@@ -3,8 +3,8 @@ from __future__ import annotations
 import unittest
 from unittest.mock import patch
 
-from orchestrator.core.pr_ready import PrReadinessResult
-from orchestrator.core.reviewer import ReviewAgentGate
+from orchestrator.core.review.pr_ready import PrReadinessResult
+from orchestrator.core.review.reviewer import ReviewAgentGate
 from orchestrator.tools.github_app import PullRequestDetails, PullRequestFileChange, WorkflowCheckSuite
 
 
@@ -48,7 +48,7 @@ class _FakeGitHubClient:
 class ReviewerGateTests(unittest.TestCase):
     def setUp(self) -> None:
         self._readiness_patch = patch(
-            "orchestrator.core.reviewer.evaluate_pr_readiness",
+            "orchestrator.core.review.reviewer.evaluate_pr_readiness",
             side_effect=_stub_readiness_evaluator,
         )
         self._readiness_patch.start()

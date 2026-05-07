@@ -12,7 +12,7 @@ import sqlalchemy as sa
 from sqlalchemy import inspect, text
 
 from orchestrator.core.config import get_settings
-from orchestrator.core.secrets import decrypt_value
+from orchestrator.core.platform.secrets import decrypt_value
 
 
 revision = "20260414_0065"

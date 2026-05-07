@@ -11,9 +11,10 @@ from orchestrator.api.discord.ingress.ask_runtime import ask_board_message, coll
 from orchestrator.api.discord.ingress.executor import execute_discord_command
 from orchestrator.api.schemas import DiscordCommandRequest
 from orchestrator.core.config import get_settings
+from orchestrator.core.runtime.payload_models import AskIntent
 from orchestrator.storage.models import Project, Tenant
 from orchestrator.tools.github_app import GitHubApiError
-from orchestrator.tools.jira_oauth import JiraIssuePreview
+from orchestrator.tools.atlassian_oauth import JiraIssuePreview
 from tests.test_support.discord_command_api_harness import DiscordCommandApiTestHarness
 
 
@@ -172,8 +173,12 @@ class DiscordAskScopeAndRequestFlowTests(DiscordCommandApiTestHarness):
                 return_value=(None, None, [{"key": "TP-20", "summary": "Do thing", "status": "To Do"}], {"To Do": 1}, []),
             ),
             patch(
-                "orchestrator.api.discord.commands.ask.plan_discord_ask_intent_with_codex",
-                return_value={"mode": "command", "summary": "Queue the issue run now", "command": "!run TP-20"},
+                "orchestrator.api.discord.commands.ask.plan_discord_ask_intent_with_runtime",
+                return_value=AskIntent(
+                    mode="command",
+                    summary="Queue the issue run now",
+                    command="!run TP-20",
+                ),
             ),
         ):
             command_response = execute_discord_command(
@@ -220,8 +225,8 @@ class DiscordAskScopeAndRequestFlowTests(DiscordCommandApiTestHarness):
                 return_value=(None, None, [{"key": "OTH-20", "summary": "Do thing", "status": "To Do"}], {"To Do": 1}, []),
             ),
             patch(
-                "orchestrator.api.discord.commands.ask.plan_discord_ask_intent_with_codex",
-                return_value={"mode": "answer", "summary": "Board answer"},
+                "orchestrator.api.discord.commands.ask.plan_discord_ask_intent_with_runtime",
+                return_value=AskIntent(mode="answer", summary="Board answer", command=None),
             ) as plan_mock,
             patch(
                 "orchestrator.api.discord.commands.ask.answer_board_question_with_runtime",
@@ -262,8 +267,8 @@ class DiscordAskScopeAndRequestFlowTests(DiscordCommandApiTestHarness):
             ),
             patch("orchestrator.api.discord.ingress.ask_runtime.collect_github_ask_context", return_value=github_context),
             patch(
-                "orchestrator.api.discord.commands.ask.plan_discord_ask_intent_with_codex",
-                return_value={"mode": "answer", "summary": "Board answer"},
+                "orchestrator.api.discord.commands.ask.plan_discord_ask_intent_with_runtime",
+                return_value=AskIntent(mode="answer", summary="Board answer", command=None),
             ) as plan_mock,
             patch(
                 "orchestrator.api.discord.commands.ask.answer_board_question_with_runtime",
@@ -301,8 +306,8 @@ class DiscordAskScopeAndRequestFlowTests(DiscordCommandApiTestHarness):
             self.session_factory() as session,
             patch("orchestrator.api.discord.ingress.ask_runtime.collect_ask_context_with_history_context", side_effect=_collect_stub),
             patch(
-                "orchestrator.api.discord.commands.ask.plan_discord_ask_intent_with_codex",
-                return_value={"mode": "answer", "summary": "answer"},
+                "orchestrator.api.discord.commands.ask.plan_discord_ask_intent_with_runtime",
+                return_value=AskIntent(mode="answer", summary="answer", command=None),
             ),
             patch("orchestrator.api.discord.commands.ask.answer_board_question_with_runtime", return_value="Board answer"),
         ):
@@ -349,8 +354,8 @@ class DiscordAskScopeAndRequestFlowTests(DiscordCommandApiTestHarness):
             ),
             patch("orchestrator.api.discord.ingress.ask_runtime.collect_github_ask_context", return_value=github_context),
             patch(
-                "orchestrator.api.discord.commands.ask.plan_discord_ask_intent_with_codex",
-                return_value={"mode": "answer", "summary": "answer"},
+                "orchestrator.api.discord.commands.ask.plan_discord_ask_intent_with_runtime",
+                return_value=AskIntent(mode="answer", summary="answer", command=None),
             ),
             patch("orchestrator.api.discord.commands.ask.answer_board_question_with_runtime", return_value="Board answer") as answer_mock,
         ):
@@ -557,8 +562,8 @@ class DiscordAskScopeAndRequestFlowTests(DiscordCommandApiTestHarness):
             self.session_factory() as session,
             patch("orchestrator.api.discord.ingress.ask_runtime.collect_ask_context_with_history_context", side_effect=_collect_stub),
             patch(
-                "orchestrator.api.discord.commands.ask.plan_discord_ask_intent_with_codex",
-                return_value={"mode": "answer", "summary": "answer"},
+                "orchestrator.api.discord.commands.ask.plan_discord_ask_intent_with_runtime",
+                return_value=AskIntent(mode="answer", summary="answer", command=None),
             ),
             patch("orchestrator.api.discord.commands.ask.answer_board_question_with_runtime", return_value="Board answer"),
         ):
@@ -605,8 +610,8 @@ class DiscordAskScopeAndRequestFlowTests(DiscordCommandApiTestHarness):
                 return_value=[JiraIssuePreview(key="TP-50", summary="DM issue", status="To Do")],
             ),
             patch(
-                "orchestrator.api.discord.commands.ask.plan_discord_ask_intent_with_codex",
-                return_value={"mode": "answer", "summary": "answer"},
+                "orchestrator.api.discord.commands.ask.plan_discord_ask_intent_with_runtime",
+                return_value=AskIntent(mode="answer", summary="answer", command=None),
             ),
             patch("orchestrator.api.discord.commands.ask.answer_board_question_with_runtime", return_value="DM scoped answer"),
         ):

@@ -11,36 +11,39 @@ from sqlalchemy.orm import Session
 
 from orchestrator.api.schemas import DiscordCommandRequest, DiscordCommandResponse
 from orchestrator.api.discord.shared.room_history import DiscordRoomHistoryService
-from orchestrator.core.codex_agents import (
+from orchestrator.core.clarification.questions import ClarificationQuestionSet
+from orchestrator.core.runtime.agents import (
     answer_board_question_with_runtime,
-    plan_discord_ask_intent_with_codex,
+    plan_discord_ask_intent_with_runtime,
 )
-from orchestrator.core.runtime_invocation import AgentInvocationContext
-from orchestrator.core.codex_runtime import CodexRuntimeError
-from orchestrator.core.agent_runtime_resolver import build_runtime_for_selector
+from orchestrator.core.runtime.invocation import AgentInvocationContext
+from orchestrator.core.runtime.runtime import CodexRuntimeError
+from orchestrator.core.runtime.agent_runtime_resolver import build_runtime_for_selector
 from orchestrator.core.config import get_settings
-from orchestrator.core.pm_plugin_catalog import plugin_catalog_payload, tool_catalog_payload
-from orchestrator.core.pm_tool_executor import execute_pm_tool_calls
-from orchestrator.core.pm_interview_service import (
+from orchestrator.core.pm.plugin_catalog import plugin_catalog_payload, tool_catalog_payload
+from orchestrator.core.pm.tool_executor import execute_pm_tool_calls
+from orchestrator.core.pm.interview_service import (
     PM_INTERVIEW_STATUS_PM_COMPLETED,
     PM_INTERVIEW_STATUS_READY_TO_WRITE,
     assess_pm_interview_brief,
     format_pm_interview_question,
     mark_pm_interview_case_completed,
     normalize_pm_interview_evidence,
-    plan_pm_interview_with_codex,
+    pm_interview_case_from_row,
+    pm_interview_question_from_payload,
+    plan_pm_interview_with_runtime,
     resolve_pm_interview_case,
     upsert_pm_interview_case,
 )
 from orchestrator.core.discord.personas import VOICE_ROOM_PERSONA_IDS, resolve_voice_room_persona_profile
-from orchestrator.core.specialist_planning import (
+from orchestrator.core.planning.specialist import (
     SpecialistPlanningRequest,
     build_runtime_seed_planning_package,
     run_specialist_planning_fanout,
 )
-from orchestrator.core.stage_design_planning import invoke_stage_design_planning_llm
-from orchestrator.core.stage_spi_policy import resolve_stage_spi_enabled
-from orchestrator.core.stage_plugins import evaluate_stage_plugin
+from orchestrator.core.stages.design_planning import invoke_stage_design_planning_llm
+from orchestrator.core.stages.spi_policy import resolve_stage_spi_enabled
+from orchestrator.core.stages.plugins import evaluate_stage_plugin
 from orchestrator.storage.models import Project, Tenant
 
 
@@ -368,10 +371,10 @@ def dispatch_ask_command(
         )
         existing_brief = getattr(existing_case, "brief_json", None) or {}
         existing_evidence = list(getattr(existing_case, "evidence_json", None) or [])
-        current_assessment = assess_pm_interview_brief(
-            brief=existing_brief,
-            evidence=existing_evidence,
-            status_hint=str(getattr(existing_case, "status", "") or "").strip() or None,
+        current_assessment = (
+            pm_interview_case_from_row(existing_case)
+            if existing_case is not None
+            else assess_pm_interview_brief(brief=existing_brief, evidence=existing_evidence)
         )
         new_evidence = normalize_pm_interview_evidence(
             _extract_pm_interview_evidence(
@@ -381,13 +384,13 @@ def dispatch_ask_command(
             )
         )
         try:
-            pm_payload = plan_pm_interview_with_codex(
+            pm_payload = plan_pm_interview_with_runtime(
                 runtime=runtime,
                 request_text=question,
                 brief=existing_brief,
                 evidence=[*existing_evidence, *new_evidence],
                 missing_slots=current_assessment.missing_slots,
-                next_question=current_assessment.next_question,
+                current_question=current_assessment.next_question,
                 project_keys=normalized_project_keys,
                 issues=issues,
                 status_counts=status_counts,
@@ -420,6 +423,7 @@ def dispatch_ask_command(
             evidence=[*existing_evidence, *new_evidence],
             status_hint=str(pm_payload.get("status") or "").strip() or None,
         )
+        explicit_next_question = pm_interview_question_from_payload(pm_payload.get("next_question"))
         question_history = [
             {
                 "speaker": "user",
@@ -449,8 +453,8 @@ def dispatch_ask_command(
             brief=final_assessment.brief.to_payload(),
             evidence=[item.to_payload() for item in new_evidence],
             question_history=question_history,
-            current_question=final_assessment.next_question,
-            next_question=final_assessment.next_question,
+            current_question=explicit_next_question,
+            next_question=explicit_next_question,
             notes={"room_source": room_source_mode} if is_voice_ingress else {},
         )
 
@@ -521,8 +525,8 @@ def dispatch_ask_command(
             "product_brief_markdown": product_brief_markdown,
             "interview_status": final_assessment.status,
             "missing_slots": list(final_assessment.missing_slots),
-            "next_question": final_assessment.next_question.to_payload() if final_assessment.next_question is not None else None,
-            "next_question_examples": list(final_assessment.next_question.examples) if final_assessment.next_question is not None else [],
+            "next_question": explicit_next_question.to_payload() if explicit_next_question is not None else None,
+            "next_question_examples": list(explicit_next_question.examples) if explicit_next_question is not None else [],
             "ready_to_write": final_assessment.ready_to_write,
             "persona_id": "pm",
             "persona_role": "Product Manager",
@@ -535,7 +539,7 @@ def dispatch_ask_command(
             return DiscordCommandResponse(
                 ok=True,
                 command="pm",
-                message=message or format_pm_interview_question(final_assessment.next_question),
+                message=message or format_pm_interview_question(explicit_next_question),
                 data=response_data,
             )
 
@@ -557,36 +561,35 @@ def dispatch_ask_command(
             allowed_plugin_ids = {str(item.get("plugin_id") or "").strip().lower() for item in plugin_catalog}
             tool_catalog = tool_catalog_payload()
             if bool(getattr(settings, "stage_spi_llm_planning_enabled", False)):
-                try:
-                    llm_plan_payload = invoke_stage_design_planning_llm(
-                        session=session,
-                        settings=settings,
-                        tenant_id=tenant.tenant_id,
-                        project_id=scoped_project_id,
-                        working_dir=codex_working_dir,
-                        issue_key=normalized_issue_key,
-                        stage_plugin=selected_plugin_id,
-                        stage_status=str((stage_state or {}).get("stage_status") or "stage_planning").strip().lower() or "stage_planning",
-                        stakeholder_text=question,
-                        assistant_summary=message,
-                        stage_artifacts=dict((stage_state or {}).get("stage_artifacts") or {}),
-                        stage_open_questions=list((stage_state or {}).get("stage_open_questions") or []),
-                        stage_tool_outputs=[dict(x) for x in ((stage_state or {}).get("stage_tool_outputs") or []) if isinstance(x, dict)],
-                    )
-                except CodexRuntimeError:
-                    llm_plan_payload = None
-                if isinstance(llm_plan_payload, dict):
-                    plugin_candidate = str(llm_plan_payload.get("selected_plugin_id") or "").strip().lower()
-                    if plugin_candidate and plugin_candidate in allowed_plugin_ids:
+                llm_plan_payload = invoke_stage_design_planning_llm(
+                    session=session,
+                    settings=settings,
+                    tenant_id=tenant.tenant_id,
+                    project_id=scoped_project_id,
+                    working_dir=codex_working_dir,
+                    issue_key=normalized_issue_key,
+                    stage_plugin=selected_plugin_id,
+                    stage_status=str((stage_state or {}).get("stage_status") or "stage_planning").strip().lower()
+                    or "stage_planning",
+                    stakeholder_text=question,
+                    assistant_summary=message,
+                    stage_artifacts=dict((stage_state or {}).get("stage_artifacts") or {}),
+                    stage_open_questions=list((stage_state or {}).get("stage_open_questions") or []),
+                    stage_tool_outputs=[
+                        dict(x) for x in ((stage_state or {}).get("stage_tool_outputs") or []) if isinstance(x, dict)
+                    ],
+                )
+                if llm_plan_payload is not None:
+                    plugin_candidate = llm_plan_payload.selected_plugin_id
+                    if plugin_candidate in allowed_plugin_ids:
                         selected_plugin_id = plugin_candidate
-                    decision_raw = str(llm_plan_payload.get("decision_state") or "").strip().lower()
+                    decision_raw = llm_plan_payload.decision_state
                     if decision_raw in {"approved", "revisions_required", "pending"}:
                         decision_state = decision_raw
                     stage_tool_outputs_from_executor = execute_pm_tool_calls(
-                        tool_calls=llm_plan_payload.get("tool_calls") if isinstance(llm_plan_payload.get("tool_calls"), list) else None,
+                        tool_calls=list(llm_plan_payload.tool_calls),
                         tenant_id=tenant.tenant_id,
                         project_id=scoped_project_id,
-                        default_prompt=message,
                     )
             stage_result = evaluate_stage_plugin(
                 state=stage_state,
@@ -597,7 +600,7 @@ def dispatch_ask_command(
                 tenant_id=tenant.tenant_id,
                 project_id=scoped_project_id,
                 request_id=request_id,
-                llm_plan_payload=llm_plan_payload,
+                llm_plan_payload=llm_plan_payload.to_payload() if llm_plan_payload is not None else None,
                 explicit_tool_outputs=stage_tool_outputs_from_executor,
                 decision_state=decision_state,
             )
@@ -712,10 +715,7 @@ def dispatch_ask_command(
                 ),
             )
             planning_state = planning_result.planning_state
-            planning_package = build_runtime_seed_planning_package(
-                result=planning_result,
-                behavior_slice=str(final_assessment.brief.objective or question).strip() or question,
-            )
+            planning_package = build_runtime_seed_planning_package(result=planning_result)
             issue_seed_message, issue_seed_data = seed_issues_with_runtime(
                 session=session,
                 tenant=tenant,
@@ -740,11 +740,19 @@ def dispatch_ask_command(
                     notes={"planning_state": planning_state},
                 )
                 interview_case.status = PM_INTERVIEW_STATUS_PM_COMPLETED
-            elif planning_result.open_behavior_questions:
+            elif planning_result.pm_decision_requests:
+                planning_questions = ClarificationQuestionSet.from_values(
+                    {
+                        "question": request.question,
+                        "why_it_matters": request.why_it_matters,
+                        "source_ref": "pm_decision_request",
+                    }
+                    for request in planning_result.pm_decision_requests
+                )
                 interview_case.status = "question_pending"
                 interview_case.current_question_json = {
                     "slot_key": "planning",
-                    "question": planning_result.open_behavior_questions[0],
+                    "question": planning_questions.prompts[0],
                     "examples": [],
                 }
                 interview_case.next_question_json = dict(interview_case.current_question_json)
@@ -846,7 +854,7 @@ def dispatch_ask_command(
             project_keys=normalized_project_keys,
         )
         try:
-            intent_payload = plan_discord_ask_intent_with_codex(
+            intent_payload = plan_discord_ask_intent_with_runtime(
                 runtime=runtime,
                 question=question,
                 project_keys=normalized_project_keys,
@@ -862,9 +870,9 @@ def dispatch_ask_command(
                 detail=f"Codex board assistant is unavailable: {exc}",
             ) from exc
 
-        mode = str(intent_payload.get("mode") or "").strip().lower()
-        summary = str(intent_payload.get("summary") or "").strip()
-        proposed_command = str(intent_payload.get("command") or "").strip()
+        mode = intent_payload.mode
+        summary = intent_payload.summary
+        proposed_command = intent_payload.command or ""
         if mode == "command" and proposed_command.startswith("!") and not proposed_command.lower().startswith("!ask"):
             pending = store_pending_ask_action(
                 session=session,

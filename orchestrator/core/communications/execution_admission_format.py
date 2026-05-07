@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from orchestrator.core.decision_state_machine import (
+from orchestrator.core.decision.state_machine import (
     ExecutionAdmissionDecision,
     ExecutionAdmissionReason,
 )

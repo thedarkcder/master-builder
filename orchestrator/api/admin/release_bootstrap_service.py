@@ -53,8 +53,8 @@ def run_release_bootstrap(
     settings,
     required_statuses,
     compute_release_bootstrap_result_fn,
-    refresh_jira_connection_tokens_fn,
-    jira_oauth_client_fn,
+    refresh_atlassian_connection_tokens_fn,
+    atlassian_oauth_client_fn,
 ):  # noqa: ANN001
     tenant = session.get(tenant_model, tenant_id)
     if tenant is None:
@@ -65,8 +65,8 @@ def run_release_bootstrap(
         tenant_id=tenant_id,
         settings=settings,
         required_statuses=required_statuses,
-        refresh_jira_connection_tokens_fn=refresh_jira_connection_tokens_fn,
-        jira_oauth_client_fn=jira_oauth_client_fn,
+        refresh_atlassian_connection_tokens_fn=refresh_atlassian_connection_tokens_fn,
+        atlassian_oauth_client_fn=atlassian_oauth_client_fn,
     )
     jira_config = dict(tenant.jira_config or {})
     jira_config["release_bootstrap"] = report_payload

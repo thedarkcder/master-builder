@@ -6,9 +6,9 @@ from time import perf_counter
 from traceback import format_exception
 from uuid import uuid4
 
-from orchestrator.core.run_logs import record_run_log_event
+from orchestrator.core.observability.logging_pane import emit_logging_pane_event
 from orchestrator.core.worker.stage_events import WorkerStageUpdate
-from orchestrator.core.runs import mark_run_terminal
+from orchestrator.core.runs.service import mark_run_terminal
 from orchestrator.core.worker.manual_pr_remediation_completion import publish_manual_pr_remediation_completion
 from orchestrator.core.workflow.runner import WorkflowResult
 
@@ -106,6 +106,7 @@ class WorkflowFinalizer:
                 run_id=run.run_id,
                 terminal_status=self._run_status_failed,
                 last_error=failure_message,
+                expected_worker_service_instance_id=expected_worker_service_instance_id,
                 expected_claim_id=expected_claim_id,
             )
             return FinalizationPlan(
@@ -346,7 +347,7 @@ def _record_completion_step_event(
         payload["error_message"] = error_message
     if stack_trace:
         payload["stack_trace"] = stack_trace
-    record_run_log_event(
+    emit_logging_pane_event(
         session=session,
         tenant_id=run.tenant_id,
         project_id=getattr(run, "project_id", None),
@@ -375,7 +376,7 @@ def _emit_orchestrated_trace_logs(
     stage_trace = list(workflow_result.orchestration_stage_trace or [])
     workstream_trace = list(workflow_result.orchestration_workstream_trace or [])
     for entry in stage_trace:
-        record_run_log_event(
+        emit_logging_pane_event(
             session=session,
             tenant_id=run.tenant_id,
             project_id=getattr(run, "project_id", None),
@@ -401,7 +402,7 @@ def _emit_orchestrated_trace_logs(
             ),
         )
     for entry in workstream_trace:
-        record_run_log_event(
+        emit_logging_pane_event(
             session=session,
             tenant_id=run.tenant_id,
             project_id=getattr(run, "project_id", None),

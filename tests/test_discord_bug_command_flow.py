@@ -6,11 +6,11 @@ from fastapi import HTTPException
 
 from orchestrator.api.discord.bug.service import build_discord_bug_description
 from orchestrator.api.discord.ingress.bug_runtime import create_discord_bug_issue
-from orchestrator.storage.models import JiraOAuthConnection, Project, Tenant
-from orchestrator.tools.jira_oauth import (
+from orchestrator.storage.models import AtlassianOAuthConnection, Project, Tenant
+from orchestrator.tools.atlassian_oauth import (
     JiraIssueBulkCreateResult,
     JiraIssueCreateResult,
-    JiraOAuthError,
+    AtlassianOAuthError,
 )
 from tests.test_support.discord_command_api_harness import DiscordCommandApiTestHarness
 
@@ -96,7 +96,7 @@ class DiscordBugCommandFlowTests(DiscordCommandApiTestHarness):
             jira_config["connection_id"] = "conn-attach"
             tenant.jira_config = jira_config
             session.add(
-                JiraOAuthConnection(
+                AtlassianOAuthConnection(
                     connection_id="conn-attach",
                     account_id="acct-1",
                     account_email="dev@example.com",
@@ -131,8 +131,8 @@ class DiscordBugCommandFlowTests(DiscordCommandApiTestHarness):
         fake_client = _FakeClient()
         with (
             self.session_factory() as session,
-            patch("orchestrator.api.discord.ingress.jira_runtime.refresh_jira_connection_tokens", return_value="token"),
-            patch("orchestrator.api.discord.ingress.jira_runtime.jira_oauth_client", return_value=fake_client),
+            patch("orchestrator.api.discord.ingress.jira_runtime.refresh_atlassian_connection_tokens", return_value="token"),
+            patch("orchestrator.api.discord.ingress.jira_runtime.atlassian_oauth_client", return_value=fake_client),
             patch("orchestrator.api.discord.ingress.bug_runtime.resolve_discord_channel_name", return_value="triage-bugs"),
             patch(
                 "orchestrator.api.discord.ingress.bug_runtime.download_discord_attachment",
@@ -171,7 +171,7 @@ class DiscordBugCommandFlowTests(DiscordCommandApiTestHarness):
             jira_config["connection_id"] = "conn-attach-fail"
             tenant.jira_config = jira_config
             session.add(
-                JiraOAuthConnection(
+                AtlassianOAuthConnection(
                     connection_id="conn-attach-fail",
                     account_id="acct-1",
                     account_email="dev@example.com",
@@ -200,13 +200,13 @@ class DiscordBugCommandFlowTests(DiscordCommandApiTestHarness):
 
             def upload_issue_attachment(self, **kwargs: object) -> list[dict]:
                 del kwargs
-                raise JiraOAuthError("Jira attachment upload failed (403): permission denied")
+                raise AtlassianOAuthError("Jira attachment upload failed (403): permission denied")
 
         fake_client = _FakeClient()
         with (
             self.session_factory() as session,
-            patch("orchestrator.api.discord.ingress.jira_runtime.refresh_jira_connection_tokens", return_value="token"),
-            patch("orchestrator.api.discord.ingress.jira_runtime.jira_oauth_client", return_value=fake_client),
+            patch("orchestrator.api.discord.ingress.jira_runtime.refresh_atlassian_connection_tokens", return_value="token"),
+            patch("orchestrator.api.discord.ingress.jira_runtime.atlassian_oauth_client", return_value=fake_client),
             patch("orchestrator.api.discord.ingress.bug_runtime.resolve_discord_channel_name", return_value="triage-bugs"),
             patch(
                 "orchestrator.api.discord.ingress.bug_runtime.download_discord_attachment",
@@ -241,7 +241,7 @@ class DiscordBugCommandFlowTests(DiscordCommandApiTestHarness):
             jira_config["connection_id"] = "conn-2"
             tenant.jira_config = jira_config
             session.add(
-                JiraOAuthConnection(
+                AtlassianOAuthConnection(
                     connection_id="conn-2",
                     account_id="acct-1",
                     account_email="dev@example.com",
@@ -274,8 +274,8 @@ class DiscordBugCommandFlowTests(DiscordCommandApiTestHarness):
         fake_client = _FakeClient()
         with (
             self.session_factory() as session,
-            patch("orchestrator.api.discord.ingress.jira_runtime.refresh_jira_connection_tokens", return_value="token"),
-            patch("orchestrator.api.discord.ingress.jira_runtime.jira_oauth_client", return_value=fake_client),
+            patch("orchestrator.api.discord.ingress.jira_runtime.refresh_atlassian_connection_tokens", return_value="token"),
+            patch("orchestrator.api.discord.ingress.jira_runtime.atlassian_oauth_client", return_value=fake_client),
             patch("orchestrator.api.discord.ingress.bug_runtime.resolve_discord_channel_name", return_value=None),
             patch(
                 "orchestrator.api.discord.ingress.bug_runtime.download_discord_attachment",
@@ -308,7 +308,7 @@ class DiscordBugCommandFlowTests(DiscordCommandApiTestHarness):
             jira_config["connection_id"] = "conn-3"
             tenant.jira_config = jira_config
             session.add(
-                JiraOAuthConnection(
+                AtlassianOAuthConnection(
                     connection_id="conn-3",
                     account_id="acct-1",
                     account_email="dev@example.com",
@@ -341,8 +341,8 @@ class DiscordBugCommandFlowTests(DiscordCommandApiTestHarness):
         fake_client = _FakeClient()
         with (
             self.session_factory() as session,
-            patch("orchestrator.api.discord.ingress.jira_runtime.refresh_jira_connection_tokens", return_value="token"),
-            patch("orchestrator.api.discord.ingress.jira_runtime.jira_oauth_client", return_value=fake_client),
+            patch("orchestrator.api.discord.ingress.jira_runtime.refresh_atlassian_connection_tokens", return_value="token"),
+            patch("orchestrator.api.discord.ingress.jira_runtime.atlassian_oauth_client", return_value=fake_client),
             patch("orchestrator.api.discord.ingress.bug_runtime.resolve_discord_channel_name", return_value="other"),
         ):
             tenant = session.get(Tenant, self.tenant_id)

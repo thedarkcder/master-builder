@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import pytest
 
-from orchestrator.tools.jira_oauth_issue_service import JiraOAuthIssueService
-from orchestrator.tools.jira_oauth_models import JiraOAuthError
+from orchestrator.tools.atlassian_oauth_issue_service import JiraOAuthIssueService
+from orchestrator.tools.atlassian_oauth_models import AtlassianOAuthError
 
 
 def test_transition_issue_by_target_status_name() -> None:
@@ -41,7 +41,7 @@ def test_transition_issue_raises_when_target_not_available() -> None:
         return {"transitions": [{"id": "21", "name": "Done", "to": {"name": "Done"}}]}
 
     service = JiraOAuthIssueService(get_json=lambda **_: {}, request_json=_request_json)
-    with pytest.raises(JiraOAuthError):
+    with pytest.raises(AtlassianOAuthError):
         service.transition_issue(
             access_token="token",
             cloud_id="cloud",

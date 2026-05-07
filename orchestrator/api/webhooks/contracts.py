@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from fastapi import HTTPException, Request, status
 from sqlalchemy.orm import Session
 
-from orchestrator.api.jira_oauth.connection_service import tenant_jira_oauth_context
+from orchestrator.api.atlassian_oauth.connection_service import tenant_atlassian_oauth_context
 from orchestrator.api.webhooks.github_payload_contracts import (
     extract_installation_id,
     extract_pull_request_targets,
@@ -28,15 +28,15 @@ from orchestrator.api.webhooks.jira_payload_contracts import (
     parse_jira_comment_command,
 )
 from orchestrator.api.webhooks.payload_utils import extract_webhook_token
-from orchestrator.core.project_routing import (
+from orchestrator.core.projects.routing import (
     find_active_project_for_issue_key,
     find_active_project_for_repo_full_name,
 )
-from orchestrator.core.platform_secret_service import resolve_platform_secret_ref
-from orchestrator.core.tenant_secret_service import resolve_scoped_secret_ref
-from orchestrator.core.decision_types import tenant_jira_webhook_secret_ref
+from orchestrator.core.platform.secret_service import resolve_platform_secret_ref
+from orchestrator.core.platform.tenant_secret_service import resolve_scoped_secret_ref
+from orchestrator.core.decision.types import tenant_jira_webhook_secret_ref
 from orchestrator.storage.models import Project, Tenant
-from orchestrator.tools.jira_oauth import JiraOAuthError
+from orchestrator.tools.atlassian_oauth import AtlassianOAuthError
 
 logger = logging.getLogger(__name__)
 
@@ -81,7 +81,7 @@ def create_jira_comment(
     settings,  # noqa: ANN001
 ) -> tuple[dict | None, str | None]:
     try:
-        oauth = tenant_jira_oauth_context(session=session, tenant=tenant, settings=settings)
+        oauth = tenant_atlassian_oauth_context(session=session, tenant=tenant, settings=settings)
         created = oauth.client.add_issue_comment(
             access_token=oauth.access_token,
             cloud_id=oauth.connection.cloud_id,
@@ -98,7 +98,7 @@ def create_jira_comment(
             exc,
         )
         return None, str(exc.detail)
-    except (JiraOAuthError, ValueError) as exc:
+    except (AtlassianOAuthError, ValueError) as exc:
         logger.exception(
             "jira_comment_post_failed tenant_id=%s issue_key=%s error=%s",
             tenant.tenant_id,

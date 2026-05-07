@@ -16,7 +16,7 @@ from orchestrator.core.secret_crypto import (
     jira_oauth_token_crypto_context,
     managed_secret_crypto_context,
 )
-from orchestrator.core.secrets import encrypt_value
+from orchestrator.core.platform.secrets import encrypt_value
 
 
 class _FakeWrappedKeyProvider:

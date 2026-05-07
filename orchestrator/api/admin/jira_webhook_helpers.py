@@ -3,7 +3,7 @@ from __future__ import annotations
 import re
 from urllib.parse import quote
 
-from orchestrator.core.decision_types import jira_config_project_keys
+from orchestrator.core.decision.types import jira_config_project_keys
 
 
 def default_ready_jql(*, project_keys: list[str], ready_statuses: list[str]) -> str:

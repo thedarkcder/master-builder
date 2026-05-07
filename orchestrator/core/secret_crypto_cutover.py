@@ -7,7 +7,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from orchestrator.core.secret_crypto import SecretCipherEnvelope
-from orchestrator.storage.models import JiraOAuthConnection, ManagedSecret, Tenant
+from orchestrator.storage.models import AtlassianOAuthConnection, ManagedSecret, Tenant
 
 
 def _is_provider_ciphertext(value: str | None) -> bool:
@@ -37,7 +37,7 @@ class ManagedSecretCutoverInventoryItem:
 
 
 @dataclass(frozen=True)
-class JiraOAuthCutoverInventoryItem:
+class AtlassianOAuthCutoverInventoryItem:
     connection_id: str
     site_url: str
     cloud_id: str
@@ -55,22 +55,22 @@ class JiraOAuthCutoverInventoryItem:
 @dataclass(frozen=True)
 class SecretCryptoCutoverReport:
     managed_secrets: tuple[ManagedSecretCutoverInventoryItem, ...]
-    jira_oauth_connections: tuple[JiraOAuthCutoverInventoryItem, ...]
+    atlassian_oauth_connections: tuple[AtlassianOAuthCutoverInventoryItem, ...]
 
     @property
     def legacy_managed_secret_refs(self) -> tuple[ManagedSecretCutoverInventoryItem, ...]:
         return tuple(item for item in self.managed_secrets if not item.provider_encrypted)
 
     @property
-    def jira_connections_requiring_relink(self) -> tuple[JiraOAuthCutoverInventoryItem, ...]:
-        return tuple(item for item in self.jira_oauth_connections if item.requires_relink)
+    def atlassian_connections_requiring_relink(self) -> tuple[AtlassianOAuthCutoverInventoryItem, ...]:
+        return tuple(item for item in self.atlassian_oauth_connections if item.requires_relink)
 
 
 def build_secret_crypto_cutover_report(session: Session) -> SecretCryptoCutoverReport:
     managed_secret_rows = session.execute(select(ManagedSecret).order_by(ManagedSecret.secret_ref.asc())).scalars().all()
     tenant_rows = session.execute(select(Tenant).order_by(Tenant.tenant_id.asc())).scalars().all()
     connection_rows = session.execute(
-        select(JiraOAuthConnection).order_by(JiraOAuthConnection.connection_id.asc())
+        select(AtlassianOAuthConnection).order_by(AtlassianOAuthConnection.connection_id.asc())
     ).scalars().all()
 
     tenant_ids_by_connection: dict[str, list[str]] = {}
@@ -89,8 +89,8 @@ def build_secret_crypto_cutover_report(session: Session) -> SecretCryptoCutoverR
             )
             for row in managed_secret_rows
         ),
-        jira_oauth_connections=tuple(
-            JiraOAuthCutoverInventoryItem(
+        atlassian_oauth_connections=tuple(
+            AtlassianOAuthCutoverInventoryItem(
                 connection_id=row.connection_id,
                 site_url=row.site_url,
                 cloud_id=row.cloud_id,
@@ -114,8 +114,8 @@ def render_secret_crypto_cutover_inventory(report: SecretCryptoCutoverReport) ->
         "## Summary",
         f"- Managed secret refs in database: {len(report.managed_secrets)}",
         f"- Managed secret refs still using legacy DB ciphertext: {len(report.legacy_managed_secret_refs)}",
-        f"- Jira OAuth connections in database: {len(report.jira_oauth_connections)}",
-        f"- Jira OAuth connections requiring relink after cutover: {len(report.jira_connections_requiring_relink)}",
+        f"- Atlassian OAuth connections in database: {len(report.atlassian_oauth_connections)}",
+        f"- Atlassian OAuth connections requiring relink after cutover: {len(report.atlassian_connections_requiring_relink)}",
         "",
         "## Managed Secret Refs",
     ]
@@ -127,11 +127,11 @@ def render_secret_crypto_cutover_inventory(report: SecretCryptoCutoverReport) ->
             lines.append(
                 f"- `{item.secret_ref}` | storage={storage} | updated_at={_format_timestamp(item.updated_at)}"
             )
-    lines.extend(["", "## Jira OAuth Connections"])
-    if not report.jira_oauth_connections:
+    lines.extend(["", "## Atlassian OAuth Connections"])
+    if not report.atlassian_oauth_connections:
         lines.append("- None")
     else:
-        for item in report.jira_oauth_connections:
+        for item in report.atlassian_oauth_connections:
             tenant_list = ", ".join(item.tenant_ids) if item.tenant_ids else "-"
             lines.append(
                 "- "
@@ -146,7 +146,7 @@ def render_secret_crypto_cutover_inventory(report: SecretCryptoCutoverReport) ->
             "",
             "## Cutover Actions",
             "- Re-add every managed secret ref that still uses `legacy-db-ciphertext` after enabling provider-backed secret crypto.",
-            "- Re-link every Jira OAuth connection whose access or refresh token still uses `legacy-db-ciphertext`.",
+            "- Re-link every Atlassian OAuth connection whose access or refresh token still uses `legacy-db-ciphertext`.",
         ]
     )
     return "\n".join(lines) + "\n"

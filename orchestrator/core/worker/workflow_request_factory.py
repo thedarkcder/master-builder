@@ -3,9 +3,9 @@ from __future__ import annotations
 import logging
 
 from orchestrator.core.guardrails import enforce_safe_command
-from orchestrator.core.platform_secret_service import resolve_platform_secret_ref
-from orchestrator.core.run_human_input_service import answered_human_inputs_for_attempt
-from orchestrator.core.tenant_secret_service import resolve_scoped_secret_ref
+from orchestrator.core.platform.secret_service import resolve_platform_secret_ref
+from orchestrator.core.runs.human_input_service import answered_human_inputs_for_attempt
+from orchestrator.core.platform.tenant_secret_service import resolve_scoped_secret_ref
 from orchestrator.core.worker.workflow_request_branching import (
     normalize_branch,
     resolve_branch_from_open_pull_requests,
@@ -24,8 +24,8 @@ from orchestrator.core.worker.workflow_request_resume import (
     extract_remediation_head_ref,
     extract_trigger_context,
 )
-from orchestrator.core.worker_capabilities import resolve_worker_capability_context
-from orchestrator.core.worker_workspace import resolve_worker_workspace_key
+from orchestrator.core.worker.capabilities import resolve_worker_capability_context
+from orchestrator.core.worker.workspace import resolve_worker_workspace_key
 from orchestrator.core.workflow.checkpoints import checkpoint_kind_for_stage
 from orchestrator.core.workflow.execution_snapshot import (
     ExecutionSnapshot,

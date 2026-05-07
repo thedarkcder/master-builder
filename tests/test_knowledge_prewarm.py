@@ -5,8 +5,8 @@ import unittest
 from unittest.mock import patch
 
 from orchestrator.core.config import Settings
-from orchestrator.core.knowledge_prewarm import prewarm_knowledge_dependencies
-from orchestrator.core.knowledge_base import _suppress_known_onnxruntime_warning_noise
+from orchestrator.core.knowledge.prewarm import prewarm_knowledge_dependencies
+from orchestrator.core.knowledge.base import _suppress_known_onnxruntime_warning_noise
 
 
 class KnowledgePrewarmTests(unittest.TestCase):
@@ -14,7 +14,7 @@ class KnowledgePrewarmTests(unittest.TestCase):
         settings = Settings()
 
         with patch(
-            "orchestrator.core.knowledge_prewarm.ensure_knowledge_embedding_model_ready",
+            "orchestrator.core.knowledge.prewarm.ensure_knowledge_embedding_model_ready",
             side_effect=[RuntimeError("missing cache"), "BAAI/bge-small-en-v1.5"],
         ) as prewarm_mock:
             result = prewarm_knowledge_dependencies(settings=settings)
@@ -29,7 +29,7 @@ class KnowledgePrewarmTests(unittest.TestCase):
         settings = Settings()
 
         with patch(
-            "orchestrator.core.knowledge_prewarm.ensure_knowledge_embedding_model_ready",
+            "orchestrator.core.knowledge.prewarm.ensure_knowledge_embedding_model_ready",
             return_value="BAAI/bge-small-en-v1.5",
         ) as prewarm_mock:
             result = prewarm_knowledge_dependencies(settings=settings)

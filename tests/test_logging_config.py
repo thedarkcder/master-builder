@@ -1,7 +1,7 @@
 import logging
 import unittest
 
-from orchestrator.core.logging import configure_logging
+from orchestrator.core.observability.logging import configure_logging
 
 
 class LoggingConfigTests(unittest.TestCase):

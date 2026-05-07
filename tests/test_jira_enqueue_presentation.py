@@ -9,8 +9,8 @@ from orchestrator.core.communications.jira_enqueue_presentation import (
     format_jira_enqueue_skipped_message,
     normalize_backlog_pre_run_check_text,
 )
-from orchestrator.core.decision_state_machine import build_execution_admission_block, ExecutionAdmissionReason
-from orchestrator.core.decision_types import PrecheckOutcome
+from orchestrator.core.decision.state_machine import build_execution_admission_block, ExecutionAdmissionReason
+from orchestrator.core.decision.types import PrecheckOutcome
 
 
 def test_format_jira_enqueue_skipped_message_includes_reason_and_guidance() -> None:

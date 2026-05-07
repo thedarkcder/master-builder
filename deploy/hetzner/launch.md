@@ -18,7 +18,7 @@ Use the app route to collect inputs and generate both artifacts:
 Provide these environment variables before running the bootstrap:
 - `ORCHESTRATOR_ADMIN_PASSWORD`
 - `ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET`
-- `ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET`
+- `ORCHESTRATOR_ATLASSIAN_OAUTH_STATE_SECRET`
 - `ORCHESTRATOR_SECRET_CRYPTO_PROVIDER`
 - `NEXTAUTH_SECRET`
 - `ORCHESTRATOR_EMAIL_FROM_ADDRESS`
@@ -39,7 +39,7 @@ package_update: true
 runcmd:
   - export ORCHESTRATOR_ADMIN_PASSWORD='replace-me'
   - export ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET='replace-me'
-  - export ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET='replace-me'
+  - export ORCHESTRATOR_ATLASSIAN_OAUTH_STATE_SECRET='replace-me'
   - export ORCHESTRATOR_SECRET_CRYPTO_PROVIDER='vault_transit'
   - export ORCHESTRATOR_VAULT_ADDR='https://vault.example.com'
   - export ORCHESTRATOR_VAULT_TOKEN='replace-me'

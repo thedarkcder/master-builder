@@ -8,10 +8,12 @@ import {
   type AuthenticatedPrincipalRecord,
   type Credentials
 } from "@/lib/api";
+import { clearLogoutRedirectBarrier, setLogoutRedirectBarrier } from "@/lib/auth-redirect-barrier";
 
 type AuthLoginInput = {
   identifier: string;
   password: string;
+  redirectTo?: string | null;
 };
 
 type AuthContextValue = {
@@ -26,8 +28,6 @@ type AuthContextValue = {
   applyPrincipal: (nextPrincipal: AuthenticatedPrincipalRecord | null) => void;
 };
 
-type SessionUserShape = Record<string, never>;
-
 const AuthContext = createContext<AuthContextValue | undefined>(undefined);
 
 function hasPendingOnboarding(principal: AuthenticatedPrincipalRecord | null): boolean {
@@ -38,20 +38,19 @@ function hasPendingOnboarding(principal: AuthenticatedPrincipalRecord | null): b
 }
 
 function AuthProviderInner({ children }: { children: React.ReactNode }) {
-  const { data: session, status } = useSession();
+  const { status } = useSession();
   const [principal, setPrincipal] = useState<AuthenticatedPrincipalRecord | null>(null);
   const [principalReady, setPrincipalReady] = useState(false);
   const [sessionRevoked, setSessionRevoked] = useState(false);
-  const sessionUser = session?.user as SessionUserShape | undefined;
 
   const credentials = useMemo<Credentials | null>(() => {
-    if (!sessionUser || status !== "authenticated" || sessionRevoked) {
+    if (status !== "authenticated" || sessionRevoked) {
       return null;
     }
     return {
       apiBaseUrl: ""
     };
-  }, [sessionRevoked, sessionUser, status]);
+  }, [sessionRevoked, status]);
 
   function normalizeAuthErrorMessage(message: string): string {
     if (message === "CredentialsSignin" || message === "Invalid tenant credentials") {
@@ -104,7 +103,7 @@ function AuthProviderInner({ children }: { children: React.ReactNode }) {
       principalReady,
       ready: status !== "loading",
       needsOnboarding: hasPendingOnboarding(principal),
-      login: async ({ identifier, password }) => {
+      login: async ({ identifier, password, redirectTo }) => {
         setPrincipal(null);
         setPrincipalReady(false);
         setSessionRevoked(false);
@@ -117,15 +116,25 @@ function AuthProviderInner({ children }: { children: React.ReactNode }) {
         if (!result || result.error) {
           throw new Error(normalizeAuthErrorMessage(result?.error || "Invalid credentials"));
         }
+        clearLogoutRedirectBarrier();
         if (typeof window !== "undefined") {
-          window.location.assign("/platform/dashboard");
+          const target =
+            redirectTo && redirectTo.startsWith("/") && !redirectTo.startsWith("//")
+              ? redirectTo
+              : "/platform/dashboard";
+          window.location.assign(target);
         }
       },
       logout: async () => {
         setSessionRevoked(false);
         setPrincipal(null);
         setPrincipalReady(false);
-        await signOut({ redirect: true, redirectTo: "/login" });
+        setLogoutRedirectBarrier();
+        const result = await signOut({ redirect: false, redirectTo: "/login" });
+        if (typeof window !== "undefined") {
+          const redirectUrl = typeof result?.url === "string" ? result.url : "/login";
+          window.location.replace(redirectUrl);
+        }
       },
       refreshPrincipal,
       applyPrincipal,

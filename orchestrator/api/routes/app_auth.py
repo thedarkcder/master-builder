@@ -27,18 +27,18 @@ from orchestrator.api.schemas import (
     TenantUserLoginRequest,
     TenantUserLoginResponse,
 )
-from orchestrator.core.auth_tokens import create_auth_access_token
+from orchestrator.core.platform.auth_tokens import create_auth_access_token
 from orchestrator.core.config import get_settings
 from orchestrator.core.discord.oauth import DiscordOAuthError, exchange_code_for_user, parse_discord_oauth_state
 from orchestrator.core.discord.oauth_config import resolve_discord_oauth_config
-from orchestrator.core.password_reset_email import send_password_reset_email
-from orchestrator.core.password_reset_tokens import (
+from orchestrator.core.platform.password_reset_email import send_password_reset_email
+from orchestrator.core.platform.password_reset_tokens import (
     PasswordResetTokenError,
     issue_password_reset_token,
     normalize_password_reset_timestamp,
     parse_password_reset_token,
 )
-from orchestrator.core.platform_secret_service import (
+from orchestrator.core.platform.secret_service import (
     PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF,
     resolve_platform_secret_ref,
 )
@@ -50,7 +50,7 @@ from orchestrator.core.security import (
     require_authenticated_principal,
     require_tenant_membership,
 )
-from orchestrator.core.tenant_users import (
+from orchestrator.core.platform.users import (
     accept_invite,
     authenticate_tenant_user,
     change_user_password,
@@ -69,6 +69,11 @@ from orchestrator.core.tenant_users import (
     update_user_profile,
 )
 from orchestrator.storage.models import Tenant, TenantMembership, TenantUser, TenantUserCredential
+from orchestrator.storage.tenant_rls import (
+    set_identity_auth_rls_context,
+    set_platform_system_rls_context,
+    set_tenant_user_rls_context,
+)
 from orchestrator.tools.discord_api import DiscordApiClient, DiscordApiError
 
 
@@ -141,6 +146,7 @@ def public_register(
     payload: PublicRegistrationRequest,
     session: Session = Depends(get_session),
 ) -> PublicRegistrationResponse:
+    set_platform_system_rls_context(session, system_purpose="public_register")
     validate_codex_assets_for_tenant_init()
     existing = session.execute(
         select(TenantUser).where(TenantUser.email == normalize_email(payload.email))
@@ -194,6 +200,7 @@ def request_password_reset(
     request: Request,
     session: Session = Depends(get_session),
 ) -> PublicMessageResponse:
+    set_identity_auth_rls_context(session)
     settings = get_settings()
     tenant_user = find_tenant_user_by_email(session=session, email=payload.email)
     if tenant_user is not None and tenant_user.is_active:
@@ -229,6 +236,7 @@ def confirm_password_reset(
     except PasswordResetTokenError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
+    set_tenant_user_rls_context(session, user_id=token_payload.user_id)
     tenant_user = session.get(TenantUser, token_payload.user_id)
     if tenant_user is None or not tenant_user.is_active or normalize_email(tenant_user.email) != token_payload.email:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Invalid password reset token")
@@ -247,9 +255,11 @@ def tenant_user_login(
     payload: TenantUserLoginRequest,
     session: Session = Depends(get_session),
 ) -> TenantUserLoginResponse:
+    set_identity_auth_rls_context(session)
     tenant_user = authenticate_tenant_user(session=session, email=payload.email, password=payload.password)
     if tenant_user is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid tenant credentials")
+    set_tenant_user_rls_context(session, user_id=tenant_user.user_id)
     mark_membership_signed_in(session=session, user_id=tenant_user.user_id)
     session.commit()
     principal = load_tenant_user_principal(session=session, user_id=tenant_user.user_id)
@@ -375,6 +385,7 @@ def accept_public_invite(
     payload: InviteAcceptRequest,
     session: Session = Depends(get_session),
 ) -> TenantUserLoginResponse:
+    set_platform_system_rls_context(session, system_purpose="public_invite_accept")
     invite = resolve_invite(session=session, raw_token=payload.token)
     if invite is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Invite not found or expired")
@@ -386,6 +397,7 @@ def accept_public_invite(
     )
     mark_membership_signed_in(session=session, user_id=tenant_user.user_id)
     session.commit()
+    set_tenant_user_rls_context(session, user_id=tenant_user.user_id)
     principal = load_tenant_user_principal(session=session, user_id=tenant_user.user_id)
     return _build_login_response(principal=principal)
 
@@ -445,6 +457,7 @@ def discord_oauth_callback(
     oauth_config = resolve_discord_oauth_config(session=session, settings=settings)
     try:
         parsed_state = parse_discord_oauth_state(settings=settings, state=state)
+        set_tenant_user_rls_context(session, user_id=parsed_state.user_id, tenant_id=parsed_state.tenant_id)
         discord_user = exchange_code_for_user(config=oauth_config, code=code)
     except DiscordOAuthError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc

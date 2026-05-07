@@ -7,6 +7,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
+import { useToast } from "@/components/ui/toast-provider";
 import {
   createProjectKnowledgeSource,
   deleteProjectKnowledgeSource,
@@ -41,6 +42,7 @@ export function ProjectKnowledgeSourcesSection({
   tenantId,
   projectId,
 }: ProjectKnowledgeSourcesSectionProps) {
+  const { showToast } = useToast();
   const [sources, setSources] = useState<ProjectKnowledgeSourceRecord[]>([]);
   const [runtimeStatus, setRuntimeStatus] = useState<KnowledgeJiraSyncProjectStatusRecord | null>(null);
   const [loading, setLoading] = useState(false);
@@ -158,9 +160,9 @@ export function ProjectKnowledgeSourcesSection({
       const source = await createProjectKnowledgeSource(activeCredentials, tenantId, projectId, buildPayload());
       resetForm();
       await loadSources();
-      setStatusLine(`Added source "${source.display_name}".`);
+      showToast({ title: "Knowledge source added", description: source.display_name, tone: "success" });
     } catch (error) {
-      setStatusLine(`Unable to add source: ${(error as Error).message}`);
+      showToast({ title: "Knowledge source add failed", description: (error as Error).message, tone: "error" });
     } finally {
       setSaving(false);
     }
@@ -178,9 +180,9 @@ export function ProjectKnowledgeSourcesSection({
         status: nextStatus,
       });
       await loadSources();
-      setStatusLine(`Source "${updated.display_name}" is now ${updated.status}.`);
+      showToast({ title: "Knowledge source updated", description: `${updated.display_name} is now ${updated.status}.`, tone: "success" });
     } catch (error) {
-      setStatusLine(`Unable to update source: ${(error as Error).message}`);
+      showToast({ title: "Knowledge source update failed", description: (error as Error).message, tone: "error" });
     } finally {
       setMutatingSourceId(null);
     }
@@ -195,9 +197,9 @@ export function ProjectKnowledgeSourcesSection({
     try {
       await deleteProjectKnowledgeSource(activeCredentials, tenantId, projectId, source.source_id);
       await loadSources();
-      setStatusLine(`Removed source "${source.display_name}".`);
+      showToast({ title: "Knowledge source removed", description: source.display_name, tone: "success" });
     } catch (error) {
-      setStatusLine(`Unable to remove source: ${(error as Error).message}`);
+      showToast({ title: "Knowledge source remove failed", description: (error as Error).message, tone: "error" });
     } finally {
       setMutatingSourceId(null);
     }
@@ -212,11 +214,13 @@ export function ProjectKnowledgeSourcesSection({
     try {
       const result = await syncProjectKnowledgeSource(activeCredentials, tenantId, projectId, source.source_id);
       await loadSources();
-      setStatusLine(
-        `Synced "${source.display_name}": created ${result.created_assets}, updated ${result.updated_assets}, unchanged ${result.unchanged_assets}, deleted ${result.deleted_assets}, failed ${result.failed_assets}.`,
-      );
+      showToast({
+        title: "Knowledge source synced",
+        description: `${source.display_name}: created ${result.created_assets}, updated ${result.updated_assets}, unchanged ${result.unchanged_assets}, deleted ${result.deleted_assets}, failed ${result.failed_assets}.`,
+        tone: result.failed_assets ? "error" : "success",
+      });
     } catch (error) {
-      setStatusLine(`Unable to sync source: ${(error as Error).message}`);
+      showToast({ title: "Knowledge source sync failed", description: (error as Error).message, tone: "error" });
     } finally {
       setSyncingSourceId(null);
     }

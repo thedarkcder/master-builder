@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi import HTTPException, status
 
-SUPPORTED_JIRA_COMMENT_COMMANDS = {"run", "retry", "ask", "clarify"}
+SUPPORTED_JIRA_COMMENT_COMMANDS = {"run", "retry", "start", "ask", "clarify"}
 
 
 def normalize_jira_webhook_event(raw_value: object) -> str | None:
@@ -125,7 +125,7 @@ def parse_jira_comment_command(payload: dict) -> tuple[str | None, str | None, s
     if command_name not in SUPPORTED_JIRA_COMMENT_COMMANDS:
         return None, None, "invalid_comment_command"
 
-    if command_name in {"run", "retry"}:
+    if command_name in {"run", "retry", "start"}:
         if len(parts) != 1:
             return None, None, "invalid_comment_command"
         return command_name, None, None

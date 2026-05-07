@@ -1,7 +1,7 @@
 import unittest
 from datetime import datetime, timedelta, timezone
 
-from orchestrator.core.agent_observability import (
+from orchestrator.core.observability.agent_observability import (
     MAX_IN_MEMORY_EVENT_HISTORY,
     agent_observability_tracker,
     reset_agent_observability_for_tests,

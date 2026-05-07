@@ -2,12 +2,12 @@ from __future__ import annotations
 
 import unittest
 
-from orchestrator.core.decision_gate import DecisionGateResult
-from orchestrator.core.decision_planner import DecisionPlannerQuestion, DecisionPlannerResult
-from orchestrator.core.decision_state_machine import reduce_decision_planner_result
-from orchestrator.core.decision_types import DecisionClassification, IngressDecision, PrecheckOutcome
+from orchestrator.core.decision.gate import DecisionGateResult
+from orchestrator.core.decision.planner import DecisionPlannerQuestion, DecisionPlannerResult
+from orchestrator.core.decision.state_machine import reduce_decision_planner_result
+from orchestrator.core.decision.types import DecisionClassification, IngressDecision, PrecheckOutcome
 from orchestrator.core.gtd import GoodToDoValidationResult
-from orchestrator.core.pre_run_check import PreRunCheckResult
+from orchestrator.core.precheck.pre_run_check import PreRunCheckResult
 
 
 def _base_decision(*, outcome: PrecheckOutcome) -> IngressDecision:

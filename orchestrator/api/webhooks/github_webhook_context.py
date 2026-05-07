@@ -21,9 +21,9 @@ from orchestrator.api.webhooks.contracts import (
 )
 from orchestrator.core.communications.integration_contracts import TransportActionExecutor
 from orchestrator.core.github.transport_executor import GitHubTransportExecutor
-from orchestrator.core.reviewer import ReviewAgentGate
-from orchestrator.core.platform_secret_service import resolve_platform_secret_ref
-from orchestrator.core.tenant_secret_service import resolve_scoped_secret_ref
+from orchestrator.core.review.reviewer import ReviewAgentGate
+from orchestrator.core.platform.secret_service import resolve_platform_secret_ref
+from orchestrator.core.platform.tenant_secret_service import resolve_scoped_secret_ref
 from orchestrator.tools.github_app import github_client_from_tenant_config
 
 

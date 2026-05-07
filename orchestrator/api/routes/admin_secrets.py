@@ -10,10 +10,10 @@ from orchestrator.api.schemas import (
     ManagedSecretResolveResult,
     ManagedSecretUpsert,
 )
-from orchestrator.core.platform_secret_service import platform_secret_service
+from orchestrator.core.platform.secret_service import platform_secret_service
 from orchestrator.core.config import get_settings
-from orchestrator.core.tenant_secret_service import tenant_secret_service
-from orchestrator.core.secret_manager import (
+from orchestrator.core.platform.tenant_secret_service import tenant_secret_service
+from orchestrator.core.platform.secret_manager import (
     normalize_secret_ref,
 )
 from orchestrator.core.security import require_admin

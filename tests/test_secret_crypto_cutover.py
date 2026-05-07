@@ -10,7 +10,7 @@ from orchestrator.core.secret_crypto_cutover import (
     build_secret_crypto_cutover_report,
     render_secret_crypto_cutover_inventory,
 )
-from orchestrator.storage.models import Base, JiraOAuthConnection, ManagedSecret, Tenant
+from orchestrator.storage.models import AtlassianOAuthConnection, Base, ManagedSecret, Tenant
 
 
 def _provider_payload() -> str:
@@ -30,7 +30,7 @@ def _build_session() -> Session:
         engine,
         tables=[
             Tenant.__table__,
-            JiraOAuthConnection.__table__,
+            AtlassianOAuthConnection.__table__,
             ManagedSecret.__table__,
         ],
     )
@@ -71,7 +71,7 @@ def test_build_secret_crypto_cutover_report_classifies_legacy_rows() -> None:
                     created_at=now,
                     updated_at=now,
                 ),
-                JiraOAuthConnection(
+                AtlassianOAuthConnection(
                     connection_id="conn-legacy",
                     account_id="account-1",
                     account_email="owner@example.com",
@@ -91,8 +91,8 @@ def test_build_secret_crypto_cutover_report_classifies_legacy_rows() -> None:
         report = build_secret_crypto_cutover_report(session)
 
     assert [item.secret_ref for item in report.legacy_managed_secret_refs] == ["platform/GITHUB_APP_ID"]
-    assert [item.connection_id for item in report.jira_connections_requiring_relink] == ["conn-legacy"]
-    assert report.jira_connections_requiring_relink[0].tenant_ids == ("route25",)
+    assert [item.connection_id for item in report.atlassian_connections_requiring_relink] == ["conn-legacy"]
+    assert report.atlassian_connections_requiring_relink[0].tenant_ids == ("route25",)
 
 
 def test_render_secret_crypto_cutover_inventory_omits_ciphertext_values() -> None:
@@ -107,7 +107,7 @@ def test_render_secret_crypto_cutover_inventory_omits_ciphertext_values() -> Non
             )
         )
         session.add(
-            JiraOAuthConnection(
+            AtlassianOAuthConnection(
                 connection_id="conn-1",
                 account_id="account-1",
                 account_email=None,

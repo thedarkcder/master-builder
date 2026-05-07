@@ -8,7 +8,7 @@ from fastapi.testclient import TestClient
 
 from orchestrator.api.main import create_app
 from orchestrator.core.config import get_settings
-from orchestrator.core.platform_metrics import platform_metrics, reset_platform_metrics_for_tests
+from orchestrator.core.observability.metrics import platform_metrics, reset_platform_metrics_for_tests
 from orchestrator.storage.db import reset_db_engine_cache
 
 
@@ -19,7 +19,7 @@ class PlatformMetricsTests(unittest.TestCase):
         os.environ["ORCHESTRATOR_ADMIN_USERNAME"] = "admin"
         os.environ["ORCHESTRATOR_ADMIN_PASSWORD"] = "secret"
         os.environ["ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET"] = "metrics-state-secret"
-        os.environ["ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET"] = "metrics-jira-state-secret"
+        os.environ["ORCHESTRATOR_ATLASSIAN_OAUTH_STATE_SECRET"] = "metrics-atlassian-state-secret"
         os.environ["ORCHESTRATOR_GITHUB_APP_SLUG"] = "master-builder-app"
         os.environ["ORCHESTRATOR_SECRETS_ENCRYPTION_KEY"] = Fernet.generate_key().decode("utf-8")
         get_settings.cache_clear()
@@ -32,7 +32,7 @@ class PlatformMetricsTests(unittest.TestCase):
         os.environ.pop("ORCHESTRATOR_ADMIN_USERNAME", None)
         os.environ.pop("ORCHESTRATOR_ADMIN_PASSWORD", None)
         os.environ.pop("ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET", None)
-        os.environ.pop("ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET", None)
+        os.environ.pop("ORCHESTRATOR_ATLASSIAN_OAUTH_STATE_SECRET", None)
         os.environ.pop("ORCHESTRATOR_GITHUB_APP_SLUG", None)
         os.environ.pop("ORCHESTRATOR_SECRETS_ENCRYPTION_KEY", None)
         get_settings.cache_clear()

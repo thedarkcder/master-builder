@@ -4,7 +4,7 @@ from dataclasses import dataclass
 
 from orchestrator.api.webhooks import jira_webhook_comment_flow
 from orchestrator.api.webhooks.jira_webhook_types import JiraWebhookContext
-from orchestrator.core.decision_state_machine import (
+from orchestrator.core.decision.state_machine import (
     ExecutionAdmissionReason,
     build_execution_admission_block,
 )
@@ -76,6 +76,17 @@ def plan_jira_comment_flow(
     if comment_clarify_response is not None:
         return JiraCommentPlan(
             content=comment_clarify_response,
+            removed_history_entries=removed_history_entries,
+        )
+
+    parent_planning_reply_response = jira_webhook_comment_flow.stage_handle_comment_parent_planning_clarification_reply(
+        context=context,
+        session=session,
+        settings=settings,
+    )
+    if parent_planning_reply_response is not None:
+        return JiraCommentPlan(
+            content=parent_planning_reply_response,
             removed_history_entries=removed_history_entries,
         )
 

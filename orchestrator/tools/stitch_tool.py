@@ -183,7 +183,7 @@ def _resolve_stitch_api_key_from_tenant_secret(
     if not tenant_id or not str(tenant_id).strip():
         return None
 
-    from orchestrator.core.secret_manager import resolve_scoped_secret_ref
+    from orchestrator.core.platform.secret_manager import resolve_scoped_secret_ref
     from orchestrator.storage.db import create_session_factory
 
     session_factory = create_session_factory()

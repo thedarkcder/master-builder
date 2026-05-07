@@ -8,10 +8,13 @@ This file defines the minimum runtime environment contract for production deploy
 - `ORCHESTRATOR_PUBLIC_API_BASE_URL`
 - `ORCHESTRATOR_ADMIN_UI_BASE_URL`
 - `ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET`
-- `ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET`
+- `ORCHESTRATOR_ATLASSIAN_OAUTH_STATE_SECRET`
 - `ORCHESTRATOR_SECRET_CRYPTO_PROVIDER`
 - `ORCHESTRATOR_DATABASE_URL`
-- `ORCHESTRATOR_REDIS_URL`
+- `ORCHESTRATOR_CLICKHOUSE_HTTP_URL`
+- `ORCHESTRATOR_CLICKHOUSE_DATABASE`
+- `ORCHESTRATOR_CLICKHOUSE_USERNAME`
+- `ORCHESTRATOR_CLICKHOUSE_PASSWORD`
 
 If `ORCHESTRATOR_SECRET_CRYPTO_PROVIDER=vault_transit`:
 - `ORCHESTRATOR_VAULT_ADDR`
@@ -43,19 +46,19 @@ If `ORCHESTRATOR_EMAIL_DELIVERY_PROVIDER=resend`:
 ## Provider Notes
 
 ### Hetzner
-- Uses local database and redis services in the same deployment stack.
-- `ORCHESTRATOR_DATABASE_URL` and `ORCHESTRATOR_REDIS_URL` should point to internal service names.
+- Uses local Postgres and ClickHouse services in the same deployment stack.
+- `ORCHESTRATOR_DATABASE_URL` and `ORCHESTRATOR_CLICKHOUSE_HTTP_URL` should point to internal service names.
 
 ### AWS
 - Uses managed HA data services.
 - `ORCHESTRATOR_DATABASE_URL` must point to RDS endpoint.
-- `ORCHESTRATOR_REDIS_URL` must point to ElastiCache endpoint.
+- `ORCHESTRATOR_CLICKHOUSE_HTTP_URL` must point to the approved ClickHouse endpoint.
 - Secret values should be sourced from Secrets Manager at deploy time.
 - Secret crypto can be backed by AWS KMS when `ORCHESTRATOR_SECRET_CRYPTO_PROVIDER=aws_kms`.
 
 ### GCP
 - Uses managed HA data services.
 - `ORCHESTRATOR_DATABASE_URL` must point to Cloud SQL connectivity endpoint.
-- `ORCHESTRATOR_REDIS_URL` must point to Memorystore endpoint.
+- `ORCHESTRATOR_CLICKHOUSE_HTTP_URL` must point to the approved ClickHouse endpoint.
 - Secret values should be sourced from Secret Manager at deploy time.
 - Secret crypto can be backed by Cloud KMS when `ORCHESTRATOR_SECRET_CRYPTO_PROVIDER=gcp_kms`.

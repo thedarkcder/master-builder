@@ -3,8 +3,8 @@ from unittest.mock import patch
 
 import pytest
 
-from orchestrator.core.codex_runtime import CodexRuntimeError
-from orchestrator.core.decision_types import DecisionClassification
+from orchestrator.core.runtime.runtime import CodexRuntimeError
+from orchestrator.core.decision.types import DecisionClassification
 from tests.test_support.jira_webhook_harness import JiraWebhookHarness
 
 

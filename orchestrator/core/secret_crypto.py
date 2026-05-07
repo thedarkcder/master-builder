@@ -388,7 +388,7 @@ def encrypt_secret_value(
 ) -> str:
     provider_name = secret_crypto_provider_name(settings, encryption_key=encryption_key)
     if provider_name == "fernet_legacy":
-        from orchestrator.core.secrets import encrypt_value
+        from orchestrator.core.platform.secrets import encrypt_value
 
         return encrypt_value(plaintext=plaintext, encryption_key=encryption_key or settings.secrets_encryption_key)
     return secret_crypto_service(settings).encrypt(plaintext=plaintext, context=context)
@@ -403,7 +403,7 @@ def decrypt_secret_value(
 ) -> str:
     provider_name = secret_crypto_provider_name(settings, encryption_key=encryption_key)
     if provider_name == "fernet_legacy":
-        from orchestrator.core.secrets import decrypt_value
+        from orchestrator.core.platform.secrets import decrypt_value
 
         return decrypt_value(ciphertext=ciphertext, encryption_key=encryption_key or settings.secrets_encryption_key)
     return secret_crypto_service(settings).decrypt(payload=ciphertext, context=context)

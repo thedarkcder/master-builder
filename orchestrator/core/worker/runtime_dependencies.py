@@ -9,16 +9,16 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
-from orchestrator.core.agent_execution_profiles import (
+from orchestrator.core.runtime.agent_execution_profiles import (
     RUNTIME_KIND_CHAT_CLI,
     RUNTIME_KIND_CLAUDE_CLI,
     RUNTIME_KIND_CODEX_CLI,
     list_supported_runtime_kinds,
     runtime_kind_label,
 )
-from orchestrator.core.codex_runtime import build_cli_command_env, codex_login_status
+from orchestrator.core.runtime.runtime import build_cli_command_env, codex_login_status
 from orchestrator.core.config import Settings
-from orchestrator.core.runtime_requirements import normalize_runtime_kinds
+from orchestrator.core.runtime.requirements import normalize_runtime_kinds
 from orchestrator.storage.models import WorkerRuntimeAuthRequest, WorkerRuntimeState
 
 RUNTIME_DEPENDENCY_STATE_READY = "ready"

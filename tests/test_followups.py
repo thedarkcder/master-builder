@@ -1,6 +1,6 @@
 import unittest
 
-from orchestrator.core.followups import build_backlog_follow_up_draft
+from orchestrator.core.pm.followups import build_backlog_follow_up_draft
 
 
 class FollowUpDraftTests(unittest.TestCase):

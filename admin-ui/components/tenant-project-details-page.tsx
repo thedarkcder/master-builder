@@ -5,10 +5,8 @@ import { useEffect, useMemo, useState } from "react";
 import { useParams, usePathname, useRouter } from "next/navigation";
 import {
   Archive,
-  ArrowLeft,
   ExternalLink,
   KeyRound,
-  Library,
   Pencil,
   RefreshCw,
   Save,
@@ -18,6 +16,8 @@ import {
 } from "lucide-react";
 
 import { useAuth } from "@/components/auth-provider";
+import { ProjectParentWorkBoard } from "@/components/project-parent-work-board";
+import { ProjectSectionTabs } from "@/components/project-section-tabs";
 import { ProjectAutomationsContent, ProjectNotificationsContent } from "@/components/tenant-project-discord-page";
 import { CodexModelSelect } from "@/components/codex-model-select";
 import { OverrideSegmentedControl } from "@/components/override-segmented-control";
@@ -27,18 +27,31 @@ import { Input } from "@/components/ui/input";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
+import { useToast } from "@/components/ui/toast-provider";
 import { formatTimestamp } from "@/lib/datetime";
 import {
+  createArchitectureDocument,
   getProject,
+  listArchitectureDocuments,
+  listConfluencePages,
+  listConfluenceSpaces,
   getTenant,
-  listDiscordAllowlistRequests,
   listCodexModels,
   listGitHubRepositories,
   listJiraProjects,
   listRuns,
   listWebhookQueueJobs,
+  retryWebhookJob,
+  resolveProjectJiraRunBoard,
   RUN_STATUSES,
-  updateProject,
+  updateProjectArchiveState,
+  updateProjectConfiguration,
+  updateProjectPolicy,
+  updateProjectSecretRefs,
+  type ArchitectureDocumentRecord,
+  type ConfluencePageRecord,
+  type ConfluenceSpaceRecord,
+  type ProjectArchitectureDocsConfig,
   type ProjectRecord,
   type RunRecord,
   type RunStatus,
@@ -51,9 +64,9 @@ import {
   canManageProjects,
   getProjectArchiveRedirectRoute,
 } from "@/lib/auth-routing";
-import { buildProjectSectionPath, buildRunDetailPath, resolveProjectSection } from "@/lib/dashboard-paths";
+import { buildRunDetailPath, resolveProjectSection, type ProjectSection } from "@/lib/dashboard-paths";
 
-type Tab = "overview" | "settings" | "runs" | "webhooks" | "notifications" | "automations" | "secrets" | "danger";
+type Tab = Exclude<ProjectSection, "knowledge">;
 type SettingsSection = "general" | "ai" | "automation" | "knowledge" | "governance";
 type OverrideToggleValue = "inherit" | "enabled" | "disabled";
 type RequireAgentsValue = "inherit" | "required";
@@ -64,6 +77,9 @@ type ProjectFormState = {
   name: string;
   github_repository: string;
   jira_project_key: string;
+  architecture_provider: "" | "internal" | "confluence";
+  architecture_space_key: string;
+  architecture_parent_page_id: string;
   codex_model: string | null;
   codex_reasoning_effort: "low" | "medium" | "high" | null;
   allow_jira_transitions: OverrideToggleValue;
@@ -83,23 +99,12 @@ type ProjectFormState = {
   allowed_commands_text: string;
 };
 
-const TABS: { id: Tab; label: string }[] = [
-  { id: "overview", label: "Overview" },
-  { id: "settings", label: "Settings" },
-  { id: "runs", label: "Runs" },
-  { id: "webhooks", label: "Webhooks" },
-  { id: "notifications", label: "Notifications" },
-  { id: "automations", label: "Automations" },
-  { id: "secrets", label: "Vault" },
-  { id: "danger", label: "Danger" },
-];
-
-const SETTINGS_SECTIONS: { id: SettingsSection; label: string; description: string }[] = [
-  { id: "general", label: "General", description: "Name, repository, and Jira mapping." },
-  { id: "ai", label: "AI", description: "Model and reasoning controls." },
-  { id: "automation", label: "Automation", description: "Execution, PR, and command policy." },
-  { id: "knowledge", label: "Knowledge", description: "Knowledge-base behavior for this project." },
-  { id: "governance", label: "Governance", description: "Repository standards and archive controls." },
+const SETTINGS_SECTIONS: { id: SettingsSection; label: string }[] = [
+  { id: "general", label: "General" },
+  { id: "ai", label: "AI" },
+  { id: "automation", label: "Automation" },
+  { id: "knowledge", label: "Knowledge" },
+  { id: "governance", label: "Governance" },
 ];
 
 const STATUS_BORDER: Record<string, string> = {
@@ -165,6 +170,12 @@ function buildProjectFormState(payload: ProjectRecord | null): ProjectFormState 
     name: payload?.name ?? "",
     github_repository: payload?.github_repository ?? "",
     jira_project_key: payload?.jira_project_key ?? "",
+    architecture_provider:
+      payload?.architecture_docs?.provider === "internal" || payload?.architecture_docs?.provider === "confluence"
+        ? payload.architecture_docs.provider
+        : "",
+    architecture_space_key: payload?.architecture_docs?.space_key ?? "",
+    architecture_parent_page_id: payload?.architecture_docs?.parent_page_id ?? "",
     codex_model: typeof overrides.codex_model === "string" ? overrides.codex_model : null,
     codex_reasoning_effort:
       overrides.codex_reasoning_effort === "low" ||
@@ -206,11 +217,28 @@ function formatBoolean(value: boolean): string {
   return value ? "Enabled" : "Disabled";
 }
 
+function buildArchitectureDocsPayload(form: ProjectFormState): ProjectArchitectureDocsConfig | null {
+  if (!form.architecture_provider) {
+    return null;
+  }
+  if (form.architecture_provider === "internal") {
+    return {
+      provider: "internal",
+    };
+  }
+  return {
+    provider: form.architecture_provider,
+    space_key: form.architecture_space_key.trim() || null,
+    parent_page_id: form.architecture_parent_page_id.trim() || null
+  };
+}
+
 export function TenantProjectDetailsPage() {
   const params = useParams<{ tenantId: string; projectId: string }>();
   const pathname = usePathname();
   const router = useRouter();
   const { credentials, ready, principal } = useAuth();
+  const { showToast } = useToast();
 
   // Project state
   const [project, setProject] = useState<ProjectRecord | null>(null);
@@ -221,6 +249,12 @@ export function TenantProjectDetailsPage() {
   const [statusLine, setStatusLine] = useState("");
   const [repoOptions, setRepoOptions] = useState<string[]>([]);
   const [jiraOptions, setJiraOptions] = useState<string[]>([]);
+  const [confluenceSpaces, setConfluenceSpaces] = useState<ConfluenceSpaceRecord[]>([]);
+  const [confluencePages, setConfluencePages] = useState<ConfluencePageRecord[]>([]);
+  const [confluenceSpacesLoading, setConfluenceSpacesLoading] = useState(false);
+  const [confluencePagesLoading, setConfluencePagesLoading] = useState(false);
+  const [confluenceCreateSpaceUrl, setConfluenceCreateSpaceUrl] = useState<string | null>(null);
+  const [confluenceStatusLine, setConfluenceStatusLine] = useState("");
   const [codexModels, setCodexModels] = useState<{ id: string; label: string; description?: string | null }[]>([]);
   const [globalCodexModel, setGlobalCodexModel] = useState("");
   const [reasoningEfforts, setReasoningEfforts] = useState<{ id: string; label: string; description?: string | null }[]>([]);
@@ -234,12 +268,14 @@ export function TenantProjectDetailsPage() {
   const [webhookSummary, setWebhookSummary] = useState<WebhookQueueSummaryRecord | null>(null);
   const [webhookBusy, setWebhookBusy] = useState(false);
   const [webhookStatusLine, setWebhookStatusLine] = useState("");
+  const [retryingWebhookJobId, setRetryingWebhookJobId] = useState<string | null>(null);
   const [webhookQueryFilter, setWebhookQueryFilter] = useState("");
   const [webhookStatusFilter, setWebhookStatusFilter] = useState<"all" | string>("all");
   const [webhookTransportFilter, setWebhookTransportFilter] = useState<"all" | string>("all");
   const [webhookTotal, setWebhookTotal] = useState(0);
   const [webhookPage, setWebhookPage] = useState(1);
   const [webhookPageSize, setWebhookPageSize] = useState<25 | 50 | 100>(25);
+  const [selectedWebhookJobId, setSelectedWebhookJobId] = useState<string | null>(null);
   const [activeSettingsSection, setActiveSettingsSection] = useState<SettingsSection>("general");
   const [runIssueFilter, setRunIssueFilter] = useState("");
   const [runStatusFilter, setRunStatusFilter] = useState<RunStatus | "all">("all");
@@ -248,8 +284,6 @@ export function TenantProjectDetailsPage() {
   const [runToDate, setRunToDate] = useState("");
   const [runPage, setRunPage] = useState(1);
   const [runPageSize, setRunPageSize] = useState<25 | 50 | 100>(25);
-  const [notificationCount, setNotificationCount] = useState(0);
-
   // Secrets state
   const [secretRefs, setSecretRefs] = useState<Record<string, string>>({});
   const [secretKey, setSecretKey] = useState("");
@@ -262,21 +296,24 @@ export function TenantProjectDetailsPage() {
     [params.tenantId, params.projectId]
   );
   const canReadCodexModels = canAccessPlatformAdmin(principal);
+  const isPlatformSuperAdmin = canAccessPlatformAdmin(principal);
   const allowProjectManagement = canManageProjects(principal, params.tenantId);
   const canAccessTechnicalPolicy = canAccessTechnicalSurface(principal, params.tenantId);
   const activeTab = useMemo<Tab>(() => {
     const resolved = resolveProjectSection(pathname) ?? "overview";
+    if (resolved === "knowledge") {
+      return "overview";
+    }
+    if (resolved === "runs" && !isPlatformSuperAdmin) {
+      return "overview";
+    }
     if (allowProjectManagement) {
       return resolved;
     }
     return resolved === "settings" || resolved === "notifications" || resolved === "automations" || resolved === "secrets" || resolved === "danger"
       ? "overview"
       : resolved;
-  }, [allowProjectManagement, pathname]);
-  const visibleTabs = useMemo(
-    () => (allowProjectManagement ? TABS : TABS.filter((tab) => tab.id === "overview" || tab.id === "runs")),
-    [allowProjectManagement],
-  );
+  }, [allowProjectManagement, isPlatformSuperAdmin, pathname]);
   const webhookStatusOptions = useMemo(
     () => Array.from(new Set(webhookJobs.map((job) => job.status).filter(Boolean))).sort(),
     [webhookJobs],
@@ -284,6 +321,10 @@ export function TenantProjectDetailsPage() {
   const webhookTransportOptions = useMemo(
     () => Array.from(new Set(webhookJobs.map((job) => job.transport).filter(Boolean))).sort(),
     [webhookJobs],
+  );
+  const selectedWebhookJob = useMemo(
+    () => webhookJobs.find((job) => job.job_id === selectedWebhookJobId) ?? null,
+    [selectedWebhookJobId, webhookJobs],
   );
 
   async function loadOptions() {
@@ -332,6 +373,53 @@ export function TenantProjectDetailsPage() {
     }
   }
 
+  async function loadConfluenceSpaces() {
+    if (!credentials || !allowProjectManagement) {
+      setConfluenceSpaces([]);
+      setConfluenceCreateSpaceUrl(null);
+      setConfluenceStatusLine("");
+      return;
+    }
+    setConfluenceSpacesLoading(true);
+    try {
+      const payload = await listConfluenceSpaces(credentials, params.tenantId);
+      setConfluenceSpaces(payload.items);
+      setConfluenceCreateSpaceUrl(payload.create_space_url);
+      setConfluenceStatusLine("");
+    } catch (error) {
+      setConfluenceSpaces([]);
+      setConfluenceCreateSpaceUrl(null);
+      setConfluenceStatusLine(`Confluence spaces are unavailable: ${(error as Error).message}`);
+    } finally {
+      setConfluenceSpacesLoading(false);
+    }
+  }
+
+  async function loadConfluencePages(spaceKey: string) {
+    const normalizedSpaceKey = spaceKey.trim();
+    if (!credentials || !allowProjectManagement || !normalizedSpaceKey) {
+      setConfluencePages([]);
+      setConfluenceStatusLine("");
+      return;
+    }
+    setConfluencePagesLoading(true);
+    try {
+      const pages = await listConfluencePages(
+        credentials,
+        params.tenantId,
+        normalizedSpaceKey,
+        form.architecture_parent_page_id.trim() || null,
+      );
+      setConfluencePages(pages);
+      setConfluenceStatusLine("");
+    } catch (error) {
+      setConfluencePages([]);
+      setConfluenceStatusLine(`Confluence pages are unavailable: ${(error as Error).message}`);
+    } finally {
+      setConfluencePagesLoading(false);
+    }
+  }
+
   async function loadRuns() {
     if (!credentials) return;
     setRunsBusy(true);
@@ -373,6 +461,9 @@ export function TenantProjectDetailsPage() {
         offset: (webhookPage - 1) * webhookPageSize,
       });
       setWebhookJobs(payload.items);
+      setSelectedWebhookJobId((current) => (
+        current && payload.items.some((job) => job.job_id === current) ? current : null
+      ));
       setWebhookSummary(payload.summary);
       setWebhookTotal(payload.total);
       setWebhookStatusLine("");
@@ -386,6 +477,32 @@ export function TenantProjectDetailsPage() {
     }
   }
 
+  async function handleRetryWebhookJob(jobId: string) {
+    if (!credentials) return;
+    setRetryingWebhookJobId(jobId);
+    try {
+      await retryWebhookJob(credentials, {
+        tenantId: params.tenantId,
+        projectId: params.projectId,
+        jobId,
+      });
+      await loadWebhookJobs();
+      showToast({
+        title: "Webhook retry queued",
+        description: `Retried webhook job ${jobId}.`,
+        tone: "success",
+      });
+    } catch (error) {
+      showToast({
+        title: "Webhook retry failed",
+        description: (error as Error).message,
+        tone: "error",
+      });
+    } finally {
+      setRetryingWebhookJobId(null);
+    }
+  }
+
   async function loadProject() {
     if (!credentials) return;
     setBusy(true);
@@ -394,8 +511,6 @@ export function TenantProjectDetailsPage() {
       setProject(payload);
       setForm(buildProjectFormState(payload));
       setSecretRefs(payload.secret_refs ?? {});
-      await loadOptions();
-      await loadRuns();
       setStatusLine("");
     } catch (error) {
       setStatusLine(`Failed to load project: ${(error as Error).message}`);
@@ -406,11 +521,47 @@ export function TenantProjectDetailsPage() {
 
   useEffect(() => {
     if (ready && credentials) void loadProject();
-  }, [ready, credentials, params.tenantId, params.projectId, allowProjectManagement]);
+  }, [ready, credentials, params.tenantId, params.projectId, allowProjectManagement, isPlatformSuperAdmin]);
 
   useEffect(() => {
-    if (ready && credentials && project && (activeTab === "overview" || activeTab === "runs")) void loadRuns();
-  }, [activeTab, ready, credentials, project, runFromDate, runIssueFilter, runPage, runPageSize, runPrFilter, runStatusFilter, runToDate]);
+    if (ready && credentials && project && activeTab === "settings" && allowProjectManagement) void loadOptions();
+  }, [activeTab, allowProjectManagement, credentials, project, ready]);
+
+  useEffect(() => {
+    if (!ready || !credentials || activeTab !== "settings" || !allowProjectManagement || form.architecture_provider !== "confluence") {
+      setConfluenceSpaces([]);
+      setConfluencePages([]);
+      setConfluenceCreateSpaceUrl(null);
+      setConfluenceStatusLine("");
+      return;
+    }
+    void loadConfluenceSpaces();
+  }, [activeTab, allowProjectManagement, credentials, form.architecture_provider, params.tenantId, ready]);
+
+  useEffect(() => {
+    if (!ready || !credentials || activeTab !== "settings" || !allowProjectManagement || form.architecture_provider !== "confluence") {
+      setConfluencePages([]);
+      return;
+    }
+    if (!form.architecture_space_key.trim()) {
+      setConfluencePages([]);
+      return;
+    }
+    void loadConfluencePages(form.architecture_space_key);
+  }, [
+    activeTab,
+    allowProjectManagement,
+    credentials,
+    form.architecture_provider,
+    form.architecture_space_key,
+    form.architecture_parent_page_id,
+    params.tenantId,
+    ready,
+  ]);
+
+  useEffect(() => {
+    if (ready && credentials && project && isPlatformSuperAdmin && activeTab === "runs") void loadRuns();
+  }, [activeTab, ready, credentials, isPlatformSuperAdmin, project, runFromDate, runIssueFilter, runPage, runPageSize, runPrFilter, runStatusFilter, runToDate]);
 
   useEffect(() => {
     if (ready && credentials && project && activeTab === "webhooks") void loadWebhookJobs();
@@ -434,28 +585,6 @@ export function TenantProjectDetailsPage() {
     }
   }, [activeTab]);
 
-  useEffect(() => {
-    if (!credentials || !allowProjectManagement) {
-      setNotificationCount(0);
-      return;
-    }
-    let cancelled = false;
-    void listDiscordAllowlistRequests(credentials, params.tenantId, params.projectId)
-      .then((requests) => {
-        if (!cancelled) {
-          setNotificationCount(requests.length);
-        }
-      })
-      .catch(() => {
-        if (!cancelled) {
-          setNotificationCount(0);
-        }
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [allowProjectManagement, credentials, params.projectId, params.tenantId]);
-
   async function toggleArchive() {
     if (!credentials || !project) return;
     if (!project.is_archived && archiveConfirmationName.trim() !== project.name.trim()) {
@@ -463,14 +592,7 @@ export function TenantProjectDetailsPage() {
     }
     setBusy(true);
     try {
-      const updated = await updateProject(credentials, params.tenantId, params.projectId, {
-        name: form.name.trim(),
-        github_repository: form.github_repository.trim(),
-        jira_project_key: form.jira_project_key.trim().toUpperCase(),
-        policy_overrides: project.policy_overrides,
-        environment: project.environment,
-        secret_refs: secretRefs,
-        discord: project.discord,
+      const updated = await updateProjectArchiveState(credentials, params.tenantId, params.projectId, {
         is_archived: !project.is_archived,
       });
       if (updated.is_archived) {
@@ -481,20 +603,24 @@ export function TenantProjectDetailsPage() {
       setProject(updated);
       setForm(buildProjectFormState(updated));
       setArchiveConfirmationName("");
-      setStatusLine(updated.is_archived ? "Project archived." : "Project unarchived.");
+      showToast({
+        title: updated.is_archived ? "Project archived" : "Project unarchived",
+        description: updated.name,
+        tone: "success",
+      });
     } catch (error) {
-      setStatusLine(`Unable to update project: ${(error as Error).message}`);
+      showToast({
+        title: "Project update failed",
+        description: (error as Error).message,
+        tone: "error",
+      });
     } finally {
       setBusy(false);
     }
   }
 
-  async function saveDetails() {
-    if (!credentials || !project) return;
-    if (!form.name.trim() || !form.github_repository.trim() || !form.jira_project_key.trim()) {
-      setStatusLine("Project name, repository, and Jira key are required.");
-      return;
-    }
+  function buildNextPolicyOverrides(): Record<string, unknown> {
+    if (!project) return {};
     const nextPolicyOverrides = { ...(project.policy_overrides ?? {}) };
     if (form.codex_model?.trim()) {
       nextPolicyOverrides.codex_model = form.codex_model.trim();
@@ -590,23 +716,65 @@ export function TenantProjectDetailsPage() {
         .map((line) => line.trim())
         .filter((line, index, array) => line.length > 0 && array.indexOf(line) === index);
     }
+    return nextPolicyOverrides;
+  }
+
+  async function saveDetails() {
+    if (!credentials || !project) return;
+    if (!form.name.trim() || !form.github_repository.trim() || !form.jira_project_key.trim()) {
+      setStatusLine("Project name, repository, and Jira key are required.");
+      return;
+    }
     setBusy(true);
     try {
-      const updated = await updateProject(credentials, params.tenantId, params.projectId, {
-        name: form.name.trim(),
-        github_repository: form.github_repository.trim(),
-        jira_project_key: form.jira_project_key.trim().toUpperCase(),
-        policy_overrides: nextPolicyOverrides,
-        environment: project.environment,
-        secret_refs: secretRefs,
-        discord: project.discord,
-        is_archived: project.is_archived,
-      });
+      const updated =
+        activeSettingsSection === "general"
+          ? await updateProjectConfiguration(credentials, params.tenantId, params.projectId, {
+              name: form.name.trim(),
+              github_repository: form.github_repository.trim(),
+              jira_project_key: form.jira_project_key.trim().toUpperCase(),
+              architecture_docs: buildArchitectureDocsPayload(form),
+            })
+          : await updateProjectPolicy(credentials, params.tenantId, params.projectId, {
+              policy_overrides: buildNextPolicyOverrides(),
+            });
       setProject(updated);
       setForm(buildProjectFormState(updated));
       setStatusLine("");
+      showToast({
+        title: activeSettingsSection === "general" ? "Project configuration saved" : "Project policy saved",
+        description: updated.name,
+        tone: "success",
+      });
     } catch (error) {
-      setStatusLine(`Unable to update project: ${(error as Error).message}`);
+      showToast({
+        title: "Project update failed",
+        description: (error as Error).message,
+        tone: "error",
+      });
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function resolveJiraRunBoard() {
+    if (!credentials || !project) return;
+    setBusy(true);
+    try {
+      const updated = await resolveProjectJiraRunBoard(credentials, params.tenantId, params.projectId);
+      setProject(updated);
+      setForm(buildProjectFormState(updated));
+      showToast({
+        title: "Jira board resolved",
+        description: `Run board id ${String(updated.policy_overrides?.run_board_id ?? "")}`,
+        tone: "success",
+      });
+    } catch (error) {
+      showToast({
+        title: "Jira board resolution failed",
+        description: (error as Error).message,
+        tone: "error",
+      });
     } finally {
       setBusy(false);
     }
@@ -645,22 +813,19 @@ export function TenantProjectDetailsPage() {
     const refsToSave = nextSecretRefs ?? secretRefs;
     setSecretsBusy(true);
     try {
-      const updated = await updateProject(credentials, params.tenantId, params.projectId, {
-        name: project.name,
-        github_repository: project.github_repository,
-        jira_project_key: project.jira_project_key,
-        policy_overrides: project.policy_overrides,
-        environment: project.environment,
+      const updated = await updateProjectSecretRefs(credentials, params.tenantId, params.projectId, {
         secret_refs: refsToSave,
-        discord: project.discord,
-        is_archived: project.is_archived,
       });
       setProject(updated);
       setSecretRefs(updated.secret_refs ?? {});
       setSecretsStatusLine("");
       return true;
     } catch (error) {
-      setSecretsStatusLine(`Save failed: ${(error as Error).message}`);
+      showToast({
+        title: "Project secrets save failed",
+        description: (error as Error).message,
+        tone: "error",
+      });
       return false;
     } finally {
       setSecretsBusy(false);
@@ -682,6 +847,11 @@ export function TenantProjectDetailsPage() {
     setSecretKey("");
     setSecretValue("");
     setEditingSecretKey(null);
+    showToast({
+      title: editingSecretKey ? "Secret updated" : "Secret saved",
+      description: key,
+      tone: "success",
+    });
   }
 
   async function removeSecretRef(key: string) {
@@ -694,6 +864,13 @@ export function TenantProjectDetailsPage() {
       setEditingSecretKey(null);
       setSecretKey("");
       setSecretValue("");
+    }
+    if (saved) {
+      showToast({
+        title: "Secret removed",
+        description: key,
+        tone: "success",
+      });
     }
   }
 
@@ -713,14 +890,7 @@ export function TenantProjectDetailsPage() {
 
   return (
     <div className="space-y-6">
-      {/* Header strip */}
       <div className="flex flex-wrap items-center gap-3">
-        <Button asChild variant="ghost" size="sm" className="-ml-1">
-          <Link href={`/${encodeURIComponent(params.tenantId)}/projects`}>
-            <ArrowLeft className="mr-1.5 h-3.5 w-3.5" />
-            Back
-          </Link>
-        </Button>
         <div className="flex items-center gap-2.5 min-w-0">
           <h1 className="truncate text-xl font-semibold">{project?.name ?? params.projectId}</h1>
           {project ? (
@@ -731,37 +901,13 @@ export function TenantProjectDetailsPage() {
         </div>
       </div>
 
-      {/* Underline tab bar */}
-      <div className="border-b overflow-x-auto">
-        <nav className="-mb-px flex min-w-max gap-1" aria-label="Project sections">
-          {visibleTabs.map((tab) => {
-            const isDanger = tab.id === "danger";
-            return (
-              <Link
-                key={tab.id}
-                href={buildProjectSectionPath(params.tenantId, params.projectId, tab.id)}
-                className={[
-                  "px-4 py-2.5 text-sm font-medium transition-colors whitespace-nowrap border-b-2",
-                  isDanger && activeTab === tab.id
-                    ? "border-red-500 text-red-600"
-                    : isDanger
-                      ? "border-transparent text-red-400 hover:border-red-300 hover:text-red-500"
-                      : activeTab === tab.id
-                        ? "border-primary text-foreground"
-                        : "border-transparent text-muted-foreground hover:text-foreground",
-                ].join(" ")}
-              >
-                <span>{tab.label}</span>
-                {tab.id === "notifications" && notificationCount > 0 ? (
-                  <span className="ml-2 inline-flex min-w-5 items-center justify-center rounded-full bg-warning px-1.5 py-0.5 text-[10px] font-semibold leading-none text-white">
-                    {notificationCount}
-                  </span>
-                ) : null}
-              </Link>
-            );
-          })}
-        </nav>
-      </div>
+      <ProjectSectionTabs
+        tenantId={params.tenantId}
+        projectId={params.projectId}
+        activeSection={activeTab}
+        allowProjectManagement={allowProjectManagement}
+        isPlatformSuperAdmin={isPlatformSuperAdmin}
+      />
 
       {/* ── Overview tab ─────────────────────────────────────────────────── */}
       {activeTab === "overview" ? (
@@ -769,249 +915,16 @@ export function TenantProjectDetailsPage() {
           {statusLine ? (
             <p className="rounded-lg border bg-muted/40 px-4 py-2.5 text-sm text-muted-foreground">{statusLine}</p>
           ) : null}
-          {runsStatusLine ? (
-            <p className="rounded-lg border bg-muted/40 px-4 py-2.5 text-sm text-muted-foreground">{runsStatusLine}</p>
-          ) : null}
           {project ? (
-            <>
-              <section className="overflow-hidden rounded-2xl border bg-background">
-                <div className="grid gap-6 p-6 lg:grid-cols-[280px_minmax(0,1fr)]">
-                  <aside className="space-y-4">
-                    <div className="rounded-xl border bg-muted/20 p-4">
-                      <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Project</p>
-                      <p className="mt-2 text-base font-semibold text-foreground">{project.name}</p>
-                      <div className="mt-4 grid gap-3 text-sm">
-                        <div>
-                          <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Status</p>
-                          <p className="mt-1 font-medium">{project.is_archived ? "Archived" : "Active"}</p>
-                        </div>
-                        <div>
-                          <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Jira project</p>
-                          <p className="mt-1 font-medium">{project.jira_project_key}</p>
-                        </div>
-                        <div>
-                          <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Secret refs</p>
-                          <p className="mt-1 font-medium">{Object.keys(secretRefs).length}</p>
-                        </div>
-                        <div>
-                          <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Loaded runs</p>
-                          <p className="mt-1 font-medium">{runs.length}</p>
-                        </div>
-                      </div>
-                    </div>
-                    <div className="flex flex-col gap-2">
-                      {allowProjectManagement ? (
-                        <Button asChild size="sm">
-                          <Link href={buildProjectSectionPath(params.tenantId, params.projectId, "settings")}>Open settings</Link>
-                        </Button>
-                      ) : null}
-                      <Button asChild size="sm" variant="outline">
-                        <Link href={`/${encodeURIComponent(params.tenantId)}/projects/${encodeURIComponent(params.projectId)}/knowledge`}>
-                          Browse knowledge
-                        </Link>
-                      </Button>
-                      {allowProjectManagement ? (
-                        <>
-                          <Button asChild size="sm" variant="outline">
-                            <Link href={`/${encodeURIComponent(params.tenantId)}/projects/${encodeURIComponent(params.projectId)}/knowledge?view=add`}>
-                              Add knowledge
-                            </Link>
-                          </Button>
-                          <Button asChild size="sm" variant="outline">
-                            <Link href={buildProjectSectionPath(params.tenantId, params.projectId, "notifications")}>Notifications</Link>
-                          </Button>
-                          <Button asChild size="sm" variant="outline">
-                            <Link href={buildProjectSectionPath(params.tenantId, params.projectId, "automations")}>Automations</Link>
-                          </Button>
-                        </>
-                      ) : null}
-                    </div>
-                  </aside>
-                  <div className="space-y-5">
-                    <div className="rounded-xl border bg-background px-4 py-3">
-                      <p className="text-[11px] font-medium uppercase tracking-[0.18em] text-muted-foreground">Repository</p>
-                      <Link
-                        className="mt-2 inline-flex items-center gap-1 text-sm text-primary hover:underline"
-                        href={project.github_repository}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                      >
-                        {project.github_repository}
-                        <ExternalLink className="h-3 w-3" />
-                      </Link>
-                    </div>
-                    <div className="grid gap-4 xl:grid-cols-3">
-                {canAccessTechnicalPolicy ? (
-                  <>
-                    <div className="overflow-hidden rounded-2xl border bg-background xl:col-span-1">
-                      <div className="px-6 pt-6 pb-3">
-                        <h2 className="text-base font-semibold">Effective AI policy</h2>
-                      </div>
-                      <div className="px-6 pb-6 space-y-3">
-                        <div className="space-y-1">
-                          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Model</p>
-                          <p className="text-sm font-medium text-foreground">
-                            {project.effective_policy.codex_model ?? (globalCodexModel || "Global default")}
-                          </p>
-                        </div>
-                        <div className="space-y-1">
-                          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Reasoning mode</p>
-                          <p className="text-sm font-medium text-foreground">
-                            {project.effective_policy.codex_reasoning_effort ?? (globalCodexReasoningEffort || "medium")}
-                          </p>
-                        </div>
-                        <div className="space-y-1">
-                          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Knowledge base</p>
-                          <p className="text-sm font-medium text-foreground">
-                            {formatBoolean(project.effective_policy.knowledge_base_enabled)}
-                          </p>
-                        </div>
-                        <div className="space-y-1">
-                          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                            Knowledge answer mode
-                          </p>
-                          <p className="text-sm font-medium text-foreground">{project.effective_policy.knowledge_auto_answer_mode}</p>
-                        </div>
-                      </div>
-                    </div>
-
-                    <div className="overflow-hidden rounded-2xl border bg-background xl:col-span-1">
-                      <div className="px-6 pt-6 pb-3">
-                        <h2 className="text-base font-semibold">Effective automation policy</h2>
-                      </div>
-                      <div className="px-6 pb-6 space-y-3">
-                        <div className="grid gap-3 sm:grid-cols-2">
-                          <div className="space-y-1">
-                            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">PR creation</p>
-                            <p className="text-sm font-medium text-foreground">{formatBoolean(project.effective_policy.allow_pr_creation)}</p>
-                          </div>
-                          <div className="space-y-1">
-                            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Code review</p>
-                            <p className="text-sm font-medium text-foreground">{formatBoolean(project.effective_policy.allow_code_reviews)}</p>
-                          </div>
-                          <div className="space-y-1">
-                            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">PR remediation</p>
-                            <p className="text-sm font-medium text-foreground">{formatBoolean(project.effective_policy.allow_pr_remediation)}</p>
-                          </div>
-                          <div className="space-y-1">
-                            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Manual PR fix requests</p>
-                            <p className="text-sm font-medium text-foreground">
-                              {formatBoolean(project.effective_policy.allow_manual_pr_fix_requests)}
-                            </p>
-                          </div>
-                          <div className="space-y-1">
-                            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Auto merge</p>
-                            <p className="text-sm font-medium text-foreground">{formatBoolean(project.effective_policy.allow_auto_merge)}</p>
-                          </div>
-                          <div className="space-y-1">
-                            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Label mutations</p>
-                            <p className="text-sm font-medium text-foreground">{formatBoolean(project.effective_policy.allow_label_mutations)}</p>
-                          </div>
-                          <div className="space-y-1">
-                            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Jira transitions</p>
-                            <p className="text-sm font-medium text-foreground">{formatBoolean(project.effective_policy.allow_jira_transitions)}</p>
-                          </div>
-                        </div>
-                        <div className="grid gap-3 sm:grid-cols-3">
-                          <div className="space-y-1">
-                            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Dev/test/review loops</p>
-                            <p className="text-sm font-medium text-foreground">{project.effective_policy.max_dev_test_review_loops}</p>
-                          </div>
-                          <div className="space-y-1">
-                            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">PR remediation loops</p>
-                            <p className="text-sm font-medium text-foreground">{project.effective_policy.max_pr_auto_remediation_loops}</p>
-                          </div>
-                          <div className="space-y-1">
-                            <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Concurrent runs</p>
-                            <p className="text-sm font-medium text-foreground">{project.effective_policy.max_concurrent_runs}</p>
-                          </div>
-                        </div>
-                        <div className="space-y-1">
-                          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Allowed commands</p>
-                          <p className="text-sm text-foreground">
-                            {(project.effective_policy.allowed_commands ?? []).length > 0
-                              ? (project.effective_policy.allowed_commands ?? []).join(", ")
-                              : "None"}
-                          </p>
-                        </div>
-                      </div>
-                    </div>
-                  </>
-                ) : null}
-
-                <div className={`overflow-hidden rounded-2xl border bg-background ${canAccessTechnicalPolicy ? "xl:col-span-1" : "xl:col-span-3"}`}>
-                  <div className="px-6 pt-6 pb-3">
-                    <div className="flex items-center gap-2">
-                      <Library className="h-4 w-4 text-primary" />
-                      <h2 className="text-base font-semibold">Knowledge</h2>
-                    </div>
-                  </div>
-                  <div className="px-6 pb-6 space-y-3">
-                    <div className="grid gap-3 sm:grid-cols-2">
-                      <div className="space-y-1">
-                        <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Knowledge browser</p>
-                        <p className="text-sm text-muted-foreground">
-                          Inspect indexed assets, metadata, and retrieval chunks from the dedicated browser page.
-                        </p>
-                      </div>
-                      {allowProjectManagement ? (
-                        <div className="space-y-1">
-                          <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Add knowledge</p>
-                          <p className="text-sm text-muted-foreground">
-                            Upload files directly into the knowledge store from the Add Knowledge tab.
-                          </p>
-                        </div>
-                      ) : null}
-                    </div>
-                    <div className="space-y-1">
-                      <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Sources</p>
-                      <p className="text-sm text-muted-foreground">
-                        Manage Jira, Google Drive, and Discord connectors from the Sources tab.
-                      </p>
-                    </div>
-                    <div className="space-y-1">
-                      <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">AGENTS.md requirement</p>
-                      <p className="text-sm font-medium text-foreground">
-                        {project.effective_policy.require_agents_md ? "Required" : "Not required"}
-                      </p>
-                    </div>
-                    <div className="flex flex-wrap gap-2">
-                      <Button asChild size="sm" variant="outline">
-                        <Link href={`/${encodeURIComponent(params.tenantId)}/projects/${encodeURIComponent(params.projectId)}/knowledge`}>
-                          Browse knowledge
-                        </Link>
-                      </Button>
-                      {allowProjectManagement ? (
-                        <>
-                          <Button asChild size="sm" variant="outline">
-                            <Link href={`/${encodeURIComponent(params.tenantId)}/projects/${encodeURIComponent(params.projectId)}/knowledge?view=add`}>
-                              Add knowledge
-                            </Link>
-                          </Button>
-                          <Button asChild size="sm" variant="outline">
-                            <Link href={`/${encodeURIComponent(params.tenantId)}/projects/${encodeURIComponent(params.projectId)}/knowledge?view=sources`}>
-                              Sources
-                            </Link>
-                          </Button>
-                        </>
-                      ) : null}
-                    </div>
-                    <div className="space-y-1">
-                      <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Vault</p>
-                      <p className="text-sm text-muted-foreground">
-                        Runtime secret references are configured separately to keep settings focused.
-                      </p>
-                    </div>
-                  </div>
-                </div>
-                    </div>
-                  </div>
-                </div>
-              </section>
-            </>
-          ) : (
+            <ProjectParentWorkBoard
+              tenantId={params.tenantId}
+              projectId={params.projectId}
+              allowJiraReconciliation={allowProjectManagement}
+            />
+          ) : null}
+          {!project ? (
             <p className="text-sm text-muted-foreground">Loading project details…</p>
-          )}
+          ) : null}
         </div>
       ) : null}
 
@@ -1052,7 +965,6 @@ export function TenantProjectDetailsPage() {
                         }`}
                       >
                         <p className="text-sm font-medium text-foreground">{section.label}</p>
-                        <p className="mt-1 text-xs text-muted-foreground">{section.description}</p>
                       </button>
                     ))}
                   </div>
@@ -1112,6 +1024,141 @@ export function TenantProjectDetailsPage() {
                           ? <option value={form.jira_project_key} />
                           : null}
                       </datalist>
+                      <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+                        <span>
+                          Run board: {project.policy_overrides?.run_board_id ? String(project.policy_overrides.run_board_id) : "not resolved"}
+                        </span>
+                        <button
+                          type="button"
+                          className="font-medium text-foreground underline underline-offset-4 disabled:opacity-50"
+                          onClick={() => void resolveJiraRunBoard()}
+                          disabled={busy}
+                        >
+                          Resolve board
+                        </button>
+                      </div>
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                        Architecture docs provider
+                      </label>
+                      <select
+                        className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                        value={form.architecture_provider}
+                        onChange={(e) =>
+                          setForm((prev) => ({
+                            ...prev,
+                            architecture_provider: e.target.value as ProjectFormState["architecture_provider"]
+                          }))
+                        }
+                        disabled={busy}
+                      >
+                        <option value="">Disabled</option>
+                        <option value="internal">Internal</option>
+                        <option value="confluence">Confluence</option>
+                      </select>
+                    </div>
+                    {form.architecture_provider === "confluence" ? (
+                      <>
+                        <div className="space-y-1.5">
+                          <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                            Confluence space
+                          </label>
+                          <select
+                            className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                            value={form.architecture_space_key}
+                            onChange={(e) =>
+                              setForm((prev) => ({
+                                ...prev,
+                                architecture_space_key: e.target.value,
+                                architecture_parent_page_id: "",
+                              }))
+                            }
+                            disabled={busy}
+                          >
+                            <option value="">
+                              {confluenceSpacesLoading
+                                ? "Loading Confluence spaces..."
+                                : confluenceSpaces.length === 0
+                                  ? "No Confluence spaces available"
+                                  : "Select Confluence space"}
+                            </option>
+                            {confluenceSpaces.map((space) => (
+                              <option key={space.space_id} value={space.key}>
+                                {space.name} ({space.key})
+                              </option>
+                            ))}
+                            {!confluenceSpaces.some((space) => space.key === form.architecture_space_key) && form.architecture_space_key ? (
+                              <option value={form.architecture_space_key}>
+                                {form.architecture_space_key} (configured)
+                              </option>
+                            ) : null}
+                          </select>
+                          {confluenceSpaces.length === 0 && confluenceCreateSpaceUrl ? (
+                            <div className="text-xs text-muted-foreground">
+                              <a
+                                href={confluenceCreateSpaceUrl}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="font-medium text-foreground underline underline-offset-4"
+                              >
+                                Create a Confluence space
+                              </a>
+                            </div>
+                          ) : null}
+                        </div>
+                        <div className="space-y-1.5">
+                          <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                            Confluence parent page
+                          </label>
+                          <select
+                            className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                            value={form.architecture_parent_page_id}
+                            onChange={(e) =>
+                              setForm((prev) => ({ ...prev, architecture_parent_page_id: e.target.value }))
+                            }
+                            disabled={busy || !form.architecture_space_key.trim()}
+                          >
+                            <option value="">
+                              {!form.architecture_space_key.trim()
+                                ? "Top-level in selected space"
+                                : confluencePagesLoading
+                                  ? "Loading space pages..."
+                                  : "Top-level in selected space"}
+                            </option>
+                            {confluencePages.map((page) => (
+                              <option key={page.page_id} value={page.page_id}>
+                                {page.title}
+                              </option>
+                            ))}
+                            {!confluencePages.some((page) => page.page_id === form.architecture_parent_page_id) &&
+                            form.architecture_parent_page_id ? (
+                              <option value={form.architecture_parent_page_id}>
+                                Current parent page ({form.architecture_parent_page_id})
+                              </option>
+                            ) : null}
+                          </select>
+                        </div>
+                        {confluenceStatusLine ? (
+                          <div className="md:col-span-3 text-sm text-muted-foreground">{confluenceStatusLine}</div>
+                        ) : null}
+                      </>
+                    ) : null}
+                    <div className="md:col-span-3 rounded-xl border bg-muted/30 p-4">
+                      <div className="flex flex-wrap items-center justify-between gap-3">
+                        <div className="space-y-1">
+                          <p className="text-sm font-medium text-foreground">Architecture documents</p>
+                          <p className="text-xs text-muted-foreground">
+                            Jira tickets should reference architecture pages instead of storing architecture inline.
+                          </p>
+                        </div>
+                        <Button asChild variant="outline" size="sm">
+                          <Link href={`/${encodeURIComponent(params.tenantId)}/projects/${encodeURIComponent(params.projectId)}/architecture`}>
+                            Open architecture docs
+                            <ExternalLink className="ml-1.5 h-3.5 w-3.5" />
+                          </Link>
+                        </Button>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -1775,11 +1822,25 @@ export function TenantProjectDetailsPage() {
                     <TableHead>Run</TableHead>
                     <TableHead>Attempts</TableHead>
                     <TableHead>Last Error</TableHead>
+                    <TableHead className="pr-5 text-right">Action</TableHead>
                   </TableRow>
                 </TableHeader>
                 <TableBody>
                   {webhookJobs.map((job) => (
-                    <TableRow key={job.job_id}>
+                    <TableRow
+                      key={job.job_id}
+                      data-testid={`webhook-job-row-${job.job_id}`}
+                      tabIndex={0}
+                      aria-selected={selectedWebhookJobId === job.job_id}
+                      className="cursor-pointer"
+                      onClick={() => setSelectedWebhookJobId(job.job_id)}
+                      onKeyDown={(event) => {
+                        if (event.key === "Enter" || event.key === " ") {
+                          event.preventDefault();
+                          setSelectedWebhookJobId(job.job_id);
+                        }
+                      }}
+                    >
                       <TableCell className="pl-5">
                         <StatusBadge status={job.status} />
                       </TableCell>
@@ -1798,6 +1859,7 @@ export function TenantProjectDetailsPage() {
                               projectId: params.projectId,
                               runId: job.related_run_id,
                             })}
+                            onClick={(event) => event.stopPropagation()}
                             className="text-primary underline-offset-4 hover:underline"
                           >
                             {job.related_run_id}
@@ -1809,6 +1871,24 @@ export function TenantProjectDetailsPage() {
                       <TableCell className="text-xs">{job.attempt_count}</TableCell>
                       <TableCell className="max-w-[300px] truncate text-xs text-muted-foreground" title={job.last_error ?? ""}>
                         {job.last_error ?? "—"}
+                      </TableCell>
+                      <TableCell className="pr-5 text-right">
+                        {job.status === "failed" ? (
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            className="h-7 text-xs"
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              void handleRetryWebhookJob(job.job_id);
+                            }}
+                            disabled={webhookBusy || retryingWebhookJobId === job.job_id}
+                          >
+                            {retryingWebhookJobId === job.job_id ? "Retrying..." : "Retry"}
+                          </Button>
+                        ) : (
+                          <span className="text-xs text-muted-foreground">—</span>
+                        )}
                       </TableCell>
                     </TableRow>
                   ))}
@@ -1851,7 +1931,6 @@ export function TenantProjectDetailsPage() {
           tenantId={params.tenantId}
           projectId={params.projectId}
           credentials={credentials}
-          onAllowlistRequestsChange={(requests) => setNotificationCount(requests.length)}
         />
       ) : null}
 
@@ -2094,6 +2173,127 @@ export function TenantProjectDetailsPage() {
             )}
             </div>
           </div>
+        </div>
+      ) : null}
+
+      {selectedWebhookJob ? (
+        <div className="fixed inset-0 z-50" role="dialog" aria-modal="true" aria-label="Webhook job details">
+          <button
+            type="button"
+            aria-label="Close webhook job details"
+            className="absolute inset-0 bg-black/40"
+            onClick={() => setSelectedWebhookJobId(null)}
+          />
+          <aside
+            className="absolute top-0 right-0 bottom-0 flex w-full max-w-5xl flex-col overflow-hidden border-l bg-background shadow-2xl"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <div className="shrink-0 border-b bg-background">
+              <div className="flex items-start justify-between gap-4 px-6 py-5">
+                <div className="min-w-0 space-y-2">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="rounded-md border bg-muted/40 px-2 py-1 font-mono text-xs text-muted-foreground">
+                      {selectedWebhookJob.transport}
+                    </span>
+                    <StatusBadge status={selectedWebhookJob.status} />
+                  </div>
+                  <div>
+                    <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Webhook subject</p>
+                    <h2 className="mt-1 break-all font-mono text-2xl font-semibold tracking-tight">{selectedWebhookJob.subject_key}</h2>
+                  </div>
+                </div>
+                <div className="flex shrink-0 items-center gap-2">
+                  {selectedWebhookJob.status === "failed" ? (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => void handleRetryWebhookJob(selectedWebhookJob.job_id)}
+                      disabled={webhookBusy || retryingWebhookJobId === selectedWebhookJob.job_id}
+                    >
+                      {retryingWebhookJobId === selectedWebhookJob.job_id ? "Retrying..." : "Retry"}
+                    </Button>
+                  ) : null}
+                  <Button variant="ghost" size="sm" className="h-8 w-8 px-0" onClick={() => setSelectedWebhookJobId(null)}>
+                    <X className="h-4 w-4" />
+                    <span className="sr-only">Close</span>
+                  </Button>
+                </div>
+              </div>
+
+              <div className="grid border-t bg-muted/20 sm:grid-cols-2 lg:grid-cols-4">
+                {[
+                  { label: "Attempts", value: String(selectedWebhookJob.attempt_count) },
+                  { label: "Arrived", value: formatTimestamp(selectedWebhookJob.created_at, "—") },
+                  { label: "Updated", value: formatTimestamp(selectedWebhookJob.updated_at, "—") },
+                  { label: "Event", value: selectedWebhookJob.event_type ?? "—", mono: true },
+                ].map((item) => (
+                  <div key={item.label} className="border-b px-6 py-3 last:border-b-0 sm:border-r sm:last:border-r-0 lg:border-b-0">
+                    <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{item.label}</p>
+                    <p className={`mt-1 truncate text-sm ${item.mono ? "font-mono" : "font-medium"}`} title={item.value}>
+                      {item.value}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            </div>
+
+            <div className="min-h-0 flex-1 overflow-hidden">
+              <div className="grid h-full min-h-0 lg:grid-cols-[minmax(0,1fr)_320px]">
+                <section className="min-h-0 overflow-hidden border-r">
+                  <div className="flex items-center justify-between gap-2 border-b px-6 py-3">
+                    <h3 className="text-sm font-semibold">Failure detail</h3>
+                    <span className="rounded-full border px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
+                      {selectedWebhookJob.last_error ? "Recorded" : "Empty"}
+                    </span>
+                  </div>
+                  <div className="h-full min-h-0 overflow-auto bg-slate-950 p-6 text-slate-100">
+                    <pre className="whitespace-pre-wrap break-words font-mono text-sm leading-6">
+                      {selectedWebhookJob.last_error ?? "No error recorded."}
+                    </pre>
+                  </div>
+                </section>
+
+                <section className="min-h-0 overflow-y-auto bg-muted/10">
+                  <div className="border-b px-5 py-4">
+                    <h3 className="text-sm font-semibold">Job context</h3>
+                  </div>
+                  <dl className="divide-y text-sm">
+                    {[
+                      ["Job ID", selectedWebhookJob.job_id],
+                      ["Request ID", selectedWebhookJob.request_id],
+                      ["Dedupe key", selectedWebhookJob.dedupe_key ?? "—"],
+                      ["Started", formatTimestamp(selectedWebhookJob.started_at, "—")],
+                      ["Completed", formatTimestamp(selectedWebhookJob.completed_at, "—")],
+                    ].map(([label, value]) => (
+                      <div key={label} className="px-5 py-3">
+                        <dt className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">{label}</dt>
+                        <dd className="mt-1 break-all font-mono text-xs text-foreground">{value}</dd>
+                      </div>
+                    ))}
+                    <div className="px-5 py-3">
+                      <dt className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Related run</dt>
+                      <dd className="mt-1 break-all font-mono text-xs">
+                        {selectedWebhookJob.related_run_id ? (
+                          <Link
+                            href={buildRunDetailPath({
+                              tenantId: params.tenantId,
+                              projectId: params.projectId,
+                              runId: selectedWebhookJob.related_run_id,
+                            })}
+                            className="text-primary underline-offset-4 hover:underline"
+                          >
+                            {selectedWebhookJob.related_run_id}
+                          </Link>
+                        ) : (
+                          <span className="text-muted-foreground">—</span>
+                        )}
+                      </dd>
+                    </div>
+                  </dl>
+                </section>
+              </div>
+            </div>
+          </aside>
         </div>
       ) : null}
     </div>

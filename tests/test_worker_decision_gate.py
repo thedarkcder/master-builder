@@ -2,10 +2,10 @@ from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from orchestrator.core.decision_gate import DecisionGateResult
+from orchestrator.core.decision.gate import DecisionGateResult
 from orchestrator.core.worker.decision_gate import apply_decision_gate
 from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
-from orchestrator.storage.models import JiraOAuthConnection
+from orchestrator.storage.models import AtlassianOAuthConnection
 
 
 class _Session:
@@ -99,8 +99,8 @@ def test_apply_decision_gate_marks_failed_on_configuration_error() -> None:
             run=run,
             tenant=tenant,
             settings=SimpleNamespace(admin_ui_base_url="https://admin.example.test"),
-            tenant_jira_oauth_context_fn=lambda **_: None,
-            evaluate_worker_decision_fn=lambda **_: (_ for _ in ()).throw(RuntimeError("Tenant Jira OAuth context is incomplete")),
+            tenant_atlassian_oauth_context_fn=lambda **_: None,
+            evaluate_worker_decision_fn=lambda **_: (_ for _ in ()).throw(RuntimeError("Tenant Atlassian context is incomplete")),
             send_discord_message_fn=lambda **_: None,
             send_jira_message_fn=lambda **_: None,
             ask_reply_components_fn=lambda: [],
@@ -150,7 +150,7 @@ def test_apply_decision_gate_marks_failed_when_blocked_decision_has_no_reason() 
             run=run,
             tenant=tenant,
             settings=SimpleNamespace(admin_ui_base_url="https://admin.example.test"),
-            tenant_jira_oauth_context_fn=lambda **_: None,
+            tenant_atlassian_oauth_context_fn=lambda **_: None,
             evaluate_worker_decision_fn=lambda **_: worker_decision,
             send_discord_message_fn=lambda **_: None,
             send_jira_message_fn=lambda **_: None,
@@ -178,7 +178,7 @@ def test_apply_decision_gate_returns_none_when_issue_is_ready() -> None:
             run=run,
             tenant=tenant,
             settings=SimpleNamespace(admin_ui_base_url="https://admin.example.test"),
-            tenant_jira_oauth_context_fn=lambda **_: oauth,
+            tenant_atlassian_oauth_context_fn=lambda **_: oauth,
             evaluate_worker_decision_fn=lambda **_: _worker_decision(allowed=True),
             send_discord_message_fn=lambda **_: None,
             send_jira_message_fn=lambda **_: None,
@@ -221,7 +221,7 @@ def test_apply_decision_gate_marks_failed_when_worker_decision_has_no_gate_paylo
             run=run,
             tenant=tenant,
             settings=SimpleNamespace(admin_ui_base_url="https://admin.example.test"),
-            tenant_jira_oauth_context_fn=lambda **_: None,
+            tenant_atlassian_oauth_context_fn=lambda **_: None,
             evaluate_worker_decision_fn=lambda **_: worker_decision,
             send_discord_message_fn=lambda **_: None,
             send_jira_message_fn=lambda **_: None,
@@ -240,7 +240,7 @@ def test_apply_decision_gate_marks_failed_when_worker_decision_has_no_gate_paylo
 def test_apply_decision_gate_uses_tenant_jira_connection_url_for_stage_update() -> None:
     class _TriggeredSession(_Session):
         def get(self, model, key):  # noqa: ANN001
-            if model is JiraOAuthConnection and key == "conn-1":
+            if model is AtlassianOAuthConnection and key == "conn-1":
                 return SimpleNamespace(site_url="https://jira.example.test")
             return None
 
@@ -279,7 +279,7 @@ def test_apply_decision_gate_uses_tenant_jira_connection_url_for_stage_update() 
             run=run,
             tenant=tenant,
             settings=SimpleNamespace(admin_ui_base_url="https://admin.example.test"),
-            tenant_jira_oauth_context_fn=lambda **_: oauth,
+            tenant_atlassian_oauth_context_fn=lambda **_: oauth,
             evaluate_worker_decision_fn=lambda **_: _worker_decision(
                 allowed=False,
                 block_reason="missing_ready_label",
@@ -325,7 +325,7 @@ def test_apply_decision_gate_passes_issue_context_into_worker_decision() -> None
             run=run,
             tenant=tenant,
             settings=SimpleNamespace(admin_ui_base_url="https://admin.example.test"),
-            tenant_jira_oauth_context_fn=lambda **_: oauth,
+            tenant_atlassian_oauth_context_fn=lambda **_: oauth,
             evaluate_worker_decision_fn=_capture_worker_decision,
             send_discord_message_fn=lambda **_: None,
             send_jira_message_fn=lambda **_: None,
@@ -362,7 +362,7 @@ def test_apply_decision_gate_preserves_trigger_context_on_block() -> None:
             run=run,
             tenant=tenant,
             settings=SimpleNamespace(admin_ui_base_url="https://admin.example.test"),
-            tenant_jira_oauth_context_fn=lambda **_: oauth,
+            tenant_atlassian_oauth_context_fn=lambda **_: oauth,
             evaluate_worker_decision_fn=lambda **_: _worker_decision(
                 allowed=False,
                 block_reason="missing_ready_label",
@@ -412,7 +412,7 @@ def test_apply_decision_gate_refreshes_latest_plan_before_replacing_it() -> None
             run=run,
             tenant=tenant,
             settings=SimpleNamespace(admin_ui_base_url="https://admin.example.test"),
-            tenant_jira_oauth_context_fn=lambda **_: oauth,
+            tenant_atlassian_oauth_context_fn=lambda **_: oauth,
             evaluate_worker_decision_fn=lambda **_: _worker_decision(
                 allowed=False,
                 block_reason="missing_ready_label",

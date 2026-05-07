@@ -8,12 +8,12 @@ from datetime import datetime, timezone
 from sqlalchemy.orm import Session
 
 from orchestrator.core.config import Settings
-from orchestrator.core.decision_types import WorkerStageEvent
-from orchestrator.core.followup_context_service import (
+from orchestrator.core.decision.types import WorkerStageEvent
+from orchestrator.core.pm.followup_context_service import (
     FOLLOWUP_CONTEXT_DECISION_GATE,
     upsert_followup_context,
 )
-from orchestrator.core.platform_secret_service import (
+from orchestrator.core.platform.secret_service import (
     PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF,
     resolve_platform_secret_ref,
 )

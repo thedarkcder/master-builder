@@ -78,15 +78,5 @@ Required actions:
 15. If you cannot proceed because of a real blocker, set outcome to `blocked` or `waiting_for_input` and provide `blocker_message`.
 16. Never guess that an evidence source is missing from ticket wording alone. For `decision_state`, `jira_issue`, and `knowledge`, first call the matching tool and use the result.
 
-Output contract:
-- outcome: "continue" | "requeue" | "waiting_for_input" | "blocked" | "failed".
-- blocker_message: null unless outcome is blocked or waiting_for_input.
-- requeue_target: target worker capability when outcome is requeue, else null.
-- requeue_reason: short reason when outcome is requeue, else null.
-- plan_steps: array of concrete execution steps.
-- acceptance_criteria: array of observable outcomes.
-- risks: array of explicit risks.
-- next_stage: "dev" or "test".
-- execution_worker_capability: "linux" or "macos".
-- resolved_prerequisites: array of concise satisfied prerequisite statements.
-- unresolved_prerequisites: array of concise unresolved prerequisite statements.
+Return JSON matching this domain model:
+{{ domain_model | tojson(indent=2) }}

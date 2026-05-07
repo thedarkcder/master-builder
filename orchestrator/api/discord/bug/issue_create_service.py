@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from orchestrator.api.discord.bug.service import build_discord_bug_description
 from orchestrator.api.discord.shared.response_format import build_jira_issue_url
 from orchestrator.storage.models import Tenant
-from orchestrator.tools.jira_oauth import JiraIssueCreateInput, JiraOAuthError
+from orchestrator.tools.atlassian_oauth import JiraIssueCreateInput, AtlassianOAuthError
 
 logger = logging.getLogger(__name__)
 
@@ -26,7 +26,7 @@ def create_discord_bug_issue(
     selected_project_key: str | None,
     tenant_project_keys_fn,
     resolve_discord_channel_name_fn,
-    tenant_jira_oauth_context_fn,
+    tenant_atlassian_oauth_context_fn,
     upload_discord_attachments_to_jira_fn,
     settings,
 ) -> tuple[str, dict]:
@@ -71,14 +71,14 @@ def create_discord_bug_issue(
     )
 
     try:
-        oauth = tenant_jira_oauth_context_fn(session=session, tenant=tenant, settings=settings)
+        oauth = tenant_atlassian_oauth_context_fn(session=session, tenant=tenant, settings=settings)
         create_result = oauth["client"].create_issues_bulk(
             access_token=oauth["access_token"],
             cloud_id=oauth["connection"].cloud_id,
             project_key=project_key,
             issues=[issue_input],
         )
-    except (ValueError, JiraOAuthError) as exc:
+    except (ValueError, AtlassianOAuthError) as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=f"Failed to create Jira bug: {exc}",

@@ -5,6 +5,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any, ClassVar
 
+from orchestrator.core.clarification.questions import ClarificationQuestion
 
 @dataclass(frozen=True)
 class ActorIdentity:
@@ -178,7 +179,7 @@ class DiscordSeedWithThreadAction(TransportAction):
     user_id: str
     content: str
     request_id: str
-    questions: list[str]
+    questions: tuple[ClarificationQuestion, ...]
 
 
 @dataclass(frozen=True)

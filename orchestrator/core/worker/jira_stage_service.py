@@ -4,14 +4,14 @@ import logging
 
 from sqlalchemy.orm import Session
 
-from orchestrator.api.jira_oauth.service import jira_oauth_client, refresh_jira_connection_tokens
-from orchestrator.core.decision_types import (
+from orchestrator.api.atlassian_oauth.service import atlassian_oauth_client, refresh_atlassian_connection_tokens
+from orchestrator.core.decision.types import (
     JiraConfigKey,
     WorkerStageEvent,
     tenant_jira_config_text,
 )
-from orchestrator.storage.models import JiraOAuthConnection, Tenant
-from orchestrator.tools.jira_oauth import JiraOAuthError
+from orchestrator.storage.models import AtlassianOAuthConnection, Tenant
+from orchestrator.tools.atlassian_oauth import AtlassianOAuthError
 
 logger = logging.getLogger(__name__)
 
@@ -51,7 +51,7 @@ def send_stage_update_to_jira(
         )
         return
 
-    connection = session.get(JiraOAuthConnection, connection_id)
+    connection = session.get(AtlassianOAuthConnection, connection_id)
     if connection is None:
         logger.info(
             "worker_jira_stage_update_not_sent tenant_id=%s issue_key=%s stage=%s reason=connection_not_found",
@@ -62,20 +62,20 @@ def send_stage_update_to_jira(
         return
 
     try:
-        access_token = refresh_jira_connection_tokens(
+        access_token = refresh_atlassian_connection_tokens(
             session,
             connection=connection,
             settings=settings,
             tenant_id=tenant.tenant_id,
         )
-        client = jira_oauth_client(session=session, settings=settings, tenant_id=tenant.tenant_id)
+        client = atlassian_oauth_client(session=session, settings=settings, tenant_id=tenant.tenant_id)
         client.add_issue_comment(
             access_token=access_token,
             cloud_id=connection.cloud_id,
             issue_id_or_key=issue_key,
             comment=message,
         )
-    except (JiraOAuthError, ValueError) as exc:
+    except (AtlassianOAuthError, ValueError) as exc:
         logger.warning(
             "worker_jira_stage_update_send_failed tenant_id=%s issue_key=%s stage=%s error=%s",
             tenant.tenant_id,
@@ -108,7 +108,7 @@ def transition_issue_status(
         )
         return
 
-    connection = session.get(JiraOAuthConnection, connection_id)
+    connection = session.get(AtlassianOAuthConnection, connection_id)
     if connection is None:
         logger.info(
             "worker_jira_transition_not_sent tenant_id=%s issue_key=%s target_status=%s reason=connection_not_found",
@@ -119,20 +119,20 @@ def transition_issue_status(
         return
 
     try:
-        access_token = refresh_jira_connection_tokens(
+        access_token = refresh_atlassian_connection_tokens(
             session,
             connection=connection,
             settings=settings,
             tenant_id=tenant.tenant_id,
         )
-        client = jira_oauth_client(session=session, settings=settings, tenant_id=tenant.tenant_id)
+        client = atlassian_oauth_client(session=session, settings=settings, tenant_id=tenant.tenant_id)
         client.transition_issue(
             access_token=access_token,
             cloud_id=connection.cloud_id,
             issue_id_or_key=normalized_issue_key,
             target_status=normalized_target_status,
         )
-    except (JiraOAuthError, ValueError) as exc:
+    except (AtlassianOAuthError, ValueError) as exc:
         logger.warning(
             "worker_jira_transition_failed tenant_id=%s issue_key=%s target_status=%s error=%s",
             tenant.tenant_id,

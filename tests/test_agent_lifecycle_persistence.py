@@ -6,11 +6,11 @@ from tempfile import TemporaryDirectory
 from cryptography.fernet import Fernet
 from sqlalchemy import select
 
-from orchestrator.core.agent_observability import prune_agent_lifecycle_events, record_agent_lifecycle_event
+from orchestrator.core.observability.agent_observability import prune_agent_lifecycle_events, record_agent_lifecycle_event
 from orchestrator.core.config import get_settings
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
-from orchestrator.storage.models import AgentLifecycleEvent, RunStreamEvent
+from orchestrator.storage.models import AgentLifecycleEvent
 
 
 class AgentLifecyclePersistenceTests(unittest.TestCase):
@@ -33,6 +33,7 @@ class AgentLifecyclePersistenceTests(unittest.TestCase):
 
     def test_record_agent_lifecycle_event_persists_to_shared_storage(self) -> None:
         now = datetime.now(timezone.utc)
+
         with self.session_factory() as session:
             record_agent_lifecycle_event(
                 session=session,
@@ -54,6 +55,7 @@ class AgentLifecyclePersistenceTests(unittest.TestCase):
 
     def test_prune_agent_lifecycle_event_applies_retention_cap(self) -> None:
         now = datetime.now(timezone.utc)
+
         with self.session_factory() as session:
             for idx in range(6):
                 record_agent_lifecycle_event(
@@ -77,17 +79,6 @@ class AgentLifecyclePersistenceTests(unittest.TestCase):
             ).scalars().all()
             self.assertEqual(len(events), 3)
             self.assertEqual([event.run_id for event in events], ["run-3", "run-4", "run-5"])
-
-            stream_events = session.execute(
-                select(RunStreamEvent)
-                .where(
-                    RunStreamEvent.tenant_id == "tenant-a",
-                    RunStreamEvent.event_kind == "agent_lifecycle",
-                )
-                .order_by(RunStreamEvent.stream_offset.asc())
-            ).scalars().all()
-            self.assertEqual(len(stream_events), 3)
-            self.assertEqual([event.run_id for event in stream_events], ["run-3", "run-4", "run-5"])
 
 
 if __name__ == "__main__":

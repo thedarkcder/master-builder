@@ -26,8 +26,8 @@ from orchestrator.api.discord.shared.state import (
     live_voice_room_links_from_discord_config,
 )
 from orchestrator.api.discord.shared.state_repository import resolve_project_for_discord_channel
-from orchestrator.core.codex_runtime import CodexRuntimeError
-from orchestrator.core.codex_working_dir import resolve_codex_working_dir
+from orchestrator.core.runtime.runtime import CodexRuntimeError
+from orchestrator.core.runtime.working_dir import resolve_codex_working_dir
 from orchestrator.core.config import Settings
 from orchestrator.core.discord.live_voice_audio import (
     LiveVoiceAudioError,
@@ -56,8 +56,8 @@ from orchestrator.core.discord.personas import (
     format_voice_room_persona_label,
     resolve_voice_room_persona_profile,
 )
-from orchestrator.core.observability import scoped_log_context
-from orchestrator.core.platform_secret_service import (
+from orchestrator.core.observability.otel import scoped_log_context
+from orchestrator.core.platform.secret_service import (
     PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF,
     resolve_platform_secret_ref,
 )
@@ -799,10 +799,10 @@ class DiscordLiveVoiceService:
                     "voice_channel_id": room.voice_channel_id,
                 },
             )
-            lane = str(routed.get("lane") or "ask").strip().lower()
-            entry_persona = str(routed.get("persona") or "pm").strip().lower()
-            conf = float(routed.get("confidence") or 0.0)
-            reason = str(routed.get("reason") or "").strip()
+            lane = routed.lane
+            entry_persona = routed.persona
+            conf = routed.confidence
+            reason = routed.reason
             logger.info(
                 "discord_live_voice_entry_routed lane=%s persona=%s confidence=%s reason=%s",
                 lane,

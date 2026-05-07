@@ -6,6 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 import orchestrator.core.worker.execution_service as execution_service_module
+import orchestrator.core.worker.run_dispatch as run_dispatch_module
 import orchestrator.worker as worker_module
 from orchestrator.core.config import get_settings
 from orchestrator.core.worker.run_health import worker_service_instance_id_for_mode
@@ -272,7 +273,7 @@ class WorkerClaimedRunIntegrationTests(SqliteTemplateDbTestCase):
     def _run_claimed(self, *, claimed_run, outcome: str):
         fake_runner = WorkflowRunner(_FakeAgents(outcome=outcome))
         with (
-            patch.object(worker_module, "build_workflow_runner_for_session", return_value=fake_runner),
+            patch.object(run_dispatch_module, "build_workflow_runner_for_session", return_value=fake_runner),
             patch.object(execution_service_module, "_build_workflow_request_for_run", new=self._fake_workflow_request),
             patch.object(execution_service_module, "ensure_project_repository_checkout", side_effect=lambda *args, **kwargs: None),
             patch.object(execution_service_module, "cleanup_run_workspaces", side_effect=lambda *args, **kwargs: None),
@@ -299,7 +300,7 @@ class WorkerClaimedRunIntegrationTests(SqliteTemplateDbTestCase):
     def _run_claimed_child_entry(self, *, claimed_run, outcome: str) -> int:
         fake_runner = WorkflowRunner(_FakeAgents(outcome=outcome))
         with (
-            patch.object(worker_module, "build_workflow_runner_for_session", return_value=fake_runner),
+            patch.object(run_dispatch_module, "build_workflow_runner_for_session", return_value=fake_runner),
             patch.object(execution_service_module, "_build_workflow_request_for_run", new=self._fake_workflow_request),
             patch.object(execution_service_module, "ensure_project_repository_checkout", side_effect=lambda *args, **kwargs: None),
             patch.object(execution_service_module, "cleanup_run_workspaces", side_effect=lambda *args, **kwargs: None),

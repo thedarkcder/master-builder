@@ -15,14 +15,15 @@ from fastapi.testclient import TestClient
 
 from orchestrator.api.main import create_app
 from orchestrator.core.config import get_settings
-from orchestrator.core.platform_secret_service import platform_secret_service
-from orchestrator.core.secrets import encrypt_value
+from orchestrator.core.platform.secret_service import platform_secret_service
+from orchestrator.core.runtime.payload_models import AskIntent
+from orchestrator.core.platform.secrets import encrypt_value
 from orchestrator.core.worker.webhook_job_service import process_next_webhook_job
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
 from orchestrator.storage.models import (
     DecisionCase,
-    JiraOAuthConnection,
+    AtlassianOAuthConnection,
     Project,
     Tenant,
 )
@@ -174,7 +175,7 @@ class DiscordInteractionsProductionPathTests(unittest.TestCase):
                 created_at=now,
                 updated_at=now,
             )
-            connection = JiraOAuthConnection(
+            connection = AtlassianOAuthConnection(
                 connection_id="conn-1",
                 account_id="account-1",
                 account_email="test@example.com",
@@ -313,11 +314,11 @@ class DiscordInteractionsProductionPathTests(unittest.TestCase):
                 return_value=discord_client,
             ),
             patch(
-                "orchestrator.api.discord.ingress.jira_runtime.refresh_jira_connection_tokens",
+                "orchestrator.api.discord.ingress.jira_runtime.refresh_atlassian_connection_tokens",
                 return_value="access-token",
             ),
             patch(
-                "orchestrator.api.discord.ingress.jira_runtime.jira_oauth_client",
+                "orchestrator.api.discord.ingress.jira_runtime.atlassian_oauth_client",
                 return_value=fake_jira_client,
             ),
             patch(
@@ -325,8 +326,8 @@ class DiscordInteractionsProductionPathTests(unittest.TestCase):
                 return_value=[],
             ),
             patch(
-                "orchestrator.api.discord.commands.ask.plan_discord_ask_intent_with_codex",
-                return_value={"mode": "answer", "summary": "Board answer"},
+                "orchestrator.api.discord.commands.ask.plan_discord_ask_intent_with_runtime",
+                return_value=AskIntent(mode="answer", summary="Board answer", command=None),
             ),
             patch(
                 "orchestrator.api.discord.commands.ask.answer_board_question_with_runtime",

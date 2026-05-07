@@ -8,6 +8,7 @@ import { ArrowLeft, CheckCircle2, Clock, MessageSquare, User } from "lucide-reac
 import { useAuth } from "@/components/auth-provider";
 import { DiscordSection } from "@/components/tenant-form-sections";
 import { Button } from "@/components/ui/button";
+import { useToast } from "@/components/ui/toast-provider";
 
 import { Input } from "@/components/ui/input";
 import {
@@ -18,7 +19,7 @@ import {
   runProjectAutomationNow,
   type ProjectAutomationExecutionRecord,
   updateProjectAutomations,
-  updateProject,
+  updateProjectDiscord,
   type Credentials,
   type DiscordAllowlistRequestRecord,
   type ProjectAutomationRecord,
@@ -145,6 +146,7 @@ export function ProjectAutomationsContent({
   credentials,
 }: ProjectAutomationsContentProps) {
   const { principal } = useAuth();
+  const { showToast } = useToast();
   const isPlatformSuperAdmin = principal?.principal_type === "platform_super_admin";
   const [automationDefinitions, setAutomationDefinitions] = useState<ProjectAutomationRecord[]>([]);
   const [automationBusy, setAutomationBusy] = useState(false);
@@ -208,9 +210,13 @@ export function ProjectAutomationsContent({
       });
       const savedAutomations = updated.automations ?? [];
       setAutomationDefinitions(savedAutomations.length > 0 ? savedAutomations : defaultAutomationDrafts());
-      setAutomationStatusLine(`Saved ${updated.automations?.length ?? 0} automation configuration${(updated.automations?.length ?? 0) === 1 ? "" : "s"}.`);
+      showToast({
+        title: "Automations saved",
+        description: `${updated.automations?.length ?? 0} configuration${(updated.automations?.length ?? 0) === 1 ? "" : "s"}.`,
+        tone: "success",
+      });
     } catch (error) {
-      setAutomationStatusLine(`Save failed: ${(error as Error).message}`);
+      showToast({ title: "Automation save failed", description: (error as Error).message, tone: "error" });
     } finally {
       setAutomationBusy(false);
     }
@@ -223,9 +229,9 @@ export function ProjectAutomationsContent({
       const updated = await runProjectAutomationNow(credentials, tenantId, projectId, kind);
       const savedAutomations = updated.automations ?? [];
       setAutomationDefinitions(savedAutomations.length > 0 ? savedAutomations : defaultAutomationDrafts());
-      setAutomationStatusLine(`Queued ${getAutomationLabel(kind)} for immediate execution.`);
+      showToast({ title: "Automation queued", description: getAutomationLabel(kind), tone: "success" });
     } catch (error) {
-      setAutomationStatusLine(`Run now failed: ${(error as Error).message}`);
+      showToast({ title: "Automation run failed", description: (error as Error).message, tone: "error" });
     } finally {
       setAutomationBusy(false);
     }
@@ -444,6 +450,7 @@ export function ProjectNotificationsContent({
   credentials,
   onAllowlistRequestsChange,
 }: ProjectNotificationsContentProps) {
+  const { showToast } = useToast();
   const [project, setProject] = useState<ProjectRecord | null>(null);
   const [busy, setBusy] = useState(false);
   const [statusLine, setStatusLine] = useState("");
@@ -501,13 +508,7 @@ export function ProjectNotificationsContent({
         : {};
     setBusy(true);
     try {
-      const updated = await updateProject(credentials, tenantId, projectId, {
-        name: project.name,
-        github_repository: project.github_repository,
-        jira_project_key: project.jira_project_key,
-        policy_overrides: project.policy_overrides,
-        environment: project.environment,
-        secret_refs: project.secret_refs,
+      const updated = await updateProjectDiscord(credentials, tenantId, projectId, {
         discord: discordEnabled
           ? {
               ...(project.discord ?? {}),
@@ -518,7 +519,6 @@ export function ProjectNotificationsContent({
               live_voice_room_links: liveVoiceRoomLinks,
             }
           : null,
-        is_archived: project.is_archived,
       });
       setProject(updated);
       setDiscordEnabled(Boolean(updated.discord));
@@ -530,14 +530,16 @@ export function ProjectNotificationsContent({
         const savedVoiceChannelId = updated.discord.live_voice_channel_id ?? normalizedLiveVoiceChannelId;
         const savedLinkedTextChannelId =
           updated.discord.live_voice_linked_text_channel_id ?? normalizedLinkedTextChannelId;
-        setStatusLine(
-          `Discord settings saved. Live voice room ${savedVoiceChannelId} is linked to ${savedLinkedTextChannelId}.`
-        );
+        showToast({
+          title: "Discord settings saved",
+          description: `Live voice room ${savedVoiceChannelId} is linked to ${savedLinkedTextChannelId}.`,
+          tone: "success",
+        });
       } else {
-        setStatusLine("Discord settings saved. Live voice is disabled for this project.");
+        showToast({ title: "Discord settings saved", description: "Live voice is disabled for this project.", tone: "success" });
       }
     } catch (error) {
-      setStatusLine(`Save failed: ${(error as Error).message}`);
+      showToast({ title: "Discord settings save failed", description: (error as Error).message, tone: "error" });
     } finally {
       setBusy(false);
     }
@@ -551,9 +553,9 @@ export function ProjectNotificationsContent({
       const requests = await listDiscordAllowlistRequests(credentials, tenantId, projectId);
       setAllowlistRequests(requests);
       onAllowlistRequestsChange?.(requests);
-      setStatusLine(result.details);
+      showToast({ title: "Allowlist request approved", description: result.details, tone: "success" });
     } catch (error) {
-      setStatusLine(`Approve failed: ${(error as Error).message}`);
+      showToast({ title: "Allowlist approval failed", description: (error as Error).message, tone: "error" });
     } finally {
       setAllowlistBusyUserId(null);
     }

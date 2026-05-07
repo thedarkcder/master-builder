@@ -5,7 +5,12 @@ import unittest
 
 import pytest
 
-from orchestrator.core.followup_context_service import (
+from orchestrator.core.clarification.projection_service import (
+    ClarificationProjectionSpec,
+    upsert_clarification_projection,
+)
+from orchestrator.core.clarification.questions import ClarificationQuestionSet
+from orchestrator.core.pm.followup_context_service import (
     close_followup_contexts,
     FOLLOWUP_CONTEXT_PM_INTERVIEW,
     resolve_discord_command_subject_key,
@@ -112,6 +117,42 @@ class FollowupContextServiceTests(unittest.TestCase):
                 )
             )
 
+    def test_clarification_projection_drops_stale_jira_comment_id_when_question_set_changes(self) -> None:
+        with self.session_factory() as session:
+            upsert_clarification_projection(
+                session=session,
+                spec=ClarificationProjectionSpec(
+                    tenant_id="route25",
+                    project_id="route25-default",
+                    context_type=FOLLOWUP_CONTEXT_PM_INTERVIEW,
+                    issue_key="MAB-243",
+                    request_id="parent-planning-clarification:MAB-243",
+                    origin_command="clarify",
+                    questions=ClarificationQuestionSet.from_values(["What is the audit window?"]).questions,
+                    metadata={
+                        "questions": [{"question": "What is the audit window?"}],
+                        "jira_comment_id": "comment-old",
+                    },
+                ),
+            )
+            projection = upsert_clarification_projection(
+                session=session,
+                spec=ClarificationProjectionSpec(
+                    tenant_id="route25",
+                    project_id="route25-default",
+                    context_type=FOLLOWUP_CONTEXT_PM_INTERVIEW,
+                    issue_key="MAB-243",
+                    request_id="parent-planning-clarification:MAB-243",
+                    origin_command="clarify",
+                    questions=ClarificationQuestionSet.from_values(["What email verification policy should v1 use?"]).questions,
+                    metadata={"questions": [{"question": "What email verification policy should v1 use?"}]},
+                ),
+            )
+
+            self.assertFalse(projection.already_projected)
+            self.assertNotIn("jira_comment_id", projection.metadata)
+            self.assertNotIn("created_comment_id", projection.metadata)
+
     def test_resolve_followup_context_prefers_root_message_over_parent_channel(self) -> None:
         with self.session_factory() as session:
             upsert_followup_context(
@@ -171,6 +212,38 @@ class FollowupContextServiceTests(unittest.TestCase):
             assert context is not None
             self.assertEqual(context.issue_key, "TP-42")
             self.assertEqual(context.context_type, "engineering_clarification")
+
+    def test_clarification_projection_detects_changed_questions_before_metadata_update(self) -> None:
+        first_questions = ClarificationQuestionSet.from_values([{"question": "What should happen first?"}])
+        changed_questions = ClarificationQuestionSet.from_values([{"question": "What should happen second?"}])
+        with self.session_factory() as session:
+            first = upsert_clarification_projection(
+                session=session,
+                spec=ClarificationProjectionSpec(
+                    tenant_id="route25",
+                    project_id="route25-default",
+                    context_type="engineering_clarification",
+                    issue_key="TP-42",
+                    request_id="engineering-clarification:TP-42",
+                    questions=first_questions.questions,
+                    metadata={"questions": first_questions.to_payload()},
+                ),
+            )
+            changed = upsert_clarification_projection(
+                session=session,
+                spec=ClarificationProjectionSpec(
+                    tenant_id="route25",
+                    project_id="route25-default",
+                    context_type="engineering_clarification",
+                    issue_key="TP-42",
+                    request_id="engineering-clarification:TP-42",
+                    questions=changed_questions.questions,
+                    metadata={"questions": changed_questions.to_payload()},
+                ),
+            )
+
+        self.assertFalse(first.already_projected)
+        self.assertFalse(changed.already_projected)
 
     def test_resolve_followup_context_match_requires_explicit_thread_or_message_identity(self) -> None:
         with self.session_factory() as session:

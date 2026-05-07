@@ -3,7 +3,7 @@ from __future__ import annotations
 from sqlalchemy.orm import Session
 
 from orchestrator.api.schemas import WorkerRuntimeAuthRequestRead
-from orchestrator.core.worker_runtime_status_service import (
+from orchestrator.core.worker.runtime_status_service import (
     get_worker_runtime_login_request,
     start_worker_runtime_login_request,
 )

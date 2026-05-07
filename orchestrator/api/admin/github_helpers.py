@@ -7,8 +7,8 @@ from fastapi import HTTPException, status
 from sqlalchemy.orm import Session
 
 from orchestrator.api.schemas import GitHubInstallStart, GitHubRepositoryRead
-from orchestrator.core.platform_secret_service import PLATFORM_SECRET_GITHUB_APP_SLUG_REF
-from orchestrator.core.github_install_state import create_install_state_token, parse_install_state_token
+from orchestrator.core.platform.secret_service import PLATFORM_SECRET_GITHUB_APP_SLUG_REF
+from orchestrator.core.integrations.github.install_state import create_install_state_token, parse_install_state_token
 from orchestrator.storage.models import Tenant
 from orchestrator.tools.github_app import GitHubApiError
 

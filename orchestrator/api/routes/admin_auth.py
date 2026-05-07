@@ -9,7 +9,7 @@ from orchestrator.api.schemas import (
     AdminLoginRequest,
     AdminLoginResponse,
 )
-from orchestrator.core.admin_tokens import create_admin_access_token
+from orchestrator.core.platform.admin_tokens import create_admin_access_token
 from orchestrator.core.config import get_settings
 from orchestrator.core.security import require_admin, validate_admin_credentials
 

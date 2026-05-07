@@ -10,6 +10,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
+import { useToast } from "@/components/ui/toast-provider";
 import {
   deleteTenantManagedSecret,
   listTenantManagedSecrets,
@@ -22,6 +23,7 @@ import { formatTimestamp } from "@/lib/datetime";
 export default function TenantSecretsPage() {
   const params = useParams<{ tenantId: string }>();
   const { credentials } = useAuth();
+  const { showToast } = useToast();
   const tenantId = decodeURIComponent(params.tenantId);
   const tenantPrefix = useMemo(() => `tenant/${tenantId}/`, [tenantId]);
 
@@ -69,8 +71,9 @@ export default function TenantSecretsPage() {
       setEditingSecretRef(null);
       setStatusLine("");
       await refresh();
+      showToast({ title: editingSecretRef ? "Secret updated" : "Secret saved", description: secretKey.trim(), tone: "success" });
     } catch (error) {
-      setStatusLine(`Save failed: ${(error as Error).message}`);
+      showToast({ title: "Secret save failed", description: (error as Error).message, tone: "error" });
     } finally {
       setSaving(false);
     }
@@ -108,8 +111,9 @@ export default function TenantSecretsPage() {
         setSecretValue("");
       }
       await refresh();
+      showToast({ title: "Secret deleted", description: secretRefToDelete, tone: "success" });
     } catch (error) {
-      setStatusLine(`Delete failed: ${(error as Error).message}`);
+      showToast({ title: "Secret delete failed", description: (error as Error).message, tone: "error" });
     } finally {
       setSaving(false);
     }

@@ -3,11 +3,11 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from orchestrator.core.decision_planner import DecisionPlannerQuestion, DecisionPlannerResult
-from orchestrator.core.decision_gate import DecisionGateResult
+from orchestrator.core.decision.planner import DecisionPlannerQuestion, DecisionPlannerResult
+from orchestrator.core.decision.gate import DecisionGateResult
 from orchestrator.core.gtd import GoodToDoValidationResult
-from orchestrator.core.pre_run_check import PreRunCheckResult
-from orchestrator.tools.jira_oauth import JiraIssueDetail, JiraIssuePreview
+from orchestrator.core.precheck.pre_run_check import PreRunCheckResult
+from orchestrator.tools.atlassian_oauth import JiraIssueDetail, JiraIssuePreview
 from tests.test_support.discord_command_reply_harness import DiscordCommandReplyHarness
 
 
@@ -60,7 +60,7 @@ class DiscordReplyCommandFlowTests(DiscordCommandReplyHarness):
                     description="Objective: refreshed for retry.",
                 ),
             ),
-            patch("orchestrator.api.discord.ingress.jira_runtime.tenant_jira_oauth_context", return_value=oauth_context),
+            patch("orchestrator.api.discord.ingress.jira_runtime.tenant_atlassian_oauth_context", return_value=oauth_context),
             patch("orchestrator.api.discord.ingress.executor.build_codex_runtime", return_value=runtime),
             patch(
                 "orchestrator.api.discord.ingress.executor._default_decision_clarification_port.capture_decision_reply_and_recheck",
@@ -124,7 +124,7 @@ class DiscordReplyCommandFlowTests(DiscordCommandReplyHarness):
     def test_reply_with_incomplete_oauth_context_returns_controlled_502(self) -> None:
         self._queue_run(run_id="run-failed-reply-2", issue_key="TP-89", status="failed")
 
-        with patch("orchestrator.api.discord.ingress.jira_runtime.tenant_jira_oauth_context", return_value={"access_token": "tok-only"}):
+        with patch("orchestrator.api.discord.ingress.jira_runtime.tenant_atlassian_oauth_context", return_value={"access_token": "tok-only"}):
             response = self.client.post(
                 f"/discord/command/{self.tenant_id}",
                 json={
@@ -181,7 +181,7 @@ class DiscordReplyCommandFlowTests(DiscordCommandReplyHarness):
         with (
             patch("orchestrator.api.discord.commands.run_controls.dispatch_run_control_command") as dispatch_mock,
             patch("orchestrator.api.discord.ingress.jira_runtime.fetch_jira_issue_preview") as preview_mock,
-            patch("orchestrator.api.discord.ingress.jira_runtime.tenant_jira_oauth_context", return_value=oauth_context),
+            patch("orchestrator.api.discord.ingress.jira_runtime.tenant_atlassian_oauth_context", return_value=oauth_context),
             patch(
                 "orchestrator.api.discord.ingress.executor._default_decision_clarification_port.capture_decision_reply_and_recheck",
                 return_value=SimpleNamespace(
@@ -217,7 +217,7 @@ class DiscordReplyCommandFlowTests(DiscordCommandReplyHarness):
                     ),
                 ),
             ),
-            patch("orchestrator.core.decision_engine.plan_decision_questions", return_value=planner_result),
+            patch("orchestrator.core.decision.engine.plan_decision_questions", return_value=planner_result),
             patch(
                 "orchestrator.api.discord.commands.run_controls.load_cycle_question_feedback",
                 return_value=(
@@ -280,7 +280,7 @@ class DiscordReplyCommandFlowTests(DiscordCommandReplyHarness):
             "client": oauth_client,
         }
         with (
-            patch("orchestrator.api.discord.ingress.jira_runtime.tenant_jira_oauth_context", return_value=oauth_context),
+            patch("orchestrator.api.discord.ingress.jira_runtime.tenant_atlassian_oauth_context", return_value=oauth_context),
             patch(
                 "orchestrator.api.discord.ingress.executor._default_decision_clarification_port.capture_decision_reply_and_recheck"
             ) as reply_recheck_mock,
@@ -383,7 +383,7 @@ class DiscordReplyCommandFlowTests(DiscordCommandReplyHarness):
             captured_answer_summary=None,
         )
         with (
-            patch("orchestrator.api.discord.ingress.jira_runtime.tenant_jira_oauth_context", return_value=oauth_context),
+            patch("orchestrator.api.discord.ingress.jira_runtime.tenant_atlassian_oauth_context", return_value=oauth_context),
             patch(
                 "orchestrator.api.discord.ingress.executor._default_decision_clarification_port.capture_decision_reply_and_recheck",
                 return_value=SimpleNamespace(
@@ -419,7 +419,7 @@ class DiscordReplyCommandFlowTests(DiscordCommandReplyHarness):
                     ),
                 ),
             ),
-            patch("orchestrator.core.decision_engine.plan_decision_questions", return_value=planner_result),
+            patch("orchestrator.core.decision.engine.plan_decision_questions", return_value=planner_result),
             patch(
                 "orchestrator.api.discord.commands.run_controls.build_runtime_precheck_message",
                 return_value=(
@@ -485,7 +485,7 @@ class DiscordReplyCommandFlowTests(DiscordCommandReplyHarness):
         enqueue_result = SimpleNamespace(enqueued=True, run=queued_run, reason=None)
 
         with (
-            patch("orchestrator.api.discord.ingress.jira_runtime.tenant_jira_oauth_context", return_value=oauth_context),
+            patch("orchestrator.api.discord.ingress.jira_runtime.tenant_atlassian_oauth_context", return_value=oauth_context),
             patch(
                 "orchestrator.api.discord.ingress.executor._default_decision_clarification_port.capture_decision_reply_and_recheck",
                 return_value=SimpleNamespace(
@@ -566,7 +566,7 @@ class DiscordReplyCommandFlowTests(DiscordCommandReplyHarness):
         }
 
         with (
-            patch("orchestrator.api.discord.ingress.jira_runtime.tenant_jira_oauth_context", return_value=oauth_context),
+            patch("orchestrator.api.discord.ingress.jira_runtime.tenant_atlassian_oauth_context", return_value=oauth_context),
             patch(
                 "orchestrator.api.discord.ingress.executor._default_decision_clarification_port.capture_decision_reply_and_recheck",
                 side_effect=ValueError("No active decision cycle exists for TP-92"),

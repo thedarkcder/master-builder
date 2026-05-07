@@ -19,7 +19,7 @@ type FormState = {
   llamaCtxSize: string;
   adminPassword: string;
   githubState: string;
-  jiraState: string;
+  atlassianState: string;
   secretCryptoProvider: string;
   vaultAddr: string;
   vaultToken: string;
@@ -52,7 +52,7 @@ const defaults: FormState = {
   llamaCtxSize: "8192",
   adminPassword: "",
   githubState: "",
-  jiraState: "",
+  atlassianState: "",
   secretCryptoProvider: "vault_transit",
   vaultAddr: "",
   vaultToken: "",
@@ -73,7 +73,7 @@ const baseRequiredKeys: (keyof FormState)[] = [
   "sshKey",
   "adminPassword",
   "githubState",
-  "jiraState",
+  "atlassianState",
   "secretCryptoProvider",
   "nextAuthSecret",
   "emailFrom",
@@ -128,7 +128,7 @@ export function HetznerSetupForm() {
       `export LLAMA_CPP_CTX_SIZE=${quote(state.llamaCtxSize)}`,
       `export ORCHESTRATOR_ADMIN_PASSWORD=${quote(state.adminPassword)}`,
       `export ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET=${quote(state.githubState)}`,
-      `export ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET=${quote(state.jiraState)}`,
+      `export ORCHESTRATOR_ATLASSIAN_OAUTH_STATE_SECRET=${quote(state.atlassianState)}`,
       `export ORCHESTRATOR_SECRET_CRYPTO_PROVIDER=${quote(state.secretCryptoProvider)}`,
       `export ORCHESTRATOR_VAULT_ADDR=${quote(state.vaultAddr)}`,
       `export ORCHESTRATOR_VAULT_TOKEN=${quote(state.vaultToken)}`,
@@ -162,7 +162,7 @@ export function HetznerSetupForm() {
       `  - export LLAMA_CPP_CTX_SIZE=${quote(state.llamaCtxSize)}`,
       `  - export ORCHESTRATOR_ADMIN_PASSWORD=${quote(state.adminPassword)}`,
       `  - export ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET=${quote(state.githubState)}`,
-      `  - export ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET=${quote(state.jiraState)}`,
+      `  - export ORCHESTRATOR_ATLASSIAN_OAUTH_STATE_SECRET=${quote(state.atlassianState)}`,
       `  - export ORCHESTRATOR_SECRET_CRYPTO_PROVIDER=${quote(state.secretCryptoProvider)}`,
       `  - export ORCHESTRATOR_VAULT_ADDR=${quote(state.vaultAddr)}`,
       `  - export ORCHESTRATOR_VAULT_TOKEN=${quote(state.vaultToken)}`,
@@ -228,7 +228,7 @@ export function HetznerSetupForm() {
           {input("llamaCtxSize", "LLAMA_CPP_CTX_SIZE")}
           {input("adminPassword", "ORCHESTRATOR_ADMIN_PASSWORD", "password")}
           {input("githubState", "ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET", "password")}
-          {input("jiraState", "ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET", "password")}
+          {input("atlassianState", "ORCHESTRATOR_ATLASSIAN_OAUTH_STATE_SECRET", "password")}
           <label className="block">
             <span className="mb-1 block text-xs font-semibold uppercase tracking-[0.14em] text-[#8fa0ad]">
               ORCHESTRATOR_SECRET_CRYPTO_PROVIDER
