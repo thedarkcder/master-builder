@@ -64,7 +64,7 @@ test("shows guided app launch for projects with no apps and starts repo analysis
   await expect(page.getByText("Queued analysis run analysis-guided-1.")).toBeVisible();
 });
 
-test("guides app launch through recommended settings and release creation", async ({ page }) => {
+test("launches an app with MB-managed deployment settings in one action", async ({ page }) => {
   const tenant = makeTenant({ tenant_id: "bsktpay-2" });
   const project = makeProject({
     tenant_id: tenant.tenant_id,
@@ -145,17 +145,13 @@ test("guides app launch through recommended settings and release creation", asyn
   await page.goto("/bsktpay-2/projects/bsktpay-2-default/apps");
 
   await expect(page.getByRole("heading", { name: "Launch BsktPay Web" })).toBeVisible();
-  await page.getByRole("button", { name: "Use recommended settings" }).click();
-  await page.getByRole("button", { name: "Save launch settings" }).click();
+  await page.getByRole("button", { name: "Launch app" }).click();
 
   expect(savedConfig).toMatchObject({
     enabled: true,
     environment_name: "production",
     source_strategy: "dockerfile",
   });
-
-  await page.getByRole("button", { name: "Launch live app" }).click();
-
   expect(releaseRequest).toMatchObject({ reason: "Guided launch" });
-  await expect(page.getByText("Queued release release-1.")).toBeVisible();
+  await expect(page.getByText("Queued release release-1. MB will expose a temporary app URL when the deployment host reports it.")).toBeVisible();
 });

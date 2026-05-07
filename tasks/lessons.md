@@ -1,6 +1,7 @@
 2026-05-05
 
 - Deployment/app configuration pages should default to guided business-user outcomes and keep advanced infrastructure controls secondary. Do not make normal users start from an empty low-level app table when the product promise is launching a live working app.
+- A guided deployment wizard is not a form with better labels. The normal path should ask the user for intent and make MB derive technical config in the background; keep ports, build strategies, domains, backups, and low-level release details behind advanced tools.
 - When optimizing shell/sidebar data loading, preserve the user-visible navigation contract. If a broad payload is too heavy, add a lightweight read model for the shell instead of hiding navigation until the user is already inside the destination route.
 - Deployment/release paths must keep read contracts, registration tokens, and external side effects fail-closed. Never reuse write models for secret-bearing reads, never let bootstrap tokens remain valid after first registration, never mutate state from GET/list calls, never match external webhooks to "latest" rows without a stable provider id, and always persist durable release intent before calling an external deployment provider.
 - When backend tenant settings are split into section routes, split the frontend submit contracts too. A single form save that calls multiple section endpoints recreates hidden coupling even when the backend is correctly separated.
