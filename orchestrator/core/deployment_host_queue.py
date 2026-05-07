@@ -25,7 +25,7 @@ def _is_postgres(session: Session) -> bool:
 class DeploymentHostCommandEnqueueRequest:
     host_id: str
     kind: str
-    tenant_id: str | None
+    tenant_id: str
     project_id: str | None
     app_id: str | None
     restore_run_id: str | None
@@ -39,10 +39,13 @@ def enqueue_deployment_host_command(
     now: datetime | None = None,
 ) -> DeploymentHostCommand:
     timestamp = now or _now()
+    tenant_id = str(request.tenant_id or "").strip()
+    if not tenant_id:
+        raise ValueError("deployment host commands require tenant_id")
     command = DeploymentHostCommand(
         command_id=str(uuid4()),
         host_id=request.host_id,
-        tenant_id=request.tenant_id,
+        tenant_id=tenant_id,
         project_id=request.project_id,
         app_id=request.app_id,
         restore_run_id=request.restore_run_id,

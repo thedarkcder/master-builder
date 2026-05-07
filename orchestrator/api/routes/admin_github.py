@@ -27,9 +27,9 @@ from orchestrator.core.security import (
     require_authenticated_principal,
     require_tenant_permission,
 )
-from orchestrator.core.tenant_access import PERMISSION_PROJECTS_MANAGE, PERMISSION_WORKSPACE_MANAGE
-from orchestrator.core.platform_secret_service import resolve_platform_secret_ref
-from orchestrator.core.tenant_secret_service import resolve_scoped_secret_ref
+from orchestrator.core.platform.access import PERMISSION_PROJECTS_MANAGE, PERMISSION_WORKSPACE_MANAGE
+from orchestrator.core.platform.secret_service import resolve_platform_secret_ref
+from orchestrator.core.platform.tenant_secret_service import resolve_scoped_secret_ref
 from orchestrator.storage.models import Tenant
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])

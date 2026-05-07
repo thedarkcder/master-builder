@@ -10,9 +10,5 @@ Child description:
 Engineering question:
 {{ question }}
 
-Output contract:
-- Use "product_behavior" only when the answer must come from product intent, user-facing behavior, or stakeholder decision.
-- Use "technical_implementation" when engineering can decide within the existing product brief.
-- stakeholder_question must avoid implementation jargon and ask for the smallest product decision needed.
-- child_block_note should be one or two sentences suitable for a Jira child comment.
-- reason should briefly explain the classification.
+Return JSON matching this domain model:
+{{ domain_model | tojson(indent=2) }}

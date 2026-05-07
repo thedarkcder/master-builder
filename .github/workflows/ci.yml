@@ -44,12 +44,22 @@ jobs:
 
           has_file_named() {
             local filename="$1"
-            [ -n "$(first_file_named "$filename")" ]
+            first_file_named "$filename" >/dev/null
           }
 
           first_file_named() {
             local filename="$1"
-            git ls-files | awk -F/ -v filename="$filename" '$NF==filename {print; exit}'
+            local match=""
+            local path
+            while IFS= read -r path; do
+              if [ -z "$match" ]; then
+                match="$path"
+              fi
+            done < <(git ls-files -- "$filename" "*/$filename")
+            if [ -z "$match" ]; then
+              return 1
+            fi
+            printf '%s\n' "$match"
           }
 
           # Java detection
@@ -273,8 +283,8 @@ jobs:
           set -euo pipefail
           npm run test:e2e
 
-  python-confidence:
-    name: Python confidence
+  python-audit:
+    name: Python audit gate
     needs: detect
     if: needs.detect.outputs.is_python == 'true'
     runs-on: self-hosted
@@ -331,13 +341,19 @@ jobs:
           set -euo pipefail
           python scripts/quality/check_dead_code.py
 
+      - name: Architecture boundary gate
+        shell: bash
+        run: |
+          set -euo pipefail
+          pytest -q tests/test_architecture_boundaries.py
+
       - name: No untracked TODO/FIXME in production paths
         shell: bash
         run: |
           set -euo pipefail
           python scripts/quality/check_no_todo_markers.py
 
-      - name: Pytest confidence pack
+      - name: Production-path audit pack
         shell: bash
         run: |
           set -euo pipefail
@@ -405,7 +421,7 @@ jobs:
 
   summary:
     name: CI summary
-    needs: [detect, repo-hygiene, java, node, python-confidence, python-rest]
+    needs: [detect, repo-hygiene, java, node, python-audit, python-rest]
     runs-on: self-hosted
     if: always()
     steps:

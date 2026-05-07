@@ -5,35 +5,48 @@ from urllib.parse import parse_qs, quote_plus, urlparse
 from unittest.mock import patch
 from types import SimpleNamespace
 
-from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 from sqlalchemy import select
 
+from orchestrator.api.main import create_app
+from orchestrator.api.admin.schema_mappers import workflow_observability_event_to_schema
 from orchestrator.api.admin.tenant_crud import purge_expired_archived_tenants
 from orchestrator.api.admin.project_normalization import resolve_project_discord_channel_name
-from orchestrator.api.schemas import ProjectDeploymentConfigRead
+from orchestrator.core.platform.admin_notifications import AdminNotificationScope, notification_fingerprint_for
 from orchestrator.core.config import get_settings
-from orchestrator.core.agent_observability import (
+from orchestrator.core.observability.agent_observability import (
     record_agent_lifecycle_event,
-    reset_agent_observability_for_tests,
 )
-from orchestrator.core.run_logs import record_run_log_event
-from orchestrator.core.secrets import encrypt_value
+from orchestrator.core.observability.logging_pane import emit_logging_pane_event
+from orchestrator.core.observability.events import ProductEvent
+from orchestrator.core.parent_feature_workflow.operations import (
+    PARENT_OP_BACKLOG_PLANNING,
+    PARENT_OP_BRIEF_NORMALIZATION,
+    PARENT_OP_DEVELOPMENT_START,
+    PARENT_OP_DEVELOPMENT_START_LINK_PROJECTION,
+    PARENT_OP_DISCORD_FOLLOWUP_PROJECTION,
+    PARENT_OP_JIRA_CHILD_FANOUT,
+    PARENT_OP_JIRA_CHILD_PROMOTION,
+    PARENT_OP_JIRA_COMMENT_PROJECTION,
+    PARENT_OP_JIRA_PARENT_UPDATE,
+    PARENT_OP_NOTIFICATION_EMIT,
+    PARENT_OP_PM_DECISION_RESOLUTION,
+)
+from orchestrator.core.platform.secrets import encrypt_value
+from orchestrator.core.workflow.operation_service import WorkflowOperationAttemptAlreadyRunningError
 from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
-from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
+from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.models import (
+    AdminNotification,
     DecisionCase,
     DiscordCommandSyncRuntimeState,
-    JiraOAuthConnection,
     KnowledgeAsset,
     KnowledgeChunk,
     KnowledgeFact,
     KnowledgeJiraSyncRuntimeState,
     KnowledgeSource,
     ManagedSecret,
-    PlatformSetting,
     Project,
-    ProjectDeploymentRelease,
     ProjectAutomation,
     ProjectInstallRequest,
     Run,
@@ -50,782 +63,52 @@ from orchestrator.storage.models import (
     WebhookJob,
     WorkflowCheckpoint,
     WorkflowExecution,
+    WorkflowOperation,
+    WorkflowOperationAttempt,
     WorkerRuntimeAuthRequest,
     WorkerRuntimeState,
 )
 from orchestrator.tools.github_app import InstallationRepository
-from orchestrator.api.main import create_app
-from tests.test_support.db_harness import SqliteTemplateApiTestCase
-from tests.workflow_test_support import add_human_input_request, add_run_with_workflow, add_workflow_attempt, make_run
+from orchestrator.tools.atlassian_oauth_models import AtlassianOAuthError
+from tests.test_support.admin_api_harness import AdminApiTestHarness
+from tests.workflow_test_support import add_workflow_attempt
+
+
+def _audit_event(
+    *,
+    sequence: int,
+    workflow_id: str,
+    operation_id: str | None,
+    attempt_id: str | None,
+    event_kind: str,
+    level: str,
+    message: str,
+    payload: dict[str, object],
+    recorded_at: datetime,
+    source_component: str = "workflow_operation_service",
+) -> ProductEvent:
+    return ProductEvent(
+        event_sequence=sequence,
+        event_id=f"event-{sequence}",
+        event_class="audit_evidence",
+        tenant_id="tenant-a",
+        project_id="tenant-a-default",
+        workflow_id=workflow_id,
+        run_id=None,
+        operation_id=operation_id,
+        attempt_id=attempt_id,
+        issue_key="MAB-215",
+        event_kind=event_kind,
+        level=level,
+        source_component=source_component,
+        message=message,
+        payload_json=payload,
+        recorded_at=recorded_at,
+    )
+
+
+class AdminApiTests(AdminApiTestHarness):
 
-
-class AdminApiTests(SqliteTemplateApiTestCase):
-    _secrets_encryption_key: str
-    _provision_jira_webhook_patcher: object
-
-    @classmethod
-    def setUpClass(cls) -> None:
-        cls._secrets_encryption_key = Fernet.generate_key().decode("utf-8")
-        super().setUpClass()
-
-    @classmethod
-    def class_environment_overrides(cls) -> dict[str, str]:
-        return {
-            "ORCHESTRATOR_ADMIN_USERNAME": "admin",
-            "ORCHESTRATOR_ADMIN_PASSWORD": "secret",
-            "ORCHESTRATOR_ADMIN_TOKEN_SECRET": "admin-token-secret-for-tests-0123456789",
-            "ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET": "unit-test-secret",
-            "ORCHESTRATOR_ADMIN_UI_BASE_URL": "http://localhost:4100",
-            "ORCHESTRATOR_PUBLIC_API_BASE_URL": "http://localhost:4000",
-            "ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET": "jira-oauth-state-secret",
-            "ORCHESTRATOR_GITHUB_APP_SLUG": "master-builder-app",
-            "ORCHESTRATOR_SECRETS_ENCRYPTION_KEY": cls._secrets_encryption_key,
-            "ORCHESTRATOR_CODEX_MODEL": "gpt-5.4",
-            "ORCHESTRATOR_CODEX_SUPPORTED_MODELS": "gpt-5.4,gpt-5.3-codex,gpt-5.3-codex-spark",
-        }
-
-    @classmethod
-    def bootstrap_template_state(cls) -> None:
-        seed_slug_secret_response = cls._class_client.put(
-            "/api/admin/secrets/platform%2FGITHUB_APP_SLUG",
-            json={"value": "master-builder-app"},
-            auth=("admin", "secret"),
-        )
-        if seed_slug_secret_response.status_code != 200:
-            raise RuntimeError(
-                f"Failed to seed GITHUB_APP_SLUG secret for tests: {seed_slug_secret_response.text}"
-            )
-
-        cls._class_client.put(
-            "/api/admin/secrets/platform%2FGITHUB_APP_ID",
-            json={"value": "12345"},
-            auth=("admin", "secret"),
-        )
-        cls._class_client.put(
-            "/api/admin/secrets/platform%2FGITHUB_APP_PRIVATE_KEY",
-            json={"value": "not-a-real-key-for-tests"},
-            auth=("admin", "secret"),
-        )
-        cls._class_client.put(
-            "/api/admin/secrets/platform%2FJIRA_OAUTH_CLIENT_ID",
-            json={"value": "jira-client-id"},
-            auth=("admin", "secret"),
-        )
-        cls._class_client.put(
-            "/api/admin/secrets/platform%2FJIRA_OAUTH_CLIENT_SECRET",
-            json={"value": "jira-client-secret"},
-            auth=("admin", "secret"),
-        )
-
-    def setUp(self) -> None:
-        self.database_url = self._start_test_database(name_prefix="admin-api")
-
-        get_settings.cache_clear()
-        reset_db_engine_cache()
-        reset_agent_observability_for_tests()
-
-        def _stub_provision_jira_webhook(**kwargs: object) -> SimpleNamespace:
-            _ = kwargs
-            return SimpleNamespace(
-                ok=True,
-                action="provision",
-                details="Provisioned 0 Jira webhook(s).",
-                webhook_ids=[],
-            )
-
-        self._provision_jira_webhook_patcher = patch(
-            "orchestrator.api.routes.admin_tenants.provision_jira_webhook",
-            side_effect=_stub_provision_jira_webhook,
-        )
-        self._provision_jira_webhook_patcher.start()
-
-    def tearDown(self) -> None:
-        self._provision_jira_webhook_patcher.stop()
-        self._cleanup_test_database()
-        os.environ.pop("ORCHESTRATOR_WORKER_CAPABILITIES", None)
-
-        get_settings.cache_clear()
-        reset_db_engine_cache()
-        reset_agent_observability_for_tests()
-
-    def _tenant_payload(self) -> dict:
-        return {
-            "name": "Tenant A",
-            "is_enabled": True,
-            "jira": {
-                "connection_id": "conn-1",
-                "project_keys": ["TP"],
-                "ready_statuses": ["Ready for Agent"],
-                "ready_jql": 'project = TP AND status = "Ready for Agent"',
-                "ready_label": "agent:ready",
-                "in_progress_label": "agent:in-progress",
-                "blocked_label": "agent:blocked",
-                "done_label": "agent:done",
-                "webhook_secret_ref": "secret/webhook",
-            },
-            "github": {
-                "mode": "github_app",
-                "webhook_secret_ref": "secret/github-webhook",
-                "installation_id": "12345",
-            },
-            "repos": {
-                "allowlist": ["https://github.com/example/repo"],
-                "mapping_rules_by_project_key": {"TP": "https://github.com/example/repo"},
-                "mapping_rules_by_component": {},
-                "fallback_repo": None,
-            },
-            "policy": {
-                "allow_jira_transitions": False,
-                "allow_pr_creation": True,
-                "allow_code_reviews": True,
-                "allow_pr_remediation": True,
-                "allow_manual_pr_fix_requests": True,
-                "allow_label_mutations": True,
-                "max_runtime_minutes": 30,
-                "max_dev_test_review_loops": 2,
-                "max_concurrent_runs": 2,
-                "allowed_commands": ["python -m unittest"],
-                "require_agents_md": False,
-                "codex_model": "gpt-5.4",
-                "codex_reasoning_effort": "medium",
-            },
-            "discord": {
-                "channel_id": "discord-channel-1",
-                "notify_events": ["run_started"],
-            },
-        }
-
-    def _insert_jira_connection(self, connection_id: str = "conn-1") -> None:
-        session_factory = create_session_factory(self.database_url)
-        settings = get_settings()
-        now = datetime.now(timezone.utc)
-        with session_factory() as session:
-            session.add(
-                JiraOAuthConnection(
-                    connection_id=connection_id,
-                    account_id="account-1",
-                    account_email="test@example.com",
-                    cloud_id="cloud-1",
-                    site_url="https://example.atlassian.net",
-                    scopes=["read:jira-work", "write:jira-work"],
-                    access_token_encrypted=encrypt_value(
-                        plaintext="access-token",
-                        encryption_key=settings.secrets_encryption_key,
-                    ),
-                    refresh_token_encrypted=encrypt_value(
-                        plaintext="refresh-token",
-                        encryption_key=settings.secrets_encryption_key,
-                    ),
-                    access_token_expires_at=now + timedelta(hours=1),
-                    created_at=now,
-                    updated_at=now,
-                )
-            )
-            session.commit()
-
-    def _default_app_id(self, tenant_id: str, project_id: str) -> str:
-        response = self.client.get(
-            f"/api/admin/tenants/{tenant_id}/projects/{project_id}/apps",
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(response.status_code, 200, response.text)
-        apps = response.json()
-        self.assertGreaterEqual(len(apps), 1)
-        return str(apps[0]["app_id"])
-
-    def _create_deployment_host(
-        self,
-        *,
-        capabilities: list[str] | None = None,
-        register: bool = False,
-    ) -> dict:
-        response = self.client.post(
-            "/api/admin/deployment-hosts",
-            json={
-                "label": "Builder EU West",
-                "provider": "internal_coolify",
-                "infrastructure_provider": "hetzner",
-                "region": "eu-west",
-                "capabilities": capabilities or ["restore_database", "postgres", "mysql", "mariadb"],
-            },
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(response.status_code, 201, response.text)
-        payload = response.json()
-        if register:
-            register_response = self.client.post(
-                "/api/internal/deployment-hosts/register",
-                json={
-                    "bootstrap_token": payload["bootstrap_token"],
-                    "agent_version": "1.0.0",
-                    "advertised_capabilities": capabilities or ["restore_database", "postgres", "mysql", "mariadb"],
-                },
-            )
-            self.assertEqual(register_response.status_code, 200, register_response.text)
-            payload["registration"] = register_response.json()
-        return payload
-
-    def _seed_workflow_attempt(
-        self,
-        *,
-        workflow_id: str,
-        run_id: str,
-        tenant_id: str = "tenant-a",
-        project_id: str = "tenant-a-default",
-        issue_key: str = "TP-1",
-        issue_summary: str = "workflow attempt",
-        issue_description: str | None = "desc",
-        workflow_status: str = "queued",
-        run_status: str = "queued",
-        checkpoint_id: str | None = None,
-        checkpoint_kind: str | None = None,
-        checkpoint_stage: str | None = None,
-        pending_request_id: str | None = None,
-    ) -> None:
-        session_factory = create_session_factory(self.database_url)
-        now = datetime.now(timezone.utc)
-        with session_factory() as session:
-            _workflow, run_row, checkpoint_row = add_workflow_attempt(
-                session,
-                workflow_id=workflow_id,
-                run_id=run_id,
-                tenant_id=tenant_id,
-                project_id=project_id,
-                issue_key=issue_key,
-                issue_summary=issue_summary,
-                issue_description=issue_description,
-                repo_url="https://github.com/example/repo",
-                branch="feature/test",
-                workflow_status=workflow_status,
-                run_status=run_status,
-                entry_checkpoint_id=checkpoint_id,
-                checkpoint_kind=checkpoint_kind,
-                checkpoint_stage=checkpoint_stage or ("pm" if checkpoint_kind == "pm" else "test"),
-                checkpoint_payload={"checkpoint": checkpoint_kind, "run_id": run_id},
-                checkpoint_session_id="checkpoint-session" if checkpoint_kind == "pm" else None,
-                blocked_reason="human_input_expired" if workflow_status == "blocked" else None,
-                last_error=None if workflow_status != "failed" and run_status not in {"failed", "blocked"} else "run failed",
-                plan=(
-                    ExecutionSnapshot.empty(trigger_context={"source": "test"}).dump()
-                    if checkpoint_id
-                    else None
-                ),
-                now=now,
-            )
-            if checkpoint_id:
-                run_snapshot = ExecutionSnapshot.require(run_row.plan, allow_empty=True)
-                run_snapshot.context.execution_context["pre_check_outcome"] = "ready_for_agent"
-                run_row.plan = run_snapshot.dump()
-                assert checkpoint_row is not None
-                checkpoint_snapshot = ExecutionSnapshot.empty(trigger_context={"source": "test"})
-                checkpoint_snapshot.context.execution_context["pre_check_outcome"] = "ready_for_agent"
-                checkpoint_row.payload_json = checkpoint_snapshot.dump()
-            if pending_request_id:
-                request_status = "pending" if workflow_status == "waiting_for_input" else "answered"
-                add_human_input_request(
-                    session,
-                    request_id=pending_request_id,
-                    tenant_id=tenant_id,
-                    project_id=project_id,
-                    workflow_id=workflow_id,
-                    checkpoint_id=checkpoint_id or "checkpoint-missing",
-                    source_run_id=run_id,
-                    issue_key=issue_key,
-                    source_stage="pm",
-                    request_type="human_reply",
-                    status=request_status,
-                    now=now,
-                )
-            session.commit()
-
-    def _persist_run(self, session, *, workflow_status: str | None = None, **run_kwargs) -> Run:
-        run = make_run(**run_kwargs)
-        add_run_with_workflow(session, run, workflow_status=workflow_status)
-        return run
-
-    def test_admin_routes_require_auth(self) -> None:
-        response = self.client.get("/api/admin/tenants")
-        self.assertEqual(response.status_code, 401)
-
-    def test_list_codex_models(self) -> None:
-        response = self.client.get("/api/admin/codex/models", auth=("admin", "secret"))
-        self.assertEqual(response.status_code, 200)
-        body = response.json()
-        self.assertEqual(body["default_model"], "gpt-5.4")
-        self.assertEqual(body["default_reasoning_effort"], "medium")
-        self.assertEqual(body["runtime_kind"], "codex_cli")
-        self.assertEqual([item["id"] for item in body["models"]], ["gpt-5.4", "gpt-5.3-codex", "gpt-5.3-codex-spark"])
-        self.assertEqual([item["id"] for item in body["reasoning_efforts"]], ["medium", "low", "high"])
-
-    def test_list_codex_models_for_engineering_profile_uses_profile_runtime(self) -> None:
-        self.client.post(
-            "/api/admin/agent-runtime-profiles",
-            json={
-                "profile_name": "engineering_execution_custom",
-                "runtime_kind": "claude_cli",
-                "cli_command": "claude",
-                "model": "claude-sonnet-4-0",
-                "reasoning_effort": "medium",
-                "tool_bridge_allowed": True,
-                "fallback_profile": "engineering_execution_default",
-                "base_url": None,
-                "api_key_secret_ref": None,
-            },
-            auth=("admin", "secret"),
-        )
-        update_response = self.client.put(
-            "/api/admin/agent-runtime-profiles/engineering_execution",
-            json={
-                "runtime_kind": "claude_cli",
-                "cli_command": "claude",
-                "model": "claude-sonnet-4-0",
-                "reasoning_effort": "medium",
-                "tool_bridge_allowed": True,
-                "fallback_profile": None,
-                "base_url": None,
-                "api_key_secret_ref": None,
-            },
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(update_response.status_code, 200)
-
-        response = self.client.get(
-            "/api/admin/codex/models?profile_name=engineering_execution",
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(response.status_code, 200)
-        body = response.json()
-        self.assertEqual(body["runtime_kind"], "claude_cli")
-        self.assertEqual(body["profile_name"], "engineering_execution")
-        self.assertIn("claude-sonnet-4-0", [item["id"] for item in body["models"]])
-
-    def test_list_codex_models_for_lm_studio_includes_reasoning_efforts(self) -> None:
-        response = self.client.get(
-            "/api/admin/codex/models?runtime_kind=lm_studio",
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(response.status_code, 200)
-        body = response.json()
-        self.assertEqual(body["runtime_kind"], "lm_studio")
-        self.assertEqual([item["id"] for item in body["reasoning_efforts"]], ["medium", "low", "high"])
-
-    def test_admin_login_issues_bearer_token(self) -> None:
-        login_response = self.client.post(
-            "/api/admin/auth/login",
-            json={"username": "admin", "password": "secret"},
-        )
-        self.assertEqual(login_response.status_code, 200)
-        token = login_response.json()["access_token"]
-        self.assertTrue(token)
-        self.assertEqual(login_response.json()["token_type"], "bearer")
-
-        me_response = self.client.get(
-            "/api/admin/auth/me",
-            headers={"Authorization": f"Bearer {token}"},
-        )
-        self.assertEqual(me_response.status_code, 200)
-        self.assertEqual(me_response.json()["username"], "admin")
-
-        tenants_response = self.client.get(
-            "/api/admin/tenants",
-            headers={"Authorization": f"Bearer {token}"},
-        )
-        self.assertEqual(tenants_response.status_code, 200)
-
-    def test_admin_login_rejects_invalid_credentials(self) -> None:
-        login_response = self.client.post(
-            "/api/admin/auth/login",
-            json={"username": "admin", "password": "wrong"},
-        )
-        self.assertEqual(login_response.status_code, 401)
-
-    def test_managed_secret_upsert_and_resolve(self) -> None:
-        put_response = self.client.put(
-            "/api/admin/secrets/platform%2Fsecret%2Fgithub-webhook",
-            json={"value": "managed-webhook-secret"},
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(put_response.status_code, 200)
-        self.assertEqual(put_response.json()["secret_ref"], "platform/secret/github-webhook")
-        self.assertEqual(put_response.json()["source"], "managed")
-
-        list_response = self.client.get("/api/admin/secrets", auth=("admin", "secret"))
-        self.assertEqual(list_response.status_code, 200)
-        refs = [item["secret_ref"] for item in list_response.json()]
-        self.assertIn("platform/secret/github-webhook", refs)
-
-        resolve_response = self.client.post(
-            "/api/admin/secrets/resolve",
-            json={"secret_ref": "platform/secret/github-webhook"},
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(resolve_response.status_code, 200)
-        self.assertTrue(resolve_response.json()["resolved"])
-        self.assertEqual(resolve_response.json()["source"], "managed")
-
-    def test_agent_runtime_routes_default_response(self) -> None:
-        response = self.client.get("/api/admin/agent-runtimes", auth=("admin", "secret"))
-        self.assertEqual(response.status_code, 200)
-        body = response.json()
-        self.assertEqual(body["role_routing"], {})
-        self.assertEqual(body["name_routing"], {})
-        self.assertEqual(body["selector_routing"], {})
-        self.assertIn("pm", body["available_roles"])
-        self.assertIn("voice_room_pm", body["available_named_agents"])
-        self.assertNotIn("discord.voice_entry_router", body["available_named_agents"])
-        self.assertIn("discord.voice_entry_router", body["available_selectors"])
-        self.assertIn("workflow.standup_voice_brief", body["available_selectors"])
-        self.assertIn("workflow.retro_voice_brief", body["available_selectors"])
-        self.assertIn("pm_conversation_fast", body["available_profiles"])
-        self.assertEqual(body["effective_defaults"]["role_routing"]["pm"], "pm_conversation_default")
-        self.assertEqual(body["effective_defaults"]["name_routing"]["workflow_dev_default"], "engineering_execution_default")
-        self.assertEqual(body["effective_defaults"]["selector_routing"]["discord.voice_room_pm"], "pm_conversation")
-
-    def test_agent_runtime_tools_catalog_response(self) -> None:
-        response = self.client.get("/api/admin/agent-runtime-tools", auth=("admin", "secret"))
-        self.assertEqual(response.status_code, 200)
-        body = response.json()
-        self.assertIn("available_stages", body)
-        self.assertIn("tools", body)
-        self.assertIn("pm", body["available_stages"])
-        repo_read = next(item for item in body["tools"] if item["tool_name"] == "repo.read")
-        self.assertEqual(repo_read["category"], "repo")
-        self.assertIn("dev", repo_read["stages"])
-        self.assertIn("pm", repo_read["stages"])
-        self.assertTrue(repo_read["description"])
-
-    def test_agent_runtime_profiles_crud_and_reset(self) -> None:
-        create_response = self.client.post(
-            "/api/admin/agent-runtime-profiles",
-            json={
-                "profile_name": "openai_engineering_fast",
-                "runtime_kind": "openai",
-                "cli_command": "",
-                "model": "gpt-5.4",
-                "reasoning_effort": "low",
-                "tool_bridge_allowed": True,
-                "fallback_profile": "engineering_execution_default",
-                "base_url": "https://api.openai.com/v1",
-                "api_key_secret_ref": "platform/openai_api_key",
-            },
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(create_response.status_code, 200)
-        self.assertEqual(create_response.json()["profile_name"], "openai_engineering_fast")
-        self.assertEqual(create_response.json()["runtime_kind"], "openai")
-        self.assertEqual(create_response.json()["base_url"], "https://api.openai.com/v1")
-
-        list_response = self.client.get("/api/admin/agent-runtime-profiles", auth=("admin", "secret"))
-        self.assertEqual(list_response.status_code, 200)
-        self.assertIn("openai_engineering_fast", list_response.json()["profiles"])
-
-        update_response = self.client.put(
-            "/api/admin/agent-runtime-profiles/engineering_execution_default",
-            json={
-                "runtime_kind": "claude_cli",
-                "cli_command": "claude",
-                "model": "claude-sonnet-4-0",
-                "reasoning_effort": "medium",
-                "tool_bridge_allowed": True,
-                "fallback_profile": None,
-                "base_url": None,
-                "api_key_secret_ref": None,
-            },
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(update_response.status_code, 200)
-        self.assertTrue(update_response.json()["is_builtin"])
-        self.assertTrue(update_response.json()["is_overridden"])
-        self.assertEqual(update_response.json()["runtime_kind"], "claude_cli")
-
-        reset_response = self.client.post(
-            "/api/admin/agent-runtime-profiles/engineering_execution_default/reset",
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(reset_response.status_code, 200)
-        self.assertEqual(reset_response.json()["runtime_kind"], "codex_cli")
-        self.assertFalse(reset_response.json()["is_overridden"])
-
-        delete_response = self.client.delete(
-            "/api/admin/agent-runtime-profiles/openai_engineering_fast",
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(delete_response.status_code, 200)
-        self.assertNotIn("openai_engineering_fast", delete_response.json()["profiles"])
-
-    def test_agent_runtime_profiles_reject_invalid_provider_configuration(self) -> None:
-        response = self.client.post(
-            "/api/admin/agent-runtime-profiles",
-            json={
-                "profile_name": "bad_openai_profile",
-                "runtime_kind": "openai",
-                "cli_command": "",
-                "model": "gpt-5.4",
-                "reasoning_effort": "medium",
-                "tool_bridge_allowed": True,
-                "fallback_profile": None,
-                "base_url": None,
-                "api_key_secret_ref": None,
-            },
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(response.status_code, 400)
-        self.assertIn("api_key_secret_ref is required", response.text)
-
-    def test_agent_runtime_profiles_accept_reasoning_for_lm_studio(self) -> None:
-        response = self.client.post(
-            "/api/admin/agent-runtime-profiles",
-            json={
-                "profile_name": "lm_studio_reasoning",
-                "runtime_kind": "lm_studio",
-                "cli_command": "",
-                "model": "local-model",
-                "reasoning_effort": "high",
-                "tool_bridge_allowed": True,
-                "fallback_profile": None,
-                "base_url": "http://localhost:1234/v1",
-                "api_key_secret_ref": None,
-            },
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.json()["runtime_kind"], "lm_studio")
-        self.assertEqual(response.json()["reasoning_effort"], "high")
-
-    def test_agent_runtime_routes_upsert_and_reset(self) -> None:
-        put_response = self.client.put(
-            "/api/admin/agent-runtimes",
-            json={
-                "role_routing": {"pm": "pm_conversation_fast"},
-                "name_routing": {"workflow_review_default": "engineering_execution_deep"},
-                "selector_routing": {
-                    "discord.voice_room_pm": "pm_conversation_fast",
-                    "workflow.standup_voice_brief": "general_planning_default",
-                    "workflow.retro_voice_brief": "general_planning_default",
-                },
-            },
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(put_response.status_code, 200)
-        body = put_response.json()
-        self.assertEqual(body["role_routing"]["pm"], "pm_conversation_fast")
-        self.assertEqual(body["name_routing"]["workflow_review_default"], "engineering_execution_deep")
-        self.assertEqual(body["selector_routing"]["discord.voice_room_pm"], "pm_conversation_fast")
-        self.assertEqual(body["selector_routing"]["workflow.standup_voice_brief"], "general_planning_default")
-        self.assertEqual(body["selector_routing"]["workflow.retro_voice_brief"], "general_planning_default")
-
-        get_response = self.client.get("/api/admin/agent-runtimes", auth=("admin", "secret"))
-        self.assertEqual(get_response.status_code, 200)
-        self.assertEqual(get_response.json()["role_routing"]["pm"], "pm_conversation_fast")
-        self.assertEqual(get_response.json()["selector_routing"]["discord.voice_room_pm"], "pm_conversation_fast")
-        self.assertEqual(
-            get_response.json()["selector_routing"]["workflow.standup_voice_brief"],
-            "general_planning_default",
-        )
-        self.assertEqual(
-            get_response.json()["selector_routing"]["workflow.retro_voice_brief"],
-            "general_planning_default",
-        )
-
-        session_factory = create_session_factory(self.database_url)
-        with session_factory() as session:
-            row = session.get(PlatformSetting, "agent_runtime_routing")
-            self.assertIsNotNone(row)
-            self.assertEqual(row.value_json["role_routing"]["pm"], "pm_conversation_fast")
-            self.assertEqual(row.value_json["name_routing"]["workflow_review_default"], "engineering_execution_deep")
-            self.assertEqual(row.value_json["selector_routing"]["discord.voice_room_pm"], "pm_conversation_fast")
-            self.assertEqual(
-                row.value_json["selector_routing"]["workflow.standup_voice_brief"],
-                "general_planning_default",
-            )
-            self.assertEqual(
-                row.value_json["selector_routing"]["workflow.retro_voice_brief"],
-                "general_planning_default",
-            )
-
-        reset_response = self.client.post("/api/admin/agent-runtimes/reset", auth=("admin", "secret"))
-        self.assertEqual(reset_response.status_code, 200)
-        self.assertEqual(reset_response.json()["role_routing"], {})
-        self.assertEqual(reset_response.json()["name_routing"], {})
-        self.assertEqual(reset_response.json()["selector_routing"], {})
-
-    def test_agent_runtime_routes_reject_unknown_role_and_profile(self) -> None:
-        response = self.client.put(
-            "/api/admin/agent-runtimes",
-            json={
-                "role_routing": {"unknown-role": "pm_conversation_fast"},
-                "name_routing": {"workflow_review_default": "missing-profile"},
-            },
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(response.status_code, 400)
-        self.assertIn("Unknown agent role", response.text)
-
-    def test_agent_runtime_routes_reject_unknown_selector(self) -> None:
-        response = self.client.put(
-            "/api/admin/agent-runtimes",
-            json={
-                "selector_routing": {"unknown-selector": "pm_conversation_fast"},
-            },
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(response.status_code, 400)
-        self.assertIn("Unknown selector", response.text)
-
-    def test_agent_runtime_routes_normalize_legacy_voice_router_selector(self) -> None:
-        response = self.client.put(
-            "/api/admin/agent-runtimes",
-            json={
-                "selector_routing": {"discord.voice_room_router": "general_planning_default"},
-            },
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(
-            response.json()["selector_routing"]["discord.voice_entry_router"],
-            "general_planning_default",
-        )
-        self.assertNotIn("discord.voice_room_router", response.json()["selector_routing"])
-
-    def test_platform_secret_list_excludes_tenant_and_project_scoped_refs(self) -> None:
-        create_response = self.client.post(
-            "/api/admin/tenants",
-            json=self._tenant_payload(),
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(create_response.status_code, 201)
-
-        self.client.put(
-            "/api/admin/secrets/platform%2FDISCORD_BOT_TOKEN",
-            json={"value": "platform-token"},
-            auth=("admin", "secret"),
-        )
-        self.client.put(
-            "/api/admin/tenants/tenant-a/secrets/DISCORD_BOT_TOKEN",
-            json={"value": "tenant-token"},
-            auth=("admin", "secret"),
-        )
-
-        platform_response = self.client.get("/api/admin/secrets", auth=("admin", "secret"))
-        self.assertEqual(platform_response.status_code, 200)
-        platform_refs = {item["secret_ref"] for item in platform_response.json()}
-        self.assertIn("platform/DISCORD_BOT_TOKEN", platform_refs)
-        self.assertNotIn("tenant/tenant-a/DISCORD_BOT_TOKEN", platform_refs)
-
-        tenant_response = self.client.get("/api/admin/tenants/tenant-a/secrets", auth=("admin", "secret"))
-        self.assertEqual(tenant_response.status_code, 200)
-        tenant_refs = {item["secret_ref"] for item in tenant_response.json()}
-        self.assertIn("tenant/tenant-a/DISCORD_BOT_TOKEN", tenant_refs)
-
-    def test_platform_secrets_endpoint_rejects_tenant_scoped_secret_ref(self) -> None:
-        response = self.client.put(
-            "/api/admin/secrets/tenant%2Ftenant-a%2FDISCORD_BOT_TOKEN",
-            json={"value": "tenant-token"},
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(response.status_code, 400)
-        self.assertIn("Platform secrets must use platform/* refs", response.json()["detail"])
-
-    def test_platform_secret_resolve_rejects_tenant_scoped_secret_ref(self) -> None:
-        response = self.client.post(
-            "/api/admin/secrets/resolve",
-            json={"secret_ref": "tenant/tenant-a/DISCORD_BOT_TOKEN"},
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(response.status_code, 400)
-        self.assertIn("Platform secrets must use platform/* refs", response.json()["detail"])
-
-    def test_tenant_secret_endpoints_require_existing_tenant(self) -> None:
-        list_response = self.client.get("/api/admin/tenants/missing/secrets", auth=("admin", "secret"))
-        self.assertEqual(list_response.status_code, 404)
-        self.assertIn("Tenant not found", list_response.json()["detail"])
-
-        put_response = self.client.put(
-            "/api/admin/tenants/missing/secrets/DISCORD_BOT_TOKEN",
-            json={"value": "token"},
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(put_response.status_code, 404)
-
-        resolve_response = self.client.post(
-            "/api/admin/tenants/missing/secrets/resolve",
-            json={"secret_ref": "DISCORD_BOT_TOKEN"},
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(resolve_response.status_code, 404)
-
-        delete_response = self.client.delete(
-            "/api/admin/tenants/missing/secrets/DISCORD_BOT_TOKEN",
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(delete_response.status_code, 404)
-
-    def test_tenant_secret_rejects_prefixed_secret_key(self) -> None:
-        create_response = self.client.post(
-            "/api/admin/tenants",
-            json=self._tenant_payload(),
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(create_response.status_code, 201)
-
-        response = self.client.put(
-            "/api/admin/tenants/tenant-a/secrets/platform%2FDISCORD_BOT_TOKEN",
-            json={"value": "token"},
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(response.status_code, 400)
-        self.assertIn("Tenant secret key must not include a scope prefix", response.json()["detail"])
-
-    def test_managed_secret_delete(self) -> None:
-        put_response = self.client.put(
-            "/api/admin/secrets/platform%2Ftemporary-secret",
-            json={"value": "temp-value"},
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(put_response.status_code, 200)
-
-        delete_response = self.client.delete(
-            "/api/admin/secrets/platform%2Ftemporary-secret",
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(delete_response.status_code, 204)
-
-        resolve_response = self.client.post(
-            "/api/admin/secrets/resolve",
-            json={"secret_ref": "platform/temporary-secret"},
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(resolve_response.status_code, 200)
-        self.assertFalse(resolve_response.json()["resolved"])
-        self.assertEqual(resolve_response.json()["source"], "missing")
-
-        missing_delete_response = self.client.delete(
-            "/api/admin/secrets/platform%2Ftemporary-secret",
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(missing_delete_response.status_code, 404)
-
-    def test_jira_connect_uses_managed_secret_when_env_not_set(self) -> None:
-        os.environ.pop("JIRA_OAUTH_CLIENT_ID", None)
-        os.environ.pop("JIRA_OAUTH_CLIENT_SECRET", None)
-
-        self.client.put(
-            "/api/admin/secrets/platform%2FJIRA_OAUTH_CLIENT_ID",
-            json={"value": "jira-client-id-managed"},
-            auth=("admin", "secret"),
-        )
-        self.client.put(
-            "/api/admin/secrets/platform%2FJIRA_OAUTH_CLIENT_SECRET",
-            json={"value": "jira-client-secret-managed"},
-            auth=("admin", "secret"),
-        )
-
-        response = self.client.post(
-            "/api/admin/jira/connect/start?return_to=wizard",
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(response.status_code, 200)
-        self.assertIn("jira-client-id-managed", response.json()["authorize_url"])
 
     def test_create_and_update_tenant(self) -> None:
         payload = self._tenant_payload()
@@ -856,17 +139,33 @@ class AdminApiTests(SqliteTemplateApiTestCase):
         self.assertEqual(list_response.status_code, 200)
         self.assertEqual(len(list_response.json()), 1)
 
-        payload["name"] = "Tenant A Updated"
-        payload["is_enabled"] = False
-
-        update_response = self.client.put(
-            "/api/admin/tenants/tenant-a",
-            json=payload,
+        update_response = self.client.patch(
+            "/api/admin/tenants/tenant-a/configuration",
+            json={"name": "Tenant A Updated"},
             auth=("admin", "secret"),
         )
         self.assertEqual(update_response.status_code, 200)
         self.assertEqual(update_response.json()["name"], "Tenant A Updated")
-        self.assertFalse(update_response.json()["is_enabled"])
+
+        jira_update_response = self.client.patch(
+            "/api/admin/tenants/tenant-a/jira",
+            json={
+                "jira": {
+                    **payload["jira"],
+                    "ready_statuses": ["Ready for Agent", "Selected for Development"],
+                },
+            },
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(jira_update_response.status_code, 200)
+        self.assertEqual(
+            jira_update_response.json()["jira"]["ready_statuses"],
+            ["Ready for Agent", "Selected for Development"],
+        )
+
+        archive_response = self.client.post("/api/admin/tenants/tenant-a/archive", auth=("admin", "secret"))
+        self.assertEqual(archive_response.status_code, 200)
+        self.assertFalse(archive_response.json()["is_enabled"])
 
         class _FakeJiraClient:
             def list_projects(self, *, access_token: str, cloud_id: str):  # noqa: ANN001
@@ -883,12 +182,12 @@ class AdminApiTests(SqliteTemplateApiTestCase):
                 ]
 
         with (
-            patch("orchestrator.api.admin.integration_dependencies.refresh_jira_connection_tokens", return_value="access-token"),
-            patch("orchestrator.api.admin.integration_dependencies.jira_oauth_client", return_value=_FakeJiraClient()),
+            patch("orchestrator.api.admin.integration_dependencies.refresh_atlassian_connection_tokens", return_value="access-token"),
+            patch("orchestrator.api.admin.integration_dependencies.atlassian_oauth_client", return_value=_FakeJiraClient()),
             patch("orchestrator.api.admin.integration_dependencies.github_client_from_tenant_config", return_value=_FakeGitHubClient()),
         ):
             jira_test = self.client.post(
-                "/api/admin/tenants/tenant-a/test-jira",
+                "/api/admin/tenants/tenant-a/test-atlassian",
                 auth=("admin", "secret"),
             )
         self.assertEqual(jira_test.status_code, 200)
@@ -913,70 +212,224 @@ class AdminApiTests(SqliteTemplateApiTestCase):
         self.assertEqual(repo_bootstrap.status_code, 200)
         self.assertEqual(repo_bootstrap.json(), [])
 
-    def test_create_tenant_auto_provisions_jira_webhook_when_jira_is_configured(self) -> None:
+    def test_list_jira_projects_requires_reauth_emits_notification(self) -> None:
         payload = self._tenant_payload()
         self._insert_jira_connection(connection_id="conn-1")
-
-        def _fake_provision_jira_webhook(**kwargs: object) -> SimpleNamespace:
-            tenant = kwargs["tenant"]
-            jira_config = dict(tenant.jira_config)
-            jira_config["managed_webhook_ids"] = [2002]
-            jira_config["webhook_last_provisioned_at"] = "2026-04-10T14:00:00+00:00"
-            jira_config["webhook_last_error"] = None
-            tenant.jira_config = jira_config
-            return SimpleNamespace(
-                ok=True,
-                action="provision",
-                details="Provisioned 1 Jira webhook(s).",
-                webhook_ids=[2002],
-            )
-
-        with patch(
-            "orchestrator.api.routes.admin_tenants.provision_jira_webhook",
-            side_effect=_fake_provision_jira_webhook,
-        ) as provision_mock:
-            response = self.client.post(
-                "/api/admin/tenants",
-                json=payload,
-                auth=("admin", "secret"),
-            )
-
-        self.assertEqual(response.status_code, 201, response.text)
-        self.assertEqual(response.json()["jira"]["managed_webhook_ids"], [2002])
-        self.assertEqual(
-            response.json()["jira"]["webhook_last_provisioned_at"],
-            "2026-04-10T14:00:00+00:00",
+        create_response = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
         )
-        provision_mock.assert_called_once()
-        self.assertFalse(provision_mock.call_args.kwargs["replace_existing"])
+        self.assertEqual(create_response.status_code, 201)
 
-    def test_create_tenant_skips_jira_webhook_provision_without_project_keys(self) -> None:
-        payload = self._tenant_payload()
-        payload["jira"]["project_keys"] = []
-        self._insert_jira_connection(connection_id="conn-1")
-
-        with patch("orchestrator.api.routes.admin_tenants.provision_jira_webhook") as provision_mock:
-            response = self.client.post(
-                "/api/admin/tenants",
-                json=payload,
+        with patch(
+            "orchestrator.api.admin.integration_dependencies.refresh_atlassian_connection_tokens",
+            side_effect=AtlassianOAuthError(
+                'Atlassian request failed (403): {"error":"unauthorized_client","error_description":"refresh_token is invalid"}'
+            ),
+        ):
+            response = self.client.get(
+                "/api/admin/atlassian/connections/conn-1/jira-projects",
                 auth=("admin", "secret"),
             )
 
-        self.assertEqual(response.status_code, 201, response.text)
-        provision_mock.assert_not_called()
-        self.assertEqual(response.json()["jira"]["managed_webhook_ids"], [])
+        self.assertEqual(response.status_code, 409, response.text)
+        self.assertEqual(response.json()["detail"], "Atlassian connection requires reauthentication.")
 
-    def test_create_tenant_rejects_unknown_jira_connection_before_persisting(self) -> None:
+        notifications_response = self.client.get(
+            "/api/admin/tenants/tenant-a/notifications",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(notifications_response.status_code, 200, notifications_response.text)
+        notifications = notifications_response.json()["notifications"]
+        self.assertEqual(len(notifications), 1)
+        self.assertEqual(notifications[0]["kind"], "reauth_required")
+        self.assertEqual(notifications[0]["scope_type"], "jira_connection")
+        self.assertEqual(notifications[0]["scope_id"], "conn-1")
+        self.assertEqual(notifications[0]["status"], "open")
+
+    def test_list_jira_projects_success_resolves_reauth_notification(self) -> None:
         payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_response = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_response.status_code, 201)
 
-        with patch(
-            "orchestrator.api.routes.admin_tenants.provision_jira_webhook",
-            return_value=SimpleNamespace(
-                ok=False,
-                action="provision",
-                details="Configured Jira connection was not found",
-                webhook_ids=[],
-            ),
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            now = datetime.now(timezone.utc)
+            session.add(
+                AdminNotification(
+                    notification_id="notify-jira-reauth",
+                    tenant_id="tenant-a",
+                    project_id=None,
+                    scope_type="jira_connection",
+                    scope_id="conn-1",
+                    source="atlassian_oauth",
+                    kind="reauth_required",
+                    severity="HIGH",
+                    title="Atlassian connection needs reauthentication",
+                    detail="Reconnect Atlassian.",
+                    action_label="Reconnect Atlassian",
+                    action_path=None,
+                    fingerprint=notification_fingerprint_for(
+                        scope=AdminNotificationScope(
+                            scope_type="jira_connection",
+                            scope_id="conn-1",
+                            tenant_id="tenant-a",
+                        ),
+                        kind="reauth_required",
+                        dedupe_key="reauth_required",
+                    ),
+                    status="open",
+                    context_json={"connection_id": "conn-1"},
+                    first_emitted_at=now,
+                    last_emitted_at=now,
+                    acknowledged_at=None,
+                    resolved_at=None,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            session.commit()
+
+        class _FakeJiraClient:
+            def list_projects(self, *, access_token: str, cloud_id: str):  # noqa: ANN001
+                return [SimpleNamespace(key="TP", name="Tenant Platform")]
+
+        with (
+            patch("orchestrator.api.admin.integration_dependencies.refresh_atlassian_connection_tokens", return_value="access-token"),
+            patch("orchestrator.api.admin.integration_dependencies.atlassian_oauth_client", return_value=_FakeJiraClient()),
+        ):
+            response = self.client.get(
+                "/api/admin/atlassian/connections/conn-1/jira-projects",
+                auth=("admin", "secret"),
+            )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.json(), [{"key": "TP", "name": "Tenant Platform"}])
+
+        open_notifications = self.client.get(
+            "/api/admin/tenants/tenant-a/notifications",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(open_notifications.status_code, 200, open_notifications.text)
+        self.assertEqual(open_notifications.json()["notifications"], [])
+
+        resolved_notifications = self.client.get(
+            "/api/admin/tenants/tenant-a/notifications?status=resolved",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(resolved_notifications.status_code, 200, resolved_notifications.text)
+
+    def test_list_confluence_spaces_for_tenant_success(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(
+            connection_id="conn-1",
+            scopes=["read:jira-work", "write:jira-work", "read:space:confluence"],
+        )
+        create_response = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_response.status_code, 201)
+
+        class _FakeClient:
+            def list_confluence_spaces(self, *, access_token: str, cloud_id: str, limit: int = 250):  # noqa: ANN001
+                return [
+                    SimpleNamespace(space_id="2", key="PLAT", name="Platform"),
+                    SimpleNamespace(space_id="1", key="ARCH", name="Architecture"),
+                ]
+
+        with (
+            patch("orchestrator.api.admin.integration_dependencies.refresh_atlassian_connection_tokens", return_value="access-token"),
+            patch("orchestrator.api.admin.integration_dependencies.atlassian_oauth_client", return_value=_FakeClient()),
+        ):
+            response = self.client.get(
+                "/api/admin/tenants/tenant-a/atlassian/confluence/spaces",
+                auth=("admin", "secret"),
+            )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(
+            response.json(),
+            {
+                "items": [
+                    {"space_id": "1", "key": "ARCH", "name": "Architecture"},
+                    {"space_id": "2", "key": "PLAT", "name": "Platform"},
+                ],
+                "create_space_url": "https://example.atlassian.net/wiki/spaces/create",
+            },
+        )
+
+    def test_list_confluence_pages_for_tenant_success(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(
+            connection_id="conn-1",
+            scopes=["read:jira-work", "write:jira-work", "read:space:confluence", "read:page:confluence"],
+        )
+        create_response = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_response.status_code, 201)
+
+        class _FakeClient:
+            def get_confluence_space_by_key(self, *, access_token: str, cloud_id: str, space_key: str):  # noqa: ANN001
+                return SimpleNamespace(space_id="space-1", key="ARCH", name="Architecture")
+
+            def list_confluence_pages(  # noqa: ANN001
+                self,
+                *,
+                access_token: str,
+                cloud_id: str,
+                site_url: str,
+                space_id: str,
+                limit: int = 250,
+            ):
+                return [
+                    SimpleNamespace(page_id="200", title="System Design", webui_url="https://example.atlassian.net/wiki/spaces/ARCH/pages/200"),
+                    SimpleNamespace(page_id="100", title="ADR Index", webui_url="https://example.atlassian.net/wiki/spaces/ARCH/pages/100"),
+                ]
+
+            def get_confluence_page(self, *, access_token: str, cloud_id: str, site_url: str, page_id: str):  # noqa: ANN001
+                return SimpleNamespace(page_id=page_id, title="Selected Parent", webui_url=f"https://example.atlassian.net/wiki/spaces/ARCH/pages/{page_id}")
+
+        with (
+            patch("orchestrator.api.admin.integration_dependencies.refresh_atlassian_connection_tokens", return_value="access-token"),
+            patch("orchestrator.api.admin.integration_dependencies.atlassian_oauth_client", return_value=_FakeClient()),
+        ):
+            response = self.client.get(
+                "/api/admin/tenants/tenant-a/atlassian/confluence/spaces/ARCH/pages?selected_page_id=300",
+                auth=("admin", "secret"),
+            )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(
+            response.json(),
+            [
+                {"page_id": "100", "title": "ADR Index", "webui_url": "https://example.atlassian.net/wiki/spaces/ARCH/pages/100"},
+                {"page_id": "300", "title": "Selected Parent", "webui_url": "https://example.atlassian.net/wiki/spaces/ARCH/pages/300"},
+                {"page_id": "200", "title": "System Design", "webui_url": "https://example.atlassian.net/wiki/spaces/ARCH/pages/200"},
+            ],
+        )
+
+    def test_create_tenant_does_not_provision_jira_webhook(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        payload["jira"]["managed_webhook_ids"] = [999001]
+        payload["jira"]["webhook_last_provisioned_at"] = "2026-05-06T00:00:00Z"
+        payload["jira"]["webhook_last_error"] = "client supplied"
+
+        with (
+            patch("orchestrator.api.admin.integration_dependencies.provision_jira_webhook") as dependency_provision_mock,
+            patch("orchestrator.api.admin.route_helpers.provision_jira_webhook") as route_helper_provision_mock,
+            patch("orchestrator.api.admin.jira_webhook_provision.provision_jira_webhook") as core_provision_mock,
         ):
             response = self.client.post(
                 "/api/admin/tenants",
@@ -984,44 +437,13 @@ class AdminApiTests(SqliteTemplateApiTestCase):
                 auth=("admin", "secret"),
             )
 
-        self.assertEqual(response.status_code, 400, response.text)
-        self.assertEqual(response.json()["detail"], "Configured Jira connection was not found")
-
-        session_factory = create_session_factory(self.database_url)
-        with session_factory() as session:
-            self.assertIsNone(session.get(Tenant, "tenant-a"))
-            self.assertIsNone(session.get(Project, "tenant-a-default"))
-            self.assertIsNone(session.get(TenantRunClaim, "tenant-a"))
-
-    def test_create_tenant_rolls_back_when_jira_webhook_provision_fails(self) -> None:
-        payload = self._tenant_payload()
-        self._insert_jira_connection(connection_id="conn-1")
-
-        with patch(
-            "orchestrator.api.routes.admin_tenants.provision_jira_webhook",
-            return_value=SimpleNamespace(
-                ok=False,
-                action="provision",
-                details="Failed to provision Jira webhook: missing Jira admin permission",
-                webhook_ids=[],
-            ),
-        ) as provision_mock:
-            response = self.client.post(
-                "/api/admin/tenants",
-                json=payload,
-                auth=("admin", "secret"),
-            )
-
-        self.assertEqual(response.status_code, 502, response.text)
-        self.assertIn("missing Jira admin permission", response.json()["detail"])
-        provision_mock.assert_called_once()
-        self.assertFalse(provision_mock.call_args.kwargs["replace_existing"])
-
-        session_factory = create_session_factory(self.database_url)
-        with session_factory() as session:
-            self.assertIsNone(session.get(Tenant, "tenant-a"))
-            self.assertIsNone(session.get(Project, "tenant-a-default"))
-            self.assertIsNone(session.get(TenantRunClaim, "tenant-a"))
+        self.assertEqual(response.status_code, 201, response.text)
+        dependency_provision_mock.assert_not_called()
+        route_helper_provision_mock.assert_not_called()
+        core_provision_mock.assert_not_called()
+        self.assertEqual(response.json()["jira"]["managed_webhook_ids"], [])
+        self.assertIsNone(response.json()["jira"]["webhook_last_provisioned_at"])
+        self.assertIsNone(response.json()["jira"]["webhook_last_error"])
 
     def test_update_tenant_preserves_ready_trigger_mode_when_omitted(self) -> None:
         payload = self._tenant_payload()
@@ -1036,18 +458,45 @@ class AdminApiTests(SqliteTemplateApiTestCase):
         self.assertEqual(create_response.status_code, 201)
         self.assertEqual(create_response.json()["jira"]["ready_trigger_mode"], "transition_only")
 
-        update_payload = self._tenant_payload()
-        update_payload["name"] = "Tenant A Updated"
-        update_payload["is_enabled"] = False
-        update_payload["jira"].pop("ready_trigger_mode", None)
+        jira_payload = dict(self._tenant_payload()["jira"])
+        jira_payload.pop("ready_trigger_mode", None)
 
-        update_response = self.client.put(
-            "/api/admin/tenants/tenant-a",
-            json=update_payload,
+        update_response = self.client.patch(
+            "/api/admin/tenants/tenant-a/jira",
+            json={"jira": jira_payload},
             auth=("admin", "secret"),
         )
         self.assertEqual(update_response.status_code, 200)
         self.assertEqual(update_response.json()["jira"]["ready_trigger_mode"], "transition_only")
+
+    def test_update_tenant_jira_rejects_client_supplied_webhook_system_state(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+
+        create_response = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_response.status_code, 201)
+
+        update_response = self.client.patch(
+            "/api/admin/tenants/tenant-a/jira",
+            json={
+                "jira": {
+                    **payload["jira"],
+                    "managed_webhook_ids": [123456],
+                    "webhook_last_provisioned_at": "2026-05-06T00:00:00Z",
+                    "webhook_last_error": "client supplied",
+                },
+            },
+            auth=("admin", "secret"),
+        )
+
+        self.assertEqual(update_response.status_code, 200, update_response.text)
+        self.assertEqual(update_response.json()["jira"]["managed_webhook_ids"], [])
+        self.assertIsNone(update_response.json()["jira"]["webhook_last_provisioned_at"])
+        self.assertIsNone(update_response.json()["jira"]["webhook_last_error"])
 
     def test_update_tenant_drops_live_voice_discord_fields_when_omitted(self) -> None:
         payload = self._tenant_payload()
@@ -1067,20 +516,48 @@ class AdminApiTests(SqliteTemplateApiTestCase):
             {"voice-room-1": "text-room-1"},
         )
 
-        update_payload = self._tenant_payload()
-        update_payload["name"] = "Tenant A Updated"
-        update_payload["is_enabled"] = False
-        update_payload["discord"].pop("live_voice_enabled", None)
-        update_payload["discord"].pop("live_voice_room_links", None)
+        discord_payload = dict(self._tenant_payload()["discord"])
+        discord_payload.pop("live_voice_enabled", None)
+        discord_payload.pop("live_voice_room_links", None)
 
-        update_response = self.client.put(
-            "/api/admin/tenants/tenant-a",
-            json=update_payload,
+        update_response = self.client.patch(
+            "/api/admin/tenants/tenant-a/discord",
+            json={"discord": discord_payload},
             auth=("admin", "secret"),
         )
         self.assertEqual(update_response.status_code, 200)
         self.assertNotIn("live_voice_enabled", update_response.json()["discord"])
         self.assertNotIn("live_voice_room_links", update_response.json()["discord"])
+
+    def test_update_tenant_persists_observability_policy(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+
+        create_response = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_response.status_code, 201)
+
+        update_response = self.client.patch(
+            "/api/admin/tenants/tenant-a/observability",
+            json={
+                "observability": {
+                    "audit_retention_days": 730,
+                    "audit_export_enabled": False,
+                    "legal_hold_enabled": True,
+                    "legal_hold_reason": "Customer compliance hold",
+                },
+            },
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(update_response.status_code, 200, update_response.text)
+        observability = update_response.json()["policy"]["observability"]
+        self.assertEqual(observability["audit_retention_days"], 730)
+        self.assertFalse(observability["audit_export_enabled"])
+        self.assertTrue(observability["legal_hold_enabled"])
+        self.assertEqual(observability["legal_hold_reason"], "Customer compliance hold")
 
     def test_ready_preview_returns_eligible_issues(self) -> None:
         payload = self._tenant_payload()
@@ -1112,8 +589,8 @@ class AdminApiTests(SqliteTemplateApiTestCase):
 
         fake_client = _FakeJiraClient()
         with (
-            patch("orchestrator.api.admin.integration_dependencies.refresh_jira_connection_tokens", return_value="access-token"),
-            patch("orchestrator.api.admin.integration_dependencies.jira_oauth_client", return_value=fake_client),
+            patch("orchestrator.api.admin.integration_dependencies.refresh_atlassian_connection_tokens", return_value="access-token"),
+            patch("orchestrator.api.admin.integration_dependencies.atlassian_oauth_client", return_value=fake_client),
         ):
             preview_response = self.client.get(
                 "/api/admin/tenants/tenant-a/ready-preview",
@@ -1151,8 +628,8 @@ class AdminApiTests(SqliteTemplateApiTestCase):
                 return []
 
         with (
-            patch("orchestrator.api.admin.integration_dependencies.refresh_jira_connection_tokens", return_value="access-token"),
-            patch("orchestrator.api.admin.integration_dependencies.jira_oauth_client", return_value=_FakeJiraClient()),
+            patch("orchestrator.api.admin.integration_dependencies.refresh_atlassian_connection_tokens", return_value="access-token"),
+            patch("orchestrator.api.admin.integration_dependencies.atlassian_oauth_client", return_value=_FakeJiraClient()),
         ):
             response = self.client.post(
                 "/api/admin/tenants/tenant-a/release/bootstrap",
@@ -1227,7 +704,7 @@ class AdminApiTests(SqliteTemplateApiTestCase):
         self.assertEqual(create_project.json()["environment"], {"APP_ENV": "prod"})
         self.assertEqual(
             create_project.json()["secret_refs"],
-            {"API_TOKEN": f"project/tenant-a/{project_id}/API_TOKEN"},
+            {"API_TOKEN": "RUNNER_TOKEN"},
         )
         self.assertIsNone(create_project.json()["discord"])
         self.assertEqual(create_project.json()["effective_policy"]["codex_model"], "gpt-5.4")
@@ -1248,12 +725,20 @@ class AdminApiTests(SqliteTemplateApiTestCase):
         self.assertEqual(list_projects.status_code, 200)
         self.assertEqual(len(list_projects.json()), 2)
 
-        update_project = self.client.put(
-            f"/api/admin/tenants/tenant-a/projects/{project_id}",
+        update_project = self.client.patch(
+            f"/api/admin/tenants/tenant-a/projects/{project_id}/configuration",
             json={
                 "name": "mobile-app-renamed",
                 "github_repository": "https://github.com/example/mobile-app-renamed",
                 "jira_project_key": "MBAPP",
+            },
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(update_project.status_code, 200)
+
+        update_policy = self.client.patch(
+            f"/api/admin/tenants/tenant-a/projects/{project_id}/policy",
+            json={
                 "policy_overrides": {
                     "allow_code_reviews": False,
                     "allow_pr_remediation": False,
@@ -1263,1442 +748,58 @@ class AdminApiTests(SqliteTemplateApiTestCase):
                     "knowledge_base_enabled": False,
                     "knowledge_auto_answer_mode": "safe",
                     "allowed_commands": ["git status"],
-                    "codex_model": "gpt-5.3-codex-spark",
+                    "codex_model": "gpt-5.4-mini",
                     "codex_reasoning_effort": "high",
                 },
-                "environment": {"APP_ENV": "stage"},
-                "secret_refs": {"API_TOKEN": "RUNNER_TOKEN_NEXT"},
-                "is_archived": True,
             },
             auth=("admin", "secret"),
         )
-        self.assertEqual(update_project.status_code, 200)
-        self.assertTrue(update_project.json()["is_archived"])
-        self.assertEqual(update_project.json()["environment"], {"APP_ENV": "stage"})
-        self.assertEqual(
-            update_project.json()["secret_refs"],
-            {"API_TOKEN": f"project/tenant-a/{project_id}/API_TOKEN"},
-        )
-        self.assertIsNone(update_project.json()["discord"])
-        self.assertEqual(update_project.json()["policy_overrides"]["codex_model"], "gpt-5.3-codex-spark")
-        self.assertFalse(update_project.json()["policy_overrides"]["allow_code_reviews"])
-        self.assertFalse(update_project.json()["policy_overrides"]["allow_pr_remediation"])
-        self.assertFalse(update_project.json()["policy_overrides"]["allow_manual_pr_fix_requests"])
-        self.assertEqual(update_project.json()["policy_overrides"]["max_pr_auto_remediation_loops"], 3)
-        self.assertFalse(update_project.json()["policy_overrides"]["knowledge_base_enabled"])
-        self.assertEqual(update_project.json()["policy_overrides"]["knowledge_auto_answer_mode"], "safe")
-        self.assertEqual(update_project.json()["policy_overrides"]["allowed_commands"], ["git status"])
-        self.assertEqual(update_project.json()["policy_overrides"]["codex_reasoning_effort"], "high")
-        self.assertEqual(update_project.json()["effective_policy"]["codex_model"], "gpt-5.3-codex-spark")
-        self.assertEqual(update_project.json()["effective_policy"]["codex_reasoning_effort"], "high")
-        self.assertFalse(update_project.json()["effective_policy"]["allow_code_reviews"])
-        self.assertFalse(update_project.json()["effective_policy"]["allow_pr_remediation"])
-        self.assertFalse(update_project.json()["effective_policy"]["allow_manual_pr_fix_requests"])
-        self.assertFalse(update_project.json()["effective_policy"]["allow_auto_merge"])
-        self.assertEqual(update_project.json()["effective_policy"]["max_pr_auto_remediation_loops"], 3)
-        self.assertFalse(update_project.json()["effective_policy"]["knowledge_base_enabled"])
-        self.assertEqual(update_project.json()["effective_policy"]["knowledge_auto_answer_mode"], "safe")
-        self.assertEqual(update_project.json()["effective_policy"]["allowed_commands"], [])
-
-    def test_internal_coolify_deployment_plane_round_trip(self) -> None:
-        payload = self._tenant_payload()
-        self._insert_jira_connection(connection_id="conn-1")
-        create_tenant = self.client.post(
-            "/api/admin/tenants",
-            json=payload,
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(create_tenant.status_code, 201)
-
-        deployment_plane_payload = {
-            "provider": "internal_coolify",
-            "infrastructure_provider": "hetzner",
-            "region": "eu-west",
-            "base_domain": "apps.example.com",
-            "platform_subdomain": "builder",
-            "secret_refs": {
-                "coolify_api_token": "platform/COOLIFY_API_TOKEN",
-                "backup_bucket": "tenant/tenant-a/BACKUP_BUCKET",
-            },
-            "state": "active",
-            "last_error": None,
-        }
-
-        put_response = self.client.put(
-            "/api/admin/tenants/tenant-a/deployment-plane",
-            json=deployment_plane_payload,
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(put_response.status_code, 200)
-        self.assertEqual(put_response.json()["provider"], "internal_coolify")
-        self.assertEqual(put_response.json()["infrastructure_provider"], "hetzner")
-        self.assertEqual(put_response.json()["region"], "eu-west")
-        self.assertEqual(put_response.json()["base_domain"], "apps.example.com")
-        self.assertEqual(put_response.json()["platform_subdomain"], "builder")
-        self.assertEqual(
-            put_response.json()["secret_refs"],
-            {
-                "coolify_api_token": "platform/COOLIFY_API_TOKEN",
-                "backup_bucket": "tenant/tenant-a/BACKUP_BUCKET",
-            },
-        )
-        self.assertEqual(put_response.json()["state"], "active")
-        self.assertIsNone(put_response.json()["last_error"])
-
-        get_response = self.client.get("/api/admin/tenants/tenant-a/deployment-plane", auth=("admin", "secret"))
-        self.assertEqual(get_response.status_code, 200)
-        self.assertEqual(get_response.json()["provider"], "internal_coolify")
-        self.assertEqual(get_response.json()["infrastructure_provider"], "hetzner")
-        self.assertEqual(get_response.json()["region"], "eu-west")
-        self.assertEqual(get_response.json()["base_domain"], "apps.example.com")
-        self.assertEqual(get_response.json()["platform_subdomain"], "builder")
-        self.assertEqual(
-            get_response.json()["secret_refs"],
-            {
-                "coolify_api_token": "platform/COOLIFY_API_TOKEN",
-                "backup_bucket": "tenant/tenant-a/BACKUP_BUCKET",
-            },
-        )
-        self.assertEqual(get_response.json()["state"], "active")
-        self.assertIsNone(get_response.json()["last_error"])
-
-    def test_project_app_deployment_config_round_trip_and_preserves_discord_config(self) -> None:
-        payload = self._tenant_payload()
-        self._insert_jira_connection(connection_id="conn-1")
-        create_tenant = self.client.post(
-            "/api/admin/tenants",
-            json=payload,
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(create_tenant.status_code, 201)
-
-        create_project = self.client.post(
-            "/api/admin/tenants/tenant-a/projects",
-            json={
-                "name": "mobile-app",
-                "github_repository": "https://github.com/example/mobile-app",
-                "jira_project_key": "MBAPP",
-            },
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(create_project.status_code, 201)
-        project_id = create_project.json()["project_id"]
-        app_id = self._default_app_id("tenant-a", project_id)
-
-        session_factory = create_session_factory(self.database_url)
-        with session_factory() as session:
-            project = session.get(Project, project_id)
-            self.assertIsNotNone(project)
-            assert project is not None
-            project.discord_config = {
-                "channel_id": "discord-channel-1",
-                "notify_events": ["run_started"],
-            }
-            session.commit()
-
-        deployment_config_payload = {
-            "enabled": True,
-            "environment_name": "production",
-            "source_strategy": "dockerfile",
-            "domains": [
-                {"key": "primary", "host": "app.example.com"},
-                {"key": "admin", "host": "admin.example.com"},
-            ],
-            "resources": [
-                {"key": "db", "kind": "postgres"},
-                {"key": "files", "kind": "s3"},
-            ],
-            "backup_policies": [
-                {"key": "db-daily", "resource_key": "db", "schedule": "0 2 * * *"},
-                {"key": "files-daily", "resource_key": "files", "schedule": "0 3 * * *"},
-            ],
-        }
-
-        put_response = self.client.put(
-            f"/api/admin/tenants/tenant-a/projects/{project_id}/apps/{app_id}/deployment-config",
-            json=deployment_config_payload,
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(put_response.status_code, 200)
-        self.assertTrue(put_response.json()["enabled"])
-        self.assertEqual(put_response.json()["environment_name"], "production")
-        self.assertEqual(put_response.json()["source_strategy"], "dockerfile")
-        self.assertEqual(put_response.json()["domains"], deployment_config_payload["domains"])
-        self.assertEqual(put_response.json()["resources"], deployment_config_payload["resources"])
-        self.assertEqual(put_response.json()["backup_policies"], deployment_config_payload["backup_policies"])
-
-        get_response = self.client.get(
-            f"/api/admin/tenants/tenant-a/projects/{project_id}/apps/{app_id}/deployment-config",
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(get_response.status_code, 200)
-        self.assertTrue(get_response.json()["enabled"])
-        self.assertEqual(get_response.json()["environment_name"], "production")
-        self.assertEqual(get_response.json()["source_strategy"], "dockerfile")
-        self.assertEqual(get_response.json()["domains"], deployment_config_payload["domains"])
-        self.assertEqual(get_response.json()["resources"], deployment_config_payload["resources"])
-        self.assertEqual(get_response.json()["backup_policies"], deployment_config_payload["backup_policies"])
-
-        project_response = self.client.get(
-            f"/api/admin/tenants/tenant-a/projects/{project_id}",
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(project_response.status_code, 200)
-        self.assertEqual(
-            project_response.json()["discord"],
-            {"channel_id": "discord-channel-1", "notify_events": ["run_started"]},
-        )
-
-        self._insert_jira_connection(connection_id="conn-2")
-        second_tenant_payload = self._tenant_payload()
-        second_tenant_payload["name"] = "Tenant B"
-        second_tenant_payload["jira"]["connection_id"] = "conn-2"
-        second_tenant_create = self.client.post(
-            "/api/admin/tenants",
-            json=second_tenant_payload,
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(second_tenant_create.status_code, 201)
-
-        scoping_response = self.client.get(
-            f"/api/admin/tenants/{second_tenant_create.json()['tenant_id']}/projects/{project_id}/apps/{app_id}/deployment-config",
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(scoping_response.status_code, 404)
-
-    def test_project_app_deployment_config_validation_rejects_duplicate_entries_and_missing_resource_refs(self) -> None:
-        payload = self._tenant_payload()
-        self._insert_jira_connection(connection_id="conn-1")
-        create_tenant = self.client.post(
-            "/api/admin/tenants",
-            json=payload,
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(create_tenant.status_code, 201)
-
-        create_project = self.client.post(
-            "/api/admin/tenants/tenant-a/projects",
-            json={
-                "name": "validation-app",
-                "github_repository": "https://github.com/example/validation-app",
-                "jira_project_key": "VAL",
-            },
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(create_project.status_code, 201)
-        project_id = create_project.json()["project_id"]
-        app_id = self._default_app_id("tenant-a", project_id)
-
-        baseline_payload = {
-            "enabled": True,
-            "environment_name": "production",
-            "source_strategy": "dockerfile",
-            "domains": [{"key": "primary", "host": "app.example.com"}],
-            "resources": [{"key": "db", "kind": "postgres"}],
-            "backup_policies": [{"key": "db-daily", "resource_key": "db", "schedule": "0 2 * * *"}],
-        }
-        baseline_response = self.client.put(
-            f"/api/admin/tenants/tenant-a/projects/{project_id}/apps/{app_id}/deployment-config",
-            json=baseline_payload,
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(baseline_response.status_code, 200)
-
-        invalid_payloads = [
-            (
-                "duplicate_domains",
-                {
-                    "enabled": True,
-                    "environment_name": "production",
-                    "source_strategy": "dockerfile",
-                    "domains": [
-                        {"key": "primary", "host": "app.example.com"},
-                        {"key": "primary", "host": "app.example.com"},
-                    ],
-                    "resources": [{"key": "db", "kind": "postgres"}],
-                    "backup_policies": [{"key": "db-daily", "resource_key": "db", "schedule": "0 2 * * *"}],
-                },
-            ),
-            (
-                "duplicate_resource_keys",
-                {
-                    "enabled": True,
-                    "environment_name": "production",
-                    "source_strategy": "dockerfile",
-                    "domains": [{"key": "primary", "host": "app.example.com"}],
-                    "resources": [
-                        {"key": "db", "kind": "postgres"},
-                        {"key": "db", "kind": "s3"},
-                    ],
-                    "backup_policies": [{"key": "db-daily", "resource_key": "db", "schedule": "0 2 * * *"}],
-                },
-            ),
-            (
-                "duplicate_backup_keys",
-                {
-                    "enabled": True,
-                    "environment_name": "production",
-                    "source_strategy": "dockerfile",
-                    "domains": [{"key": "primary", "host": "app.example.com"}],
-                    "resources": [{"key": "db", "kind": "postgres"}],
-                    "backup_policies": [
-                        {"key": "db-daily", "resource_key": "db", "schedule": "0 2 * * *"},
-                        {"key": "db-daily", "resource_key": "db", "schedule": "0 3 * * *"},
-                    ],
-                },
-            ),
-            (
-                "missing_backup_resource",
-                {
-                    "enabled": True,
-                    "environment_name": "production",
-                    "source_strategy": "dockerfile",
-                    "domains": [{"key": "primary", "host": "app.example.com"}],
-                    "resources": [{"key": "db", "kind": "postgres"}],
-                    "backup_policies": [
-                        {"key": "files-daily", "resource_key": "files", "schedule": "0 3 * * *"}
-                    ],
-                },
-            ),
-        ]
-
-        for case_name, invalid_payload in invalid_payloads:
-            with self.subTest(case_name=case_name):
-                response = self.client.put(
-                    f"/api/admin/tenants/tenant-a/projects/{project_id}/apps/{app_id}/deployment-config",
-                    json=invalid_payload,
-                    auth=("admin", "secret"),
-                )
-                self.assertEqual(response.status_code, 422, response.text)
-                self.assertTrue(
-                    any(
-                        snippet in response.text.lower()
-                        for snippet in (
-                            "duplicate",
-                            "missing",
-                            "resource",
-                            "backup",
-                            "domain",
-                        )
-                    ),
-                    response.text,
-                )
-
-                get_response = self.client.get(
-                    f"/api/admin/tenants/tenant-a/projects/{project_id}/apps/{app_id}/deployment-config",
-                    auth=("admin", "secret"),
-                )
-                self.assertEqual(get_response.status_code, 200)
-                self.assertEqual(get_response.json()["domains"], baseline_payload["domains"])
-                self.assertEqual(get_response.json()["resources"], baseline_payload["resources"])
-                self.assertEqual(get_response.json()["backup_policies"], baseline_payload["backup_policies"])
-
-    def test_project_app_deployment_release_create_and_list_round_trip(self) -> None:
-        payload = self._tenant_payload()
-        self._insert_jira_connection(connection_id="conn-1")
-        create_tenant = self.client.post(
-            "/api/admin/tenants",
-            json=payload,
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(create_tenant.status_code, 201)
-
-        coolify_secret_response = self.client.put(
-            "/api/admin/secrets/platform%2FCOOLIFY_API_TOKEN",
-            json={"value": "coolify-token"},
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(coolify_secret_response.status_code, 200)
-
-        deployment_plane_response = self.client.put(
-            "/api/admin/tenants/tenant-a/deployment-plane",
-            json={
-                "provider": "internal_coolify",
-                "infrastructure_provider": "hetzner",
-                "region": "eu-west",
-                "base_domain": "apps.example.com",
-                "platform_subdomain": "builder",
-                "api_base_url": "https://builder.apps.example.com/api/v1",
-                "coolify_project_uuid": "project-uuid-1",
-                "coolify_environment_name": "production",
-                "coolify_server_uuid": "server-uuid-1",
-                "coolify_destination_uuid": "destination-uuid-1",
-                "secret_refs": {
-                    "coolify_api_token": "platform/COOLIFY_API_TOKEN",
-                },
-                "state": "active",
-            },
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(deployment_plane_response.status_code, 200)
-
-        create_project = self.client.post(
-            "/api/admin/tenants/tenant-a/projects",
-            json={
-                "name": "release-app",
-                "github_repository": "https://github.com/example/release-app",
-                "jira_project_key": "REL",
-            },
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(create_project.status_code, 201)
-        project_id = create_project.json()["project_id"]
-
-        default_app_id = self._default_app_id("tenant-a", project_id)
-        deployment_config_response = self.client.put(
-            f"/api/admin/tenants/tenant-a/projects/{project_id}/apps/{default_app_id}/deployment-config",
-            json={
-                "enabled": True,
-                "environment_name": "production",
-                "source_strategy": "dockerfile",
-                "domains": [{"key": "primary", "host": "app.example.com"}],
-                "resources": [{"key": "db", "kind": "postgres"}],
-                "backup_policies": [{"key": "db-daily", "resource_key": "db", "schedule": "0 2 * * *"}],
-            },
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(deployment_config_response.status_code, 200)
-
-        with (
-            patch(
-                "orchestrator.api.admin.deployment_release_service.CoolifyApiClient.create_public_application",
-                return_value="app-uuid-1",
-            ),
-            patch(
-                "orchestrator.api.admin.deployment_release_service.CoolifyApiClient.bulk_update_application_envs",
-                return_value={"message": "ok"},
-            ),
-            patch(
-                "orchestrator.api.admin.deployment_release_service.CoolifyApiClient.start_application",
-                return_value="deployment-uuid-1",
-            ),
-        ):
-            create_release_response = self.client.post(
-                f"/api/admin/tenants/tenant-a/projects/{project_id}/apps/{default_app_id}/deployment-releases",
-                json={
-                    "git_ref": "refs/heads/main",
-                    "commit_sha": "abc123def456",
-                    "reason": "manual production deploy",
-                },
-                auth=("admin", "secret"),
-            )
-        self.assertEqual(create_release_response.status_code, 201, create_release_response.text)
-        release_payload = create_release_response.json()
-        self.assertEqual(release_payload["provider"], "internal_coolify")
-        self.assertEqual(release_payload["status"], "queued")
-        self.assertEqual(release_payload["app_id"], default_app_id)
-        self.assertEqual(release_payload["environment_name"], "production")
-        self.assertEqual(release_payload["source_strategy"], "dockerfile")
-        self.assertEqual(release_payload["git_ref"], "refs/heads/main")
-        self.assertEqual(release_payload["commit_sha"], "abc123def456")
-        self.assertEqual(release_payload["deployment_snapshot"]["domains"], [{"key": "primary", "host": "app.example.com"}])
-        self.assertEqual(release_payload["deployment_snapshot"]["resources"], [{"key": "db", "kind": "postgres"}])
-        self.assertEqual(
-            release_payload["deployment_snapshot"]["backup_policies"],
-            [{"key": "db-daily", "resource_key": "db", "schedule": "0 2 * * *"}],
-        )
-        self.assertEqual(release_payload["provider_context"]["infrastructure_provider"], "hetzner")
-        self.assertEqual(release_payload["provider_context"]["base_domain"], "apps.example.com")
-        self.assertEqual(release_payload["provider_context"]["platform_subdomain"], "builder")
-        self.assertEqual(release_payload["provider_context"]["application_uuid"], "app-uuid-1")
-        self.assertEqual(release_payload["provider_context"]["deployment_uuid"], "deployment-uuid-1")
-        self.assertEqual(release_payload["provider_context"]["api_base_url"], "https://builder.apps.example.com/api/v1")
-
-        list_release_response = self.client.get(
-            f"/api/admin/tenants/tenant-a/projects/{project_id}/apps/{default_app_id}/deployment-releases",
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(list_release_response.status_code, 200)
-        self.assertEqual(len(list_release_response.json()), 1)
-        self.assertEqual(list_release_response.json()[0]["release_id"], release_payload["release_id"])
-
-        session_factory = create_session_factory(self.database_url)
-        with session_factory() as session:
-            persisted_release = session.get(ProjectDeploymentRelease, release_payload["release_id"])
-            self.assertIsNotNone(persisted_release)
-            assert persisted_release is not None
-            self.assertEqual(persisted_release.project_id, project_id)
-            self.assertEqual(persisted_release.app_id, default_app_id)
-            self.assertEqual(persisted_release.provider, "internal_coolify")
-            self.assertEqual(persisted_release.status, "queued")
-            self.assertEqual(persisted_release.commit_sha, "abc123def456")
-            self.assertEqual(persisted_release.provider_context["application_uuid"], "app-uuid-1")
-
-    def test_project_app_deployment_endpoints_and_tenant_overview(self) -> None:
-        payload = self._tenant_payload()
-        self._insert_jira_connection(connection_id="conn-1")
-        create_tenant = self.client.post(
-            "/api/admin/tenants",
-            json=payload,
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(create_tenant.status_code, 201)
-
-        coolify_secret_response = self.client.put(
-            "/api/admin/secrets/platform%2FCOOLIFY_API_TOKEN",
-            json={"value": "coolify-token"},
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(coolify_secret_response.status_code, 200)
-
-        deployment_plane_response = self.client.put(
-            "/api/admin/tenants/tenant-a/deployment-plane",
-            json={
-                "provider": "internal_coolify",
-                "infrastructure_provider": "aws",
-                "region": "us-east-1",
-                "base_domain": "apps.example.com",
-                "platform_subdomain": "builder",
-                "api_base_url": "https://builder.apps.example.com/api/v1",
-                "coolify_project_uuid": "project-uuid-1",
-                "coolify_environment_name": "production",
-                "coolify_server_uuid": "server-uuid-1",
-                "coolify_destination_uuid": "destination-uuid-1",
-                "secret_refs": {
-                    "coolify_api_token": "platform/COOLIFY_API_TOKEN",
-                },
-                "state": "active",
-            },
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(deployment_plane_response.status_code, 200)
-
-        create_project = self.client.post(
-            "/api/admin/tenants/tenant-a/projects",
-            json={
-                "name": "multi-app-release",
-                "github_repository": "https://github.com/example/multi-app-release",
-                "jira_project_key": "MAR",
-            },
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(create_project.status_code, 201)
-        project_id = create_project.json()["project_id"]
-
-        create_app_response = self.client.post(
-            f"/api/admin/tenants/tenant-a/projects/{project_id}/apps",
-            json={
-                "name": "web-app",
-                "slug": "web-app",
-                "source_path": "apps/web",
-                "build_strategy": "dockerfile",
-                "deployment_config": {
-                    "enabled": True,
-                    "environment_name": "production",
-                    "source_strategy": "dockerfile",
-                    "domains": [{"key": "web", "host": "web.apps.example.com"}],
-                    "resources": [{"key": "web-db", "kind": "postgres"}],
-                    "backup_policies": [{"key": "web-db-daily", "resource_key": "web-db", "schedule": "0 2 * * *"}],
-                },
-            },
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(create_app_response.status_code, 201, create_app_response.text)
-        app_id = create_app_response.json()["app_id"]
-
-        get_app_config_response = self.client.get(
-            f"/api/admin/tenants/tenant-a/projects/{project_id}/apps/{app_id}/deployment-config",
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(get_app_config_response.status_code, 200)
-        self.assertEqual(get_app_config_response.json()["environment_name"], "production")
-
-        with (
-            patch(
-                "orchestrator.api.admin.deployment_release_service.CoolifyApiClient.create_public_application",
-                return_value="app-uuid-web-1",
-            ),
-            patch(
-                "orchestrator.api.admin.deployment_release_service.CoolifyApiClient.bulk_update_application_envs",
-                return_value={"message": "ok"},
-            ),
-            patch(
-                "orchestrator.api.admin.deployment_release_service.CoolifyApiClient.start_application",
-                return_value="deployment-uuid-web-1",
-            ),
-        ):
-            create_release_response = self.client.post(
-                f"/api/admin/tenants/tenant-a/projects/{project_id}/apps/{app_id}/deployment-releases",
-                json={
-                    "git_ref": "refs/heads/main",
-                    "commit_sha": "def456abc123",
-                    "reason": "manual deploy",
-                },
-                auth=("admin", "secret"),
-            )
-        self.assertEqual(create_release_response.status_code, 201, create_release_response.text)
-        release_payload = create_release_response.json()
-        release_id = release_payload["release_id"]
-        self.assertEqual(release_payload["app_id"], app_id)
-
-        app_release_list_response = self.client.get(
-            f"/api/admin/tenants/tenant-a/projects/{project_id}/apps/{app_id}/deployment-releases",
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(app_release_list_response.status_code, 200)
-        self.assertEqual(len(app_release_list_response.json()), 1)
-        self.assertEqual(app_release_list_response.json()[0]["release_id"], release_id)
-
-        update_release_status_response = self.client.patch(
-            f"/api/admin/tenants/tenant-a/projects/{project_id}/apps/{app_id}/deployment-releases/{release_id}/status",
-            json={"status": "failed", "last_error": "healthcheck failed"},
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(update_release_status_response.status_code, 200, update_release_status_response.text)
-        self.assertEqual(update_release_status_response.json()["status"], "failed")
-
-        overview_response = self.client.get(
-            "/api/admin/tenants/tenant-a/deployments/overview",
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(overview_response.status_code, 200, overview_response.text)
-        overview_payload = overview_response.json()
-        self.assertEqual(overview_payload["summary"]["total_apps"], 2)
-        self.assertEqual(overview_payload["summary"]["failed_count"], 1)
-        self.assertEqual(len(overview_payload["latest_failures"]), 1)
-        self.assertEqual(overview_payload["latest_failures"][0]["app_id"], app_id)
-        self.assertEqual(overview_payload["latest_failures"][0]["status"], "failed")
-
-    def test_project_app_deployment_release_create_requires_active_plane_and_ready_project_config(self) -> None:
-        payload = self._tenant_payload()
-        self._insert_jira_connection(connection_id="conn-1")
-        create_tenant = self.client.post(
-            "/api/admin/tenants",
-            json=payload,
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(create_tenant.status_code, 201)
-
-        create_project = self.client.post(
-            "/api/admin/tenants/tenant-a/projects",
-            json={
-                "name": "blocked-release-app",
-                "github_repository": "https://github.com/example/blocked-release-app",
-                "jira_project_key": "BLK",
-            },
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(create_project.status_code, 201)
-        project_id = create_project.json()["project_id"]
-        app_id = self._default_app_id("tenant-a", project_id)
-
-        no_plane_response = self.client.post(
-            f"/api/admin/tenants/tenant-a/projects/{project_id}/apps/{app_id}/deployment-releases",
-            json={"git_ref": "refs/heads/main"},
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(no_plane_response.status_code, 409)
-        self.assertIn("deployment plane", no_plane_response.json()["detail"].lower())
-
-        plane_response = self.client.put(
-            "/api/admin/tenants/tenant-a/deployment-plane",
-            json={
-                "provider": "internal_coolify",
-                "infrastructure_provider": "aws",
-                "region": "us-east-1",
-                "base_domain": "apps.example.com",
-                "platform_subdomain": "builder",
-                "api_base_url": "https://builder.apps.example.com/api/v1",
-                "coolify_project_uuid": "project-uuid-1",
-                "coolify_environment_name": "production",
-                "coolify_server_uuid": "server-uuid-1",
-                "coolify_destination_uuid": "destination-uuid-1",
-                "state": "active",
-            },
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(plane_response.status_code, 200)
-
-        missing_project_config_response = self.client.post(
-            f"/api/admin/tenants/tenant-a/projects/{project_id}/apps/{app_id}/deployment-releases",
-            json={"git_ref": "refs/heads/main"},
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(missing_project_config_response.status_code, 409)
-        self.assertIn("environment_name", missing_project_config_response.json()["detail"])
-
-        disabled_config_response = self.client.put(
-            f"/api/admin/tenants/tenant-a/projects/{project_id}/apps/{app_id}/deployment-config",
-            json={
-                "enabled": False,
-                "environment_name": "production",
-                "source_strategy": "dockerfile",
-            },
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(disabled_config_response.status_code, 200)
-
-        disabled_release_response = self.client.post(
-            f"/api/admin/tenants/tenant-a/projects/{project_id}/apps/{app_id}/deployment-releases",
-            json={"git_ref": "refs/heads/main"},
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(disabled_release_response.status_code, 409)
-        self.assertIn("disabled", disabled_release_response.json()["detail"].lower())
-
-        list_release_response = self.client.get(
-            f"/api/admin/tenants/tenant-a/projects/{project_id}/apps/{app_id}/deployment-releases",
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(list_release_response.status_code, 200)
-        self.assertEqual(list_release_response.json(), [])
-
-    def test_project_app_deployment_release_status_transitions_and_detail_lookup(self) -> None:
-        payload = self._tenant_payload()
-        self._insert_jira_connection(connection_id="conn-1")
-        create_tenant = self.client.post(
-            "/api/admin/tenants",
-            json=payload,
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(create_tenant.status_code, 201)
-
-        coolify_secret_response = self.client.put(
-            "/api/admin/secrets/platform%2FCOOLIFY_API_TOKEN",
-            json={"value": "coolify-token"},
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(coolify_secret_response.status_code, 200)
-
-        plane_response = self.client.put(
-            "/api/admin/tenants/tenant-a/deployment-plane",
-            json={
-                "provider": "internal_coolify",
-                "infrastructure_provider": "hetzner",
-                "region": "eu-west",
-                "base_domain": "apps.example.com",
-                "platform_subdomain": "builder",
-                "api_base_url": "https://builder.apps.example.com/api/v1",
-                "coolify_project_uuid": "project-uuid-1",
-                "coolify_environment_name": "production",
-                "coolify_server_uuid": "server-uuid-1",
-                "coolify_destination_uuid": "destination-uuid-1",
-                "secret_refs": {"coolify_api_token": "platform/COOLIFY_API_TOKEN"},
-                "state": "active",
-            },
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(plane_response.status_code, 200)
-
-        create_project = self.client.post(
-            "/api/admin/tenants/tenant-a/projects",
-            json={
-                "name": "statusful-release-app",
-                "github_repository": "https://github.com/example/statusful-release-app",
-                "jira_project_key": "STS",
-            },
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(create_project.status_code, 201)
-        project_id = create_project.json()["project_id"]
-        app_id = self._default_app_id("tenant-a", project_id)
-
-        deployment_config_response = self.client.put(
-            f"/api/admin/tenants/tenant-a/projects/{project_id}/apps/{app_id}/deployment-config",
-            json={
-                "enabled": True,
-                "environment_name": "production",
-                "source_strategy": "dockerfile",
-            },
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(deployment_config_response.status_code, 200)
-
-        with (
-            patch(
-                "orchestrator.api.admin.deployment_release_service.CoolifyApiClient.create_public_application",
-                return_value="app-uuid-2",
-            ),
-            patch(
-                "orchestrator.api.admin.deployment_release_service.CoolifyApiClient.bulk_update_application_envs",
-                return_value={"message": "ok"},
-            ),
-            patch(
-                "orchestrator.api.admin.deployment_release_service.CoolifyApiClient.start_application",
-                return_value="deployment-uuid-2",
-            ),
-        ):
-            create_release_response = self.client.post(
-                f"/api/admin/tenants/tenant-a/projects/{project_id}/apps/{app_id}/deployment-releases",
-                json={"git_ref": "refs/heads/main"},
-                auth=("admin", "secret"),
-            )
-        self.assertEqual(create_release_response.status_code, 201)
-        release_id = create_release_response.json()["release_id"]
-
-        provisioning_response = self.client.patch(
-            f"/api/admin/tenants/tenant-a/projects/{project_id}/apps/{app_id}/deployment-releases/{release_id}/status",
-            json={"status": "provisioning"},
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(provisioning_response.status_code, 200)
-        self.assertEqual(provisioning_response.json()["status"], "provisioning")
-
-        deploying_response = self.client.patch(
-            f"/api/admin/tenants/tenant-a/projects/{project_id}/apps/{app_id}/deployment-releases/{release_id}/status",
-            json={"status": "deploying", "deployment_uuid": "deployment-uuid-2b"},
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(deploying_response.status_code, 200)
-        self.assertEqual(deploying_response.json()["status"], "deploying")
-        self.assertEqual(deploying_response.json()["provider_context"]["deployment_uuid"], "deployment-uuid-2b")
-
-        live_response = self.client.patch(
-            f"/api/admin/tenants/tenant-a/projects/{project_id}/apps/{app_id}/deployment-releases/{release_id}/status",
-            json={"status": "live"},
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(live_response.status_code, 200)
-        self.assertEqual(live_response.json()["status"], "live")
-        self.assertIsNotNone(live_response.json()["completed_at"])
-
-        detail_response = self.client.get(
-            f"/api/admin/tenants/tenant-a/projects/{project_id}/apps/{app_id}/deployment-releases/{release_id}",
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(detail_response.status_code, 200)
-        self.assertEqual(detail_response.json()["release_id"], release_id)
-        self.assertEqual(detail_response.json()["status"], "live")
-
-        with create_session_factory(self.database_url)() as session:
-            persisted_release = session.get(ProjectDeploymentRelease, release_id)
-            self.assertIsNotNone(persisted_release)
-            assert persisted_release is not None
-            self.assertEqual(persisted_release.status, "live")
-            self.assertEqual(persisted_release.provider_context["deployment_uuid"], "deployment-uuid-2b")
-            self.assertIsNotNone(persisted_release.completed_at)
-
-    def test_project_app_deployment_release_status_rejects_invalid_transition(self) -> None:
-        payload = self._tenant_payload()
-        self._insert_jira_connection(connection_id="conn-1")
-        create_tenant = self.client.post(
-            "/api/admin/tenants",
-            json=payload,
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(create_tenant.status_code, 201)
-
-        coolify_secret_response = self.client.put(
-            "/api/admin/secrets/platform%2FCOOLIFY_API_TOKEN",
-            json={"value": "coolify-token"},
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(coolify_secret_response.status_code, 200)
-
-        plane_response = self.client.put(
-            "/api/admin/tenants/tenant-a/deployment-plane",
-            json={
-                "provider": "internal_coolify",
-                "infrastructure_provider": "hetzner",
-                "region": "eu-west",
-                "base_domain": "apps.example.com",
-                "platform_subdomain": "builder",
-                "api_base_url": "https://builder.apps.example.com/api/v1",
-                "coolify_project_uuid": "project-uuid-1",
-                "coolify_environment_name": "production",
-                "coolify_server_uuid": "server-uuid-1",
-                "coolify_destination_uuid": "destination-uuid-1",
-                "secret_refs": {"coolify_api_token": "platform/COOLIFY_API_TOKEN"},
-                "state": "active",
-            },
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(plane_response.status_code, 200)
-
-        create_project = self.client.post(
-            "/api/admin/tenants/tenant-a/projects",
-            json={
-                "name": "invalid-transition-release-app",
-                "github_repository": "https://github.com/example/invalid-transition-release-app",
-                "jira_project_key": "INV",
-            },
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(create_project.status_code, 201)
-        project_id = create_project.json()["project_id"]
-        app_id = self._default_app_id("tenant-a", project_id)
-
-        deployment_config_response = self.client.put(
-            f"/api/admin/tenants/tenant-a/projects/{project_id}/apps/{app_id}/deployment-config",
-            json={
-                "enabled": True,
-                "environment_name": "production",
-                "source_strategy": "dockerfile",
-            },
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(deployment_config_response.status_code, 200)
-
-        with (
-            patch(
-                "orchestrator.api.admin.deployment_release_service.CoolifyApiClient.create_public_application",
-                return_value="app-uuid-3",
-            ),
-            patch(
-                "orchestrator.api.admin.deployment_release_service.CoolifyApiClient.bulk_update_application_envs",
-                return_value={"message": "ok"},
-            ),
-            patch(
-                "orchestrator.api.admin.deployment_release_service.CoolifyApiClient.start_application",
-                return_value="deployment-uuid-3",
-            ),
-        ):
-            create_release_response = self.client.post(
-                f"/api/admin/tenants/tenant-a/projects/{project_id}/apps/{app_id}/deployment-releases",
-                json={"git_ref": "refs/heads/main"},
-                auth=("admin", "secret"),
-            )
-        self.assertEqual(create_release_response.status_code, 201)
-        release_id = create_release_response.json()["release_id"]
-
-        invalid_transition_response = self.client.patch(
-            f"/api/admin/tenants/tenant-a/projects/{project_id}/apps/{app_id}/deployment-releases/{release_id}/status",
-            json={"status": "live"},
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(invalid_transition_response.status_code, 409)
-        self.assertIn("cannot transition", invalid_transition_response.json()["detail"])
-
-        detail_response = self.client.get(
-            f"/api/admin/tenants/tenant-a/projects/{project_id}/apps/{app_id}/deployment-releases/{release_id}",
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(detail_response.status_code, 200)
-        self.assertEqual(detail_response.json()["status"], "queued")
-
-    def test_project_app_deployment_execution_endpoints_apply_resources_domains_backups_and_restore_contracts(self) -> None:
-        payload = self._tenant_payload()
-        self._insert_jira_connection(connection_id="conn-1")
-        create_tenant = self.client.post(
-            "/api/admin/tenants",
-            json=payload,
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(create_tenant.status_code, 201)
-
-        coolify_secret_response = self.client.put(
-            "/api/admin/secrets/platform%2FCOOLIFY_API_TOKEN",
-            json={"value": "coolify-token"},
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(coolify_secret_response.status_code, 200)
-        host_payload = self._create_deployment_host(register=True)
-        host_id = host_payload["host"]["host_id"]
-
-        deployment_plane_response = self.client.put(
-            "/api/admin/tenants/tenant-a/deployment-plane",
-            json={
-                "provider": "internal_coolify",
-                "infrastructure_provider": "hetzner",
-                "region": "eu-west",
-                "base_domain": "apps.example.com",
-                "platform_subdomain": "builder",
-                "api_base_url": "https://builder.apps.example.com/api/v1",
-                "coolify_project_uuid": "project-uuid-1",
-                "coolify_environment_name": "production",
-                "coolify_server_uuid": "server-uuid-1",
-                "coolify_destination_uuid": "destination-uuid-1",
-                "managed_host_id": host_id,
-                "secret_refs": {
-                    "coolify_api_token": "platform/COOLIFY_API_TOKEN",
-                },
-                "state": "active",
-            },
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(deployment_plane_response.status_code, 200)
-
-        create_project = self.client.post(
-            "/api/admin/tenants/tenant-a/projects",
-            json={
-                "name": "orchestration-app",
-                "github_repository": "https://github.com/example/orchestration-app",
-                "jira_project_key": "ORC",
-            },
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(create_project.status_code, 201)
-        project_id = create_project.json()["project_id"]
-        app_id = self._default_app_id("tenant-a", project_id)
-
-        deployment_config_response = self.client.put(
-            f"/api/admin/tenants/tenant-a/projects/{project_id}/apps/{app_id}/deployment-config",
-            json={
-                "enabled": True,
-                "environment_name": "production",
-                "source_strategy": "dockerfile",
-                "domains": [
-                    {"key": "primary", "host": "app.example.com"},
-                    {"key": "api", "host": "api.example.com", "tls_enabled": False},
-                ],
-                "resources": [
-                    {
-                        "key": "db",
-                        "kind": "postgres",
-                        "name": "app-db",
-                        "config": {
-                            "postgres_user": "app",
-                            "postgres_password": "app-secret",
-                            "postgres_db": "app",
-                        },
-                    },
-                    {
-                        "key": "cache",
-                        "kind": "cache",
-                        "name": "app-cache",
-                        "config": {
-                            "database_type": "redis",
-                            "redis_password": "cache-secret",
-                        },
-                    },
-                    {
-                        "key": "files",
-                        "kind": "volume",
-                        "name": "app-files",
-                        "config": {"mount_path": "/data", "host_path": "/srv/app-files"},
-                    },
-                    {
-                        "key": "bucket",
-                        "kind": "s3",
-                        "name": "app-bucket",
-                    },
-                ],
-                "backup_policies": [
-                    {
-                        "key": "db-daily",
-                        "resource_key": "db",
-                        "schedule": "0 2 * * *",
-                        "config": {"timeout": 600},
-                    },
-                    {
-                        "key": "files-daily",
-                        "resource_key": "files",
-                        "schedule": "0 3 * * *",
-                    },
-                ],
-            },
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(deployment_config_response.status_code, 200)
-
-        with (
-            patch(
-                "orchestrator.api.admin.deployment_release_service.CoolifyApiClient.create_public_application",
-                return_value="app-uuid-1",
-            ),
-            patch(
-                "orchestrator.api.admin.deployment_release_service.CoolifyApiClient.bulk_update_application_envs",
-                return_value={"message": "ok"},
-            ),
-            patch(
-                "orchestrator.api.admin.deployment_release_service.CoolifyApiClient.start_application",
-                return_value="deployment-uuid-1",
-            ),
-        ):
-            create_release_response = self.client.post(
-                f"/api/admin/tenants/tenant-a/projects/{project_id}/apps/{app_id}/deployment-releases",
-                json={"git_ref": "refs/heads/main"},
-                auth=("admin", "secret"),
-            )
-        self.assertEqual(create_release_response.status_code, 201, create_release_response.text)
-
-        with (
-            patch(
-                "orchestrator.api.admin.project_service.CoolifyApiClient.create_database",
-                side_effect=["db-uuid-1", "cache-uuid-1"],
-            ) as create_database_mock,
-            patch(
-                "orchestrator.api.admin.project_service.CoolifyApiClient.create_service",
-                return_value="service-uuid-1",
-            ) as create_service_mock,
-            patch(
-                "orchestrator.api.admin.project_service.CoolifyApiClient.create_application_storage",
-                return_value="storage-uuid-1",
-            ) as create_storage_mock,
-            patch(
-                "orchestrator.api.admin.project_service.CoolifyApiClient.update_application",
-                return_value={"message": "domains-updated"},
-            ) as update_application_mock,
-            patch(
-                "orchestrator.api.admin.project_service.CoolifyApiClient.create_database_backup",
-                return_value="backup-uuid-1",
-            ) as create_backup_mock,
-            patch(
-                "orchestrator.api.admin.project_service.CoolifyApiClient.trigger_database_backup",
-                return_value={"message": "triggered"},
-            ) as trigger_backup_mock,
-        ):
-            resources_response = self.client.post(
-                f"/api/admin/tenants/tenant-a/projects/{project_id}/apps/{app_id}/deployment-resources/apply",
-                json={"resource_keys": ["db", "cache", "files", "bucket"]},
-                auth=("admin", "secret"),
-            )
-            domains_response = self.client.post(
-                f"/api/admin/tenants/tenant-a/projects/{project_id}/apps/{app_id}/deployment-domains/apply",
-                json={"domain_keys": ["primary", "api"]},
-                auth=("admin", "secret"),
-            )
-            backups_response = self.client.post(
-                f"/api/admin/tenants/tenant-a/projects/{project_id}/apps/{app_id}/deployment-backups/apply",
-                json={"backup_keys": ["db-daily", "files-daily"]},
-                auth=("admin", "secret"),
-            )
-            trigger_response = self.client.post(
-                f"/api/admin/tenants/tenant-a/projects/{project_id}/apps/{app_id}/deployment-backups/trigger",
-                json={"backup_keys": ["db-daily"]},
-                auth=("admin", "secret"),
-            )
-
-        self.assertEqual(create_database_mock.call_count, 2)
-        self.assertEqual(create_service_mock.call_count, 1)
-        self.assertEqual(create_storage_mock.call_count, 1)
-        self.assertEqual(update_application_mock.call_count, 1)
-        self.assertEqual(create_backup_mock.call_count, 1)
-        self.assertEqual(trigger_backup_mock.call_count, 1)
-
-        self.assertEqual(resources_response.status_code, 200, resources_response.text)
-        self.assertEqual(resources_response.json()["applied_count"], 4)
-        self.assertEqual(resources_response.json()["unsupported_count"], 0)
-        self.assertEqual(
-            {item["key"]: item["status"] for item in resources_response.json()["items"]},
-            {"db": "applied", "cache": "applied", "files": "applied", "bucket": "applied"},
-        )
-
-        self.assertEqual(domains_response.status_code, 200, domains_response.text)
-        self.assertEqual(domains_response.json()["applied_count"], 2)
-        self.assertEqual(domains_response.json()["items"][0]["status"], "applied")
-        self.assertEqual(update_application_mock.call_args.kwargs["application_uuid"], "app-uuid-1")
-        self.assertEqual(update_application_mock.call_args.kwargs["payload"]["domains"], "app.example.com,api.example.com")
-        self.assertTrue(update_application_mock.call_args.kwargs["payload"]["is_force_https_enabled"])
-
-        self.assertEqual(backups_response.status_code, 200, backups_response.text)
-        self.assertEqual(backups_response.json()["applied_count"], 1)
-        self.assertEqual(backups_response.json()["unsupported_count"], 1)
-        self.assertEqual(
-            {item["key"]: item["status"] for item in backups_response.json()["items"]},
-            {"db-daily": "applied", "files-daily": "unsupported"},
-        )
-        self.assertEqual(trigger_response.status_code, 200, trigger_response.text)
-        self.assertEqual(trigger_response.json()["applied_count"], 1)
-        self.assertEqual(trigger_response.json()["items"][0]["status"], "applied")
-
-        with patch(
-            "orchestrator.api.admin.deployment_restore_service.CoolifyApiClient.list_database_backup_executions",
-            return_value=[
-                {
-                    "id": "execution-uuid-1",
-                    "status": "completed",
-                    "created_at": "2026-04-14T12:00:00Z",
-                    "completed_at": "2026-04-14T12:05:00Z",
-                    "filename": "app.dump",
-                    "path": "/var/lib/coolify/backups/app.dump",
-                }
-            ],
-        ):
-            execution_response = self.client.get(
-                f"/api/admin/tenants/tenant-a/projects/{project_id}/apps/{app_id}/deployment-backups/executions?backup_key=db-daily",
-                auth=("admin", "secret"),
-            )
-            restore_response = self.client.post(
-                f"/api/admin/tenants/tenant-a/projects/{project_id}/apps/{app_id}/deployment-backups/restore",
-                json={
-                    "backup_key": "db-daily",
-                    "resource_key": "db",
-                    "execution_uuid": "execution-uuid-1",
-                    "confirmation_value": "default",
-                },
-                auth=("admin", "secret"),
-            )
-        self.assertEqual(execution_response.status_code, 200, execution_response.text)
-        self.assertEqual(execution_response.json()["executions"][0]["execution_uuid"], "execution-uuid-1")
-        self.assertEqual(restore_response.status_code, 201, restore_response.text)
-        self.assertEqual(restore_response.json()["status"], "queued")
-        self.assertEqual(restore_response.json()["host_id"], host_id)
-        self.assertIsNotNone(restore_response.json()["command_id"])
-        restore_run_id = restore_response.json()["restore_run_id"]
-
-        restore_runs_response = self.client.get(
-            f"/api/admin/tenants/tenant-a/projects/{project_id}/apps/{app_id}/deployment-backups/restore-runs",
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(restore_runs_response.status_code, 200, restore_runs_response.text)
-        self.assertEqual(restore_runs_response.json()[0]["restore_run_id"], restore_run_id)
-
-        restore_detail_response = self.client.get(
-            f"/api/admin/tenants/tenant-a/projects/{project_id}/apps/{app_id}/deployment-backups/restore-runs/{restore_run_id}",
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(restore_detail_response.status_code, 200, restore_detail_response.text)
-        self.assertEqual(restore_detail_response.json()["execution_uuid"], "execution-uuid-1")
-
-        session_factory = create_session_factory(self.database_url)
-        with session_factory() as session:
-            project = session.get(Project, project_id)
-            assert project is not None
-            deployment_config = ProjectDeploymentConfigRead.model_validate(dict(project.deployment_config or {}))
-            self.assertEqual(
-                deployment_config.resources[0].config["coolify_uuid"],
-                "db-uuid-1",
-            )
-            self.assertEqual(
-                deployment_config.resources[1].config["coolify_uuid"],
-                "cache-uuid-1",
-            )
-            self.assertEqual(
-                deployment_config.resources[2].config["coolify_uuid"],
-                "storage-uuid-1",
-            )
-            self.assertEqual(
-                deployment_config.domains[0].config["coolify_application_uuid"],
-                "app-uuid-1",
-            )
-            self.assertEqual(
-                deployment_config.backup_policies[0].config["coolify_backup_uuid"],
-                "backup-uuid-1",
-            )
-
-    def test_project_app_restore_run_rejects_wrong_confirmation_value(self) -> None:
-        payload = self._tenant_payload()
-        self._insert_jira_connection(connection_id="conn-1")
-        create_tenant = self.client.post(
-            "/api/admin/tenants",
-            json=payload,
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(create_tenant.status_code, 201)
-
-        coolify_secret_response = self.client.put(
-            "/api/admin/secrets/platform%2FCOOLIFY_API_TOKEN",
-            json={"value": "coolify-token"},
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(coolify_secret_response.status_code, 200)
-        host_payload = self._create_deployment_host(register=True)
-
-        deployment_plane_response = self.client.put(
-            "/api/admin/tenants/tenant-a/deployment-plane",
-            json={
-                "provider": "internal_coolify",
-                "infrastructure_provider": "hetzner",
-                "region": "eu-west",
-                "base_domain": "apps.example.com",
-                "platform_subdomain": "builder",
-                "api_base_url": "https://builder.apps.example.com/api/v1",
-                "coolify_project_uuid": "project-uuid-1",
-                "coolify_environment_name": "production",
-                "coolify_server_uuid": "server-uuid-1",
-                "coolify_destination_uuid": "destination-uuid-1",
-                "managed_host_id": host_payload["host"]["host_id"],
-                "secret_refs": {
-                    "coolify_api_token": "platform/COOLIFY_API_TOKEN",
-                },
-                "state": "active",
-            },
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(deployment_plane_response.status_code, 200)
-
-        create_project = self.client.post(
-            "/api/admin/tenants/tenant-a/projects",
-            json={
-                "name": "restore-app",
-                "github_repository": "https://github.com/example/restore-app",
-                "jira_project_key": "RST",
-            },
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(create_project.status_code, 201)
-        project_id = create_project.json()["project_id"]
-        app_id = self._default_app_id("tenant-a", project_id)
-
-        deployment_config_response = self.client.put(
-            f"/api/admin/tenants/tenant-a/projects/{project_id}/apps/{app_id}/deployment-config",
-            json={
-                "enabled": True,
-                "environment_name": "production",
-                "source_strategy": "dockerfile",
-                "resources": [
-                    {
-                        "key": "db",
-                        "kind": "postgres",
-                        "name": "restore-db",
-                        "config": {
-                            "coolify_uuid": "db-uuid-1",
-                            "postgres_user": "app",
-                            "postgres_password": "secret",
-                            "postgres_db": "app",
-                        },
-                    }
-                ],
-                "backup_policies": [
-                    {
-                        "key": "db-daily",
-                        "resource_key": "db",
-                        "schedule": "0 2 * * *",
-                        "config": {"coolify_backup_uuid": "backup-uuid-1"},
-                    }
-                ],
-            },
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(deployment_config_response.status_code, 200)
-
-        restore_response = self.client.post(
-            f"/api/admin/tenants/tenant-a/projects/{project_id}/apps/{app_id}/deployment-backups/restore",
-            json={
-                "backup_key": "db-daily",
-                "resource_key": "db",
-                "execution_uuid": "execution-uuid-1",
-                "confirmation_value": "wrong-slug",
-            },
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(restore_response.status_code, 400, restore_response.text)
-        self.assertIn("confirmation", restore_response.json()["detail"].lower())
-
-    def test_project_app_deployment_execution_endpoints_enforce_tenant_scoping(self) -> None:
-        payload = self._tenant_payload()
-        self._insert_jira_connection(connection_id="conn-1")
-        create_tenant = self.client.post(
-            "/api/admin/tenants",
-            json=payload,
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(create_tenant.status_code, 201)
-
-        second_tenant_create = self.client.post(
-            "/api/admin/tenants",
-            json={**payload, "name": "Other Tenant"},
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(second_tenant_create.status_code, 201)
-
-        project_create = self.client.post(
-            "/api/admin/tenants/tenant-a/projects",
-            json={
-                "name": "scoped-app",
-                "github_repository": "https://github.com/example/scoped-app",
-                "jira_project_key": "SCP",
-            },
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(project_create.status_code, 201)
-        project_id = project_create.json()["project_id"]
-        app_id = self._default_app_id("tenant-a", project_id)
-
-        cross_tenant_response = self.client.post(
-            f"/api/admin/tenants/{second_tenant_create.json()['tenant_id']}/projects/{project_id}/apps/{app_id}/deployment-resources/apply",
-            json={},
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(cross_tenant_response.status_code, 404)
-
-    def test_project_apps_default_app_is_created_and_used_for_app_scoped_deployment_config(self) -> None:
-        payload = self._tenant_payload()
-        self._insert_jira_connection(connection_id="conn-1")
-        create_tenant = self.client.post(
-            "/api/admin/tenants",
-            json=payload,
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(create_tenant.status_code, 201)
-
-        project_create = self.client.post(
-            "/api/admin/tenants/tenant-a/projects",
-            json={
-                "name": "apps-surface-app",
-                "github_repository": "https://github.com/example/apps-surface-app",
-                "jira_project_key": "APP",
-            },
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(project_create.status_code, 201)
-        project_id = project_create.json()["project_id"]
-
-        list_apps_response = self.client.get(
-            f"/api/admin/tenants/tenant-a/projects/{project_id}/apps",
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(list_apps_response.status_code, 200, list_apps_response.text)
-        self.assertEqual(len(list_apps_response.json()), 1)
-        default_app = list_apps_response.json()[0]
-        self.assertEqual(default_app["source_path"], ".")
-        self.assertEqual(default_app["slug"], "default")
-
-        update_app_response = self.client.patch(
-            f"/api/admin/tenants/tenant-a/projects/{project_id}/apps/{default_app['app_id']}",
-            json={
-                "name": "Primary App",
-                "build_strategy": "dockerfile",
-                "deployment_config": {
-                    "enabled": True,
-                    "environment_name": "production",
-                    "source_strategy": "dockerfile",
-                    "domains": [{"key": "primary", "host": "app.example.com"}],
-                    "resources": [{"key": "db", "kind": "postgres"}],
-                    "backup_policies": [],
-                },
-            },
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(update_app_response.status_code, 200, update_app_response.text)
-
-        deployment_config_response = self.client.get(
-            f"/api/admin/tenants/tenant-a/projects/{project_id}/apps/{default_app['app_id']}/deployment-config",
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(deployment_config_response.status_code, 200)
-        self.assertEqual(deployment_config_response.json()["environment_name"], "production")
-        self.assertEqual(deployment_config_response.json()["domains"][0]["host"], "app.example.com")
-
-    def test_project_app_analysis_run_can_be_started_and_listed(self) -> None:
-        payload = self._tenant_payload()
-        self._insert_jira_connection(connection_id="conn-1")
-        create_tenant = self.client.post(
-            "/api/admin/tenants",
-            json=payload,
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(create_tenant.status_code, 201)
-
-        project_create = self.client.post(
-            "/api/admin/tenants/tenant-a/projects",
-            json={
-                "name": "analysis-app",
-                "github_repository": "https://github.com/example/analysis-app",
-                "jira_project_key": "ANA",
-            },
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(project_create.status_code, 201)
-        project_id = project_create.json()["project_id"]
-
-        start_response = self.client.post(
-            f"/api/admin/tenants/tenant-a/projects/{project_id}/apps/analyze",
-            json={"planner_version": "planner-v1"},
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(start_response.status_code, 201, start_response.text)
-        run_payload = start_response.json()
-        self.assertEqual(run_payload["status"], "queued")
-        self.assertEqual(run_payload["planner_version"], "planner-v1")
-        self.assertEqual(run_payload["request_payload"]["planner_version"], "planner-v1")
-
-        list_response = self.client.get(
-            f"/api/admin/tenants/tenant-a/projects/{project_id}/apps/analysis-runs",
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(list_response.status_code, 200)
-        self.assertEqual(len(list_response.json()), 1)
-        self.assertEqual(list_response.json()[0]["run_id"], run_payload["run_id"])
-
-        detail_response = self.client.get(
-            f"/api/admin/tenants/tenant-a/projects/{project_id}/apps/analysis-runs/{run_payload['run_id']}",
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(detail_response.status_code, 200)
-        self.assertEqual(detail_response.json()["run_id"], run_payload["run_id"])
-        self.assertEqual(detail_response.json()["status"], "queued")
+        self.assertEqual(update_policy.status_code, 200)
+
+        update_environment = self.client.patch(
+            f"/api/admin/tenants/tenant-a/projects/{project_id}/environment",
+            json={"environment": {"APP_ENV": "stage"}},
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(update_environment.status_code, 200)
+
+        update_secrets = self.client.patch(
+            f"/api/admin/tenants/tenant-a/projects/{project_id}/secrets",
+            json={"secret_refs": {"API_TOKEN": "RUNNER_TOKEN_NEXT"}},
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(update_secrets.status_code, 200)
+
+        update_archive = self.client.patch(
+            f"/api/admin/tenants/tenant-a/projects/{project_id}/archive",
+            json={"is_archived": True},
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(update_archive.status_code, 200)
+        body = update_archive.json()
+        self.assertTrue(body["is_archived"])
+        self.assertEqual(body["environment"], {"APP_ENV": "stage"})
+        self.assertEqual(body["secret_refs"], {"API_TOKEN": "RUNNER_TOKEN_NEXT"})
+        self.assertIsNone(body["discord"])
+        self.assertEqual(body["policy_overrides"]["codex_model"], "gpt-5.4-mini")
+        self.assertFalse(body["policy_overrides"]["allow_code_reviews"])
+        self.assertFalse(body["policy_overrides"]["allow_pr_remediation"])
+        self.assertFalse(body["policy_overrides"]["allow_manual_pr_fix_requests"])
+        self.assertEqual(body["policy_overrides"]["max_pr_auto_remediation_loops"], 3)
+        self.assertFalse(body["policy_overrides"]["knowledge_base_enabled"])
+        self.assertEqual(body["policy_overrides"]["knowledge_auto_answer_mode"], "safe")
+        self.assertEqual(body["policy_overrides"]["allowed_commands"], ["git status"])
+        self.assertEqual(body["policy_overrides"]["codex_reasoning_effort"], "high")
+        self.assertEqual(body["effective_policy"]["codex_model"], "gpt-5.4-mini")
+        self.assertEqual(body["effective_policy"]["codex_reasoning_effort"], "high")
+        self.assertFalse(body["effective_policy"]["allow_code_reviews"])
+        self.assertFalse(body["effective_policy"]["allow_pr_remediation"])
+        self.assertFalse(body["effective_policy"]["allow_manual_pr_fix_requests"])
+        self.assertFalse(body["effective_policy"]["allow_auto_merge"])
+        self.assertEqual(body["effective_policy"]["max_pr_auto_remediation_loops"], 3)
+        self.assertFalse(body["effective_policy"]["knowledge_base_enabled"])
+        self.assertEqual(body["effective_policy"]["knowledge_auto_answer_mode"], "safe")
+        self.assertEqual(body["effective_policy"]["allowed_commands"], [])
 
     def test_project_update_migrates_inline_secret_values_to_project_managed_refs(self) -> None:
         payload = self._tenant_payload()
@@ -2715,18 +816,13 @@ class AdminApiTests(SqliteTemplateApiTestCase):
         default_project = projects_response.json()[0]
         project_id = default_project["project_id"]
 
-        update_project = self.client.put(
-            f"/api/admin/tenants/tenant-a/projects/{project_id}",
+        update_project = self.client.patch(
+            f"/api/admin/tenants/tenant-a/projects/{project_id}/secrets",
             json={
-                "name": default_project["name"],
-                "github_repository": default_project["github_repository"],
-                "jira_project_key": default_project["jira_project_key"],
-                "environment": {},
                 "secret_refs": {
                     "SUPABASE_URL": "https://example.supabase.co",
                     "APPLE_TEST_PASSWORD": "Ft6ygA&aYkf%hy",
                 },
-                "is_archived": False,
             },
             auth=("admin", "secret"),
         )
@@ -2764,18 +860,13 @@ class AdminApiTests(SqliteTemplateApiTestCase):
         self.assertEqual(projects_response.status_code, 200)
         project_id = projects_response.json()[0]["project_id"]
 
-        update_project = self.client.put(
-            f"/api/admin/tenants/tenant-a/projects/{project_id}",
+        update_project = self.client.patch(
+            f"/api/admin/tenants/tenant-a/projects/{project_id}/secrets",
             json={
-                "name": projects_response.json()[0]["name"],
-                "github_repository": projects_response.json()[0]["github_repository"],
-                "jira_project_key": projects_response.json()[0]["jira_project_key"],
-                "environment": {},
                 "secret_refs": {
                     "RAILWAY_TOKEN": "platform/RAILWAY_TOKEN",
                     "SUPABASE_SERVICE_ROLE_KEY": "tenant/tenant-a/SUPABASE_SERVICE_ROLE_KEY",
                 },
-                "is_archived": False,
             },
             auth=("admin", "secret"),
         )
@@ -3157,14 +1248,10 @@ class AdminApiTests(SqliteTemplateApiTestCase):
             "orchestrator.api.admin.route_helpers.resolve_project_discord_channel_binding",
             return_value={"channel_id": "discord-channel-proj-1", "notify_events": []},
         ) as provision_mock:
-            response = self.client.put(
-                f"/api/admin/tenants/tenant-a/projects/{project_id}",
+            response = self.client.patch(
+                f"/api/admin/tenants/tenant-a/projects/{project_id}/discord",
                 json={
-                    "name": default_project["name"],
-                    "github_repository": default_project["github_repository"],
-                    "jira_project_key": default_project["jira_project_key"],
                     "discord": {"notify_events": []},
-                    "is_archived": False,
                 },
                 auth=("admin", "secret"),
             )
@@ -3213,14 +1300,10 @@ class AdminApiTests(SqliteTemplateApiTestCase):
             "orchestrator.api.admin.route_helpers.resolve_project_discord_channel_binding",
             side_effect=lambda **kwargs: dict(kwargs["discord_config"]),
         ):
-            response = self.client.put(
-                f"/api/admin/tenants/tenant-a/projects/{project_id}",
+            response = self.client.patch(
+                f"/api/admin/tenants/tenant-a/projects/{project_id}/discord",
                 json={
-                    "name": default_project["name"],
-                    "github_repository": default_project["github_repository"],
-                    "jira_project_key": default_project["jira_project_key"],
                     "discord": {"notify_events": ["run_failed"]},
-                    "is_archived": False,
                 },
                 auth=("admin", "secret"),
             )
@@ -3257,12 +1340,9 @@ class AdminApiTests(SqliteTemplateApiTestCase):
             "orchestrator.api.admin.route_helpers.resolve_project_discord_channel_binding",
             side_effect=lambda **kwargs: dict(kwargs["discord_config"]),
         ):
-            response = self.client.put(
-                f"/api/admin/tenants/tenant-a/projects/{project_id}",
+            response = self.client.patch(
+                f"/api/admin/tenants/tenant-a/projects/{project_id}/discord",
                 json={
-                    "name": default_project["name"],
-                    "github_repository": default_project["github_repository"],
-                    "jira_project_key": default_project["jira_project_key"],
                     "discord": {
                         "notify_events": ["run_failed"],
                         "live_voice_enabled": True,
@@ -3271,7 +1351,6 @@ class AdminApiTests(SqliteTemplateApiTestCase):
                             "voice-room-10": "text-room-10",
                         },
                     },
-                    "is_archived": False,
                 },
                 auth=("admin", "secret"),
             )
@@ -3305,18 +1384,14 @@ class AdminApiTests(SqliteTemplateApiTestCase):
             "orchestrator.api.admin.route_helpers.resolve_project_discord_channel_binding",
             side_effect=lambda **kwargs: dict(kwargs["discord_config"]),
         ):
-            response = self.client.put(
-                f"/api/admin/tenants/tenant-a/projects/{project_id}",
+            response = self.client.patch(
+                f"/api/admin/tenants/tenant-a/projects/{project_id}/discord",
                 json={
-                    "name": default_project["name"],
-                    "github_repository": default_project["github_repository"],
-                    "jira_project_key": default_project["jira_project_key"],
                     "discord": {
                         "notify_events": ["run_failed"],
                         "live_voice_enabled": False,
                         "live_voice_room_links": {},
                     },
-                    "is_archived": False,
                 },
                 auth=("admin", "secret"),
             )
@@ -3448,17 +1523,1567 @@ class AdminApiTests(SqliteTemplateApiTestCase):
         list_body = list_response.json()
         self.assertEqual(len(list_body), 1)
         self.assertEqual(list_body[0]["workflow_id"], "workflow-read-1")
+        self.assertEqual(list_body[0]["workflow_type"]["key"], "issue_execution")
+        self.assertEqual(list_body[0]["workflow_type"]["label"], "Issue execution")
         self.assertEqual(list_body[0]["latest_checkpoint_kind"], "pm")
         self.assertEqual(list_body[0]["pending_input_request_id"], "request-read-1")
         self.assertEqual(list_body[0]["runs"][0]["workflow_id"], "workflow-read-1")
         self.assertNotIn("dev_session_id", list_body[0]["runs"][0])
 
-        detail_response = self.client.get("/api/admin/workflows/workflow-read-1", auth=("admin", "secret"))
+        detail_response = self.client.get("/api/admin/workflows/exec-run-read-1", auth=("admin", "secret"))
         self.assertEqual(detail_response.status_code, 200, detail_response.text)
         detail_body = detail_response.json()
         self.assertEqual(detail_body["status"], "waiting_for_input")
+        self.assertEqual(detail_body["workflow_type"]["key"], "issue_execution")
+        self.assertEqual(detail_body["operations"][0]["operation_type"], "run_attempt_execution")
+        self.assertEqual(detail_body["operations"][0]["label"], "Run attempt execution")
+        self.assertEqual(detail_body["operations"][0]["status"], "waiting_for_input")
+        self.assertEqual(detail_body["operations"][0]["required"], True)
         self.assertEqual(detail_body["runs"][0]["attempt_number"], 1)
         self.assertEqual(detail_body["runs"][0]["entry_checkpoint_id"], "checkpoint-read-1")
+
+    def test_workflow_board_items_use_lightweight_project_summary_contract(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post("/api/admin/tenants", json=payload, auth=("admin", "secret"))
+        self.assertEqual(create_tenant.status_code, 201)
+
+        now = datetime.now(timezone.utc)
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            workflow, run, _checkpoint = add_workflow_attempt(
+                session,
+                workflow_type_key="parent_planning",
+                workflow_id="parent_planning:TP-101",
+                run_id="run-board-1",
+                tenant_id="tenant-a",
+                project_id="tenant-a-default",
+                issue_key="TP-101",
+                issue_summary="Board summary parent",
+                dedupe_scope="parent_planning",
+                workflow_status="waiting_for_input",
+                run_status="running",
+                entry_checkpoint_id="checkpoint-board-1",
+                checkpoint_kind="pm",
+                now=now,
+            )
+            session.add(
+                RunHumanInputRequest(
+                    request_id="request-board-1",
+                    tenant_id="tenant-a",
+                    project_id="tenant-a-default",
+                    workflow_id=workflow.workflow_id,
+                    checkpoint_id="checkpoint-board-1",
+                    source_run_id=run.run_id,
+                    issue_key="TP-101",
+                    source_stage="pm",
+                    request_type="human_reply",
+                    status="pending",
+                    prompt="Answer",
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            session.add(
+                WorkflowOperation(
+                    operation_id="operation-board-hidden",
+                    workflow_id=workflow.workflow_id,
+                    run_id=run.run_id,
+                    operation_type="backlog_planning",
+                    idempotency_key="board-hidden",
+                    status="running",
+                    created_at=now,
+                    started_at=now,
+                    finished_at=None,
+                    updated_at=now,
+                )
+            )
+            add_workflow_attempt(
+                session,
+                workflow_type_key="issue_execution",
+                workflow_id="workflow-issue-execution-hidden",
+                run_id="run-hidden",
+                tenant_id="tenant-a",
+                project_id="tenant-a-default",
+                issue_key="TP-102",
+                issue_summary="Hidden issue execution",
+                workflow_status="running",
+                run_status="running",
+                now=now,
+            )
+            session.add(
+                WorkflowExecution(
+                    workflow_id="parent_planning:TP-103",
+                    execution_id="exec-board-cancelled",
+                    workflow_type_key="parent_planning",
+                    tenant_id="tenant-a",
+                    project_id="tenant-a-default",
+                    source_system="jira",
+                    source_ref="TP-103",
+                    display_name="Cancelled parent planning",
+                    source_description="Already no longer eligible",
+                    orchestration_backend="temporal",
+                    dedupe_scope="parent_planning",
+                    status="cancelled",
+                    last_error="Source item is no longer eligible for MB parent planning.",
+                    created_at=now,
+                    started_at=None,
+                    finished_at=now,
+                    updated_at=now,
+                )
+            )
+            session.commit()
+
+        response = self.client.get(
+            "/api/admin/workflows/board?tenant_id=tenant-a&project_id=tenant-a-default",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        self.assertEqual(len(body), 1)
+        self.assertEqual(body[0]["workflow_id"], "parent_planning:TP-101")
+        self.assertEqual(body[0]["workflow_type_key"], "parent_planning")
+        self.assertEqual(body[0]["pending_input_request_id"], "request-board-1")
+        self.assertEqual(body[0]["run_count"], 1)
+        self.assertEqual(body[0]["latest_run"]["run_id"], "run-board-1")
+        self.assertEqual(body[0]["links"][0]["kind"], "jira_issue")
+        self.assertEqual(body[0]["links"][0]["url"], "https://example.atlassian.net/browse/TP-101")
+        self.assertNotIn("operations", body[0])
+        self.assertNotIn("workflow_type", body[0])
+
+    def test_start_parent_planning_uses_parent_workflow_advance_contract(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post("/api/admin/tenants", json=payload, auth=("admin", "secret"))
+        self.assertEqual(create_tenant.status_code, 201)
+
+        now = datetime.now(timezone.utc)
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            session.add(
+                WorkflowExecution(
+                    workflow_id="parent_planning:TP-165",
+                    execution_id="exec-parent-planning-165",
+                    workflow_type_key="parent_planning",
+                    tenant_id="tenant-a",
+                    project_id="tenant-a-default",
+                    source_system="jira",
+                    source_ref="TP-165",
+                    display_name="Plan GP165",
+                    source_description="Existing Jira parent issue",
+                    orchestration_backend="temporal",
+                    dedupe_scope="parent_planning",
+                    status="queued",
+                    created_at=now,
+                    started_at=None,
+                    finished_at=None,
+                    updated_at=now,
+                )
+            )
+            session.commit()
+
+        class FakeJiraAdapter:
+            def get_issue_detail(self, *, issue_id_or_key: str):
+                self.issue_id_or_key = issue_id_or_key
+                return SimpleNamespace(labels=["pm-parent", "sync-current"])
+
+        class FakeIntegrationRouter:
+            def __init__(self) -> None:
+                self.jira_adapter = FakeJiraAdapter()
+
+            def jira(self, **kwargs):
+                self.jira_kwargs = kwargs
+                return self.jira_adapter
+
+        fake_router = FakeIntegrationRouter()
+
+        def _handle_parent_feature_sync(**kwargs):
+            context = kwargs["context"]
+            self.assertEqual(context.issue_key, "TP-165")
+            self.assertEqual(context.webhook_event, "issue_created")
+            self.assertIn("pm-parent", context.issue_labels)
+            with session_factory() as session:
+                workflow = session.get(WorkflowExecution, "parent_planning:TP-165")
+                workflow.status = "running"
+                workflow.updated_at = now
+                session.commit()
+            return SimpleNamespace(handled=True, failed=False, reason="manual_parent_planning_start", extra={})
+
+        with (
+            patch("orchestrator.api.admin.workflows.use_cases.workflow_integration_router", fake_router),
+            patch(
+                "orchestrator.api.admin.workflows.start_planning_service.handle_parent_feature_sync_service",
+                side_effect=_handle_parent_feature_sync,
+            ) as handle_sync,
+        ):
+            response = self.client.post(
+                "/api/admin/workflows/exec-parent-planning-165/start-planning",
+                auth=("admin", "secret"),
+            )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(fake_router.jira_adapter.issue_id_or_key, "TP-165")
+        self.assertEqual(handle_sync.call_count, 1)
+        self.assertEqual(response.json()["status"], "running")
+
+    def test_list_and_get_workflow_types_from_admin(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post("/api/admin/tenants", json=payload, auth=("admin", "secret"))
+        self.assertEqual(create_tenant.status_code, 201)
+
+        self._seed_workflow_attempt(
+            workflow_id="workflow-read-1",
+            run_id="run-read-1",
+            issue_key="TP-999",
+            issue_summary="Workflow read model",
+            workflow_status="waiting_for_input",
+            run_status="waiting_for_input",
+            checkpoint_id="checkpoint-read-1",
+            checkpoint_kind="pm",
+            pending_request_id="request-read-1",
+        )
+
+        list_response = self.client.get("/api/admin/workflow-types?tenant_id=tenant-a", auth=("admin", "secret"))
+        self.assertEqual(list_response.status_code, 200, list_response.text)
+        list_body = list_response.json()
+        issue_execution = next(item for item in list_body if item["key"] == "issue_execution")
+        self.assertEqual(issue_execution["label"], "Issue execution")
+        self.assertGreaterEqual(issue_execution["operation_count"], 1)
+        self.assertEqual(issue_execution["execution_count"], 1)
+
+        detail_response = self.client.get(
+            "/api/admin/workflow-types/issue_execution?tenant_id=tenant-a",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(detail_response.status_code, 200, detail_response.text)
+        detail_body = detail_response.json()
+        self.assertEqual(detail_body["key"], "issue_execution")
+        self.assertEqual(detail_body["operations"][0]["operation_type"], "run_attempt_execution")
+        self.assertEqual(detail_body["orchestration_backend"], "temporal")
+        self.assertIn("manual_retry_enabled", detail_body["retry_policy"])
+        self.assertTrue(detail_body["operations"][0]["completion_required"])
+        self.assertEqual(detail_body["operations"][0]["kind"], "business")
+        self.assertEqual(detail_body["operations"][0]["graph_index"], 0)
+        self.assertEqual(detail_body["recent_executions"][0]["workflow_id"], "workflow-read-1")
+        self.assertEqual(detail_body["recent_executions"][0]["waiting_on"], "human_input")
+
+        update_response = self.client.put(
+            "/api/admin/workflow-types/issue_execution",
+            json={
+                "orchestration_backend": "temporal",
+                "retry_policy": {
+                    "manual_retry_enabled": True,
+                    "max_attempts": 7,
+                    "initial_interval_seconds": 45,
+                    "max_interval_seconds": 2400,
+                    "backoff_coefficient": 2.5,
+                },
+            },
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(update_response.status_code, 405, update_response.text)
+
+    def test_update_workflow_type_endpoint_is_removed(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post("/api/admin/tenants", json=payload, auth=("admin", "secret"))
+        self.assertEqual(create_tenant.status_code, 201)
+
+        response = self.client.put(
+            "/api/admin/workflow-types/parent_planning",
+            json={
+                "orchestration_backend": "temporal",
+                "retry_policy": {
+                    "manual_retry_enabled": True,
+                    "max_attempts": 3,
+                    "initial_interval_seconds": 30,
+                    "max_interval_seconds": 300,
+                    "backoff_coefficient": 1.5,
+                },
+            },
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(response.status_code, 405, response.text)
+
+    def test_get_workflow_reads_links_without_calling_jira(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post("/api/admin/tenants", json=payload, auth=("admin", "secret"))
+        self.assertEqual(create_tenant.status_code, 201)
+
+        now = datetime.now(timezone.utc)
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            session.add(
+                WorkflowExecution(
+                    workflow_id="parent_planning:MAB-215",
+                    execution_id="wfexec-mab-215",
+                    workflow_type_key="parent_planning",
+                    tenant_id="tenant-a",
+                    project_id="tenant-a-default",
+                    source_system="jira",
+                    source_ref="MAB-215",
+                    display_name="Identity and authorization v1 contract",
+                    source_description="Parent planning",
+                    repo_url="https://github.com/example/repo",
+                    branch=None,
+                    pr_url=None,
+                    orchestration_backend="temporal",
+                    dedupe_scope="parent_planning",
+                    status="failed",
+                    last_error='Failed to seed Jira issues: Jira API request failed (400): {"errorMessages":["CONTENT_LIMIT_EXCEEDED"],"errors":{}}',
+                    active_run_id=None,
+                    latest_checkpoint_id=None,
+                    source_workflow_id=None,
+                    source_run_id=None,
+                    created_at=now,
+                    started_at=now,
+                    finished_at=None,
+                    updated_at=now,
+                )
+            )
+            session.commit()
+
+        with patch.object(
+            __import__("orchestrator.api.admin.workflows.use_cases", fromlist=["workflow_integration_router"]).workflow_integration_router,
+            "jira",
+            side_effect=AssertionError("workflow detail reads must not call Jira"),
+        ) as jira_adapter:
+            response = self.client.get(
+                "/api/admin/workflows/wfexec-mab-215",
+                auth=("admin", "secret"),
+            )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        jira_adapter.assert_not_called()
+        body = response.json()
+        links = body["links"]
+        operation_statuses = {item["operation_type"]: item["status"] for item in body["operations"]}
+        self.assertTrue(any(link["kind"] == "jira_issue" and link["ref"] == "MAB-215" for link in links))
+        self.assertFalse(any(link["kind"] == "child_issue" for link in links))
+        self.assertEqual(
+            set(operation_statuses),
+            {
+                PARENT_OP_BACKLOG_PLANNING,
+                PARENT_OP_BRIEF_NORMALIZATION,
+                PARENT_OP_DEVELOPMENT_START,
+                PARENT_OP_DEVELOPMENT_START_LINK_PROJECTION,
+                PARENT_OP_DISCORD_FOLLOWUP_PROJECTION,
+                PARENT_OP_JIRA_CHILD_FANOUT,
+                PARENT_OP_JIRA_CHILD_PROMOTION,
+                PARENT_OP_JIRA_COMMENT_PROJECTION,
+                PARENT_OP_JIRA_PARENT_UPDATE,
+                PARENT_OP_NOTIFICATION_EMIT,
+                PARENT_OP_PM_DECISION_RESOLUTION,
+            },
+        )
+        self.assertEqual(operation_statuses["jira_comment_projection"], "pending")
+        self.assertEqual(operation_statuses["jira_parent_update"], "pending")
+        self.assertEqual(body["failure_reason"], 'Failed to seed Jira issues: Jira API request failed (400): {"errorMessages":["CONTENT_LIMIT_EXCEEDED"],"errors":{}}')
+
+    def test_retry_workflow_operation_returns_refreshed_workflow(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post("/api/admin/tenants", json=payload, auth=("admin", "secret"))
+        self.assertEqual(create_tenant.status_code, 201)
+
+        now = datetime.now(timezone.utc)
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            workflow = WorkflowExecution(
+                workflow_id="parent_planning:MAB-215",
+                execution_id="wfexec-mab-215",
+                workflow_type_key="parent_planning",
+                tenant_id="tenant-a",
+                project_id="tenant-a-default",
+                source_system="jira",
+                source_ref="MAB-215",
+                display_name="Identity and authorization v1 contract",
+                source_description="Parent planning",
+                repo_url="https://github.com/example/repo",
+                branch=None,
+                pr_url=None,
+                orchestration_backend="temporal",
+                dedupe_scope="parent_planning",
+                status="failed",
+                last_error='Failed to seed Jira issues: Jira API request failed (400): {"errorMessages":["CONTENT_LIMIT_EXCEEDED"],"errors":{}}',
+                active_run_id=None,
+                latest_checkpoint_id=None,
+                source_workflow_id=None,
+                source_run_id=None,
+                created_at=now,
+                started_at=now,
+                finished_at=None,
+                updated_at=now,
+            )
+            session.add(workflow)
+            operation = WorkflowOperation(
+                operation_id="operation-jira-child-fanout",
+                workflow_id=workflow.workflow_id,
+                run_id=None,
+                operation_type="jira_child_fanout",
+                idempotency_key="jira-child-fanout:MAB-215",
+                status="failed",
+                target_system="jira",
+                target_ref="MAB-215",
+                summary='Failed to seed Jira issues: Jira API request failed (400): {"errorMessages":["CONTENT_LIMIT_EXCEEDED"],"errors":{}}',
+                created_at=now,
+                started_at=now,
+                finished_at=now,
+                updated_at=now,
+            )
+            session.add(operation)
+            session.add(
+                WorkflowOperationAttempt(
+                    attempt_id="attempt-1",
+                    operation_id=operation.operation_id,
+                    attempt_number=1,
+                    status="failed",
+                    error_category="content_limit",
+                    error_message='Failed to seed Jira issues: Jira API request failed (400): {"errorMessages":["CONTENT_LIMIT_EXCEEDED"],"errors":{}}',
+                    retryable=True,
+                    next_retry_at=None,
+                    created_at=now,
+                    started_at=now,
+                    finished_at=now,
+                )
+            )
+            session.commit()
+
+        class _FakeRuntime:
+            def __init__(self, runtime_session) -> None:
+                self._session = runtime_session
+
+            def retry_operation(self, *, workflow, operation):  # noqa: ANN001
+                current = datetime.now(timezone.utc)
+                workflow.status = "running"
+                workflow.last_error = None
+                workflow.updated_at = current
+                operation.status = "running"
+                operation.summary = "Retrying engineering child fanout."
+                operation.started_at = current
+                operation.finished_at = None
+                operation.updated_at = current
+                self._session.add(
+                    WorkflowOperationAttempt(
+                        attempt_id="attempt-2",
+                        operation_id=operation.operation_id,
+                        attempt_number=2,
+                        status="running",
+                        error_category=None,
+                        error_message=None,
+                        retryable=False,
+                        next_retry_at=None,
+                        created_at=current,
+                        started_at=current,
+                        finished_at=None,
+                    )
+                )
+                return SimpleNamespace(
+                    operation_id=operation.operation_id,
+                    workflow_id=workflow.workflow_id,
+                    operation_type=operation.operation_type,
+                    status=operation.status,
+                )
+
+        fake_jira_adapter = SimpleNamespace(list_child_issue_previews=lambda **_kwargs: [])
+        with (
+            patch(
+                "orchestrator.api.admin.workflows.operation_retry_service.build_workflow_runtime",
+                side_effect=lambda **kwargs: _FakeRuntime(kwargs["session"]),
+            ),
+            patch.object(
+                __import__("orchestrator.api.admin.workflows.use_cases", fromlist=["workflow_integration_router"]).workflow_integration_router,
+                "jira",
+                return_value=fake_jira_adapter,
+            ),
+        ):
+            response = self.client.post(
+                "/api/admin/workflows/wfexec-mab-215/operations/operation-jira-child-fanout/retry",
+                auth=("admin", "secret"),
+            )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        workflow_body = body["workflow"]
+        self.assertEqual(workflow_body["status"], "running")
+        self.assertEqual(workflow_body["current_state"], "running")
+        operation_body = next(item for item in workflow_body["operations"] if item["operation_type"] == "jira_child_fanout")
+        self.assertEqual(operation_body["status"], "running")
+        self.assertEqual(len(operation_body["attempts"]), 2)
+        self.assertEqual(operation_body["attempts"][-1]["attempt_number"], 2)
+        self.assertEqual(body["started_attempt"]["attempt_id"], "attempt-2")
+        self.assertEqual(body["started_attempt"]["attempt_number"], 2)
+        self.assertIsNone(workflow_body["failure_reason"])
+
+    def test_retry_workflow_operation_rejects_false_success_without_new_attempt(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post("/api/admin/tenants", json=payload, auth=("admin", "secret"))
+        self.assertEqual(create_tenant.status_code, 201)
+
+        now = datetime.now(timezone.utc)
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            workflow = WorkflowExecution(
+                workflow_id="parent_planning:MAB-244",
+                execution_id="wfexec-mab-244",
+                workflow_type_key="parent_planning",
+                tenant_id="tenant-a",
+                project_id="tenant-a-default",
+                source_system="jira",
+                source_ref="MAB-244",
+                display_name="Retry false success",
+                source_description="Parent planning",
+                repo_url="https://github.com/example/repo",
+                branch=None,
+                pr_url=None,
+                orchestration_backend="temporal",
+                dedupe_scope="parent_planning",
+                status="failed",
+                last_error="Previous retry failed",
+                active_run_id=None,
+                latest_checkpoint_id=None,
+                source_workflow_id=None,
+                source_run_id=None,
+                created_at=now,
+                started_at=now,
+                finished_at=None,
+                updated_at=now,
+            )
+            operation = WorkflowOperation(
+                operation_id="operation-false-success",
+                workflow_id=workflow.workflow_id,
+                run_id=None,
+                operation_type="jira_child_fanout",
+                idempotency_key="workflow-definition:jira_child_fanout",
+                status="failed",
+                target_system="jira",
+                target_ref="MAB-244",
+                summary="Previous retry failed",
+                created_at=now,
+                started_at=now,
+                finished_at=now,
+                updated_at=now,
+            )
+            session.add(workflow)
+            session.add(operation)
+            session.add(
+                WorkflowOperationAttempt(
+                    attempt_id="attempt-1",
+                    operation_id=operation.operation_id,
+                    attempt_number=1,
+                    status="failed",
+                    error_category="external_failure",
+                    error_message="Previous retry failed.",
+                    retryable=True,
+                    next_retry_at=None,
+                    created_at=now,
+                    started_at=now,
+                    finished_at=now,
+                )
+            )
+            session.commit()
+
+        class _FakeRuntime:
+            def retry_operation(self, *, workflow, operation):  # noqa: ANN001
+                return SimpleNamespace(
+                    operation_id=operation.operation_id,
+                    workflow_id=workflow.workflow_id,
+                    operation_type=operation.operation_type,
+                    status=operation.status,
+                )
+
+        fake_jira_adapter = SimpleNamespace(list_child_issue_previews=lambda **_kwargs: [])
+        with (
+            patch(
+                "orchestrator.api.admin.workflows.operation_retry_service.build_workflow_runtime",
+                return_value=_FakeRuntime(),
+            ),
+            patch.object(
+                __import__("orchestrator.api.admin.workflows.use_cases", fromlist=["workflow_integration_router"]).workflow_integration_router,
+                "jira",
+                return_value=fake_jira_adapter,
+            ),
+        ):
+            response = self.client.post(
+                "/api/admin/workflows/wfexec-mab-244/operations/operation-false-success/retry",
+                auth=("admin", "secret"),
+            )
+
+        self.assertEqual(response.status_code, 409, response.text)
+        self.assertEqual(response.json()["detail"], "Workflow operation retry did not create a new persisted attempt")
+
+    def test_retry_workflow_operation_returns_conflict_for_running_attempt(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post("/api/admin/tenants", json=payload, auth=("admin", "secret"))
+        self.assertEqual(create_tenant.status_code, 201)
+
+        now = datetime.now(timezone.utc)
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            workflow = WorkflowExecution(
+                workflow_id="parent_planning:MAB-234",
+                execution_id="wfexec-mab-234",
+                workflow_type_key="parent_planning",
+                tenant_id="tenant-a",
+                project_id="tenant-a-default",
+                source_system="jira",
+                source_ref="MAB-234",
+                display_name="Duplicate running retry",
+                source_description="Parent planning",
+                repo_url="https://github.com/example/repo",
+                branch=None,
+                pr_url=None,
+                orchestration_backend="temporal",
+                dedupe_scope="parent_planning",
+                status="failed",
+                last_error="Previous retry is still active",
+                active_run_id=None,
+                latest_checkpoint_id=None,
+                source_workflow_id=None,
+                source_run_id=None,
+                created_at=now,
+                started_at=now,
+                finished_at=None,
+                updated_at=now,
+            )
+            operation = WorkflowOperation(
+                operation_id="operation-backlog-planning-running",
+                workflow_id=workflow.workflow_id,
+                run_id=None,
+                operation_type="backlog_planning",
+                idempotency_key="workflow-definition:backlog_planning",
+                status="failed",
+                target_system="jira",
+                target_ref="MAB-234",
+                summary="Previous retry is still active",
+                created_at=now,
+                started_at=now,
+                finished_at=now,
+                updated_at=now,
+            )
+            session.add(workflow)
+            session.add(operation)
+            session.add(
+                WorkflowOperationAttempt(
+                    attempt_id="attempt-1",
+                    operation_id=operation.operation_id,
+                    attempt_number=1,
+                    status="failed",
+                    error_category="external_failure",
+                    error_message="Previous retry failed.",
+                    retryable=True,
+                    next_retry_at=None,
+                    created_at=now,
+                    started_at=now,
+                    finished_at=now,
+                )
+            )
+            session.commit()
+
+        class _FakeRuntime:
+            def retry_operation(self, *, workflow, operation):  # noqa: ANN001
+                del workflow, operation
+                raise WorkflowOperationAttemptAlreadyRunningError(
+                    "Workflow operation backlog_planning already has active attempt 2 (attempt-running)."
+                )
+
+        fake_jira_adapter = SimpleNamespace(list_child_issue_previews=lambda **_kwargs: [])
+        with (
+            patch(
+                "orchestrator.api.admin.workflows.operation_retry_service.build_workflow_runtime",
+                return_value=_FakeRuntime(),
+            ),
+            patch.object(
+                __import__("orchestrator.api.admin.workflows.use_cases", fromlist=["workflow_integration_router"]).workflow_integration_router,
+                "jira",
+                return_value=fake_jira_adapter,
+            ),
+        ):
+            response = self.client.post(
+                "/api/admin/workflows/wfexec-mab-234/operations/operation-backlog-planning-running/retry",
+                auth=("admin", "secret"),
+            )
+
+        self.assertEqual(response.status_code, 409, response.text)
+        self.assertIn("already has active attempt 2", response.json()["detail"])
+
+    def test_restart_workflow_operation_interrupts_running_attempt_and_starts_next(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post("/api/admin/tenants", json=payload, auth=("admin", "secret"))
+        self.assertEqual(create_tenant.status_code, 201)
+
+        now = datetime.now(timezone.utc)
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            workflow = WorkflowExecution(
+                workflow_id="parent_planning:MAB-245",
+                execution_id="wfexec-mab-245",
+                workflow_type_key="parent_planning",
+                tenant_id="tenant-a",
+                project_id="tenant-a-default",
+                source_system="jira",
+                source_ref="MAB-245",
+                display_name="Restart stale fanout",
+                source_description="Parent planning",
+                repo_url="https://github.com/example/repo",
+                branch=None,
+                pr_url=None,
+                orchestration_backend="temporal",
+                dedupe_scope="parent_planning",
+                status="running",
+                last_error=None,
+                active_run_id=None,
+                latest_checkpoint_id=None,
+                source_workflow_id=None,
+                source_run_id=None,
+                created_at=now,
+                started_at=now,
+                finished_at=None,
+                updated_at=now,
+            )
+            operation = WorkflowOperation(
+                operation_id="operation-stale-fanout",
+                workflow_id=workflow.workflow_id,
+                run_id=None,
+                operation_type="jira_child_fanout",
+                idempotency_key="workflow-definition:jira_child_fanout",
+                status="running",
+                target_system="jira",
+                target_ref="MAB-245",
+                summary="Fanout is running.",
+                created_at=now,
+                started_at=now,
+                finished_at=None,
+                updated_at=now,
+            )
+            session.add(workflow)
+            session.add(operation)
+            session.add(
+                WorkflowOperationAttempt(
+                    attempt_id="attempt-1",
+                    operation_id=operation.operation_id,
+                    attempt_number=1,
+                    status="running",
+                    error_category=None,
+                    error_message=None,
+                    retryable=False,
+                    next_retry_at=None,
+                    last_heartbeat_at=now - timedelta(minutes=20),
+                    lease_expires_at=now - timedelta(minutes=15),
+                    lease_owner="test-worker",
+                    created_at=now,
+                    started_at=now,
+                    finished_at=None,
+                )
+            )
+            session.commit()
+
+        class _FakeRuntime:
+            def __init__(self, runtime_session) -> None:
+                self._session = runtime_session
+
+            def retry_operation(self, *, workflow, operation):  # noqa: ANN001
+                current = datetime.now(timezone.utc)
+                workflow.status = "running"
+                workflow.last_error = None
+                workflow.updated_at = current
+                operation.status = "running"
+                operation.summary = "Restarting engineering child fanout."
+                operation.started_at = current
+                operation.finished_at = None
+                operation.updated_at = current
+                self._session.add(
+                    WorkflowOperationAttempt(
+                        attempt_id="attempt-2",
+                        operation_id=operation.operation_id,
+                        attempt_number=2,
+                        status="running",
+                        error_category=None,
+                        error_message=None,
+                        retryable=False,
+                        next_retry_at=None,
+                        last_heartbeat_at=current,
+                        lease_expires_at=current + timedelta(minutes=5),
+                        lease_owner="test-worker",
+                        created_at=current,
+                        started_at=current,
+                        finished_at=None,
+                    )
+                )
+                return SimpleNamespace(
+                    operation_id=operation.operation_id,
+                    workflow_id=workflow.workflow_id,
+                    operation_type=operation.operation_type,
+                    status=operation.status,
+                )
+
+        fake_jira_adapter = SimpleNamespace(list_child_issue_previews=lambda **_kwargs: [])
+        with (
+            patch(
+                "orchestrator.api.admin.workflows.operation_restart_service.build_registered_operation_retry_runtime",
+                side_effect=lambda **kwargs: _FakeRuntime(kwargs["session"]),
+            ),
+            patch.object(
+                __import__("orchestrator.api.admin.workflows.use_cases", fromlist=["workflow_integration_router"]).workflow_integration_router,
+                "jira",
+                return_value=fake_jira_adapter,
+            ),
+        ):
+            response = self.client.post(
+                "/api/admin/workflows/wfexec-mab-245/operations/operation-stale-fanout/restart",
+                json={"restart_reason": "Test restart"},
+                auth=("admin", "secret"),
+            )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        operation_body = next(item for item in body["workflow"]["operations"] if item["operation_type"] == "jira_child_fanout")
+        self.assertEqual(operation_body["status"], "running")
+        self.assertEqual(operation_body["attempts"][-2]["status"], "failed")
+        self.assertEqual(operation_body["attempts"][-2]["error_category"], "interrupted")
+        self.assertEqual(operation_body["attempts"][-1]["attempt_number"], 2)
+        self.assertEqual(body["started_attempt"]["attempt_id"], "attempt-2")
+
+    def test_restart_workflow_operation_rejects_waiting_for_input(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post("/api/admin/tenants", json=payload, auth=("admin", "secret"))
+        self.assertEqual(create_tenant.status_code, 201)
+
+        now = datetime.now(timezone.utc)
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            workflow = WorkflowExecution(
+                workflow_id="parent_planning:MAB-246",
+                execution_id="wfexec-mab-246",
+                workflow_type_key="parent_planning",
+                tenant_id="tenant-a",
+                project_id="tenant-a-default",
+                source_system="jira",
+                source_ref="MAB-246",
+                display_name="Waiting fanout",
+                source_description="Parent planning",
+                repo_url="https://github.com/example/repo",
+                branch=None,
+                pr_url=None,
+                orchestration_backend="temporal",
+                dedupe_scope="parent_planning",
+                status="waiting_for_input",
+                last_error=None,
+                active_run_id=None,
+                latest_checkpoint_id=None,
+                source_workflow_id=None,
+                source_run_id=None,
+                created_at=now,
+                started_at=now,
+                finished_at=None,
+                updated_at=now,
+            )
+            operation = WorkflowOperation(
+                operation_id="operation-waiting-fanout",
+                workflow_id=workflow.workflow_id,
+                run_id=None,
+                operation_type="jira_child_fanout",
+                idempotency_key="workflow-definition:jira_child_fanout",
+                status="waiting_for_input",
+                target_system="jira",
+                target_ref="MAB-246",
+                summary="Waiting for stakeholder input.",
+                created_at=now,
+                started_at=now,
+                finished_at=None,
+                updated_at=now,
+            )
+            session.add(workflow)
+            session.add(operation)
+            session.add(
+                WorkflowOperationAttempt(
+                    attempt_id="attempt-waiting",
+                    operation_id=operation.operation_id,
+                    attempt_number=1,
+                    status="waiting_for_input",
+                    error_category=None,
+                    error_message=None,
+                    retryable=False,
+                    next_retry_at=None,
+                    last_heartbeat_at=now - timedelta(minutes=20),
+                    lease_expires_at=None,
+                    lease_owner=None,
+                    created_at=now,
+                    started_at=now,
+                    finished_at=now,
+                )
+            )
+            session.commit()
+
+        response = self.client.post(
+            "/api/admin/workflows/wfexec-mab-246/operations/operation-waiting-fanout/restart",
+            json={"restart_reason": "Test restart"},
+            auth=("admin", "secret"),
+        )
+
+        self.assertEqual(response.status_code, 409, response.text)
+        self.assertEqual(response.json()["detail"], "Workflow operation is waiting for input and cannot be restarted")
+
+    def test_get_workflow_includes_operation_events(self) -> None:
+        payload = self._tenant_payload()
+        create_tenant = self.client.post("/api/admin/tenants", json=payload, auth=("admin", "secret"))
+        self.assertEqual(create_tenant.status_code, 201)
+
+        now = datetime.now(timezone.utc)
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            workflow = WorkflowExecution(
+                workflow_id="parent_planning:MAB-215",
+                execution_id="wfexec-mab-215",
+                workflow_type_key="parent_planning",
+                tenant_id="tenant-a",
+                project_id="tenant-a-default",
+                source_system="jira",
+                source_ref="MAB-215",
+                display_name="Identity and authorization v1 contract",
+                source_description="Parent planning",
+                repo_url=None,
+                branch=None,
+                pr_url=None,
+                orchestration_backend="temporal",
+                dedupe_scope="parent_planning",
+                status="failed",
+                last_error='Failed to seed Jira issues: Jira API request failed (400): {"errorMessages":["CONTENT_LIMIT_EXCEEDED"],"errors":{}}',
+                active_run_id=None,
+                latest_checkpoint_id=None,
+                source_workflow_id=None,
+                source_run_id=None,
+                created_at=now,
+                started_at=now,
+                finished_at=None,
+                updated_at=now,
+            )
+            session.add(workflow)
+            operation = WorkflowOperation(
+                operation_id="operation-jira-child-fanout",
+                workflow_id=workflow.workflow_id,
+                run_id=None,
+                operation_type="jira_child_fanout",
+                idempotency_key="jira-child-fanout:MAB-215",
+                status="failed",
+                target_system="jira",
+                target_ref="MAB-215",
+                summary='Failed to seed Jira issues: Jira API request failed (400): {"errorMessages":["CONTENT_LIMIT_EXCEEDED"],"errors":{}}',
+                created_at=now,
+                started_at=now,
+                finished_at=now,
+                updated_at=now,
+            )
+            session.add(operation)
+            session.add(
+                WorkflowOperationAttempt(
+                    attempt_id="attempt-1",
+                    operation_id=operation.operation_id,
+                    attempt_number=1,
+                    status="failed",
+                    error_category="content_limit",
+                    error_message='Failed to seed Jira issues: Jira API request failed (400): {"errorMessages":["CONTENT_LIMIT_EXCEEDED"],"errors":{}}',
+                    retryable=True,
+                    next_retry_at=None,
+                    created_at=now,
+                    started_at=now,
+                    finished_at=now,
+                )
+            )
+            audit_events = [
+                _audit_event(
+                    sequence=1,
+                    workflow_id=workflow.workflow_id,
+                    operation_id=operation.operation_id,
+                    attempt_id="attempt-1",
+                    event_kind="attempt_failed",
+                    level="error",
+                    message='Failed to seed Jira issues: Jira API request failed (400): {"errorMessages":["CONTENT_LIMIT_EXCEEDED"],"errors":{}}',
+                    payload={"error_category": "content_limit"},
+                    recorded_at=now,
+                )
+            ]
+            session.commit()
+
+        fake_jira_adapter = SimpleNamespace(list_child_issue_previews=lambda **_kwargs: [])
+        with (
+            patch.object(
+                __import__("orchestrator.api.admin.workflows.use_cases", fromlist=["workflow_integration_router"]).workflow_integration_router,
+                "jira",
+                return_value=fake_jira_adapter,
+            ),
+            patch("orchestrator.api.admin.workflows.queries.list_product_events", return_value=audit_events),
+        ):
+            response = self.client.get("/api/admin/workflows/wfexec-mab-215", auth=("admin", "secret"))
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        operation_body = next(item for item in body["operations"] if item["operation_type"] == "jira_child_fanout")
+        self.assertEqual(len(operation_body["events"]), 1)
+        self.assertEqual(operation_body["events"][0]["event_kind"], "attempt_failed")
+        self.assertEqual(operation_body["events"][0]["level"], "error")
+
+    def test_get_workflow_operation_audit_events(self) -> None:
+        payload = self._tenant_payload()
+        create_tenant = self.client.post("/api/admin/tenants", json=payload, auth=("admin", "secret"))
+        self.assertEqual(create_tenant.status_code, 201)
+
+        now = datetime.now(timezone.utc)
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            workflow = WorkflowExecution(
+                workflow_id="parent_planning:MAB-215",
+                execution_id="wfexec-mab-215",
+                workflow_type_key="parent_planning",
+                tenant_id="tenant-a",
+                project_id="tenant-a-default",
+                source_system="jira",
+                source_ref="MAB-215",
+                display_name="Identity and authorization v1 contract",
+                source_description="Parent planning",
+                repo_url=None,
+                branch=None,
+                pr_url=None,
+                orchestration_backend="temporal",
+                dedupe_scope="parent_planning",
+                status="failed",
+                last_error="Failed to seed Jira issues",
+                active_run_id=None,
+                latest_checkpoint_id=None,
+                source_workflow_id=None,
+                source_run_id=None,
+                created_at=now,
+                started_at=now,
+                finished_at=None,
+                updated_at=now,
+            )
+            session.add(workflow)
+            operation = WorkflowOperation(
+                operation_id="operation-jira-child-fanout",
+                workflow_id=workflow.workflow_id,
+                run_id=None,
+                operation_type="jira_child_fanout",
+                idempotency_key="jira-child-fanout:MAB-215",
+                status="failed",
+                target_system="jira",
+                target_ref="MAB-215",
+                summary="Failed to seed Jira issues",
+                created_at=now,
+                started_at=now,
+                finished_at=now,
+                updated_at=now,
+            )
+            session.add(operation)
+            attempt = WorkflowOperationAttempt(
+                attempt_id="attempt-3",
+                operation_id=operation.operation_id,
+                attempt_number=3,
+                status="failed",
+                error_category="content_limit",
+                error_message="Failed to seed Jira issues",
+                status_detail=None,
+                retryable=True,
+                next_retry_at=None,
+                created_at=now,
+                started_at=now,
+                finished_at=now,
+            )
+            session.add(attempt)
+            audit_events = [
+                _audit_event(
+                    sequence=1,
+                    workflow_id=workflow.workflow_id,
+                    operation_id=operation.operation_id,
+                    attempt_id=attempt.attempt_id,
+                    event_kind="attempt_failed",
+                    level="error",
+                    message="Failed to seed Jira issues",
+                    payload={
+                        "error_category": "content_limit",
+                        "invocation_id": "inv-123",
+                        "stage": "seed",
+                        "attempt": 3,
+                        "stream": "stderr",
+                    },
+                    recorded_at=now,
+                )
+            ]
+            session.commit()
+
+        with patch("orchestrator.api.admin.workflows.events_service.list_product_events", return_value=audit_events):
+            response = self.client.get(
+                "/api/admin/workflows/wfexec-mab-215/operations/operation-jira-child-fanout/audit",
+                auth=("admin", "secret"),
+            )
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        self.assertEqual(len(body), 1)
+        self.assertEqual(body[0]["source"], "audit")
+        self.assertEqual(body[0]["event_kind"], "attempt_failed")
+        self.assertEqual(body[0]["invocation_id"], "inv-123")
+        self.assertEqual(body[0]["stage"], "seed")
+        self.assertEqual(body[0]["attempt"], 3)
+        self.assertEqual(body[0]["stream"], "stderr")
+
+    def test_get_workflow_operation_telemetry_events(self) -> None:
+        payload = self._tenant_payload()
+        create_tenant = self.client.post("/api/admin/tenants", json=payload, auth=("admin", "secret"))
+        self.assertEqual(create_tenant.status_code, 201)
+
+        now = datetime.now(timezone.utc)
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            workflow = WorkflowExecution(
+                workflow_id="parent_planning:MAB-215",
+                execution_id="wfexec-mab-215",
+                workflow_type_key="parent_planning",
+                tenant_id="tenant-a",
+                project_id="tenant-a-default",
+                source_system="jira",
+                source_ref="MAB-215",
+                display_name="Identity and authorization v1 contract",
+                source_description="Parent planning",
+                repo_url=None,
+                branch=None,
+                pr_url=None,
+                orchestration_backend="temporal",
+                dedupe_scope="parent_planning",
+                status="running",
+                last_error=None,
+                active_run_id=None,
+                latest_checkpoint_id=None,
+                source_workflow_id=None,
+                source_run_id=None,
+                created_at=now,
+                started_at=now,
+                finished_at=None,
+                updated_at=now,
+            )
+            session.add(workflow)
+            operation = WorkflowOperation(
+                operation_id="operation-jira-child-fanout",
+                workflow_id=workflow.workflow_id,
+                run_id=None,
+                operation_type="jira_child_fanout",
+                idempotency_key="jira-child-fanout:MAB-215",
+                status="running",
+                target_system="jira",
+                target_ref="MAB-215",
+                summary=None,
+                created_at=now,
+                started_at=now,
+                finished_at=None,
+                updated_at=now,
+            )
+            session.add(operation)
+            session.commit()
+
+        with patch(
+            "orchestrator.api.admin.workflows.use_cases.list_workflow_operation_live_events_impl",
+            return_value=[
+                workflow_observability_event_to_schema(
+                    {
+                        "event_id": "telemetry:event-1",
+                        "source": "telemetry",
+                        "level": "info",
+                        "event_kind": "workflow_operation_attempt_started",
+                        "message": "Creating Jira child ticket payload.",
+                        "source_component": "orchestrator.workflow_operation",
+                        "run_id": None,
+                        "operation_id": "operation-jira-child-fanout",
+                        "attempt_id": "attempt-1",
+                        "agent_id": None,
+                        "invocation_id": None,
+                        "stage": None,
+                        "attempt": 1,
+                        "stream": None,
+                        "payload": {"status": "running"},
+                        "recorded_at": now,
+                    }
+                )
+            ],
+        ) as list_live_events:
+            response = self.client.get(
+                "/api/admin/workflows/wfexec-mab-215/operations/operation-jira-child-fanout/telemetry",
+                auth=("admin", "secret"),
+            )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        self.assertEqual(len(body), 1)
+        self.assertEqual(body[0]["source"], "telemetry")
+        self.assertEqual(body[0]["message"], "Creating Jira child ticket payload.")
+        self.assertEqual(body[0]["operation_id"], "operation-jira-child-fanout")
+        list_live_events.assert_called_once()
+
+    def test_stream_workflow_operation_attempt_telemetry_passes_numeric_cursor(self) -> None:
+        payload = self._tenant_payload()
+        create_tenant = self.client.post("/api/admin/tenants", json=payload, auth=("admin", "secret"))
+        self.assertEqual(create_tenant.status_code, 201)
+
+        now = datetime.now(timezone.utc)
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            workflow = WorkflowExecution(
+                workflow_id="parent_planning:MAB-236",
+                execution_id="wfexec-mab-236",
+                workflow_type_key="parent_planning",
+                tenant_id="tenant-a",
+                project_id="tenant-a-default",
+                source_system="jira",
+                source_ref="MAB-236",
+                display_name="Telemetry stream cursor regression",
+                source_description="Parent planning",
+                repo_url=None,
+                branch=None,
+                pr_url=None,
+                orchestration_backend="temporal",
+                dedupe_scope="parent_planning",
+                status="running",
+                last_error=None,
+                active_run_id=None,
+                latest_checkpoint_id=None,
+                source_workflow_id=None,
+                source_run_id=None,
+                created_at=now,
+                started_at=now,
+                finished_at=None,
+                updated_at=now,
+            )
+            operation = WorkflowOperation(
+                operation_id="operation-backlog-planning",
+                workflow_id=workflow.workflow_id,
+                run_id=None,
+                operation_type="backlog_planning",
+                idempotency_key="workflow-definition:backlog_planning",
+                status="running",
+                target_system="jira",
+                target_ref="MAB-236",
+                summary=None,
+                created_at=now,
+                started_at=now,
+                finished_at=None,
+                updated_at=now,
+            )
+            attempt = WorkflowOperationAttempt(
+                attempt_id="attempt-backlog-planning-5",
+                operation_id=operation.operation_id,
+                attempt_number=5,
+                status="running",
+                error_category=None,
+                error_message=None,
+                retryable=True,
+                next_retry_at=None,
+                created_at=now,
+                started_at=now,
+                finished_at=None,
+            )
+            session.add_all([workflow, operation, attempt])
+            session.commit()
+
+        def _stream_events(*, operation_id, attempt_id, after_event_sequence, **_kwargs):  # noqa: ANN001
+            self.assertEqual(operation_id, "operation-backlog-planning")
+            self.assertEqual(attempt_id, "attempt-backlog-planning-5")
+            self.assertEqual(after_event_sequence, 11719001157677308259)
+            self.assertIsInstance(after_event_sequence, int)
+            return iter(['{"event_sequence":11719001157677308260}\n'])
+
+        with patch(
+            "orchestrator.api.admin.workflows.use_cases.stream_workflow_operation_live_events_ndjson_impl",
+            side_effect=_stream_events,
+        ):
+            response = self.client.get(
+                "/api/admin/workflows/wfexec-mab-236/operations/operation-backlog-planning"
+                "/attempts/attempt-backlog-planning-5/telemetry/stream"
+                "?after_event_sequence=11719001157677308259",
+                auth=("admin", "secret"),
+            )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.text, '{"event_sequence":11719001157677308260}\n')
+
+    def test_get_workflow_operation_transcript_groups_attempts(self) -> None:
+        payload = self._tenant_payload()
+        create_tenant = self.client.post("/api/admin/tenants", json=payload, auth=("admin", "secret"))
+        self.assertEqual(create_tenant.status_code, 201)
+
+        now = datetime.now(timezone.utc)
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            workflow = WorkflowExecution(
+                workflow_id="parent_planning:MAB-215",
+                execution_id="wfexec-mab-215",
+                workflow_type_key="parent_planning",
+                tenant_id="tenant-a",
+                project_id="tenant-a-default",
+                source_system="jira",
+                source_ref="MAB-215",
+                display_name="Identity and authorization v1 contract",
+                source_description="Parent planning",
+                repo_url=None,
+                branch=None,
+                pr_url=None,
+                orchestration_backend="temporal",
+                dedupe_scope="parent_planning",
+                status="failed",
+                last_error="Answer the product clarification on Jira issue MAB-215, then retry engineering child fanout.",
+                active_run_id=None,
+                latest_checkpoint_id=None,
+                source_workflow_id=None,
+                source_run_id=None,
+                created_at=now,
+                started_at=now,
+                finished_at=None,
+                updated_at=now,
+            )
+            session.add(workflow)
+            operation = WorkflowOperation(
+                operation_id="operation-jira-child-fanout",
+                workflow_id=workflow.workflow_id,
+                run_id=None,
+                operation_type="jira_child_fanout",
+                idempotency_key="jira-child-fanout:MAB-215",
+                status="failed",
+                target_system="jira",
+                target_ref="MAB-215",
+                summary="Failed to seed Jira issues",
+                created_at=now,
+                started_at=now,
+                finished_at=now,
+                updated_at=now,
+            )
+            attempt = WorkflowOperationAttempt(
+                attempt_id="attempt-7",
+                operation_id=operation.operation_id,
+                attempt_number=7,
+                status="failed",
+                error_category="missing_input",
+                error_message="Answer the product clarification on Jira issue MAB-215, then retry engineering child fanout.",
+                status_detail=None,
+                retryable=True,
+                next_retry_at=None,
+                created_at=now,
+                started_at=now,
+                finished_at=now,
+            )
+            session.add(operation)
+            session.add(attempt)
+            audit_events = [
+                _audit_event(
+                    sequence=1,
+                    workflow_id=workflow.workflow_id,
+                    operation_id=operation.operation_id,
+                    attempt_id=attempt.attempt_id,
+                    event_kind="stage_request",
+                    level="info",
+                    message="Submitted runtime request.",
+                    payload={
+                        "attempt": 7,
+                        "system_prompt": "You are the planner.",
+                        "user_prompt": "Create or refresh engineering child tickets.",
+                    },
+                    recorded_at=now,
+                    source_component="runtime_invocation",
+                )
+            ]
+            session.commit()
+
+        with patch("orchestrator.api.admin.workflows.events_service.list_product_events", return_value=audit_events):
+            response = self.client.get(
+                "/api/admin/workflows/wfexec-mab-215/operations/operation-jira-child-fanout/transcript?source=audit",
+                auth=("admin", "secret"),
+            )
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        self.assertEqual(body["operation_id"], "operation-jira-child-fanout")
+        self.assertEqual(body["source"], "audit")
+        self.assertEqual(len(body["attempts"]), 1)
+        self.assertEqual(body["attempts"][0]["attempt_number"], 7)
+        self.assertEqual(body["attempts"][0]["sections"][0]["kind"], "prompts")
+
+    def test_get_workflow_operation_attempt_audit_returns_selected_attempt(self) -> None:
+        payload = self._tenant_payload()
+        create_tenant = self.client.post("/api/admin/tenants", json=payload, auth=("admin", "secret"))
+        self.assertEqual(create_tenant.status_code, 201)
+
+        now = datetime.now(timezone.utc)
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            workflow = WorkflowExecution(
+                workflow_id="parent_planning:MAB-215",
+                execution_id="wfexec-mab-215",
+                workflow_type_key="parent_planning",
+                tenant_id="tenant-a",
+                project_id="tenant-a-default",
+                source_system="jira",
+                source_ref="MAB-215",
+                display_name="Identity and authorization v1 contract",
+                source_description="Parent planning",
+                repo_url=None,
+                branch=None,
+                pr_url=None,
+                orchestration_backend="temporal",
+                dedupe_scope="parent_planning",
+                status="failed",
+                last_error="Answer the product clarification on Jira issue MAB-215, then retry engineering child fanout.",
+                active_run_id=None,
+                latest_checkpoint_id=None,
+                source_workflow_id=None,
+                source_run_id=None,
+                created_at=now,
+                started_at=now,
+                finished_at=None,
+                updated_at=now,
+            )
+            operation = WorkflowOperation(
+                operation_id="operation-jira-child-fanout",
+                workflow_id=workflow.workflow_id,
+                run_id=None,
+                operation_type="jira_child_fanout",
+                idempotency_key="jira-child-fanout:MAB-215",
+                status="failed",
+                target_system="jira",
+                target_ref="MAB-215",
+                summary="Failed to seed Jira issues",
+                created_at=now,
+                started_at=now,
+                finished_at=now,
+                updated_at=now,
+            )
+            attempt = WorkflowOperationAttempt(
+                attempt_id="attempt-7",
+                operation_id=operation.operation_id,
+                attempt_number=7,
+                status="failed",
+                error_category="missing_input",
+                error_message="Answer the product clarification on Jira issue MAB-215, then retry engineering child fanout.",
+                status_detail=None,
+                retryable=True,
+                next_retry_at=None,
+                created_at=now,
+                started_at=now,
+                finished_at=now,
+            )
+            session.add_all([workflow, operation, attempt])
+            audit_events = [
+                _audit_event(
+                    sequence=1,
+                    workflow_id=workflow.workflow_id,
+                    operation_id=operation.operation_id,
+                    attempt_id=attempt.attempt_id,
+                    event_kind="stage_request",
+                    level="info",
+                    message="Submitted runtime request.",
+                    payload={
+                        "attempt": 7,
+                        "user_prompt": "Create or refresh engineering child tickets.",
+                    },
+                    recorded_at=now,
+                    source_component="runtime_invocation",
+                )
+            ]
+            session.commit()
+
+        with patch("orchestrator.api.admin.workflows.events_service.list_product_events", return_value=audit_events):
+            response = self.client.get(
+                "/api/admin/workflows/wfexec-mab-215/operations/operation-jira-child-fanout/attempts/attempt-7/audit",
+                auth=("admin", "secret"),
+            )
+        self.assertEqual(response.status_code, 200, response.text)
+        body = response.json()
+        self.assertEqual(body["attempt_id"], "attempt-7")
+        self.assertEqual(body["attempt_number"], 7)
+        self.assertEqual(body["sections"][0]["kind"], "prompts")
+
+    def test_export_audit_events_as_ndjson(self) -> None:
+        import json as json_module
+
+        payload = self._tenant_payload()
+        create_tenant = self.client.post("/api/admin/tenants", json=payload, auth=("admin", "secret"))
+        self.assertEqual(create_tenant.status_code, 201)
+
+        now = datetime.now(timezone.utc)
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            workflow = WorkflowExecution(
+                workflow_id="parent_planning:MAB-215",
+                execution_id="wfexec-mab-215",
+                workflow_type_key="parent_planning",
+                tenant_id="tenant-a",
+                project_id="tenant-a-default",
+                source_system="jira",
+                source_ref="MAB-215",
+                display_name="Identity and authorization v1 contract",
+                source_description="Parent planning",
+                repo_url=None,
+                branch=None,
+                pr_url=None,
+                orchestration_backend="temporal",
+                dedupe_scope="parent_planning",
+                status="failed",
+                last_error="Failed to seed Jira issues",
+                active_run_id=None,
+                latest_checkpoint_id=None,
+                source_workflow_id=None,
+                source_run_id=None,
+                created_at=now,
+                started_at=now,
+                finished_at=None,
+                updated_at=now,
+            )
+            session.add(workflow)
+            audit_events = [
+                _audit_event(
+                    sequence=1,
+                    workflow_id=workflow.workflow_id,
+                    operation_id=None,
+                    attempt_id=None,
+                    event_kind="execution_failed",
+                    level="error",
+                    message="Execution failed",
+                    payload={"failure": "content_limit"},
+                    recorded_at=now,
+                    source_component="workflow_runtime",
+                )
+            ]
+            session.commit()
+
+        with patch("orchestrator.api.admin.audit_export_service.list_product_events", return_value=audit_events):
+            response = self.client.post(
+                "/api/admin/audit/export",
+                json={"tenant_id": "tenant-a", "execution_id": "parent_planning:MAB-215"},
+                auth=("admin", "secret"),
+            )
+        self.assertEqual(response.status_code, 200, response.text)
+        self.assertEqual(response.headers["content-type"].split(";")[0], "application/x-ndjson")
+        rows = [json_module.loads(line) for line in response.text.splitlines() if line.strip()]
+        self.assertEqual(len(rows), 1)
+        self.assertEqual(rows[0]["source"], "audit")
+        self.assertEqual(rows[0]["event_kind"], "execution_failed")
+
+    def test_export_audit_events_rejects_disabled_tenant_policy(self) -> None:
+        payload = self._tenant_payload()
+        payload["policy"]["observability"] = {
+            "audit_retention_days": 365,
+            "audit_export_enabled": False,
+            "legal_hold_enabled": False,
+            "legal_hold_reason": None,
+        }
+        create_tenant = self.client.post("/api/admin/tenants", json=payload, auth=("admin", "secret"))
+        self.assertEqual(create_tenant.status_code, 201)
+
+        response = self.client.post(
+            "/api/admin/audit/export",
+            json={"tenant_id": "tenant-a"},
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(response.status_code, 403, response.text)
+        self.assertEqual(response.json()["detail"], "Audit export is disabled for this tenant")
 
     def test_create_workflow_attempt_reuses_waiting_workflow(self) -> None:
         payload = self._tenant_payload()
@@ -3479,7 +3104,7 @@ class AdminApiTests(SqliteTemplateApiTestCase):
         )
 
         response = self.client.post(
-            "/api/admin/workflows/workflow-waiting-1/attempts",
+            "/api/admin/workflows/exec-run-waiting-1/attempts",
             json={"mode": "resume", "checkpoint_kind": "pm"},
             auth=("admin", "secret"),
         )
@@ -3522,7 +3147,7 @@ class AdminApiTests(SqliteTemplateApiTestCase):
         )
 
         response = self.client.post(
-            "/api/admin/workflows/workflow-waiting-restart-rejected-1/attempts",
+            "/api/admin/workflows/exec-run-waiting-restart-rejected-1/attempts",
             json={"mode": "restart", "checkpoint_kind": "pm"},
             auth=("admin", "secret"),
         )
@@ -3554,12 +3179,46 @@ class AdminApiTests(SqliteTemplateApiTestCase):
             session.commit()
 
         response = self.client.post(
-            "/api/admin/workflows/workflow-non-ready-checkpoint-1/attempts",
+            "/api/admin/workflows/exec-run-non-ready-checkpoint-1/attempts",
             json={"mode": "resume", "checkpoint_kind": "pm"},
             auth=("admin", "secret"),
         )
         self.assertEqual(response.status_code, 409, response.text)
         self.assertIn("pre_check_outcome must be 'ready_for_agent'", response.json()["detail"])
+
+    def test_create_workflow_attempt_rejects_non_canonical_checkpoint_payload(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post("/api/admin/tenants", json=payload, auth=("admin", "secret"))
+        self.assertEqual(create_tenant.status_code, 201)
+
+        self._seed_workflow_attempt(
+            workflow_id="workflow-invalid-checkpoint-1",
+            run_id="run-invalid-checkpoint-1",
+            issue_key="TP-1000D",
+            issue_summary="Invalid checkpoint workflow",
+            workflow_status="waiting_for_input",
+            run_status="waiting_for_input",
+            checkpoint_id="checkpoint-invalid-1",
+            checkpoint_kind="pm",
+        )
+
+        with create_session_factory(self.database_url)() as session:
+            checkpoint = session.get(WorkflowCheckpoint, "checkpoint-invalid-1")
+            assert checkpoint is not None
+            checkpoint.payload_json = {}
+            session.commit()
+
+        response = self.client.post(
+            "/api/admin/workflows/exec-run-invalid-checkpoint-1/attempts",
+            json={"mode": "resume", "checkpoint_kind": "pm"},
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(response.status_code, 409, response.text)
+        self.assertEqual(
+            response.json()["detail"],
+            "Selected run/checkpoint has an unsupported execution snapshot shape",
+        )
 
     def test_create_workflow_attempt_from_terminal_workflow_creates_new_workflow_lineage(self) -> None:
         payload = self._tenant_payload()
@@ -3579,7 +3238,7 @@ class AdminApiTests(SqliteTemplateApiTestCase):
         )
 
         response = self.client.post(
-            "/api/admin/workflows/workflow-terminal-1/attempts",
+            "/api/admin/workflows/exec-run-terminal-1/attempts",
             json={"mode": "restart", "checkpoint_kind": "execution"},
             auth=("admin", "secret"),
         )
@@ -3600,6 +3259,125 @@ class AdminApiTests(SqliteTemplateApiTestCase):
             self.assertEqual(workflow.source_run_id, "run-terminal-1")
             self.assertEqual(workflow.status, "queued")
 
+    def test_resume_workflow_execution_uses_latest_orchestrated_checkpoint(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post("/api/admin/tenants", json=payload, auth=("admin", "secret"))
+        self.assertEqual(create_tenant.status_code, 201)
+
+        self._seed_workflow_attempt(
+            workflow_id="workflow-terminal-orchestrated-1",
+            run_id="run-terminal-orchestrated-1",
+            issue_key="TP-1001O",
+            issue_summary="Terminal workflow with orchestrated checkpoint",
+            workflow_status="failed",
+            run_status="failed",
+            checkpoint_id="checkpoint-terminal-orchestrated-1",
+            checkpoint_kind="orchestrated",
+            checkpoint_stage="orchestrated",
+        )
+
+        response = self.client.post(
+            "/api/admin/workflows/exec-run-terminal-orchestrated-1/resume",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(response.status_code, 201, response.text)
+        body = response.json()
+        self.assertEqual(body["workflow_id"], "workflow-terminal-orchestrated-1")
+        self.assertEqual(body["entry_mode"], "resume")
+        self.assertEqual(body["entry_checkpoint_id"], "checkpoint-terminal-orchestrated-1")
+        self.assertEqual(body["entry_stage"], "orchestrated")
+
+    def test_resume_workflow_execution_reuses_failed_execution(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post("/api/admin/tenants", json=payload, auth=("admin", "secret"))
+        self.assertEqual(create_tenant.status_code, 201)
+
+        self._seed_workflow_attempt(
+            workflow_id="workflow-terminal-resume-1",
+            run_id="run-terminal-resume-1",
+            issue_key="TP-1001R",
+            issue_summary="Terminal workflow resume",
+            workflow_status="failed",
+            run_status="failed",
+            checkpoint_id="checkpoint-terminal-resume-1",
+            checkpoint_kind="execution",
+        )
+
+        response = self.client.post(
+            "/api/admin/workflows/exec-run-terminal-resume-1/resume",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(response.status_code, 201, response.text)
+        body = response.json()
+        self.assertEqual(body["workflow_id"], "workflow-terminal-resume-1")
+        self.assertEqual(body["attempt_number"], 2)
+        self.assertEqual(body["entry_mode"], "resume")
+        self.assertEqual(body["entry_checkpoint_id"], "checkpoint-terminal-resume-1")
+
+    def test_resume_workflow_execution_rejects_completed_execution(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post("/api/admin/tenants", json=payload, auth=("admin", "secret"))
+        self.assertEqual(create_tenant.status_code, 201)
+
+        self._seed_workflow_attempt(
+            workflow_id="workflow-completed-resume-rejected-1",
+            run_id="run-completed-resume-rejected-1",
+            issue_key="TP-1001S",
+            issue_summary="Completed workflow",
+            workflow_status="succeeded",
+            run_status="succeeded",
+            checkpoint_id="checkpoint-completed-resume-rejected-1",
+            checkpoint_kind="execution",
+        )
+
+        response = self.client.post(
+            "/api/admin/workflows/exec-run-completed-resume-rejected-1/resume",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(response.status_code, 409, response.text)
+        self.assertEqual(response.json()["detail"], "Completed executions cannot be restarted.")
+
+    def test_create_workflow_attempt_uses_workflow_type_backend_not_stale_execution_backend(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_tenant = self.client.post("/api/admin/tenants", json=payload, auth=("admin", "secret"))
+        self.assertEqual(create_tenant.status_code, 201)
+
+        self._seed_workflow_attempt(
+            workflow_id="workflow-terminal-backend-1",
+            run_id="run-terminal-backend-1",
+            issue_key="TP-1001A",
+            issue_summary="Terminal workflow with stale backend",
+            workflow_status="failed",
+            run_status="failed",
+            checkpoint_id="checkpoint-terminal-backend-1",
+            checkpoint_kind="execution",
+        )
+
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            workflow = session.get(WorkflowExecution, "workflow-terminal-backend-1")
+            assert workflow is not None
+            workflow.orchestration_backend = "legacy"
+            session.commit()
+
+        response = self.client.post(
+            "/api/admin/workflows/exec-run-terminal-backend-1/attempts",
+            json={"mode": "restart", "checkpoint_kind": "execution"},
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(response.status_code, 201, response.text)
+        body = response.json()
+
+        with session_factory() as session:
+            next_workflow = session.get(WorkflowExecution, body["workflow_id"])
+            self.assertIsNotNone(next_workflow)
+            assert next_workflow is not None
+            self.assertEqual(next_workflow.orchestration_backend, "temporal")
+
     def test_create_workflow_attempt_repairs_stale_active_status_before_policy_check(self) -> None:
         payload = self._tenant_payload()
         self._insert_jira_connection(connection_id="conn-1")
@@ -3618,7 +3396,7 @@ class AdminApiTests(SqliteTemplateApiTestCase):
         )
 
         response = self.client.post(
-            "/api/admin/workflows/workflow-stale-active-1/attempts",
+            "/api/admin/workflows/exec-run-stale-active-1/attempts",
             json={"mode": "restart", "checkpoint_kind": "execution"},
             auth=("admin", "secret"),
         )
@@ -3661,7 +3439,7 @@ class AdminApiTests(SqliteTemplateApiTestCase):
         )
 
         response = self.client.post(
-            "/api/admin/workflows/workflow-terminal-conflict-1/attempts",
+            "/api/admin/workflows/exec-run-terminal-conflict-1/attempts",
             json={"mode": "restart", "checkpoint_kind": "execution"},
             auth=("admin", "secret"),
         )
@@ -3697,7 +3475,7 @@ class AdminApiTests(SqliteTemplateApiTestCase):
             session.commit()
 
         response = self.client.post(
-            "/api/admin/workflows/workflow-terminal-fresh-1/attempts",
+            "/api/admin/workflows/exec-run-terminal-fresh-1/attempts",
             json={"mode": "fresh"},
             auth=("admin", "secret"),
         )
@@ -3735,24 +3513,24 @@ class AdminApiTests(SqliteTemplateApiTestCase):
             )
             self.assertNotIn("human_input_request_id", run.plan["context"]["execution_context"])
 
-    def test_create_fresh_workflow_attempt_from_blocked_workflow_strips_stale_human_input_state(self) -> None:
+    def test_create_fresh_workflow_attempt_from_failed_workflow_strips_stale_human_input_state(self) -> None:
         payload = self._tenant_payload()
         self._insert_jira_connection(connection_id="conn-1")
         create_tenant = self.client.post("/api/admin/tenants", json=payload, auth=("admin", "secret"))
         self.assertEqual(create_tenant.status_code, 201)
 
         self._seed_workflow_attempt(
-            workflow_id="workflow-blocked-fresh-1",
-            run_id="run-blocked-fresh-1",
+            workflow_id="workflow-failed-fresh-1",
+            run_id="run-failed-fresh-1",
             issue_key="TP-1002B",
-            issue_summary="Blocked workflow fresh retry",
-            workflow_status="blocked",
-            run_status="blocked",
-            checkpoint_id="checkpoint-blocked-fresh-1",
+            issue_summary="Failed workflow fresh retry",
+            workflow_status="failed",
+            run_status="failed",
+            checkpoint_id="checkpoint-failed-fresh-1",
             checkpoint_kind="execution",
         )
         with create_session_factory(self.database_url)() as session:
-            source_run = session.get(Run, "run-blocked-fresh-1")
+            source_run = session.get(Run, "run-failed-fresh-1")
             assert source_run is not None
             snapshot = ExecutionSnapshot.require(source_run.plan, allow_empty=True)
             snapshot.context.execution_context["human_input_request_id"] = "stale-request"
@@ -3760,7 +3538,7 @@ class AdminApiTests(SqliteTemplateApiTestCase):
             session.commit()
 
         response = self.client.post(
-            "/api/admin/workflows/workflow-blocked-fresh-1/attempts",
+            "/api/admin/workflows/exec-run-failed-fresh-1/attempts",
             json={"mode": "fresh"},
             auth=("admin", "secret"),
         )
@@ -3831,7 +3609,7 @@ class AdminApiTests(SqliteTemplateApiTestCase):
             session.commit()
 
         response = self.client.post(
-            "/api/admin/workflows/workflow-terminal-fresh-capability/attempts",
+            "/api/admin/workflows/exec-run-terminal-fresh-capability/attempts",
             json={"mode": "fresh"},
             auth=("admin", "secret"),
         )
@@ -3876,7 +3654,7 @@ class AdminApiTests(SqliteTemplateApiTestCase):
             session.commit()
 
         response = self.client.post(
-            "/api/admin/workflows/workflow-terminal-fresh-pr-remediation/attempts",
+            "/api/admin/workflows/exec-run-terminal-fresh-pr-remediation/attempts",
             json={"mode": "fresh"},
             auth=("admin", "secret"),
         )
@@ -3925,7 +3703,7 @@ class AdminApiTests(SqliteTemplateApiTestCase):
             session.commit()
 
         response = self.client.post(
-            "/api/admin/workflows/workflow-terminal-fresh-pr-url/attempts",
+            "/api/admin/workflows/exec-run-terminal-fresh-pr-url/attempts",
             json={"mode": "fresh"},
             auth=("admin", "secret"),
         )
@@ -3959,7 +3737,7 @@ class AdminApiTests(SqliteTemplateApiTestCase):
         )
 
         response = self.client.post(
-            "/api/admin/workflows/workflow-fresh-missing-precheck-1/attempts",
+            "/api/admin/workflows/exec-run-fresh-missing-precheck-1/attempts",
             json={"mode": "fresh"},
             auth=("admin", "secret"),
         )
@@ -3984,7 +3762,7 @@ class AdminApiTests(SqliteTemplateApiTestCase):
         )
 
         response = self.client.post(
-            "/api/admin/workflows/workflow-terminal-fresh-invalid/attempts",
+            "/api/admin/workflows/exec-run-terminal-fresh-invalid/attempts",
             json={"mode": "fresh", "checkpoint_kind": "pm"},
             auth=("admin", "secret"),
         )
@@ -4119,7 +3897,7 @@ class AdminApiTests(SqliteTemplateApiTestCase):
                 started_at=now,
             )
             session.flush()
-            record_run_log_event(
+            emit_logging_pane_event(
                 session=session,
                 tenant_id="tenant-a",
                 project_id="tenant-a-default",
@@ -4138,7 +3916,35 @@ class AdminApiTests(SqliteTemplateApiTestCase):
             )
             session.commit()
 
-        response = self.client.get("/api/admin/runs/run-log-1/logs", auth=("admin", "secret"))
+        runtime_event = ProductEvent(
+            event_sequence=1,
+            event_id="event-runtime",
+            event_class="execution_log",
+            tenant_id="tenant-a",
+            project_id="tenant-a-default",
+            workflow_id=None,
+            run_id="run-log-1",
+            operation_id=None,
+            attempt_id=None,
+            issue_key="TP-503",
+            event_kind="runtime_log",
+            level="info",
+            source_component="logging_pane",
+            message="hello from codex",
+            payload_json={
+                "agent_id": "worker-logs",
+                "invocation_id": "inv-run-log-1",
+                "channel": "worker",
+                "command": "workflow.dev",
+                "working_dir": "/tmp/repo",
+                "stage": "dev",
+                "attempt": 1,
+                "stream": "stdout",
+            },
+            recorded_at=now,
+        )
+        with patch("orchestrator.core.observability.logging_pane.list_product_events", return_value=[runtime_event]):
+            response = self.client.get("/api/admin/runs/run-log-1/logs", auth=("admin", "secret"))
         self.assertEqual(response.status_code, 200)
         body = response.json()
         self.assertEqual(len(body), 1)
@@ -4172,7 +3978,7 @@ class AdminApiTests(SqliteTemplateApiTestCase):
                 started_at=now,
             )
             session.flush()
-            record_run_log_event(
+            emit_logging_pane_event(
                 session=session,
                 tenant_id="tenant-a",
                 project_id="tenant-a-default",
@@ -4189,7 +3995,7 @@ class AdminApiTests(SqliteTemplateApiTestCase):
                 message="line-1",
                 recorded_at=now - timedelta(seconds=2),
             )
-            record_run_log_event(
+            emit_logging_pane_event(
                 session=session,
                 tenant_id="tenant-a",
                 project_id="tenant-a-default",
@@ -4206,7 +4012,7 @@ class AdminApiTests(SqliteTemplateApiTestCase):
                 message="line-2",
                 recorded_at=now - timedelta(seconds=1),
             )
-            record_run_log_event(
+            emit_logging_pane_event(
                 session=session,
                 tenant_id="tenant-a",
                 project_id="tenant-a-default",
@@ -4225,18 +4031,69 @@ class AdminApiTests(SqliteTemplateApiTestCase):
             )
             session.commit()
 
-        first_page = self.client.get(
-            "/api/admin/runs/run-log-page/logs?limit=2",
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(first_page.status_code, 200)
-        first_body = first_page.json()
-        self.assertEqual([entry["message"] for entry in first_body], ["line-3", "line-2"])
+        def row(sequence: int, message: str, recorded_at: datetime) -> ProductEvent:
+            return ProductEvent(
+                event_sequence=sequence,
+                event_id=f"event-{sequence}",
+                event_class="execution_log",
+                tenant_id="tenant-a",
+                project_id="tenant-a-default",
+                workflow_id=None,
+                run_id="run-log-page",
+                operation_id=None,
+                attempt_id=None,
+                issue_key="TP-504",
+                event_kind="runtime_log",
+                level="info",
+                source_component="logging_pane",
+                message=message,
+                payload_json={
+                    "agent_id": "worker-logs",
+                    "invocation_id": "inv-run-log-page",
+                    "channel": "worker",
+                    "command": "workflow.dev",
+                    "working_dir": "/tmp/repo",
+                    "stage": "dev",
+                    "attempt": 1,
+                    "stream": "stdout",
+                },
+                recorded_at=recorded_at,
+            )
 
-        second_page = self.client.get(
-            f"/api/admin/runs/run-log-page/logs?limit=2&before_recorded_at={quote_plus(first_body[-1]['recorded_at'])}",
-            auth=("admin", "secret"),
-        )
+        rows = [
+            row(1, "line-1", now - timedelta(seconds=2)),
+            row(2, "line-2", now - timedelta(seconds=1)),
+            row(3, "line-3", now),
+        ]
+
+        def fake_list_logs(*, before=None, limit=500, newest_first=True, **_kwargs):
+            page_rows = sorted(rows, key=lambda item: (item.recorded_at, item.event_sequence), reverse=newest_first)
+            if before is not None and before.recorded_at is not None:
+                page_rows = [
+                    item
+                    for item in page_rows
+                    if item.recorded_at < before.recorded_at
+                    or (
+                        item.recorded_at == before.recorded_at
+                        and before.event_sequence is not None
+                        and item.event_sequence < before.event_sequence
+                    )
+                ]
+            return page_rows[:limit]
+
+        with patch("orchestrator.core.observability.logging_pane.list_product_events", side_effect=fake_list_logs):
+            first_page = self.client.get(
+                "/api/admin/runs/run-log-page/logs?limit=2",
+                auth=("admin", "secret"),
+            )
+            self.assertEqual(first_page.status_code, 200)
+            first_body = first_page.json()
+            self.assertEqual([entry["message"] for entry in first_body], ["line-3", "line-2"])
+
+            second_page = self.client.get(
+                f"/api/admin/runs/run-log-page/logs?limit=2&before_recorded_at={quote_plus(first_body[-1]['recorded_at'])}",
+                auth=("admin", "secret"),
+            )
         self.assertEqual(second_page.status_code, 200)
         second_body = second_page.json()
         self.assertEqual([entry["message"] for entry in second_body], ["line-1"])
@@ -4251,8 +4108,66 @@ class AdminApiTests(SqliteTemplateApiTestCase):
         )
         self.assertEqual(create_tenant.status_code, 201)
         now = datetime.now(timezone.utc)
+        lifecycle_event = ProductEvent(
+            event_sequence=1,
+            event_id="event-lifecycle",
+            event_class="execution_log",
+            tenant_id="tenant-a",
+            project_id="tenant-a-default",
+            workflow_id=None,
+            run_id="run-events-stream",
+            operation_id=None,
+            attempt_id=None,
+            issue_key="TP-502",
+            event_kind="agent_lifecycle",
+            level="info",
+            source_component="agent_observability",
+            message="Agent lifecycle event: TASK_STARTED",
+            payload_json={"event_type": "TASK_STARTED", "agent_id": "worker-stream"},
+            recorded_at=now,
+        )
+        runtime_event = ProductEvent(
+            event_sequence=2,
+            event_id="event-runtime",
+            event_class="execution_log",
+            tenant_id="tenant-a",
+            project_id="tenant-a-default",
+            workflow_id=None,
+            run_id="run-events-stream",
+            operation_id=None,
+            attempt_id=None,
+            issue_key="TP-502",
+            event_kind="runtime_log",
+            level="info",
+            source_component="logging_pane",
+            message="live line",
+            payload_json={
+                "agent_id": "worker-stream",
+                "invocation_id": "inv-run-events-stream",
+                "channel": "worker",
+                "command": "workflow.dev",
+                "working_dir": "/tmp/repo",
+                "stage": "dev",
+                "attempt": 1,
+                "stream": "stdout",
+            },
+            recorded_at=now,
+        )
+
+        def fake_list_product_events(*, filters, **_kwargs):
+            event_kind = filters.get("event_kind")
+            if event_kind == "agent_lifecycle":
+                return [lifecycle_event]
+            if event_kind == "runtime_log":
+                return [runtime_event]
+            return []
+
         session_factory = create_session_factory(self.database_url)
-        with session_factory() as session:
+        with (
+            patch("orchestrator.core.observability.logging_pane.list_product_events", side_effect=fake_list_product_events),
+            patch("orchestrator.api.admin.runs.logging_stream_service.list_logging_pane_events_after_sequence", return_value=[]),
+            session_factory() as session,
+        ):
             add_workflow_attempt(
                 session,
                 run_id="run-events-stream",
@@ -4277,7 +4192,7 @@ class AdminApiTests(SqliteTemplateApiTestCase):
                 agent_id="worker-stream",
                 recorded_at=now,
             )
-            record_run_log_event(
+            emit_logging_pane_event(
                 session=session,
                 tenant_id="tenant-a",
                 project_id="tenant-a-default",
@@ -4296,13 +4211,19 @@ class AdminApiTests(SqliteTemplateApiTestCase):
             )
             session.commit()
 
-        response = self.client.get("/api/admin/runs/run-events-stream/events/stream", auth=("admin", "secret"))
-        self.assertEqual(response.status_code, 200)
-        self.assertEqual(response.headers.get("content-type"), "application/x-ndjson")
-        self.assertIn("\"run_id\":\"run-events-stream\"", response.text)
-        self.assertIn("\"event_type\":\"TASK_STARTED\"", response.text)
-        self.assertIn("\"event_kind\":\"codex_log\"", response.text)
-        self.assertIn("\"message\":\"live line\"", response.text)
+            from orchestrator.api.admin.runs.logging_stream_service import stream_run_events_ndjson
+
+            generator = stream_run_events_ndjson(
+                session=session,
+                run_id="run-events-stream",
+                run_model=Run,
+                settings=get_settings(),
+            )
+            body = next(generator) + next(generator)
+        self.assertIn("\"run_id\":\"run-events-stream\"", body)
+        self.assertIn("\"event_type\":\"TASK_STARTED\"", body)
+        self.assertIn("\"event_kind\":\"runtime_log\"", body)
+        self.assertIn("\"message\":\"live line\"", body)
 
     def test_stream_run_events_missing_run_returns_not_found(self) -> None:
         response = self.client.get("/api/admin/runs/run-missing/events/stream", auth=("admin", "secret"))
@@ -4858,15 +4779,9 @@ class AdminApiTests(SqliteTemplateApiTestCase):
         self.assertEqual(len(projects), 1)
         project = projects[0]
 
-        archive_response = self.client.put(
-            f"/api/admin/tenants/tenant-a/projects/{project['project_id']}",
-            json={
-                "name": project["name"],
-                "github_repository": project["github_repository"],
-                "jira_project_key": project["jira_project_key"],
-                "policy_overrides": project.get("policy_overrides", {}),
-                "is_archived": True,
-            },
+        archive_response = self.client.patch(
+            f"/api/admin/tenants/tenant-a/projects/{project['project_id']}/archive",
+            json={"is_archived": True},
             auth=("admin", "secret"),
         )
         self.assertEqual(archive_response.status_code, 200)
@@ -5059,14 +4974,14 @@ class AdminApiTests(SqliteTemplateApiTestCase):
 
     def test_jira_connect_start_requires_tenant_for_edit_mode(self) -> None:
         response = self.client.post(
-            "/api/admin/jira/connect/start?return_to=edit",
+            "/api/admin/atlassian/connect/start?return_to=edit",
             auth=("admin", "secret"),
         )
         self.assertEqual(response.status_code, 400)
 
     def test_jira_connect_wizard_callback_creates_connection(self) -> None:
         start_response = self.client.post(
-            "/api/admin/jira/connect/start?return_to=wizard",
+            "/api/admin/atlassian/connect/start?return_to=wizard",
             auth=("admin", "secret"),
         )
         self.assertEqual(start_response.status_code, 200)
@@ -5109,16 +5024,16 @@ class AdminApiTests(SqliteTemplateApiTestCase):
                     {"webhook_id": "1001"},
                 )()
 
-        with patch("orchestrator.api.admin.integration_dependencies.jira_oauth_client", return_value=_FakeClient()):
+        with patch("orchestrator.api.admin.integration_dependencies.atlassian_oauth_client", return_value=_FakeClient()):
             callback_response = self.client.get(
-                "/api/admin/jira/connect/callback",
+                "/api/admin/atlassian/connect/callback",
                 params={"code": "abc123", "state": state_token},
                 follow_redirects=False,
             )
 
         self.assertEqual(callback_response.status_code, 302)
         self.assertIn(
-            "/tenants/new?jira_oauth=success&jira_connection_id=",
+            "/tenants/new?atlassian_oauth=success&atlassian_connection_id=",
             callback_response.headers.get("location", ""),
         )
 
@@ -5133,7 +5048,7 @@ class AdminApiTests(SqliteTemplateApiTestCase):
         self.assertEqual(create_response.status_code, 201)
 
         start_response = self.client.post(
-            "/api/admin/jira/connect/start?return_to=edit&tenant_id=tenant-a",
+            "/api/admin/atlassian/connect/start?return_to=edit&tenant_id=tenant-a",
             auth=("admin", "secret"),
         )
         self.assertEqual(start_response.status_code, 200)
@@ -5177,96 +5092,27 @@ class AdminApiTests(SqliteTemplateApiTestCase):
                 )()
 
         with (
-            patch("orchestrator.api.admin.integration_dependencies.jira_oauth_client", return_value=_FakeClient()),
-            patch(
-                "orchestrator.api.admin.integration_dependencies.provision_jira_webhook",
-                return_value=SimpleNamespace(ok=True),
-            ) as provision_mock,
+            patch("orchestrator.api.admin.integration_dependencies.atlassian_oauth_client", return_value=_FakeClient()),
+            patch("orchestrator.api.admin.integration_dependencies.provision_jira_webhook") as provision_mock,
         ):
             callback_response = self.client.get(
-                "/api/admin/jira/connect/callback",
+                "/api/admin/atlassian/connect/callback",
                 params={"code": "abc123", "state": state_token},
                 follow_redirects=False,
             )
 
         self.assertEqual(callback_response.status_code, 302)
         self.assertIn(
-            "/tenants/tenant-a/settings/jira?jira_oauth=success&jira_connection_id=",
+            "/tenant-a/settings/atlassian?atlassian_oauth=success&atlassian_connection_id=",
             callback_response.headers.get("location", ""),
         )
-        self.assertIn("jira_webhook=ok", callback_response.headers.get("location", ""))
-        provision_mock.assert_called_once()
-        self.assertTrue(provision_mock.call_args.kwargs["replace_existing"])
+        self.assertNotIn("jira_webhook=", callback_response.headers.get("location", ""))
+        provision_mock.assert_not_called()
 
         tenant_response = self.client.get("/api/admin/tenants/tenant-a", auth=("admin", "secret"))
         self.assertEqual(tenant_response.status_code, 200)
         self.assertTrue(tenant_response.json()["jira"]["connection_id"])
         self.assertIsInstance(tenant_response.json()["jira"]["managed_webhook_ids"], list)
-
-    def test_jira_connect_edit_callback_reports_webhook_provision_failure_in_redirect(self) -> None:
-        payload = self._tenant_payload()
-        payload["jira"]["connection_id"] = None
-        create_response = self.client.post(
-            "/api/admin/tenants",
-            json=payload,
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(create_response.status_code, 201)
-
-        start_response = self.client.post(
-            "/api/admin/jira/connect/start?return_to=edit&tenant_id=tenant-a",
-            auth=("admin", "secret"),
-        )
-        self.assertEqual(start_response.status_code, 200)
-        authorize_url = start_response.json()["authorize_url"]
-        parsed = urlparse(authorize_url)
-        state_token = parse_qs(parsed.query).get("state", [None])[0]
-        self.assertIsNotNone(state_token)
-
-        class _FakeClient:
-            def exchange_code(self, *, code: str):  # noqa: ANN001
-                now = datetime.now(timezone.utc)
-                return type(
-                    "TokenSet",
-                    (),
-                    {
-                        "access_token": "access-token",
-                        "refresh_token": "refresh-token",
-                        "expires_at": now + timedelta(hours=1),
-                        "scopes": ["read:jira-work", "write:jira-work"],
-                    },
-                )()
-
-            def list_accessible_resources(self, *, access_token: str):  # noqa: ANN001
-                return [
-                    type(
-                        "Resource",
-                        (),
-                        {
-                            "cloud_id": "cloud-1",
-                            "site_url": "https://example.atlassian.net",
-                            "name": "Example",
-                        },
-                    )()
-                ]
-
-        with (
-            patch("orchestrator.api.admin.integration_dependencies.jira_oauth_client", return_value=_FakeClient()),
-            patch(
-                "orchestrator.api.admin.integration_dependencies.provision_jira_webhook",
-                side_effect=RuntimeError("provision-failed"),
-            ) as provision_mock,
-        ):
-            callback_response = self.client.get(
-                "/api/admin/jira/connect/callback",
-                params={"code": "abc123", "state": state_token},
-                follow_redirects=False,
-            )
-
-        self.assertEqual(callback_response.status_code, 302)
-        self.assertIn("jira_webhook=failed", callback_response.headers.get("location", ""))
-        provision_mock.assert_called_once()
-        self.assertTrue(provision_mock.call_args.kwargs["replace_existing"])
 
     def test_provision_tenant_jira_webhooks_success(self) -> None:
         payload = self._tenant_payload()
@@ -5283,11 +5129,11 @@ class AdminApiTests(SqliteTemplateApiTestCase):
                 return [2002]
 
         with (
-            patch("orchestrator.api.admin.integration_dependencies.refresh_jira_connection_tokens", return_value="access-token"),
-            patch("orchestrator.api.admin.integration_dependencies.jira_oauth_client", return_value=_FakeClient()),
+            patch("orchestrator.api.admin.integration_dependencies.refresh_atlassian_connection_tokens", return_value="access-token"),
+            patch("orchestrator.api.admin.integration_dependencies.atlassian_oauth_client", return_value=_FakeClient()),
         ):
             response = self.client.post(
-                "/api/admin/tenants/tenant-a/jira/webhooks/provision",
+                "/api/admin/tenants/tenant-a/atlassian/jira/webhooks/provision",
                 auth=("admin", "secret"),
             )
 
@@ -5315,16 +5161,16 @@ class AdminApiTests(SqliteTemplateApiTestCase):
                 raise ValueError("Forbidden: missing Jira admin permission")
 
         with (
-            patch("orchestrator.api.admin.integration_dependencies.refresh_jira_connection_tokens", return_value="access-token"),
-            patch("orchestrator.api.admin.integration_dependencies.jira_oauth_client", return_value=_FakeClient()),
+            patch("orchestrator.api.admin.integration_dependencies.refresh_atlassian_connection_tokens", return_value="access-token"),
+            patch("orchestrator.api.admin.integration_dependencies.atlassian_oauth_client", return_value=_FakeClient()),
         ):
             response = self.client.post(
-                "/api/admin/tenants/tenant-a/jira/webhooks/provision",
+                "/api/admin/tenants/tenant-a/atlassian/jira/webhooks/provision",
                 auth=("admin", "secret"),
             )
 
         self.assertEqual(response.status_code, 502)
-        self.assertIn("missing Jira admin permission", response.json()["details"])
+        self.assertIn("missing Jira admin permission", response.json()["detail"])
 
         tenant_response = self.client.get("/api/admin/tenants/tenant-a", auth=("admin", "secret"))
         self.assertEqual(tenant_response.status_code, 200)
@@ -5385,11 +5231,11 @@ class AdminApiTests(SqliteTemplateApiTestCase):
 
         fake_client = _FakeClient()
         with (
-            patch("orchestrator.api.admin.integration_dependencies.refresh_jira_connection_tokens", return_value="access-token"),
-            patch("orchestrator.api.admin.integration_dependencies.jira_oauth_client", return_value=fake_client),
+            patch("orchestrator.api.admin.integration_dependencies.refresh_atlassian_connection_tokens", return_value="access-token"),
+            patch("orchestrator.api.admin.integration_dependencies.atlassian_oauth_client", return_value=fake_client),
         ):
             response = self.client.post(
-                "/api/admin/tenants/tenant-a/jira/webhooks/provision",
+                "/api/admin/tenants/tenant-a/atlassian/jira/webhooks/provision",
                 auth=("admin", "secret"),
             )
 
@@ -5446,11 +5292,11 @@ class AdminApiTests(SqliteTemplateApiTestCase):
 
         fake_client = _FakeClient()
         with (
-            patch("orchestrator.api.admin.integration_dependencies.refresh_jira_connection_tokens", return_value="access-token"),
-            patch("orchestrator.api.admin.integration_dependencies.jira_oauth_client", return_value=fake_client),
+            patch("orchestrator.api.admin.integration_dependencies.refresh_atlassian_connection_tokens", return_value="access-token"),
+            patch("orchestrator.api.admin.integration_dependencies.atlassian_oauth_client", return_value=fake_client),
         ):
             response = self.client.post(
-                "/api/admin/tenants/tenant-a/jira/webhooks/provision",
+                "/api/admin/tenants/tenant-a/atlassian/jira/webhooks/provision",
                 auth=("admin", "secret"),
             )
 
@@ -5518,11 +5364,11 @@ class AdminApiTests(SqliteTemplateApiTestCase):
 
         fake_client = _FakeClient()
         with (
-            patch("orchestrator.api.admin.integration_dependencies.refresh_jira_connection_tokens", return_value="access-token"),
-            patch("orchestrator.api.admin.integration_dependencies.jira_oauth_client", return_value=fake_client),
+            patch("orchestrator.api.admin.integration_dependencies.refresh_atlassian_connection_tokens", return_value="access-token"),
+            patch("orchestrator.api.admin.integration_dependencies.atlassian_oauth_client", return_value=fake_client),
         ):
             response = self.client.post(
-                "/api/admin/tenants/tenant-a/jira/webhooks/provision",
+                "/api/admin/tenants/tenant-a/atlassian/jira/webhooks/provision",
                 auth=("admin", "secret"),
             )
 
@@ -5661,11 +5507,11 @@ class AdminApiTests(SqliteTemplateApiTestCase):
 
         fake_client = _FakeJiraClient()
         with (
-            patch("orchestrator.api.admin.integration_dependencies.refresh_jira_connection_tokens", return_value="access-token"),
-            patch("orchestrator.api.admin.integration_dependencies.jira_oauth_client", return_value=fake_client),
+            patch("orchestrator.api.admin.integration_dependencies.refresh_atlassian_connection_tokens", return_value="access-token"),
+            patch("orchestrator.api.admin.integration_dependencies.atlassian_oauth_client", return_value=fake_client),
         ):
             provision = self.client.post(
-                "/api/admin/tenants/tenant-a/jira/webhooks/provision",
+                "/api/admin/tenants/tenant-a/atlassian/jira/webhooks/provision",
                 auth=("admin", "secret"),
             )
             self.assertEqual(provision.status_code, 200)
@@ -5673,7 +5519,7 @@ class AdminApiTests(SqliteTemplateApiTestCase):
             self.assertEqual(provision.json()["webhook_ids"], [10101])
 
             diagnostics = self.client.get(
-                "/api/admin/tenants/tenant-a/jira/webhooks/diagnostics",
+                "/api/admin/tenants/tenant-a/atlassian/jira/webhooks/diagnostics",
                 auth=("admin", "secret"),
             )
             self.assertEqual(diagnostics.status_code, 200)
@@ -5681,7 +5527,7 @@ class AdminApiTests(SqliteTemplateApiTestCase):
             self.assertFalse(diagnostics.json()["recent_delivery_ok"])
 
             reset = self.client.post(
-                "/api/admin/tenants/tenant-a/jira/webhooks/reset",
+                "/api/admin/tenants/tenant-a/atlassian/jira/webhooks/reset",
                 auth=("admin", "secret"),
             )
             self.assertEqual(reset.status_code, 200)
@@ -5691,7 +5537,7 @@ class AdminApiTests(SqliteTemplateApiTestCase):
             self.assertEqual(deleted_batches, [[10101]])
 
             disconnect = self.client.post(
-                "/api/admin/tenants/tenant-a/jira/disconnect",
+                "/api/admin/tenants/tenant-a/atlassian/disconnect",
                 auth=("admin", "secret"),
             )
             self.assertEqual(disconnect.status_code, 200)
@@ -5702,6 +5548,32 @@ class AdminApiTests(SqliteTemplateApiTestCase):
         self.assertEqual(tenant_response.status_code, 200)
         self.assertIsNone(tenant_response.json()["jira"]["connection_id"])
         self.assertEqual(tenant_response.json()["jira"]["managed_webhook_ids"], [])
+
+    def test_disconnect_tenant_atlassian_fails_when_managed_webhook_delete_fails(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_response = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_response.status_code, 201)
+
+        with patch(
+            "orchestrator.api.admin.integration_dependencies.delete_jira_webhooks",
+            return_value=(False, "Jira API rejected webhook deletion", [10101]),
+        ):
+            response = self.client.post(
+                "/api/admin/tenants/tenant-a/atlassian/disconnect",
+                auth=("admin", "secret"),
+            )
+
+        self.assertEqual(response.status_code, 502)
+        self.assertIn("Jira API rejected webhook deletion", response.json()["detail"])
+
+        tenant_response = self.client.get("/api/admin/tenants/tenant-a", auth=("admin", "secret"))
+        self.assertEqual(tenant_response.status_code, 200)
+        self.assertEqual(tenant_response.json()["jira"]["connection_id"], "conn-1")
 
     def test_reset_tenant_jira_webhooks_recovers_single_url_conflict(self) -> None:
         payload = self._tenant_payload()
@@ -5742,11 +5614,11 @@ class AdminApiTests(SqliteTemplateApiTestCase):
                 deleted_batches.append(list(webhook_ids))
 
         with (
-            patch("orchestrator.api.admin.integration_dependencies.refresh_jira_connection_tokens", return_value="access-token"),
-            patch("orchestrator.api.admin.integration_dependencies.jira_oauth_client", return_value=_FakeClient()),
+            patch("orchestrator.api.admin.integration_dependencies.refresh_atlassian_connection_tokens", return_value="access-token"),
+            patch("orchestrator.api.admin.integration_dependencies.atlassian_oauth_client", return_value=_FakeClient()),
         ):
             response = self.client.post(
-                "/api/admin/tenants/tenant-a/jira/webhooks/reset",
+                "/api/admin/tenants/tenant-a/atlassian/jira/webhooks/reset",
                 auth=("admin", "secret"),
             )
 
@@ -5770,7 +5642,7 @@ class AdminApiTests(SqliteTemplateApiTestCase):
         with patch("orchestrator.api.admin.integration_dependencies.provision_jira_webhook", side_effect=RuntimeError("boom")):
             with TestClient(create_app(), raise_server_exceptions=False) as non_raising_client:
                 response = non_raising_client.post(
-                    "/api/admin/tenants/tenant-a/jira/webhooks/reset",
+                    "/api/admin/tenants/tenant-a/atlassian/jira/webhooks/reset",
                     auth=("admin", "secret"),
                 )
 
@@ -6314,10 +6186,10 @@ class AdminApiTests(SqliteTemplateApiTestCase):
         source_id = source_response.json()["source_id"]
 
         with (
-            patch("orchestrator.core.knowledge_sources.refresh_jira_connection_tokens", return_value="token"),
-            patch("orchestrator.core.knowledge_sources.jira_oauth_client", return_value=SimpleNamespace()),
+            patch("orchestrator.core.knowledge.sources.refresh_atlassian_connection_tokens", return_value="token"),
+            patch("orchestrator.core.knowledge.sources.atlassian_oauth_client", return_value=SimpleNamespace()),
             patch(
-                "orchestrator.core.knowledge_sources.sync_project_knowledge_from_jira",
+                "orchestrator.core.knowledge.sources.sync_project_knowledge_from_jira",
                 return_value=SimpleNamespace(
                     ok=True,
                     synced_assets=1,
@@ -6627,7 +6499,7 @@ class AdminApiTests(SqliteTemplateApiTestCase):
                         attempt_count=0,
                         last_error=None,
                         payload_json={},
-                        context_json={},
+                        context_json={"related_run_id": "run-pending-1"},
                         created_at=now - timedelta(minutes=3),
                         updated_at=now - timedelta(minutes=3),
                         started_at=None,
@@ -6694,6 +6566,18 @@ class AdminApiTests(SqliteTemplateApiTestCase):
         self.assertEqual(payload["summary"]["failed_count"], 1)
         self.assertEqual(payload["items"][0]["job_id"], "job-pending-1")
         self.assertEqual(payload["items"][0]["status"], "pending")
+        self.assertEqual(payload["items"][0]["related_run_id"], "run-pending-1")
+        self.assertNotIn("owner_id", payload["items"][0])
+
+        paged_response = self.client.get(
+            "/api/admin/observability/webhook-jobs?tenant_id=example&project_id=example-default&limit=1&offset=1",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(paged_response.status_code, 200)
+        paged_payload = paged_response.json()
+        self.assertEqual(paged_payload["total"], 3)
+        self.assertEqual(len(paged_payload["items"]), 1)
+        self.assertEqual(paged_payload["items"][0]["job_id"], "job-pending-1")
 
         missing_project_response = self.client.get(
             "/api/admin/observability/webhook-jobs?tenant_id=example&status=pending&limit=10&offset=0",
@@ -6701,6 +6585,100 @@ class AdminApiTests(SqliteTemplateApiTestCase):
         )
         self.assertEqual(missing_project_response.status_code, 400)
         self.assertIn("project_id is required", missing_project_response.json()["detail"])
+
+    def test_retry_failed_webhook_job_requeues_terminal_failure(self) -> None:
+        now = datetime.now(timezone.utc)
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            session.add(
+                WebhookJob(
+                    job_id="job-failed-retry",
+                    transport="jira_webhook",
+                    tenant_id="example",
+                    project_id="example-default",
+                    subject_key="jira:example:MAB-229",
+                    dedupe_key="delivery-retry",
+                    request_id="request-retry",
+                    event_type="jira:issue_updated",
+                    status="failed",
+                    owner_id=None,
+                    lease_expires_at=None,
+                    available_at=now - timedelta(minutes=1),
+                    attempt_count=3,
+                    last_error="Workflow Task in failed state",
+                    payload_json={},
+                    context_json={"related_run_id": "run-retry-1"},
+                    created_at=now - timedelta(minutes=5),
+                    updated_at=now - timedelta(minutes=1),
+                    started_at=now - timedelta(minutes=4),
+                    completed_at=now - timedelta(minutes=1),
+                )
+            )
+            session.commit()
+
+        response = self.client.post(
+            "/api/admin/observability/webhook-jobs/job-failed-retry/retry?tenant_id=example&project_id=example-default",
+            auth=("admin", "secret"),
+        )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        payload = response.json()
+        self.assertEqual(payload["job_id"], "job-failed-retry")
+        self.assertEqual(payload["status"], "pending")
+        self.assertEqual(payload["attempt_count"], 3)
+        self.assertIsNone(payload["last_error"])
+        self.assertIsNone(payload["lease_expires_at"])
+        self.assertIsNone(payload["started_at"])
+        self.assertIsNone(payload["completed_at"])
+        self.assertEqual(payload["related_run_id"], "run-retry-1")
+
+        with session_factory() as session:
+            persisted = session.get(WebhookJob, "job-failed-retry")
+            assert persisted is not None
+            self.assertEqual(persisted.status, "pending")
+            self.assertIsNone(persisted.owner_id)
+            self.assertIsNone(persisted.lease_expires_at)
+            self.assertIsNone(persisted.last_error)
+            self.assertIsNone(persisted.started_at)
+            self.assertIsNone(persisted.completed_at)
+
+    def test_retry_failed_webhook_job_rejects_non_failed_rows(self) -> None:
+        now = datetime.now(timezone.utc)
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            session.add(
+                WebhookJob(
+                    job_id="job-processing-retry",
+                    transport="jira_webhook",
+                    tenant_id="example",
+                    project_id="example-default",
+                    subject_key="jira:example:MAB-229",
+                    dedupe_key="delivery-processing",
+                    request_id="request-processing",
+                    event_type="jira:issue_updated",
+                    status="processing",
+                    owner_id="worker:example:webhooks:child:1",
+                    lease_expires_at=now + timedelta(minutes=2),
+                    available_at=now - timedelta(minutes=1),
+                    attempt_count=2,
+                    last_error=None,
+                    payload_json={},
+                    context_json={},
+                    created_at=now - timedelta(minutes=5),
+                    updated_at=now - timedelta(minutes=1),
+                    started_at=now - timedelta(minutes=4),
+                    completed_at=None,
+                )
+            )
+            session.commit()
+
+        response = self.client.post(
+            "/api/admin/observability/webhook-jobs/job-processing-retry/retry?tenant_id=example&project_id=example-default",
+            auth=("admin", "secret"),
+        )
+
+        self.assertEqual(response.status_code, 409, response.text)
+        self.assertIn("only allowed for failed webhook jobs", response.json()["detail"])
 
     def test_platform_status_dedupes_legacy_worker_runtime_rows_by_agent_and_mode(self) -> None:
         now = datetime.now(timezone.utc)
@@ -6807,15 +6785,98 @@ class AdminApiTests(SqliteTemplateApiTestCase):
         worker_service = next(service for service in payload["services"] if service["service_id"] == "workers")
         self.assertEqual(worker_service["status"], "degraded")
         self.assertIn("startup/runtime dependencies", worker_service["summary"])
+        self.assertIn("Shared runtime login is still required", worker_service["summary"])
+        self.assertEqual(
+            worker_service["runtime_dependencies"]["codex_cli"]["login_service_instance_id"],
+            "worker-macos-local:runs",
+        )
+        self.assertEqual(
+            worker_service["runtime_dependencies"]["codex_cli"]["remediation_text"],
+            "Open this link",
+        )
         instance = next(item for item in worker_service["instances"] if item["instance_id"] == "worker-macos-local:runs")
         self.assertEqual(instance["status"], "degraded")
         self.assertEqual(instance["runtime_dependencies"]["codex_cli"]["remediation_text"], "Open this link")
+        self.assertEqual(
+            instance["runtime_dependencies"]["codex_cli"]["login_service_instance_id"],
+            "worker-macos-local:runs",
+        )
         self.assertEqual(
             instance["runtime_dependencies"]["codex_cli"]["remediation_expires_at"],
             remediation_expires_at.isoformat(),
         )
         self.assertNotIn("remediation_text", instance)
         self.assertNotIn("remediation_expires_at", instance)
+
+    def test_admin_platform_status_does_not_hide_linux_runtime_login_behind_ready_macos_worker(self) -> None:
+        session_factory = create_session_factory(self.database_url)
+        now = datetime.now(timezone.utc)
+        remediation_expires_at = now + timedelta(minutes=15)
+        with session_factory() as session:
+            session.add(
+                WorkerRuntimeState(
+                    service_instance_id="worker-macos-local:runs",
+                    agent_id="worker-macos-local",
+                    worker_mode="runs",
+                    capabilities_json=["macos"],
+                    runtime_dependencies_json={
+                        "codex_cli": {
+                            "state": "ready",
+                            "summary": "Codex CLI is authenticated and ready.",
+                        }
+                    },
+                    state="idle",
+                    started_at=now,
+                    last_heartbeat_at=now,
+                    updated_at=now,
+                )
+            )
+            session.add(
+                WorkerRuntimeState(
+                    service_instance_id="worker-linux-local:runs",
+                    agent_id="worker-linux-local",
+                    worker_mode="runs",
+                    capabilities_json=["linux"],
+                    runtime_dependencies_json={
+                        "codex_cli": {
+                            "state": "degraded",
+                            "summary": "Codex CLI is not authenticated on this worker.",
+                            "remediation_text": "Open Docker login",
+                            "remediation_expires_at": remediation_expires_at.isoformat(),
+                        }
+                    },
+                    state="degraded",
+                    started_at=now,
+                    last_heartbeat_at=now,
+                    updated_at=now,
+                )
+            )
+            session.commit()
+
+        response = self.client.get("/api/admin/status", auth=("admin", "secret"))
+
+        self.assertEqual(response.status_code, 200)
+        payload = response.json()
+        worker_service = next(service for service in payload["services"] if service["service_id"] == "workers")
+        self.assertEqual(worker_service["status"], "degraded")
+        self.assertEqual(worker_service["runtime_dependencies"]["codex_cli"]["state"], "degraded")
+        self.assertEqual(
+            worker_service["runtime_dependencies"]["codex_cli"]["login_service_instance_id"],
+            "worker-linux-local:runs",
+        )
+        self.assertIn("authentication differs across worker instances", worker_service["runtime_dependencies"]["codex_cli"]["summary"])
+        macos_instance = next(item for item in worker_service["instances"] if item["instance_id"] == "worker-macos-local:runs")
+        self.assertEqual(macos_instance["runtime_dependencies"]["codex_cli"]["state"], "ready")
+        self.assertEqual(
+            macos_instance["runtime_dependencies"]["codex_cli"]["login_service_instance_id"],
+            "worker-macos-local:runs",
+        )
+        linux_instance = next(item for item in worker_service["instances"] if item["instance_id"] == "worker-linux-local:runs")
+        self.assertEqual(linux_instance["runtime_dependencies"]["codex_cli"]["state"], "degraded")
+        self.assertEqual(
+            linux_instance["runtime_dependencies"]["codex_cli"]["login_service_instance_id"],
+            "worker-linux-local:runs",
+        )
 
     def test_start_worker_runtime_login_session_creates_pending_request(self) -> None:
         session_factory = create_session_factory(self.database_url)

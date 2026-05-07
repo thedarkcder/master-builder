@@ -49,7 +49,10 @@ export function AcceptInviteClient() {
       if (!email) {
         throw new Error("Invite acceptance succeeded but email was missing from the response.");
       }
-      await login({ identifier: email, password });
+      const needsMemberOnboarding = accepted.principal.memberships.some(
+        (membership) => membership.onboarding_completed_at == null,
+      );
+      await login({ identifier: email, password, redirectTo: needsMemberOnboarding ? "/get-started" : null });
     } catch (error) {
       setErrorMessage(error instanceof Error ? error.message : "Unable to accept invite");
     } finally {

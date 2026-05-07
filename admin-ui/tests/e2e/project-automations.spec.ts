@@ -2,7 +2,7 @@ import { expect, test } from "@playwright/test";
 
 import {
   fulfillJson,
-  installAdminApiMocks,
+  installBffApiMocks,
   makeProject,
   makeProjectAutomation,
   makeProjectAutomationExecution,
@@ -25,40 +25,35 @@ test("project automations render default drafts, save edits, and show execution 
   let savedPayload: unknown = null;
 
   await seedAdminSession(page);
-  await installAdminApiMocks(page, [
+  await installBffApiMocks(page, [
     {
       method: "GET",
-      pathname: "/api/admin/auth/me",
-      handler: (route) => fulfillJson(route, { username: "admin" }),
-    },
-    {
-      method: "GET",
-      pathname: "/api/admin/tenants/example",
+      pathname: "/api/bff/api/admin/tenants/example",
       handler: (route) => fulfillJson(route, tenant),
     },
     {
       method: "GET",
-      pathname: "/api/admin/tenants/example/projects",
+      pathname: "/api/bff/api/admin/tenants/example/projects",
       handler: (route) => fulfillJson(route, [project]),
     },
     {
       method: "GET",
-      pathname: "/api/admin/tenants/example/projects/example-default",
+      pathname: "/api/bff/api/admin/tenants/example/projects/example-default",
       handler: (route) => fulfillJson(route, project),
     },
     {
       method: "GET",
-      pathname: "/api/admin/tenants/example/projects/example-default/automations",
+      pathname: "/api/bff/api/admin/tenants/example/projects/example-default/automations",
       handler: (route) => fulfillJson(route, { automations: [] }),
     },
     {
       method: "GET",
-      pathname: "/api/admin/tenants/example/projects/example-default/discord/allowlist-requests",
+      pathname: "/api/bff/api/admin/tenants/example/projects/example-default/discord/allowlist-requests",
       handler: (route) => fulfillJson(route, []),
     },
     {
       method: "PUT",
-      pathname: "/api/admin/tenants/example/projects/example-default/automations",
+      pathname: "/api/bff/api/admin/tenants/example/projects/example-default/automations",
       handler: async (route) => {
         savedPayload = await route.request().postDataJSON();
         await fulfillJson(
@@ -70,7 +65,7 @@ test("project automations render default drafts, save edits, and show execution 
                 kind: "standup_voice_brief",
                 enabled: true,
                 timezone: "Europe/London",
-                days_of_week: [1, 2, 3, 4, 5],
+                days_of_week: [0, 1, 2, 3, 4],
                 local_time: "09:30",
                 fallback_lookback_hours: 36,
                 last_successful_window_end_at: "2026-03-28T09:00:00Z",
@@ -96,7 +91,7 @@ test("project automations render default drafts, save edits, and show execution 
                 kind: "retro_voice_brief",
                 enabled: false,
                 timezone: "Europe/London",
-                days_of_week: [1, 4],
+                days_of_week: [0, 3, 4],
                 local_time: "16:00",
                 fallback_lookback_hours: 72,
                 last_successful_window_end_at: "2026-03-28T10:00:00Z",
@@ -148,14 +143,16 @@ test("project automations render default drafts, save edits, and show execution 
 
   await page.getByRole("button", { name: "Save automations" }).click();
 
-  await expect(page.getByText("Saved 2 automation configurations.")).toBeVisible();
+  const notifications = page.getByLabel("Notifications");
+  await expect(notifications.getByText("Automations saved", { exact: true })).toBeVisible();
+  await expect(notifications.getByText("2 configurations.", { exact: true })).toBeVisible();
   expect(savedPayload).toEqual({
     automations: [
       {
         kind: "standup_voice_brief",
         enabled: true,
         timezone: "Europe/London",
-        days_of_week: [1, 2, 3, 4, 5],
+        days_of_week: [0, 1, 2, 3, 4],
         local_time: "09:30",
         fallback_lookback_hours: 36,
       },
@@ -163,7 +160,7 @@ test("project automations render default drafts, save edits, and show execution 
         kind: "retro_voice_brief",
         enabled: false,
         timezone: "Europe/London",
-        days_of_week: [1, 4],
+        days_of_week: [0, 3],
         local_time: "16:00",
         fallback_lookback_hours: 72,
       },
@@ -174,9 +171,9 @@ test("project automations render default drafts, save edits, and show execution 
   await expect(executionRows).toHaveCount(2);
   await expect(executionRows.nth(0)).toContainText("Retro voice brief");
   await expect(executionRows.nth(0)).toContainText("2026-03-28T10:00:00Z");
-  await expect(executionRows.nth(0)).toContainText("Discord message ID: 222222222222222222");
-  await expect(executionRows.nth(0)).toContainText("Last error: Discord delivery failed.");
+  await expect(executionRows.nth(0)).toContainText("Discord msg: 222222222222222222");
+  await expect(executionRows.nth(0)).toContainText("Error: Discord delivery failed.");
   await expect(executionRows.nth(1)).toContainText("Standup voice brief");
   await expect(executionRows.nth(1)).toContainText("2026-03-28T09:00:00Z");
-  await expect(executionRows.nth(1)).toContainText("Discord message ID: 111111111111111111");
+  await expect(executionRows.nth(1)).toContainText("Discord msg: 111111111111111111");
 });

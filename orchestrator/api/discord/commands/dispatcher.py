@@ -13,7 +13,7 @@ from orchestrator.api.discord.shared.state import (
 )
 from orchestrator.api.schemas import DiscordCommandRequest, DiscordCommandResponse
 from orchestrator.core.communications.command_pipeline import CommandScope
-from orchestrator.core.runs import RUN_STATUS_QUEUED, RUN_STATUS_RUNNING
+from orchestrator.core.runs.service import RUN_STATUS_QUEUED, RUN_STATUS_RUNNING
 from orchestrator.storage.models import Run, Tenant
 
 

@@ -11,7 +11,6 @@ from orchestrator.api.admin.config_helpers import (
 from orchestrator.api.admin.route_helpers import (
     admin_project_service,
     allocate_tenant_id,
-    provision_jira_webhook,
     reconcile_tenant_projects,
     with_managed_github_refs,
     with_preserved_jira_system_fields,
@@ -31,7 +30,6 @@ from orchestrator.api.admin.tenant_crud import (
     get_tenant_or_404 as get_tenant_or_404_impl,
     set_tenant_archive_state as set_tenant_archive_state_impl,
     update_tenant_deployment_plane as update_tenant_deployment_plane_impl,
-    update_tenant as update_tenant_impl,
 )
 from orchestrator.api.admin.tenant_project_routes_service import (
     create_project as create_project_route_impl,
@@ -41,9 +39,14 @@ from orchestrator.api.admin.tenant_project_routes_service import (
     get_tenant as get_tenant_route_impl,
     list_projects as list_projects_route_impl,
     list_tenants as list_tenants_route_impl,
+    resolve_project_jira_run_board as resolve_project_jira_run_board_route_impl,
     set_tenant_archive_state as set_tenant_archive_state_route_impl,
-    update_project as update_project_route_impl,
-    update_tenant as update_tenant_route_impl,
+    update_project_archive_state as update_project_archive_state_route_impl,
+    update_project_configuration as update_project_configuration_route_impl,
+    update_project_discord as update_project_discord_route_impl,
+    update_project_environment as update_project_environment_route_impl,
+    update_project_policy as update_project_policy_route_impl,
+    update_project_secret_refs as update_project_secret_refs_route_impl,
 )
 from orchestrator.api.routes.app_auth import invite_to_schema
 from orchestrator.api.dependencies import get_session
@@ -59,31 +62,36 @@ from orchestrator.api.schemas import (
     ProjectAppCreate,
     ProjectAppRead,
     ProjectAppUpdate,
+    ProjectArchiveUpdate,
+    ProjectConfigurationUpdate,
+    ProjectDiscordUpdate,
+    ProjectEnvironmentUpdate,
+    ProjectDeploymentBackupApplyRequest,
+    ProjectDeploymentBackupExecutionListRead,
+    ProjectDeploymentBackupRestoreRequest,
+    ProjectDeploymentBackupTriggerRequest,
+    ProjectDeploymentConfigRead,
+    ProjectDeploymentConfigWrite,
+    ProjectDeploymentDomainApplyRequest,
+    ProjectDeploymentOperationRead,
+    ProjectDeploymentReleaseCreate,
+    ProjectDeploymentReleaseRead,
+    ProjectDeploymentReleaseStatusUpdate,
+    ProjectDeploymentResourceApplyRequest,
+    ProjectDeploymentRestoreRunRead,
     ProjectInstallRead,
     ProjectInstallRequestRead,
     ProjectInstallRequestUpdate,
     ProjectInstallRequestsRead,
     ProjectInstallsRead,
     ProjectInstallWrite,
+    ProjectPolicyUpdate,
     ProjectRead,
-    ProjectUpdate,
-    ProjectDeploymentConfigRead,
-    ProjectDeploymentConfigWrite,
-    ProjectDeploymentBackupApplyRequest,
-    ProjectDeploymentBackupExecutionListRead,
-    ProjectDeploymentBackupRestoreRequest,
-    ProjectDeploymentBackupTriggerRequest,
-    ProjectDeploymentDomainApplyRequest,
-    ProjectDeploymentReleaseCreate,
-    ProjectDeploymentReleaseRead,
-    ProjectDeploymentReleaseStatusUpdate,
-    ProjectDeploymentOperationRead,
-    ProjectDeploymentRestoreRunRead,
-    ProjectDeploymentResourceApplyRequest,
+    ProjectSecretRefsUpdate,
     TenantDeliverySummaryRead,
-    TenantDeploymentsOverviewRead,
     TenantDeploymentPlaneRead,
     TenantDeploymentPlaneWrite,
+    TenantDeploymentsOverviewRead,
     TenantDiscordIdentityRead,
     TenantDiscordInviteRead,
     TenantDiscordLinkStartRead,
@@ -98,9 +106,8 @@ from orchestrator.api.schemas import (
     TenantTeamUpdate,
     TenantCreate,
     TenantRead,
-    TenantUpdate,
 )
-from orchestrator.core.install_registry_service import (
+from orchestrator.core.platform.install_registry_service import (
     ProjectInstallWrite as ServiceProjectInstallWrite,
     create_project_install,
     delete_project_install,
@@ -108,7 +115,7 @@ from orchestrator.core.install_registry_service import (
     list_project_installs,
     update_project_install,
 )
-from orchestrator.core.install_request_service import (
+from orchestrator.core.platform.install_request_service import (
     get_project_install_request,
     list_project_install_requests,
     update_install_request_status,
@@ -121,13 +128,13 @@ from orchestrator.core.discord.oauth import (
     issue_discord_oauth_state,
 )
 from orchestrator.core.discord.oauth_config import resolve_discord_oauth_config
-from orchestrator.core.email_delivery import EmailDeliveryError
+from orchestrator.core.platform.email_delivery import EmailDeliveryError
 from orchestrator.core.invites import email_delivery
-from orchestrator.core.platform_secret_service import (
+from orchestrator.core.platform.secret_service import (
     PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF,
     resolve_platform_secret_ref,
 )
-from orchestrator.core.project_automation_service import (
+from orchestrator.core.projects.automation_service import (
     enqueue_project_automation_run_now,
     ProjectAutomationWrite as ServiceProjectAutomationWrite,
     list_execution_history,
@@ -143,14 +150,13 @@ from orchestrator.core.security import (
     require_tenant_membership,
     require_tenant_permission,
 )
-from orchestrator.core.tenant_access import (
+from orchestrator.core.platform.access import (
     KNOWN_PERMISSION_KEYS,
     PERMISSION_PEOPLE_MANAGE,
     PERMISSION_PROJECTS_MANAGE,
-    PERMISSION_WORKSPACE_MANAGE,
     normalize_permission_keys,
 )
-from orchestrator.core.tenant_users import (
+from orchestrator.core.platform.users import (
     create_team,
     create_invite,
     ensure_team_ids_exist,
@@ -323,14 +329,12 @@ def create_tenant(
     return create_tenant_route_impl(
         session=session,
         payload=payload,
-        settings=get_settings(),
         validate_codex_assets_for_tenant_init_fn=_validate_codex_assets_for_tenant_init,
         create_tenant_fn=create_tenant_impl,
         allocate_tenant_id_fn=allocate_tenant_id,
         with_preserved_jira_system_fields_fn=with_preserved_jira_system_fields,
         with_managed_github_refs_fn=with_managed_github_refs,
         with_preserved_discord_system_fields_fn=with_preserved_discord_system_fields,
-        provision_jira_webhook_fn=provision_jira_webhook,
         reconcile_tenant_projects_fn=reconcile_tenant_projects,
         tenant_to_schema_fn=tenant_to_schema,
     )
@@ -349,47 +353,6 @@ def get_tenant(
         get_tenant_or_404_fn=get_tenant_or_404_impl,
         tenant_to_schema_fn=tenant_to_schema,
     )
-
-
-@router.put("/tenants/{tenant_id}", response_model=TenantRead)
-def update_tenant(
-    tenant_id: str,
-    payload: TenantUpdate,
-    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
-    session: Session = Depends(get_session),
-) -> TenantRead:
-    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_WORKSPACE_MANAGE)
-    return update_tenant_route_impl(
-        session=session,
-        tenant_id=tenant_id,
-        payload=payload,
-        validate_codex_assets_for_tenant_init_fn=_validate_codex_assets_for_tenant_init,
-        update_tenant_fn=update_tenant_impl,
-        with_preserved_jira_system_fields_fn=with_preserved_jira_system_fields,
-        with_managed_github_refs_fn=with_managed_github_refs,
-        with_preserved_discord_system_fields_fn=with_preserved_discord_system_fields,
-        reconcile_tenant_projects_fn=reconcile_tenant_projects,
-        tenant_to_schema_fn=tenant_to_schema,
-    )
-
-
-@router.get("/tenants/{tenant_id}/deployment-plane", response_model=TenantDeploymentPlaneRead)
-def get_tenant_deployment_plane(
-    tenant_id: str,
-    _: str = Depends(require_admin),
-    session: Session = Depends(get_session),
-) -> TenantDeploymentPlaneRead:
-    return get_tenant_deployment_plane_impl(session=session, tenant_id=tenant_id)
-
-
-@router.put("/tenants/{tenant_id}/deployment-plane", response_model=TenantDeploymentPlaneRead)
-def update_tenant_deployment_plane(
-    tenant_id: str,
-    payload: TenantDeploymentPlaneWrite,
-    _: str = Depends(require_admin),
-    session: Session = Depends(get_session),
-) -> TenantDeploymentPlaneRead:
-    return update_tenant_deployment_plane_impl(session=session, tenant_id=tenant_id, payload=payload)
 
 
 @router.post("/tenants/{tenant_id}/invites", response_model=TenantInviteRead, status_code=status.HTTP_201_CREATED)
@@ -888,22 +851,472 @@ def get_project(
     )  # type: ignore[return-value]
 
 
-@router.put("/tenants/{tenant_id}/projects/{project_id}", response_model=ProjectRead)
-def update_project(
+@router.patch("/tenants/{tenant_id}/projects/{project_id}/configuration", response_model=ProjectRead)
+def update_project_configuration(
     tenant_id: str,
     project_id: str,
-    payload: ProjectUpdate,
+    payload: ProjectConfigurationUpdate,
     principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
     session: Session = Depends(get_session),
 ) -> ProjectRead:
     require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
-    return update_project_route_impl(
+    return update_project_configuration_route_impl(
         session=session,
         tenant_id=tenant_id,
         project_id=project_id,
         payload=payload,
         admin_project_service_factory=admin_project_service,
     )  # type: ignore[return-value]
+
+
+@router.patch("/tenants/{tenant_id}/projects/{project_id}/policy", response_model=ProjectRead)
+def update_project_policy(
+    tenant_id: str,
+    project_id: str,
+    payload: ProjectPolicyUpdate,
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
+    session: Session = Depends(get_session),
+) -> ProjectRead:
+    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
+    return update_project_policy_route_impl(
+        session=session,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        payload=payload,
+        admin_project_service_factory=admin_project_service,
+    )  # type: ignore[return-value]
+
+
+@router.patch("/tenants/{tenant_id}/projects/{project_id}/environment", response_model=ProjectRead)
+def update_project_environment(
+    tenant_id: str,
+    project_id: str,
+    payload: ProjectEnvironmentUpdate,
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
+    session: Session = Depends(get_session),
+) -> ProjectRead:
+    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
+    return update_project_environment_route_impl(
+        session=session,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        payload=payload,
+        admin_project_service_factory=admin_project_service,
+    )  # type: ignore[return-value]
+
+
+@router.patch("/tenants/{tenant_id}/projects/{project_id}/secrets", response_model=ProjectRead)
+def update_project_secret_refs(
+    tenant_id: str,
+    project_id: str,
+    payload: ProjectSecretRefsUpdate,
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
+    session: Session = Depends(get_session),
+) -> ProjectRead:
+    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
+    return update_project_secret_refs_route_impl(
+        session=session,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        payload=payload,
+        admin_project_service_factory=admin_project_service,
+    )  # type: ignore[return-value]
+
+
+@router.patch("/tenants/{tenant_id}/projects/{project_id}/discord", response_model=ProjectRead)
+def update_project_discord(
+    tenant_id: str,
+    project_id: str,
+    payload: ProjectDiscordUpdate,
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
+    session: Session = Depends(get_session),
+) -> ProjectRead:
+    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
+    return update_project_discord_route_impl(
+        session=session,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        payload=payload,
+        admin_project_service_factory=admin_project_service,
+    )  # type: ignore[return-value]
+
+
+@router.patch("/tenants/{tenant_id}/projects/{project_id}/archive", response_model=ProjectRead)
+def update_project_archive_state(
+    tenant_id: str,
+    project_id: str,
+    payload: ProjectArchiveUpdate,
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
+    session: Session = Depends(get_session),
+) -> ProjectRead:
+    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
+    return update_project_archive_state_route_impl(
+        session=session,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        payload=payload,
+        admin_project_service_factory=admin_project_service,
+    )  # type: ignore[return-value]
+
+
+@router.post("/tenants/{tenant_id}/projects/{project_id}/jira/resolve-run-board", response_model=ProjectRead)
+def resolve_project_jira_run_board(
+    tenant_id: str,
+    project_id: str,
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
+    session: Session = Depends(get_session),
+) -> ProjectRead:
+    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
+    return resolve_project_jira_run_board_route_impl(
+        session=session,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        admin_project_service_factory=admin_project_service,
+    )  # type: ignore[return-value]
+
+
+@router.get(
+    "/tenants/{tenant_id}/projects/{project_id}/installs",
+    response_model=ProjectInstallsRead,
+)
+def get_project_installs(
+    tenant_id: str,
+    project_id: str,
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
+    session: Session = Depends(get_session),
+) -> ProjectInstallsRead:
+    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
+    project = _get_project_for_tenant_or_404(session=session, tenant_id=tenant_id, project_id=project_id)
+    installs = list_project_installs(session=session, tenant_id=tenant_id, project_id=project.project_id)
+    return ProjectInstallsRead(installs=[project_install_to_schema(install) for install in installs])
+
+
+@router.post(
+    "/tenants/{tenant_id}/projects/{project_id}/installs",
+    response_model=ProjectInstallRead,
+    status_code=status.HTTP_201_CREATED,
+)
+def create_project_install_route(
+    tenant_id: str,
+    project_id: str,
+    payload: ProjectInstallWrite,
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
+    session: Session = Depends(get_session),
+) -> ProjectInstallRead:
+    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
+    project = _get_project_for_tenant_or_404(session=session, tenant_id=tenant_id, project_id=project_id)
+    try:
+        install = create_project_install(
+            session=session,
+            tenant_id=tenant_id,
+            project_id=project.project_id,
+            payload=ServiceProjectInstallWrite(
+                kind=payload.kind,
+                label=payload.label,
+                enabled=payload.enabled,
+                config=payload.config,
+                binding_names=tuple(payload.binding_names),
+            ),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return project_install_to_schema(install)
+
+
+@router.put(
+    "/tenants/{tenant_id}/projects/{project_id}/installs/{install_id}",
+    response_model=ProjectInstallRead,
+)
+def update_project_install_route(
+    tenant_id: str,
+    project_id: str,
+    install_id: str,
+    payload: ProjectInstallWrite,
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
+    session: Session = Depends(get_session),
+) -> ProjectInstallRead:
+    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
+    _get_project_for_tenant_or_404(session=session, tenant_id=tenant_id, project_id=project_id)
+    install = get_project_install(session=session, install_id=install_id)
+    if install is None or install.tenant_id != tenant_id or install.project_id != project_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project install not found")
+    try:
+        updated = update_project_install(
+            session=session,
+            install=install,
+            payload=ServiceProjectInstallWrite(
+                kind=payload.kind,
+                label=payload.label,
+                enabled=payload.enabled,
+                config=payload.config,
+                binding_names=tuple(payload.binding_names),
+            ),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return project_install_to_schema(updated)
+
+
+@router.delete(
+    "/tenants/{tenant_id}/projects/{project_id}/installs/{install_id}",
+    status_code=status.HTTP_204_NO_CONTENT,
+)
+def delete_project_install_route(
+    tenant_id: str,
+    project_id: str,
+    install_id: str,
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
+    session: Session = Depends(get_session),
+) -> Response:
+    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
+    _get_project_for_tenant_or_404(session=session, tenant_id=tenant_id, project_id=project_id)
+    install = get_project_install(session=session, install_id=install_id)
+    if install is None or install.tenant_id != tenant_id or install.project_id != project_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project install not found")
+    delete_project_install(session=session, install=install)
+    return Response(status_code=status.HTTP_204_NO_CONTENT)
+
+
+@router.get(
+    "/tenants/{tenant_id}/projects/{project_id}/install-requests",
+    response_model=ProjectInstallRequestsRead,
+)
+def get_project_install_requests_route(
+    tenant_id: str,
+    project_id: str,
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
+    session: Session = Depends(get_session),
+) -> ProjectInstallRequestsRead:
+    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
+    project = _get_project_for_tenant_or_404(session=session, tenant_id=tenant_id, project_id=project_id)
+    requests = list_project_install_requests(session=session, tenant_id=tenant_id, project_id=project.project_id)
+    return ProjectInstallRequestsRead(requests=[project_install_request_to_schema(request) for request in requests])
+
+
+@router.put(
+    "/tenants/{tenant_id}/projects/{project_id}/install-requests/{request_id}",
+    response_model=ProjectInstallRequestRead,
+)
+def update_project_install_request_route(
+    tenant_id: str,
+    project_id: str,
+    request_id: str,
+    payload: ProjectInstallRequestUpdate,
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
+    session: Session = Depends(get_session),
+) -> ProjectInstallRequestRead:
+    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
+    _get_project_for_tenant_or_404(session=session, tenant_id=tenant_id, project_id=project_id)
+    request = get_project_install_request(session=session, request_id=request_id)
+    if request is None or request.tenant_id != tenant_id or request.project_id != project_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project install request not found")
+    if str(payload.status or "").strip().lower() == "fulfilled":
+        matching_install = next(
+            (
+                install
+                for install in list_project_installs(session=session, tenant_id=tenant_id, project_id=project_id)
+                if install.kind == request.kind and install.label == request.label
+            ),
+            None,
+        )
+        if matching_install is None:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Create a matching project install before marking this request fulfilled",
+            )
+    try:
+        updated = update_install_request_status(session=session, request=request, status=payload.status)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    return project_install_request_to_schema(updated)
+
+
+def _get_project_for_tenant_or_404(*, session: Session, tenant_id: str, project_id: str) -> Project:
+    tenant = session.get(Tenant, tenant_id)
+    if tenant is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+    project = session.get(Project, project_id)
+    if project is None or project.tenant_id != tenant_id:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+    return project
+
+
+def _automation_execution_to_schema(execution) -> ProjectAutomationExecutionRead:  # noqa: ANN001
+    return ProjectAutomationExecutionRead(
+        execution_id=execution.execution_id,
+        automation_id=execution.automation_id,
+        scheduled_for=execution.scheduled_for,
+        window_start_at=execution.window_start_at,
+        window_end_at=execution.window_end_at,
+        status=execution.status,
+        dedupe_key=execution.dedupe_key,
+        started_at=execution.started_at,
+        completed_at=execution.completed_at,
+        discord_message_id=execution.discord_message_id,
+        last_error=execution.last_error,
+        created_at=execution.created_at,
+        updated_at=execution.updated_at,
+    )
+
+
+def _automation_to_schema(*, automation, executions) -> ProjectAutomationRead:  # noqa: ANN001
+    return ProjectAutomationRead(
+        automation_id=automation.automation_id,
+        project_id=automation.project_id,
+        tenant_id=automation.tenant_id,
+        enabled=automation.enabled,
+        kind=automation.kind,
+        timezone=automation.timezone,
+        days_of_week=list(automation.days_of_week or []),
+        local_time=automation.local_time,
+        fallback_lookback_hours=automation.fallback_lookback_hours,
+        last_successful_window_end_at=automation.last_successful_window_end_at,
+        next_run_at=automation.next_run_at,
+        executions=[_automation_execution_to_schema(execution) for execution in executions],
+        created_at=automation.created_at,
+        updated_at=automation.updated_at,
+    )
+
+
+@router.get(
+    "/tenants/{tenant_id}/projects/{project_id}/automations",
+    response_model=ProjectAutomationsRead,
+)
+def get_project_automations(
+    tenant_id: str,
+    project_id: str,
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> ProjectAutomationsRead:
+    project = _get_project_for_tenant_or_404(session=session, tenant_id=tenant_id, project_id=project_id)
+    automations = list_project_automation_definitions(
+        session=session,
+        tenant_id=tenant_id,
+        project_id=project.project_id,
+    )
+    return ProjectAutomationsRead(
+        automations=[
+            _automation_to_schema(
+                automation=automation,
+                executions=list_execution_history(
+                    session=session,
+                    automation_id=automation.automation_id,
+                    limit=20,
+                ),
+            )
+            for automation in automations
+        ]
+    )
+
+
+@router.put(
+    "/tenants/{tenant_id}/projects/{project_id}/automations",
+    response_model=ProjectAutomationsRead,
+)
+def put_project_automations(
+    tenant_id: str,
+    project_id: str,
+    payload: ProjectAutomationsWrite,
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> ProjectAutomationsRead:
+    project = _get_project_for_tenant_or_404(session=session, tenant_id=tenant_id, project_id=project_id)
+    for item in payload.automations:
+        normalized = ServiceProjectAutomationWrite(
+            kind=item.kind,
+            enabled=item.enabled,
+            timezone=item.timezone,
+            days_of_week=tuple(int(day) for day in item.days_of_week),
+            local_time=item.local_time,
+            fallback_lookback_hours=item.fallback_lookback_hours,
+        )
+        try:
+            upsert_project_automation(
+                session=session,
+                tenant_id=tenant_id,
+                project_id=project.project_id,
+                payload=normalized,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    automations = list_project_automation_definitions(
+        session=session,
+        tenant_id=tenant_id,
+        project_id=project.project_id,
+    )
+    return ProjectAutomationsRead(
+        automations=[
+            _automation_to_schema(
+                automation=automation,
+                executions=list_execution_history(
+                    session=session,
+                    automation_id=automation.automation_id,
+                    limit=20,
+                ),
+            )
+            for automation in automations
+        ]
+    )
+
+
+@router.post(
+    "/tenants/{tenant_id}/projects/{project_id}/automations/{kind}/run-now",
+    response_model=ProjectAutomationsRead,
+)
+def post_project_automation_run_now(
+    tenant_id: str,
+    project_id: str,
+    kind: str,
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> ProjectAutomationsRead:
+    project = _get_project_for_tenant_or_404(session=session, tenant_id=tenant_id, project_id=project_id)
+    try:
+        enqueue_project_automation_run_now(
+            session=session,
+            tenant_id=tenant_id,
+            project_id=project.project_id,
+            kind=kind,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    automations = list_project_automation_definitions(
+        session=session,
+        tenant_id=tenant_id,
+        project_id=project.project_id,
+    )
+    return ProjectAutomationsRead(
+        automations=[
+            _automation_to_schema(
+                automation=automation,
+                executions=list_execution_history(
+                    session=session,
+                    automation_id=automation.automation_id,
+                    limit=20,
+                ),
+            )
+            for automation in automations
+        ]
+    )
+
+
+@router.get("/tenants/{tenant_id}/deployment-plane", response_model=TenantDeploymentPlaneRead)
+def get_tenant_deployment_plane(
+    tenant_id: str,
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> TenantDeploymentPlaneRead:
+    return get_tenant_deployment_plane_impl(session=session, tenant_id=tenant_id)
+
+
+@router.put("/tenants/{tenant_id}/deployment-plane", response_model=TenantDeploymentPlaneRead)
+def update_tenant_deployment_plane(
+    tenant_id: str,
+    payload: TenantDeploymentPlaneWrite,
+    _: str = Depends(require_admin),
+    session: Session = Depends(get_session),
+) -> TenantDeploymentPlaneRead:
+    return update_tenant_deployment_plane_impl(session=session, tenant_id=tenant_id, payload=payload)
 
 
 @router.get("/tenants/{tenant_id}/projects/{project_id}/apps", response_model=list[ProjectAppRead])
@@ -1358,328 +1771,3 @@ def get_tenant_deployments_overview(
         session=session,
         tenant_id=tenant_id,
     )  # type: ignore[return-value]
-
-
-@router.get(
-    "/tenants/{tenant_id}/projects/{project_id}/installs",
-    response_model=ProjectInstallsRead,
-)
-def get_project_installs(
-    tenant_id: str,
-    project_id: str,
-    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
-    session: Session = Depends(get_session),
-) -> ProjectInstallsRead:
-    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
-    project = _get_project_for_tenant_or_404(session=session, tenant_id=tenant_id, project_id=project_id)
-    installs = list_project_installs(session=session, tenant_id=tenant_id, project_id=project.project_id)
-    return ProjectInstallsRead(installs=[project_install_to_schema(install) for install in installs])
-
-
-@router.post(
-    "/tenants/{tenant_id}/projects/{project_id}/installs",
-    response_model=ProjectInstallRead,
-    status_code=status.HTTP_201_CREATED,
-)
-def create_project_install_route(
-    tenant_id: str,
-    project_id: str,
-    payload: ProjectInstallWrite,
-    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
-    session: Session = Depends(get_session),
-) -> ProjectInstallRead:
-    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
-    project = _get_project_for_tenant_or_404(session=session, tenant_id=tenant_id, project_id=project_id)
-    try:
-        install = create_project_install(
-            session=session,
-            tenant_id=tenant_id,
-            project_id=project.project_id,
-            payload=ServiceProjectInstallWrite(
-                kind=payload.kind,
-                label=payload.label,
-                enabled=payload.enabled,
-                config=payload.config,
-                binding_names=tuple(payload.binding_names),
-            ),
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    return project_install_to_schema(install)
-
-
-@router.put(
-    "/tenants/{tenant_id}/projects/{project_id}/installs/{install_id}",
-    response_model=ProjectInstallRead,
-)
-def update_project_install_route(
-    tenant_id: str,
-    project_id: str,
-    install_id: str,
-    payload: ProjectInstallWrite,
-    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
-    session: Session = Depends(get_session),
-) -> ProjectInstallRead:
-    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
-    _get_project_for_tenant_or_404(session=session, tenant_id=tenant_id, project_id=project_id)
-    install = get_project_install(session=session, install_id=install_id)
-    if install is None or install.tenant_id != tenant_id or install.project_id != project_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project install not found")
-    try:
-        updated = update_project_install(
-            session=session,
-            install=install,
-            payload=ServiceProjectInstallWrite(
-                kind=payload.kind,
-                label=payload.label,
-                enabled=payload.enabled,
-                config=payload.config,
-                binding_names=tuple(payload.binding_names),
-            ),
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    return project_install_to_schema(updated)
-
-
-@router.delete(
-    "/tenants/{tenant_id}/projects/{project_id}/installs/{install_id}",
-    status_code=status.HTTP_204_NO_CONTENT,
-)
-def delete_project_install_route(
-    tenant_id: str,
-    project_id: str,
-    install_id: str,
-    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
-    session: Session = Depends(get_session),
-) -> Response:
-    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
-    _get_project_for_tenant_or_404(session=session, tenant_id=tenant_id, project_id=project_id)
-    install = get_project_install(session=session, install_id=install_id)
-    if install is None or install.tenant_id != tenant_id or install.project_id != project_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project install not found")
-    delete_project_install(session=session, install=install)
-    return Response(status_code=status.HTTP_204_NO_CONTENT)
-
-
-@router.get(
-    "/tenants/{tenant_id}/projects/{project_id}/install-requests",
-    response_model=ProjectInstallRequestsRead,
-)
-def get_project_install_requests_route(
-    tenant_id: str,
-    project_id: str,
-    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
-    session: Session = Depends(get_session),
-) -> ProjectInstallRequestsRead:
-    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
-    project = _get_project_for_tenant_or_404(session=session, tenant_id=tenant_id, project_id=project_id)
-    requests = list_project_install_requests(session=session, tenant_id=tenant_id, project_id=project.project_id)
-    return ProjectInstallRequestsRead(requests=[project_install_request_to_schema(request) for request in requests])
-
-
-@router.put(
-    "/tenants/{tenant_id}/projects/{project_id}/install-requests/{request_id}",
-    response_model=ProjectInstallRequestRead,
-)
-def update_project_install_request_route(
-    tenant_id: str,
-    project_id: str,
-    request_id: str,
-    payload: ProjectInstallRequestUpdate,
-    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
-    session: Session = Depends(get_session),
-) -> ProjectInstallRequestRead:
-    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
-    _get_project_for_tenant_or_404(session=session, tenant_id=tenant_id, project_id=project_id)
-    request = get_project_install_request(session=session, request_id=request_id)
-    if request is None or request.tenant_id != tenant_id or request.project_id != project_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project install request not found")
-    if str(payload.status or "").strip().lower() == "fulfilled":
-        matching_install = next(
-            (
-                install
-                for install in list_project_installs(session=session, tenant_id=tenant_id, project_id=project_id)
-                if install.kind == request.kind and install.label == request.label
-            ),
-            None,
-        )
-        if matching_install is None:
-            raise HTTPException(
-                status_code=status.HTTP_400_BAD_REQUEST,
-                detail="Create a matching project install before marking this request fulfilled",
-            )
-    try:
-        updated = update_install_request_status(session=session, request=request, status=payload.status)
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    return project_install_request_to_schema(updated)
-
-
-def _get_project_for_tenant_or_404(*, session: Session, tenant_id: str, project_id: str) -> Project:
-    tenant = session.get(Tenant, tenant_id)
-    if tenant is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
-    project = session.get(Project, project_id)
-    if project is None or project.tenant_id != tenant_id:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
-    return project
-
-
-def _automation_execution_to_schema(execution) -> ProjectAutomationExecutionRead:  # noqa: ANN001
-    return ProjectAutomationExecutionRead(
-        execution_id=execution.execution_id,
-        automation_id=execution.automation_id,
-        scheduled_for=execution.scheduled_for,
-        window_start_at=execution.window_start_at,
-        window_end_at=execution.window_end_at,
-        status=execution.status,
-        dedupe_key=execution.dedupe_key,
-        started_at=execution.started_at,
-        completed_at=execution.completed_at,
-        discord_message_id=execution.discord_message_id,
-        last_error=execution.last_error,
-        created_at=execution.created_at,
-        updated_at=execution.updated_at,
-    )
-
-
-def _automation_to_schema(*, automation, executions) -> ProjectAutomationRead:  # noqa: ANN001
-    return ProjectAutomationRead(
-        automation_id=automation.automation_id,
-        project_id=automation.project_id,
-        tenant_id=automation.tenant_id,
-        enabled=automation.enabled,
-        kind=automation.kind,
-        timezone=automation.timezone,
-        days_of_week=list(automation.days_of_week or []),
-        local_time=automation.local_time,
-        fallback_lookback_hours=automation.fallback_lookback_hours,
-        last_successful_window_end_at=automation.last_successful_window_end_at,
-        next_run_at=automation.next_run_at,
-        executions=[_automation_execution_to_schema(execution) for execution in executions],
-        created_at=automation.created_at,
-        updated_at=automation.updated_at,
-    )
-
-
-@router.get(
-    "/tenants/{tenant_id}/projects/{project_id}/automations",
-    response_model=ProjectAutomationsRead,
-)
-def get_project_automations(
-    tenant_id: str,
-    project_id: str,
-    _: str = Depends(require_admin),
-    session: Session = Depends(get_session),
-) -> ProjectAutomationsRead:
-    project = _get_project_for_tenant_or_404(session=session, tenant_id=tenant_id, project_id=project_id)
-    automations = list_project_automation_definitions(
-        session=session,
-        tenant_id=tenant_id,
-        project_id=project.project_id,
-    )
-    return ProjectAutomationsRead(
-        automations=[
-            _automation_to_schema(
-                automation=automation,
-                executions=list_execution_history(
-                    session=session,
-                    automation_id=automation.automation_id,
-                    limit=20,
-                ),
-            )
-            for automation in automations
-        ]
-    )
-
-
-@router.put(
-    "/tenants/{tenant_id}/projects/{project_id}/automations",
-    response_model=ProjectAutomationsRead,
-)
-def put_project_automations(
-    tenant_id: str,
-    project_id: str,
-    payload: ProjectAutomationsWrite,
-    _: str = Depends(require_admin),
-    session: Session = Depends(get_session),
-) -> ProjectAutomationsRead:
-    project = _get_project_for_tenant_or_404(session=session, tenant_id=tenant_id, project_id=project_id)
-    for item in payload.automations:
-        normalized = ServiceProjectAutomationWrite(
-            kind=item.kind,
-            enabled=item.enabled,
-            timezone=item.timezone,
-            days_of_week=tuple(int(day) for day in item.days_of_week),
-            local_time=item.local_time,
-            fallback_lookback_hours=item.fallback_lookback_hours,
-        )
-        try:
-            upsert_project_automation(
-                session=session,
-                tenant_id=tenant_id,
-                project_id=project.project_id,
-                payload=normalized,
-            )
-        except ValueError as exc:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    automations = list_project_automation_definitions(
-        session=session,
-        tenant_id=tenant_id,
-        project_id=project.project_id,
-    )
-    return ProjectAutomationsRead(
-        automations=[
-            _automation_to_schema(
-                automation=automation,
-                executions=list_execution_history(
-                    session=session,
-                    automation_id=automation.automation_id,
-                    limit=20,
-                ),
-            )
-            for automation in automations
-        ]
-    )
-
-
-@router.post(
-    "/tenants/{tenant_id}/projects/{project_id}/automations/{kind}/run-now",
-    response_model=ProjectAutomationsRead,
-)
-def post_project_automation_run_now(
-    tenant_id: str,
-    project_id: str,
-    kind: str,
-    _: str = Depends(require_admin),
-    session: Session = Depends(get_session),
-) -> ProjectAutomationsRead:
-    project = _get_project_for_tenant_or_404(session=session, tenant_id=tenant_id, project_id=project_id)
-    try:
-        enqueue_project_automation_run_now(
-            session=session,
-            tenant_id=tenant_id,
-            project_id=project.project_id,
-            kind=kind,
-        )
-    except ValueError as exc:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
-    automations = list_project_automation_definitions(
-        session=session,
-        tenant_id=tenant_id,
-        project_id=project.project_id,
-    )
-    return ProjectAutomationsRead(
-        automations=[
-            _automation_to_schema(
-                automation=automation,
-                executions=list_execution_history(
-                    session=session,
-                    automation_id=automation.automation_id,
-                    limit=20,
-                ),
-            )
-            for automation in automations
-        ]
-    )

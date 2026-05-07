@@ -249,7 +249,7 @@ export default function SelectTenantPage() {
                   {pagedArchivedTenants.map((tenant) => (
                     <li key={tenant.tenant_id}>
                       <Link
-                        href={`/${encodeURIComponent(tenant.tenant_id)}/settings/integrations`}
+                        href={`/${encodeURIComponent(tenant.tenant_id)}/settings/config`}
                         className="group flex items-center gap-4 px-5 py-4 transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:bg-muted/50"
                       >
                         <div className="flex h-10 w-10 flex-shrink-0 items-center justify-center rounded-xl bg-muted text-muted-foreground">

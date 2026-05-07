@@ -1,4 +1,5 @@
 # AWS Package (Phase 2, HA)
+
 ## Objective
 Deliver an HA AWS deployment with ECS on EC2 ASG and Marketplace-compatible launch flow.
 
@@ -7,7 +8,7 @@ Deliver an HA AWS deployment with ECS on EC2 ASG and Marketplace-compatible laun
 - ECS cluster backed by EC2 Auto Scaling Groups in at least 2 AZs.
 - ALB for `api` and `admin-ui`.
 - RDS PostgreSQL Multi-AZ.
-- ElastiCache Redis with automatic failover.
+- Approved ClickHouse deployment for product logs and audit queries.
 - Secrets Manager for runtime secrets.
 
 ## Required Deliverables
@@ -25,4 +26,4 @@ Deliver an HA AWS deployment with ECS on EC2 ASG and Marketplace-compatible laun
 ## Acceptance Criteria
 - All required services run with desired counts across at least 2 AZs.
 - Simulated AZ impairment preserves API availability.
-- Managed DB and Redis failover behavior is validated.
+- Managed DB and ClickHouse failover behavior is validated.

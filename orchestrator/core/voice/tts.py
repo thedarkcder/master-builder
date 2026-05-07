@@ -11,7 +11,7 @@ from typing import Any
 from typing import Sequence
 
 from orchestrator.core.config import Settings
-from orchestrator.core.discord.personas import get_voice_room_persona_definition
+from orchestrator.core.discord.personas import get_voice_room_persona_definition, list_voice_room_personas
 
 if TYPE_CHECKING:
     from collections.abc import Iterable
@@ -304,7 +304,7 @@ def _resolve_prewarm_voice_ids(*, settings: Settings, voices: Sequence[str] | No
     if voices is not None:
         requested_voices.extend(_normalize_voice_ids(voices))
     else:
-        requested_voices.extend(list_predefined_pocket_tts_voices())
+        requested_voices.extend(_default_voice_reply_voice_ids())
         configured_voice = str(settings.pocket_tts_voice or "").strip().lower()
         if configured_voice:
             requested_voices.append(configured_voice)
@@ -422,3 +422,9 @@ def _default_persona_voice(persona_id: str | None) -> str:
         return get_voice_room_persona_definition(persona_id).default_voice_id
     except Exception:  # noqa: BLE001
         return ""
+
+
+def _default_voice_reply_voice_ids() -> list[str]:
+    return _unique_preserving_order(
+        _normalize_voice_ids(persona.get("voice_id") for persona in list_voice_room_personas())
+    )

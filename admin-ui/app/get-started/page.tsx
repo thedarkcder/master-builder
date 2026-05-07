@@ -220,7 +220,7 @@ export default function GetStartedPage() {
             <CardContent className="space-y-3">
               {isTenantAdminSetup ? (
                 <>
-                  <ChecklistRow done={jiraReady} label="Connect Jira and choose at least one project" />
+                  <ChecklistRow done={jiraReady} label="Connect Atlassian and choose at least one Jira project" />
                   <ChecklistRow done={githubReady} label="Install the GitHub App for this tenant" />
                   <ChecklistRow done={discordReady} label="Install the Discord bot and choose an onboarding channel" />
                   <div className="flex flex-wrap gap-3 pt-2">

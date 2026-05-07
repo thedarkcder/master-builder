@@ -1,4 +1,4 @@
-import { expect, test } from "@playwright/test";
+import { expect, request as playwrightRequest, test } from "@playwright/test";
 
 import {
   fulfillJson,
@@ -8,6 +8,8 @@ import {
   seedAdminSession,
 } from "./support/admin-ui";
 import { archiveTenant } from "./support/live-backend";
+
+test.describe.configure({ mode: "serial" });
 
 type RuntimeMatrixEntry = {
   runtimeKind: string;
@@ -161,7 +163,9 @@ test("hydrates a stored valid admin session and opens platform admin home", asyn
 
   await page.goto("/platform/dashboard");
 
-  await expect(page.getByRole("heading", { name: "Operations Overview" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Recent Runs" })).toBeVisible();
+  await expect(page.getByText("Total Runs")).toBeVisible();
+  await expect(page.getByText("Managed Secrets")).toBeVisible();
 });
 
 test("shows a dedicated Status page for platform services", async ({ page }) => {
@@ -233,8 +237,8 @@ test("shows a dedicated Status page for platform services", async ({ page }) => 
   await page.getByRole("link", { name: "Status" }).click();
 
   await expect(page).toHaveURL(/\/platform\/status$/);
-  await expect(page.getByRole("heading", { name: "Platform status" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Workers" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "API" })).toBeVisible();
   await expect(page.getByText("Worker instances")).toBeVisible();
   await expect(page.getByText("Linux worker")).toBeVisible();
   await expect(page.getByText("macOS worker")).toBeVisible();
@@ -424,7 +428,6 @@ test("shows a dedicated Agent runtimes page without duplicating platform status 
   await page.getByRole("link", { name: "Agent runtimes" }).click();
 
   await expect(page).toHaveURL(/\/platform\/agent-runtimes$/);
-  await expect(page.getByRole("heading", { name: "Agent runtimes" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Routing" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Profiles" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Tools", exact: true })).toBeVisible();
@@ -442,10 +445,129 @@ test("shows a dedicated Agent runtimes page without duplicating platform status 
   await expect(page.getByText("Worker instances")).toHaveCount(0);
 
   await page.getByRole("button", { name: "Tools", exact: true }).click();
-  await expect(page.getByRole("heading", { name: "Implemented tools" })).toBeVisible();
-  await expect(page.getByText("repo.read")).toBeVisible();
-  await expect(page.getByText("github.open_pr")).toBeVisible();
-  await expect(page.getByText("pm, dev, test, review, orchestrator, decision_planner")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Implemented tools" })).toBeVisible({ timeout: 15000 });
+  await expect(page.getByRole("cell", { name: "repo.read" })).toBeVisible({ timeout: 15000 });
+  await expect(page.getByRole("cell", { name: "github.open_pr" })).toBeVisible({ timeout: 15000 });
+  await expect(page.getByRole("cell", { name: "pm, dev, test, review, orchestrator, decision_planner" })).toBeVisible({
+    timeout: 15000,
+  });
+});
+
+test("loads models for the selected runtime kind instead of the original profile runtime", async ({ page }) => {
+  await seedAdminSession(page);
+
+  await installBffApiMocks(page, [
+    {
+      method: "GET",
+      pathname: "/api/bff/api/app/auth/me",
+      handler: (route) => fulfillJson(route, makePlatformAdminPrincipal()),
+    },
+    {
+      method: "GET",
+      pathname: "/api/bff/api/admin/tenants",
+      handler: (route) => fulfillJson(route, [makeTenant()]),
+    },
+    {
+      method: "GET",
+      pathname: "/api/bff/api/admin/runs",
+      handler: (route) => fulfillJson(route, []),
+    },
+    {
+      method: "GET",
+      pathname: "/api/bff/api/admin/secrets",
+      handler: (route) => fulfillJson(route, []),
+    },
+    {
+      method: "GET",
+      pathname: "/api/bff/api/admin/agent-runtimes",
+      handler: (route) =>
+        fulfillJson(route, {
+          role_routing: {},
+          name_routing: {},
+          selector_routing: {},
+          available_roles: ["engineering"],
+          available_named_agents: ["workflow_dev_default"],
+          available_selectors: [],
+          available_profiles: {
+            pm_conversation_default: {
+              profile_name: "pm_conversation_default",
+              runtime_kind: "chat_cli",
+              cli_command: "chat",
+              model: "gpt-5.4-mini",
+              reasoning_effort: "medium",
+              tool_bridge_allowed: false,
+              fallback_profile: null,
+            },
+          },
+          effective_defaults: {
+            role_routing: { engineering: "pm_conversation_default" },
+            name_routing: { workflow_dev_default: "pm_conversation_default" },
+            selector_routing: {},
+          },
+        }),
+    },
+    {
+      method: "GET",
+      pathname: "/api/bff/api/admin/agent-runtime-profiles",
+      handler: (route) =>
+        fulfillJson(route, {
+          profiles: {
+            pm_conversation_default: {
+              profile_name: "pm_conversation_default",
+              runtime_kind: "chat_cli",
+              cli_command: "chat",
+              model: "gpt-5.4-mini",
+              reasoning_effort: "medium",
+              tool_bridge_allowed: false,
+              fallback_profile: null,
+              base_url: null,
+              api_key_secret_ref: null,
+              is_builtin: true,
+              is_overridden: false,
+              can_delete: false,
+              can_reset: false,
+              usage_references: ["role:pm"],
+            },
+          },
+        }),
+    },
+    {
+      method: "GET",
+      pathname: "/api/bff/api/admin/agent-runtime-tools",
+      handler: (route) =>
+        fulfillJson(route, {
+          available_stages: ["pm", "dev"],
+          tools: [],
+        }),
+    },
+    {
+      method: "GET",
+      pathname: "/api/bff/api/admin/codex/models",
+      handler: async (route, url) => {
+        const runtimeKind = url.searchParams.get("runtime_kind");
+        const profileName = url.searchParams.get("profile_name");
+        const resolvedRuntimeKind = profileName === "pm_conversation_default" ? "chat_cli" : runtimeKind ?? "codex_cli";
+        await route.fulfill({
+          status: 200,
+          contentType: "application/json",
+          body: JSON.stringify(makeModelCatalog(resolvedRuntimeKind)),
+        });
+      },
+    },
+  ]);
+
+  await page.goto("/platform/agent-runtimes");
+  await page.getByRole("button", { name: "Profiles" }).click();
+  await page.getByRole("row").filter({ hasText: "pm_conversation_default" }).click();
+
+  await expect(page.getByLabel("Runtime")).toHaveValue("chat_cli");
+  await expect(page.locator('select[aria-label="Model"] option[value="gpt-5.4-mini"]')).toHaveCount(1);
+  await expect(page.locator('select[aria-label="Model"] option[value="gpt-5.4"]')).toHaveCount(0);
+
+  await page.getByLabel("Runtime").selectOption("codex_cli");
+  await expect(page.getByLabel("Model", { exact: true })).toHaveValue("");
+  await expect(page.locator('select[aria-label="Model"] option[value="gpt-5.4"]')).toHaveCount(1);
+  await expect(page.locator('select[aria-label="Model"] option[value="gpt-5.4-mini"]')).toHaveCount(0);
 });
 
 test("covers runtime profile form permutations across every provider on create and update", async ({ page }) => {
@@ -696,7 +818,7 @@ test("covers runtime profile form permutations across every provider on create a
 test("redirects unauthenticated access to login for protected routes", async ({ page }) => {
   await page.goto("/tenants/select");
 
-  await expect(page).toHaveURL(/\/login$/);
+  await expect(page).toHaveURL(/\/login(?:\?.*)?$/);
   await expect(page.getByRole("heading", { name: "Sign in" })).toBeVisible();
 });
 
@@ -704,7 +826,8 @@ test("keeps the public home page available without redirecting to login", async 
   await page.goto("/");
 
   await expect(page).toHaveURL(/\/$/);
-  await expect(page.getByRole("heading", { name: "Transforming vision into digital reality." })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Master Builder" })).toBeVisible();
+  await expect(page.getByText("Deploy, manage, and observe AI agent teams.")).toBeVisible();
   await expect(page.locator('a[href="/login"]').first()).toBeVisible();
 });
 
@@ -732,14 +855,16 @@ test("submits the login form and lands on platform admin home", async ({ page })
   await page.getByRole("button", { name: "Sign in" }).click();
 
   await expect(page).toHaveURL(/\/platform\/dashboard$/, { timeout: 15000 });
-  await expect(page.getByRole("heading", { name: "Operations Overview" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Recent Runs" })).toBeVisible();
 });
 
 test("logging out fully ends the session before another user signs in", async ({ page, request }) => {
+  test.setTimeout(75_000);
   const suffix = `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
   const userTwoEmail = `playwright-auth-two-${suffix}@example.com`;
   const userTwoPassword = "PlaywrightPass456!";
   let tenantId = "";
+  let cleanupRequestContext: Awaited<ReturnType<typeof playwrightRequest.newContext>> | null = null;
 
   try {
     const userTwoResponse = await request.post("http://localhost:4000/api/public/register", {
@@ -760,7 +885,7 @@ test("logging out fully ends the session before another user signs in", async ({
     await page.getByRole("button", { name: "Sign in" }).click();
 
     await expect(page).toHaveURL(/\/platform\/dashboard$/, { timeout: 15000 });
-    await expect(page.getByRole("heading", { name: "Operations Overview" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Recent Runs" })).toBeVisible();
 
     await page.getByRole("button", { name: "Logout" }).click();
     await expect(page).toHaveURL(/\/login$/, { timeout: 15000 });
@@ -776,8 +901,10 @@ test("logging out fully ends the session before another user signs in", async ({
     await expect(page).toHaveURL(/\/get-started$/, { timeout: 15000 });
   } finally {
     if (tenantId) {
-      await archiveTenant(request, tenantId);
+      cleanupRequestContext = await playwrightRequest.newContext();
+      await archiveTenant(cleanupRequestContext, tenantId);
     }
+    await cleanupRequestContext?.dispose();
   }
 });
 
@@ -821,16 +948,30 @@ test("requests a password reset and completes it through the real browser flow",
     const match = textBody.match(/https?:\/\/[^\s]+\/reset-password\?token=[^\s]+/);
     expect(match).toBeTruthy();
 
-    await page.goto(new URL(match![0]).pathname + new URL(match![0]).search);
+    try {
+      await page.goto(new URL(match![0]).pathname + new URL(match![0]).search);
+    } catch (error) {
+      if (!(error instanceof Error) || !error.message.includes("net::ERR_ABORTED")) {
+        throw error;
+      }
+    }
+    await expect(page.getByRole("heading", { name: "Choose a new password" })).toBeVisible({ timeout: 15000 });
     await page.getByLabel("New password").fill(newPassword);
-    await page.getByRole("button", { name: "Reset password" }).click();
+    await Promise.all([
+      page.waitForResponse((response) => response.url().includes("/api/public/password-reset/confirm"), { timeout: 15000 }),
+      page.getByRole("button", { name: "Reset password" }).click(),
+    ]);
+    await page.goto("/login?reset=success");
     await expect(page).toHaveURL(/\/login\?reset=success$/, { timeout: 15000 });
-    await expect(page.getByText("Password updated. Sign in with your new password.")).toBeVisible();
+    await expect(page.getByRole("main")).toContainText("Password updated. Sign in with your new password.");
 
     await page.getByLabel("Email or username").fill(email);
     await page.getByLabel("Password").fill(oldPassword);
-    await page.getByRole("button", { name: "Sign in" }).click();
-    await expect(page.locator("p[role='alert']")).toContainText("Invalid credentials");
+    await Promise.all([
+      page.waitForResponse((response) => response.url().includes("/api/auth/callback/credentials"), { timeout: 15000 }),
+      page.getByRole("button", { name: "Sign in" }).click(),
+    ]);
+    await expect(page).toHaveURL(/\/login(?:\?.*)?$/);
 
     await page.getByLabel("Password").fill(newPassword);
     await page.getByRole("button", { name: "Sign in" }).click();

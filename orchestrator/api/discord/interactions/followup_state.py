@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 
 from orchestrator.api.discord.shared.state_repository import resolve_project_for_discord_channel
 from orchestrator.core.discord.channel_tenant_index import resolve_tenant_for_discord_channel
-from orchestrator.core.followup_context_service import (
+from orchestrator.core.pm.followup_context_service import (
     FOLLOWUP_CONTEXT_DECISION_GATE,
     resolve_followup_context as resolve_shared_followup_context,
 )

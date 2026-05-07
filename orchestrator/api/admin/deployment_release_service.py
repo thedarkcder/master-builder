@@ -8,8 +8,8 @@ from fastapi import HTTPException, status
 from sqlalchemy import select
 
 from orchestrator.core.config import get_settings
-from orchestrator.core.platform_secret_service import resolve_platform_secret_ref
-from orchestrator.core.secret_manager import normalize_secret_ref, resolve_scoped_secret_ref
+from orchestrator.core.platform.secret_service import resolve_platform_secret_ref
+from orchestrator.core.platform.secret_manager import normalize_secret_ref, resolve_scoped_secret_ref
 from orchestrator.api.admin.deployment_config_service import (
     ensure_project_default_app,
     get_project_app,

@@ -30,7 +30,7 @@ export function ReviewStep({
           <div className="mt-1 font-mono text-xs text-slate-600">{tenantDisplayId}</div>
         </div>
         <div className="rounded-2xl border border-slate-200 bg-slate-50/70 px-5 py-5 text-sm">
-          <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Jira</div>
+          <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Atlassian</div>
           <div className="mt-2 font-medium text-slate-900">{jiraConnectionId || "Not connected"}</div>
           <div className="mt-1 text-slate-600">{jiraProjectKeys || "No projects selected"}</div>
         </div>

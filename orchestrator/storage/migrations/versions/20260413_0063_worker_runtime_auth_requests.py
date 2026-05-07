@@ -18,9 +18,10 @@ depends_on = None
 
 
 def upgrade() -> None:
-    inspector = sa.inspect(op.get_bind())
-    table_names = set(inspector.get_table_names())
-    if "worker_runtime_auth_requests" not in table_names:
+    bind = op.get_bind()
+    inspector = sa.inspect(bind)
+    existing_tables = set(inspector.get_table_names())
+    if "worker_runtime_auth_requests" not in existing_tables:
         op.create_table(
             "worker_runtime_auth_requests",
             sa.Column("request_id", sa.String(length=64), nullable=False),
@@ -40,14 +41,16 @@ def upgrade() -> None:
             ),
             sa.PrimaryKeyConstraint("request_id"),
         )
-    index_names = {index["name"] for index in inspector.get_indexes("worker_runtime_auth_requests")}
-    if "ix_worker_runtime_auth_requests_scope" not in index_names:
+    existing_indexes = {
+        index["name"] for index in inspector.get_indexes("worker_runtime_auth_requests")
+    } if "worker_runtime_auth_requests" in set(sa.inspect(bind).get_table_names()) else set()
+    if "ix_worker_runtime_auth_requests_scope" not in existing_indexes:
         op.create_index(
             "ix_worker_runtime_auth_requests_scope",
             "worker_runtime_auth_requests",
             ["service_instance_id", "runtime_kind", "status"],
         )
-    if "ix_worker_runtime_auth_requests_requested_at" not in index_names:
+    if "ix_worker_runtime_auth_requests_requested_at" not in existing_indexes:
         op.create_index(
             "ix_worker_runtime_auth_requests_requested_at",
             "worker_runtime_auth_requests",

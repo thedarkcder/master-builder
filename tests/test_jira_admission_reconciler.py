@@ -3,12 +3,11 @@ from __future__ import annotations
 from types import SimpleNamespace
 
 from orchestrator.core.communications.execution_admission_format import (
-    build_jira_admission_notification_detail,
-    build_jira_admission_response_fields,
-    format_discord_admission_conflict_detail,
+    present_discord_admission_conflict,
+    present_jira_admission,
 )
-from orchestrator.core.decision_types import ExecutionGateReason, ExecutionGateResolution, ExecutionGateState
-from orchestrator.core.decision_state_machine import (
+from orchestrator.core.decision.types import ExecutionGateReason, ExecutionGateResolution, ExecutionGateState
+from orchestrator.core.decision.state_machine import (
     ExecutionAdmissionReason,
     resolve_execution_admission,
 )
@@ -56,7 +55,7 @@ def test_resolve_execution_admission_allows_when_execution_gate_allows() -> None
     )
     assert decision.can_enqueue is True
     assert decision.precheck_outcome == "ready_for_agent"
-    assert build_jira_admission_response_fields(admission=decision) == {}
+    assert present_jira_admission(admission=decision).response_fields == {}
 
 
 def test_resolve_execution_admission_formats_discord_missing_ready_label_detail() -> None:
@@ -67,7 +66,7 @@ def test_resolve_execution_admission_formats_discord_missing_ready_label_detail(
         )
     )
     assert decision.reason is ExecutionAdmissionReason.MISSING_READY_LABEL
-    assert format_discord_admission_conflict_detail(admission=decision) == "Guidance (agent:ready)"
+    assert present_discord_admission_conflict(admission=decision).detail == "Guidance (agent:ready)"
 
 
 def test_jira_admission_response_fields_do_not_use_fallback_ready_label() -> None:
@@ -77,7 +76,7 @@ def test_jira_admission_response_fields_do_not_use_fallback_ready_label() -> Non
             reason_code="missing_ready_label",
         )
     )
-    assert build_jira_admission_response_fields(admission=decision) == {
+    assert present_jira_admission(admission=decision).response_fields == {
         "reason": "missing_ready_label",
         "guidance": "Guidance",
         "ready_label": "agent:ready",
@@ -91,4 +90,4 @@ def test_jira_admission_notification_detail_includes_decision_gate_reason_marker
             reason_code="decision_gate_required",
         )
     )
-    assert build_jira_admission_notification_detail(admission=decision) == "decision_gate_reason=detail"
+    assert present_jira_admission(admission=decision).notification_detail == "decision_gate_reason=detail"

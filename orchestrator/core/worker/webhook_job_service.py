@@ -10,7 +10,7 @@ from orchestrator.api.commands.entrypoint import execute_tenant_discord_ingress_
 from orchestrator.api.discord.interactions.application import build_default_discord_interaction_dispatch_deps
 from orchestrator.api.discord.interactions.dispatcher import dispatch_discord_interaction
 from orchestrator.api.discord.shared.state import command_matches
-from orchestrator.api.jira_oauth.connection_service import tenant_jira_oauth_context
+from orchestrator.api.atlassian_oauth.connection_service import tenant_atlassian_oauth_context
 from orchestrator.api.schemas import DiscordCommandRequest
 from orchestrator.api.transport_runtime import (
     build_http_transport_action_executors,
@@ -37,12 +37,13 @@ from orchestrator.core.communications import (
 )
 from orchestrator.core.deployment_runtime import ingest_coolify_deployment_event
 from orchestrator.core.github.transport_executor import GitHubTransportExecutor
-from orchestrator.core.project_automation_execution_service import (
+from orchestrator.core.projects.automation_execution_service import (
     mark_project_automation_execution_failure,
     mark_project_automation_execution_success,
     prepare_project_automation_execution,
 )
-from orchestrator.core.webhook_job_queue import (
+from orchestrator.core.webhooks.job_errors import RetryableWebhookJobError
+from orchestrator.core.webhooks.job_queue import (
     WEBHOOK_TRANSPORT_COOLIFY_DEPLOYMENT,
     WEBHOOK_TRANSPORT_DISCORD_COMMAND,
     WEBHOOK_TRANSPORT_DISCORD_INTERACTION,
@@ -50,16 +51,21 @@ from orchestrator.core.webhook_job_queue import (
     WEBHOOK_TRANSPORT_JIRA,
     WEBHOOK_TRANSPORT_PROJECT_AUTOMATION,
     WebhookJob,
-    claim_next_webhook_job,
-    claim_pending_jobs_for_subject,
+    claim_next_webhook_subject_batch,
     mark_webhook_job_ids_failed,
     mark_webhook_jobs_done,
     mark_webhook_jobs_failed,
+    requeue_webhook_job_ids,
 )
 from orchestrator.core.config import Settings
 from orchestrator.storage.models import Project, Tenant
 
 logger = logging.getLogger(__name__)
+
+_TEMPORAL_WRAPPER_ERROR_MESSAGES = {
+    "Workflow update failed",
+    "Activity task failed",
+}
 
 
 def _process_coolify_deployment_job(
@@ -91,15 +97,31 @@ def _process_coolify_deployment_job(
         return mark_webhook_jobs_done(session, jobs=(claimed_job,), owner_id=owner_id)
 
     context_json = dict(claimed_job.context_json or {})
-    payload_json = dict(claimed_job.payload_json or {})
     ingest_coolify_deployment_event(
         session=session,
         tenant_id=tenant.tenant_id,
         project_id=project.project_id,
         webhook_token=str(context_json.get("webhook_token") or "").strip(),
-        payload=payload_json,
+        payload=dict(claimed_job.payload_json or {}),
     )
     return mark_webhook_jobs_done(session, jobs=(claimed_job,), owner_id=owner_id)
+
+
+def _webhook_failure_message(error: Exception) -> str:
+    messages: list[str] = []
+    current: BaseException | None = error
+    seen: set[int] = set()
+    while current is not None and id(current) not in seen:
+        seen.add(id(current))
+        message = str(current).strip()
+        if message:
+            messages.append(message)
+        current = current.__cause__ or current.__context__
+    for message in reversed(messages):
+        if message not in _TEMPORAL_WRAPPER_ERROR_MESSAGES:
+            return message
+    return messages[0] if messages else error.__class__.__name__
+
 
 def _rollback_job_session(
     session: Session,
@@ -134,7 +156,7 @@ def _non_http_ingress_result(result: IngressResult) -> IngressResult:
 
 
 def _refresh_jira_context_from_live_issue(*, context, session, settings) -> None:  # noqa: ANN001
-    oauth = tenant_jira_oauth_context(session=session, tenant=context.tenant, settings=settings)
+    oauth = tenant_atlassian_oauth_context(session=session, tenant=context.tenant, settings=settings)
     issue_detail = oauth.client.get_issue_detail(
         access_token=oauth.access_token,
         cloud_id=oauth.connection.cloud_id,
@@ -495,52 +517,36 @@ def process_next_webhook_job(
     settings: Settings,
     owner_id: str,
 ) -> WebhookJob | None:
-    claim = claim_next_webhook_job(
+    claim = claim_next_webhook_subject_batch(
         session,
         owner_id=owner_id,
     )
-    if not claim.acquired or claim.job is None:
+    if not claim.acquired or claim.batch is None:
         return None
 
-    job = claim.job
+    batch = claim.batch
+    job = batch.primary_job
     job_transport = str(job.transport)
     job_tenant_id = str(job.tenant_id)
     job_subject_key = str(job.subject_key)
     job_id = str(job.job_id)
-    failed_job_ids: tuple[str, ...] = (job_id,)
-    additional_jobs: tuple[WebhookJob, ...] = ()
+    failed_job_ids = batch.job_ids
     try:
         if job.transport == WEBHOOK_TRANSPORT_JIRA:
-            additional_jobs = claim_pending_jobs_for_subject(
-                session,
-                transport=WEBHOOK_TRANSPORT_JIRA,
-                subject_key=job.subject_key,
-                owner_id=owner_id,
-                exclude_job_id=job.job_id,
-            )
-            failed_job_ids = (job_id, *(str(item.job_id) for item in additional_jobs))
             processed = _process_jira_subject_jobs(
                 session=session,
                 settings=settings,
                 owner_id=owner_id,
                 claimed_job=job,
-                related_jobs=additional_jobs,
+                related_jobs=batch.related_jobs,
             )
         elif job.transport == WEBHOOK_TRANSPORT_GITHUB:
-            additional_jobs = claim_pending_jobs_for_subject(
-                session,
-                transport=WEBHOOK_TRANSPORT_GITHUB,
-                subject_key=job.subject_key,
-                owner_id=owner_id,
-                exclude_job_id=job.job_id,
-            )
-            failed_job_ids = (job_id, *(str(item.job_id) for item in additional_jobs))
             processed = _process_github_subject_jobs(
                 session=session,
                 settings=settings,
                 owner_id=owner_id,
                 claimed_job=job,
-                related_jobs=additional_jobs,
+                related_jobs=batch.related_jobs,
             )
         elif job.transport == WEBHOOK_TRANSPORT_PROJECT_AUTOMATION:
             processed = _process_project_automation_job(
@@ -598,6 +604,31 @@ def process_next_webhook_job(
             error=str(exc.detail),
         )
         return failed_jobs[0] if failed_jobs else None
+    except RetryableWebhookJobError as exc:
+        _rollback_job_session(
+            session,
+            job_transport=job_transport,
+            job_tenant_id=job_tenant_id,
+            job_subject_key=job_subject_key,
+            job_id=job_id,
+        )
+        logger.warning(
+            "webhook_job_requeued transport=%s tenant_id=%s subject_key=%s job_id=%s retry_after_seconds=%s error=%s",
+            job_transport,
+            job_tenant_id,
+            job_subject_key,
+            job_id,
+            exc.retry_after_seconds,
+            str(exc),
+        )
+        requeued_jobs = requeue_webhook_job_ids(
+            session,
+            job_ids=failed_job_ids,
+            owner_id=owner_id,
+            error=str(exc),
+            retry_after_seconds=exc.retry_after_seconds,
+        )
+        return requeued_jobs[0] if requeued_jobs else None
     except Exception as exc:  # noqa: BLE001
         _rollback_job_session(
             session,
@@ -612,12 +643,12 @@ def process_next_webhook_job(
             job_tenant_id,
             job_subject_key,
             job_id,
-            exc,
+            _webhook_failure_message(exc),
         )
         failed_jobs = mark_webhook_job_ids_failed(
             session,
             job_ids=failed_job_ids,
             owner_id=owner_id,
-            error=str(exc),
+            error=_webhook_failure_message(exc),
         )
         return failed_jobs[0] if failed_jobs else None

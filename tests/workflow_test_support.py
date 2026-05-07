@@ -1,8 +1,17 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from uuid import uuid4
 
+from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 from orchestrator.storage.models import Run, RunHumanInputRequest, WorkflowCheckpoint, WorkflowExecution
+
+
+def _public_execution_id(*, run_id: str) -> str:
+    normalized_run_id = str(run_id or "").strip()
+    if normalized_run_id:
+        return f"exec-{normalized_run_id}"
+    return uuid4().hex
 
 
 def make_run(
@@ -74,11 +83,13 @@ def add_run_with_workflow(
     session,
     run: Run,
     *,
+    workflow_type_key: str = "issue_execution",
     workflow_status: str | None = None,
+    orchestration_backend: str = "legacy",
     latest_checkpoint: WorkflowCheckpoint | None = None,
     source_workflow_id: str | None = None,
     source_run_id: str | None = None,
-    blocked_reason: str | None = None,
+    failure_reason: str | None = None,
 ) -> WorkflowExecution:
     if not run.workflow_id:
         run.workflow_id = f"workflow-{run.run_id}"
@@ -93,22 +104,25 @@ def add_run_with_workflow(
     active_run_id = run.run_id if effective_workflow_status in {"queued", "dispatching", "running", "waiting_for_input"} else None
     workflow = WorkflowExecution(
         workflow_id=run.workflow_id,
+        execution_id=_public_execution_id(run_id=run.run_id),
+        workflow_type_key=workflow_type_key,
         tenant_id=run.tenant_id,
         project_id=run.project_id,
-        issue_key=run.issue_key,
-        issue_summary=run.issue_summary,
-        issue_description=run.issue_description,
+        source_system="jira",
+        source_ref=run.issue_key,
+        display_name=run.issue_summary,
+        source_description=run.issue_description,
         repo_url=run.repo_url,
         branch=run.branch,
         pr_url=run.pr_url,
+        orchestration_backend=orchestration_backend,
         dedupe_scope=run.dedupe_scope,
         status=effective_workflow_status,
-        last_error=run.last_error,
+        last_error=failure_reason if failure_reason is not None else run.last_error,
         active_run_id=active_run_id,
         latest_checkpoint_id=latest_checkpoint.checkpoint_id if latest_checkpoint is not None else None,
         source_workflow_id=source_workflow_id,
         source_run_id=source_run_id,
-        blocked_reason=blocked_reason if blocked_reason is not None else (run.last_error if effective_workflow_status == "blocked" else None),
         created_at=timestamp,
         started_at=run.started_at,
         finished_at=run.finished_at if effective_workflow_status in {"succeeded", "failed", "cancelled"} else None,
@@ -124,6 +138,7 @@ def add_run_with_workflow(
 def add_workflow_attempt(
     session,
     *,
+    workflow_type_key: str = "issue_execution",
     workflow_id: str | None = None,
     run_id: str,
     tenant_id: str,
@@ -135,6 +150,7 @@ def add_workflow_attempt(
     branch: str | None = None,
     pr_url: str | None = None,
     dedupe_scope: str = "issue_execution",
+    orchestration_backend: str = "legacy",
     workflow_status: str = "queued",
     run_status: str = "queued",
     attempt_number: int = 1,
@@ -146,7 +162,7 @@ def add_workflow_attempt(
     checkpoint_stage: str | None = None,
     checkpoint_payload: dict | None = None,
     checkpoint_session_id: str | None = None,
-    blocked_reason: str | None = None,
+    failure_reason: str | None = None,
     last_error: str | None = None,
     pre_check_outcome: str | None = None,
     required_worker_capability: str | None = None,
@@ -168,7 +184,7 @@ def add_workflow_attempt(
     normalized_workflow_id = workflow_id or f"workflow-{run_id}"
     workflow_started = started_at if started_at is not None else (timestamp if workflow_status not in {"queued", "dispatching"} else None)
     workflow_finished = finished_at if finished_at is not None else (
-        timestamp if workflow_status in {"succeeded", "failed", "cancelled"} else None
+        timestamp if workflow_status in {"succeeded", "failed", "cancelled", "blocked"} else None
     )
     run_started = started_at if started_at is not None else (timestamp if run_status not in {"queued", "dispatching"} else None)
     run_finished = finished_at if finished_at is not None else (
@@ -176,22 +192,25 @@ def add_workflow_attempt(
     )
     workflow = WorkflowExecution(
         workflow_id=normalized_workflow_id,
+        execution_id=_public_execution_id(run_id=run_id),
+        workflow_type_key=workflow_type_key,
         tenant_id=tenant_id,
         project_id=project_id,
-        issue_key=issue_key,
-        issue_summary=issue_summary,
-        issue_description=issue_description,
+        source_system="jira",
+        source_ref=issue_key,
+        display_name=issue_summary,
+        source_description=issue_description,
         repo_url=repo_url,
         branch=branch,
         pr_url=pr_url,
+        orchestration_backend=orchestration_backend,
         dedupe_scope=dedupe_scope,
-        status=workflow_status,
+        status="failed" if workflow_status == "blocked" else workflow_status,
         last_error=last_error,
-        active_run_id=run_id if workflow_status in {"queued", "dispatching", "running", "waiting_for_input", "blocked"} else None,
+        active_run_id=run_id if workflow_status in {"queued", "dispatching", "running", "waiting_for_input"} else None,
         latest_checkpoint_id=entry_checkpoint_id,
         source_workflow_id=source_workflow_id,
         source_run_id=source_run_id,
-        blocked_reason=blocked_reason,
         created_at=created_at or timestamp,
         started_at=workflow_started,
         finished_at=workflow_finished,
@@ -230,13 +249,16 @@ def add_workflow_attempt(
     )
     checkpoint = None
     if entry_checkpoint_id and checkpoint_kind:
+        effective_checkpoint_payload = checkpoint_payload
+        if effective_checkpoint_payload is None:
+            effective_checkpoint_payload = ExecutionSnapshot.empty().dump()
         checkpoint = WorkflowCheckpoint(
             checkpoint_id=entry_checkpoint_id,
             workflow_id=normalized_workflow_id,
             run_id=run_id,
             checkpoint_kind=checkpoint_kind,
             stage=checkpoint_stage or entry_stage,
-            payload_json=dict(checkpoint_payload or {}),
+            payload_json=dict(effective_checkpoint_payload),
             codex_session_id=checkpoint_session_id,
             created_at=timestamp,
             updated_at=timestamp,

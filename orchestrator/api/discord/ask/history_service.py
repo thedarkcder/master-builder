@@ -3,7 +3,7 @@ from __future__ import annotations
 from collections.abc import Callable
 from datetime import datetime, timezone
 
-from orchestrator.core.decision_types import JiraConfigKey, tenant_jira_config_text
+from orchestrator.core.decision.types import JiraConfigKey, tenant_jira_config_text
 
 
 class DiscordAskHistoryService:

@@ -29,9 +29,9 @@ from orchestrator.api.schemas import (
 from orchestrator.core.deployment_host_queue import (
     claim_next_deployment_host_command,
     complete_deployment_host_command,
-    fail_stale_running_deployment_host_commands,
     start_deployment_host_command,
 )
+from orchestrator.core.deployment_host_recovery import fail_stale_running_restore_commands
 from orchestrator.core.config import get_settings
 from orchestrator.core.security import DeploymentHostPrincipal, require_deployment_host_agent
 from orchestrator.storage.models import DeploymentHostCommand
@@ -81,15 +81,7 @@ def claim_host_command(
     host: DeploymentHostPrincipal = Depends(require_deployment_host_agent),
     session: Session = Depends(get_session),
 ) -> DeploymentHostCommandClaimRead:
-    stale_commands = fail_stale_running_deployment_host_commands(session=session, host_id=host.host_id)
-    for stale_command in stale_commands:
-        if stale_command.kind == "restore_database" and stale_command.restore_run_id:
-            complete_project_deployment_restore_run(
-                session=session,
-                restore_run_id=stale_command.restore_run_id,
-                status="failed",
-                last_error=stale_command.last_error,
-            )
+    fail_stale_running_restore_commands(session=session, host_id=host.host_id)
     command = claim_next_deployment_host_command(session=session, host_id=host.host_id)
     if command is None:
         session.commit()

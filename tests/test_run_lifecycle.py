@@ -5,10 +5,11 @@ from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
 from orchestrator.core.config import get_settings
-from orchestrator.core.runs import (
+from orchestrator.core.runs.service import (
     RUN_DEDUPE_SCOPE_ISSUE_EXECUTION,
     RUN_DEDUPE_SCOPE_PR_REMEDIATION,
     RUN_STATUS_BLOCKED,
+    RUN_STATUS_FAILED,
     RUN_STATUS_SUCCEEDED,
     RunBootstrap,
     RunStateTransitionError,
@@ -86,14 +87,27 @@ class RunLifecycleTests(unittest.TestCase):
     def _get_workflow(self, session, *, issue_key: str, dedupe_scope: str = RUN_DEDUPE_SCOPE_ISSUE_EXECUTION):
         return session.query(WorkflowExecution).filter_by(
             tenant_id="tenant-runs",
-            issue_key=issue_key,
+            source_system="jira",
+            source_ref=issue_key,
             dedupe_scope=dedupe_scope,
         ).one_or_none()
 
     def test_enqueue_is_idempotent_for_active_issue(self) -> None:
         with self.session_factory() as session:
-            first = enqueue_run(session, tenant_id="tenant-runs", project_id=None, issue_key="TP-901")
-            second = enqueue_run(session, tenant_id="tenant-runs", project_id=None, issue_key="TP-901")
+            first = enqueue_run(
+                session,
+                tenant_id="tenant-runs",
+                project_id=None,
+                issue_key="TP-901",
+                precheck_outcome="ready_for_agent",
+            )
+            second = enqueue_run(
+                session,
+                tenant_id="tenant-runs",
+                project_id=None,
+                issue_key="TP-901",
+                precheck_outcome="ready_for_agent",
+            )
 
             self.assertTrue(first.enqueued)
             self.assertFalse(second.enqueued)
@@ -114,6 +128,7 @@ class RunLifecycleTests(unittest.TestCase):
                 project_id=None,
                 issue_key="TP-907",
                 dedupe_scope=RUN_DEDUPE_SCOPE_ISSUE_EXECUTION,
+                precheck_outcome="ready_for_agent",
             )
             remediation_run = enqueue_run(
                 session,
@@ -121,6 +136,7 @@ class RunLifecycleTests(unittest.TestCase):
                 project_id=None,
                 issue_key="TP-907",
                 dedupe_scope=RUN_DEDUPE_SCOPE_PR_REMEDIATION,
+                precheck_outcome="ready_for_agent",
             )
 
             self.assertTrue(issue_run.enqueued)
@@ -145,6 +161,7 @@ class RunLifecycleTests(unittest.TestCase):
                 project_id=None,
                 issue_key="TP-902",
                 delivery_id="delivery-xyz",
+                precheck_outcome="ready_for_agent",
             )
             second = enqueue_run(
                 session,
@@ -152,6 +169,7 @@ class RunLifecycleTests(unittest.TestCase):
                 project_id=None,
                 issue_key="TP-902",
                 delivery_id="delivery-xyz",
+                precheck_outcome="ready_for_agent",
             )
 
             self.assertTrue(first.enqueued)
@@ -167,6 +185,7 @@ class RunLifecycleTests(unittest.TestCase):
                 project_id=None,
                 issue_key="TP-910",
                 max_concurrent_runs=1,
+                precheck_outcome="ready_for_agent",
             )
             second = enqueue_run(
                 session,
@@ -174,6 +193,7 @@ class RunLifecycleTests(unittest.TestCase):
                 project_id=None,
                 issue_key="TP-911",
                 max_concurrent_runs=1,
+                precheck_outcome="ready_for_agent",
             )
 
             self.assertTrue(first.enqueued)
@@ -183,7 +203,13 @@ class RunLifecycleTests(unittest.TestCase):
 
     def test_running_to_success_updates_workflow_and_persists_timestamps(self) -> None:
         with self.session_factory() as session:
-            enqueue = enqueue_run(session, tenant_id="tenant-runs", project_id=None, issue_key="TP-903")
+            enqueue = enqueue_run(
+                session,
+                tenant_id="tenant-runs",
+                project_id=None,
+                issue_key="TP-903",
+                precheck_outcome="ready_for_agent",
+            )
             running = mark_run_running(session, run_id=enqueue.run.run_id)
             self.assertEqual(running.status, "running")
             self.assertIsNotNone(running.started_at)
@@ -204,9 +230,15 @@ class RunLifecycleTests(unittest.TestCase):
             self.assertEqual(workflow.active_run_id, enqueue.run.run_id)
             self.assertIsNotNone(workflow.finished_at)
 
-    def test_failure_path_marks_blocked_without_finishing_workflow(self) -> None:
+    def test_failure_path_marks_failed_workflow_and_persists_error(self) -> None:
         with self.session_factory() as session:
-            enqueue = enqueue_run(session, tenant_id="tenant-runs", project_id=None, issue_key="TP-904")
+            enqueue = enqueue_run(
+                session,
+                tenant_id="tenant-runs",
+                project_id=None,
+                issue_key="TP-904",
+                precheck_outcome="ready_for_agent",
+            )
             mark_run_running(session, run_id=enqueue.run.run_id)
             blocked = mark_run_terminal(
                 session,
@@ -221,13 +253,19 @@ class RunLifecycleTests(unittest.TestCase):
 
             workflow = self._get_workflow(session, issue_key="TP-904")
             assert workflow is not None
-            self.assertEqual(workflow.status, RUN_STATUS_BLOCKED)
-            self.assertEqual(workflow.blocked_reason, "jira label mutation failed")
-            self.assertIsNone(workflow.finished_at)
+            self.assertEqual(workflow.status, RUN_STATUS_FAILED)
+            self.assertEqual(workflow.last_error, "jira label mutation failed")
+            self.assertIsNotNone(workflow.finished_at)
 
     def test_invalid_state_transition_is_rejected(self) -> None:
         with self.session_factory() as session:
-            enqueue = enqueue_run(session, tenant_id="tenant-runs", project_id=None, issue_key="TP-905")
+            enqueue = enqueue_run(
+                session,
+                tenant_id="tenant-runs",
+                project_id=None,
+                issue_key="TP-905",
+                precheck_outcome="ready_for_agent",
+            )
             mark_run_terminal(
                 session,
                 run_id=enqueue.run.run_id,
@@ -237,16 +275,68 @@ class RunLifecycleTests(unittest.TestCase):
             with self.assertRaises(RunStateTransitionError):
                 mark_run_running(session, run_id=enqueue.run.run_id)
 
+    def test_worker_terminal_transition_requires_owner_and_claim(self) -> None:
+        with self.session_factory() as session:
+            enqueue = enqueue_run(
+                session,
+                tenant_id="tenant-runs",
+                project_id=None,
+                issue_key="TP-912",
+                precheck_outcome="ready_for_agent",
+            )
+            run = mark_run_running(session, run_id=enqueue.run.run_id)
+            run.worker_service_instance_id = "worker-a"
+            run.claim_id = "claim-a"
+            session.commit()
+
+            with self.assertRaises(RunStateTransitionError):
+                mark_run_terminal(
+                    session,
+                    run_id=enqueue.run.run_id,
+                    terminal_status=RUN_STATUS_FAILED,
+                    expected_worker_service_instance_id="worker-b",
+                    expected_claim_id="claim-a",
+                )
+            with self.assertRaises(RunStateTransitionError):
+                mark_run_terminal(
+                    session,
+                    run_id=enqueue.run.run_id,
+                    terminal_status=RUN_STATUS_FAILED,
+                    expected_worker_service_instance_id="worker-a",
+                    expected_claim_id="claim-b",
+                )
+
+            completed = mark_run_terminal(
+                session,
+                run_id=enqueue.run.run_id,
+                terminal_status=RUN_STATUS_SUCCEEDED,
+                expected_worker_service_instance_id="worker-a",
+                expected_claim_id="claim-a",
+            )
+            self.assertEqual(completed.status, RUN_STATUS_SUCCEEDED)
+
     def test_enqueue_creates_new_workflow_after_terminal_run(self) -> None:
         with self.session_factory() as session:
-            first = enqueue_run(session, tenant_id="tenant-runs", project_id=None, issue_key="TP-906")
+            first = enqueue_run(
+                session,
+                tenant_id="tenant-runs",
+                project_id=None,
+                issue_key="TP-906",
+                precheck_outcome="ready_for_agent",
+            )
             mark_run_terminal(
                 session,
                 run_id=first.run.run_id,
                 terminal_status=RUN_STATUS_SUCCEEDED,
             )
 
-            second = enqueue_run(session, tenant_id="tenant-runs", project_id=None, issue_key="TP-906")
+            second = enqueue_run(
+                session,
+                tenant_id="tenant-runs",
+                project_id=None,
+                issue_key="TP-906",
+                precheck_outcome="ready_for_agent",
+            )
             self.assertTrue(second.enqueued)
             self.assertNotEqual(second.run.run_id, first.run.run_id)
             self.assertNotEqual(second.run.workflow_id, first.run.workflow_id)
@@ -254,11 +344,10 @@ class RunLifecycleTests(unittest.TestCase):
     def test_enqueue_applies_bootstrap_before_queue_notification(self) -> None:
         observed: dict[str, object] = {}
 
-        def capture_notification(session, *, tenant_id: str, project_id: str | None, run_id: str, issue_key: str):  # noqa: ANN001
+        def capture_notification(session, *, tenant_id: str, project_id: str | None, run_id: str):  # noqa: ANN001
             observed["tenant_id"] = tenant_id
             observed["project_id"] = project_id
             observed["run_id"] = run_id
-            observed["issue_key"] = issue_key
             staged_run = next(item for item in session.new if isinstance(item, Run))
             observed["plan"] = dict(staged_run.plan or {})
             observed["branch"] = staged_run.branch
@@ -268,7 +357,7 @@ class RunLifecycleTests(unittest.TestCase):
             observed["entry_checkpoint_id"] = staged_run.entry_checkpoint_id
 
         with self.session_factory() as session:
-            with patch("orchestrator.core.runs.notify_run_enqueued", side_effect=capture_notification):
+            with patch("orchestrator.core.runs.service.notify_run_enqueued", side_effect=capture_notification):
                 result = enqueue_run(
                     session,
                     tenant_id="tenant-runs",
@@ -292,7 +381,6 @@ class RunLifecycleTests(unittest.TestCase):
         self.assertTrue(result.enqueued)
         self.assertEqual(observed["tenant_id"], "tenant-runs")
         self.assertEqual(observed["project_id"], "tenant-runs-default")
-        self.assertEqual(observed["issue_key"], "TP-912")
         self.assertEqual(observed["run_id"], result.run.run_id)
         self.assertEqual(observed["branch"], "feature/TP-912")
         self.assertEqual(observed["pr_url"], "https://github.com/example/repo/pull/12")
@@ -334,14 +422,17 @@ class RunLifecycleTests(unittest.TestCase):
         with self.session_factory() as session:
             workflow = WorkflowExecution(
                 workflow_id="workflow-non-ready",
+                workflow_type_key="issue_execution",
                 tenant_id="tenant-runs",
                 project_id=None,
-                issue_key="TP-913",
-                issue_summary="resume test",
-                issue_description="desc",
+                source_system="jira",
+                source_ref="TP-913",
+                display_name="resume test",
+                source_description="desc",
                 repo_url=None,
                 branch=None,
                 pr_url=None,
+                orchestration_backend="temporal",
                 dedupe_scope=RUN_DEDUPE_SCOPE_ISSUE_EXECUTION,
                 status="waiting_for_input",
                 last_error=None,
@@ -349,7 +440,6 @@ class RunLifecycleTests(unittest.TestCase):
                 latest_checkpoint_id=None,
                 source_workflow_id=None,
                 source_run_id=None,
-                blocked_reason=None,
                 created_at=now,
                 started_at=now,
                 finished_at=None,

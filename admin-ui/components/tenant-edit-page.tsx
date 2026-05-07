@@ -6,41 +6,41 @@ import { useEffect, useMemo, useState } from "react";
 import { KeyRound, Link2 } from "lucide-react";
 
 import { useAuth } from "@/components/auth-provider";
-import { ProjectsManager } from "@/components/projects-manager";
+import { TenantAtlassianSettings } from "@/components/tenant-atlassian-settings";
+import { TenantDiscordSettings } from "@/components/tenant-discord-settings";
 import { TenantForm } from "@/components/tenant-form";
+import { TenantObservabilitySettings } from "@/components/tenant-observability-settings";
+import { TenantProjectsSettings } from "@/components/tenant-projects-settings";
 import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useToast } from "@/components/ui/toast-provider";
 import {
+  type AdminNotificationRecord,
   archiveTenant,
-  disconnectJira,
   listCodexModels,
   getTenant,
   getJiraWebhookDiagnostics,
-  listJiraProjects,
-  listProjects,
-  listGitHubRepositories,
+  listTenantNotifications,
   previewReadyGate,
-  provisionJiraWebhook,
-  type GitHubRepositoryRecord,
   type ReadyGatePreviewRecord,
   type JiraWebhookDiagnosticsRecord,
-  startJiraConnect,
+  startAtlassianConnect,
   startDiscordInstall,
   startGitHubInstall,
-  resetJiraWebhook,
   testGithub,
-  testJira,
+  testAtlassian,
   unarchiveTenant,
-  createProject,
-  updateTenant,
-  updateProject,
+  updateTenantConfiguration,
+  updateTenantDiscord,
+  updateTenantGithub,
+  updateTenantPolicy,
   type TenantRecord,
-  type TenantUpdatePayload,
-  type JiraProjectRecord,
-  type ProjectCreatePayload,
-  type ProjectRecord,
-  type ProjectUpdatePayload
+  type TenantConfigurationUpdatePayload,
+  type TenantDiscordUpdatePayload,
+  type TenantGithubUpdatePayload,
+  type TenantPolicyUpdatePayload,
 } from "@/lib/api";
 import { canAccessPlatformAdmin, getTenantArchiveConfirmationRoute, getTenantSettingsRoute } from "@/lib/auth-routing";
 import { recordToFormValues } from "@/lib/tenant-form";
@@ -48,12 +48,12 @@ import { cn } from "@/lib/utils";
 
 type TenantEditSection =
   | "setup"
-  | "integrations"
-  | "jira"
+  | "atlassian"
   | "github"
   | "discord"
   | "health"
   | "config"
+  | "observability"
   | "projects"
   | "notifications"
   | "danger";
@@ -63,6 +63,7 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
   const params = useParams<{ tenantId: string }>();
   const searchParams = useSearchParams();
   const { credentials, principal, ready } = useAuth();
+  const { showToast } = useToast();
   const isPlatformAdmin = canAccessPlatformAdmin(principal);
 
   const [tenant, setTenant] = useState<TenantRecord | null>(null);
@@ -71,24 +72,14 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
   const [statusLine, setStatusLine] = useState("");
   const [readyPreview, setReadyPreview] = useState<ReadyGatePreviewRecord | null>(null);
   const [jiraWebhook, setJiraWebhook] = useState<JiraWebhookDiagnosticsRecord | null>(null);
-  const [jiraWebhookBusy, setJiraWebhookBusy] = useState(false);
-  const [githubRepositories, setGithubRepositories] = useState<GitHubRepositoryRecord[]>([]);
+  const [notifications, setNotifications] = useState<AdminNotificationRecord[]>([]);
   const [codexModels, setCodexModels] = useState<{ id: string; label: string; description?: string | null }[]>([]);
   const [globalCodexModel, setGlobalCodexModel] = useState("");
   const [reasoningEfforts, setReasoningEfforts] = useState<{ id: string; label: string; description?: string | null }[]>([]);
   const [globalCodexReasoningEffort, setGlobalCodexReasoningEffort] = useState("");
-  const [repositoriesLoading, setRepositoriesLoading] = useState(false);
-  const [jiraProjects, setJiraProjects] = useState<JiraProjectRecord[]>([]);
-  const [projects, setProjects] = useState<ProjectRecord[]>([]);
-  const [projectsBusy, setProjectsBusy] = useState(false);
   const [archiveBusy, setArchiveBusy] = useState(false);
   const [archiveConfirmationName, setArchiveConfirmationName] = useState("");
   const [showArchiveConfirm, setShowArchiveConfirm] = useState(false);
-  const [discordEnabled, setDiscordEnabled] = useState(false);
-  const [discordServerId, setDiscordServerId] = useState("");
-  const [discordOnboardingChannelId, setDiscordOnboardingChannelId] = useState("");
-  const [discordInviteExpirySeconds, setDiscordInviteExpirySeconds] = useState("86400");
-  const [discordInviteMaxUses, setDiscordInviteMaxUses] = useState("1");
 
   const statusClasses = useMemo(() => {
     const normalized = statusLine.toLowerCase();
@@ -111,24 +102,16 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
     }
   }
 
-  async function loadGitHubRepositories({ silent = false }: { silent?: boolean } = {}) {
+  async function loadNotifications() {
     if (!credentials) {
+      setNotifications([]);
       return;
     }
-    setRepositoriesLoading(true);
     try {
-      const repos = await listGitHubRepositories(credentials, params.tenantId);
-      setGithubRepositories(repos);
-      if (!silent) {
-        setStatusLine(`Loaded ${repos.length} repository option(s) from GitHub installation.`);
-      }
-    } catch {
-      setGithubRepositories([]);
-      if (!silent) {
-        setStatusLine("Unable to load repositories from GitHub installation.");
-      }
-    } finally {
-      setRepositoriesLoading(false);
+      const payload = await listTenantNotifications(credentials, params.tenantId);
+      setNotifications(payload.notifications);
+    } catch (error) {
+      setStatusLine(`Failed to load notifications: ${(error as Error).message}`);
     }
   }
 
@@ -141,7 +124,7 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
       const payload = await getTenant(credentials, params.tenantId);
       setTenant(payload);
 
-      if (isPlatformAdmin) {
+      if (isPlatformAdmin && section === "config") {
         try {
           const modelCatalog = await listCodexModels(credentials, { profileName: "engineering_execution" });
           setCodexModels(modelCatalog.models);
@@ -161,18 +144,12 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
         setGlobalCodexReasoningEffort("");
       }
 
-      setDiscordEnabled(Boolean(payload.discord));
-      setDiscordServerId(payload.discord?.guild_id ?? "");
-      setDiscordOnboardingChannelId(payload.discord?.onboarding_channel_id ?? "");
-      setDiscordInviteExpirySeconds(String(payload.discord?.onboarding_invite_expires_in_seconds ?? 86400));
-      setDiscordInviteMaxUses(String(payload.discord?.onboarding_invite_max_uses ?? 1));
-      if (isPlatformAdmin && (section === "jira" || section === "notifications")) {
-        await loadJiraWebhookDiagnostics();
+      if (isPlatformAdmin && section === "notifications") {
+        await Promise.all([loadJiraWebhookDiagnostics(), loadNotifications()]);
       } else {
         setJiraWebhook(null);
+        setNotifications([]);
       }
-      const loadedProjects = await listProjects(credentials, params.tenantId);
-      setProjects(loadedProjects);
     } catch (error) {
       setStatusLine(`Failed to load tenant: ${(error as Error).message}`);
     } finally {
@@ -193,22 +170,54 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
     if (searchParams.get("discord_install") === "success") {
       setStatusLine("Discord bot install callback received. Confirm the onboarding channel and invite settings, then save.");
     }
-    if (searchParams.get("jira_oauth") === "success") {
-      setStatusLine("Jira OAuth callback received. Update project keys if needed, then save.");
+    if (searchParams.get("atlassian_oauth") === "success") {
+      setStatusLine("Atlassian callback received. Update project keys if needed, then save.");
     }
   }, [searchParams]);
 
-  async function handleSave(payload: TenantUpdatePayload): Promise<void> {
-    if (!credentials) {
+  async function saveTenantConfiguration(payload: TenantConfigurationUpdatePayload): Promise<void> {
+    if (!credentials || !tenant) {
       return;
     }
     setSaving(true);
     try {
-      const updated = await updateTenant(credentials, params.tenantId, payload);
+      const updated = await updateTenantConfiguration(credentials, params.tenantId, payload);
       setTenant(updated);
-      setStatusLine(`Saved ${updated.tenant_id}.`);
+      showToast({ title: "Workspace configuration saved", description: updated.tenant_id, tone: "success" });
     } catch (error) {
-      setStatusLine(`Save failed: ${(error as Error).message}`);
+      showToast({ title: "Workspace configuration save failed", description: (error as Error).message, tone: "error" });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function saveTenantGithub(payload: TenantGithubUpdatePayload): Promise<void> {
+    if (!credentials || !tenant) {
+      return;
+    }
+    setSaving(true);
+    try {
+      const updated = await updateTenantGithub(credentials, params.tenantId, payload);
+      setTenant(updated);
+      showToast({ title: "GitHub settings saved", description: updated.tenant_id, tone: "success" });
+    } catch (error) {
+      showToast({ title: "GitHub settings save failed", description: (error as Error).message, tone: "error" });
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function saveTenantPolicy(payload: TenantPolicyUpdatePayload): Promise<void> {
+    if (!credentials || !tenant) {
+      return;
+    }
+    setSaving(true);
+    try {
+      const updated = await updateTenantPolicy(credentials, params.tenantId, payload);
+      setTenant(updated);
+      showToast({ title: "Tenant policy saved", description: updated.tenant_id, tone: "success" });
+    } catch (error) {
+      showToast({ title: "Tenant policy save failed", description: (error as Error).message, tone: "error" });
     } finally {
       setSaving(false);
     }
@@ -219,7 +228,7 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
       return;
     }
     try {
-      const jira = await testJira(credentials, params.tenantId);
+      const jira = await testAtlassian(credentials, params.tenantId);
       const github = await testGithub(credentials, params.tenantId);
       setStatusLine(
         `${params.tenantId}: Jira ${jira.ok ? "ok" : "fail"} (${jira.details}); GitHub ${github.ok ? "ok" : "fail"} (${github.details})`
@@ -244,7 +253,7 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
         ? await archiveTenant(credentials, tenant.tenant_id)
         : await unarchiveTenant(credentials, tenant.tenant_id);
       setTenant(updated);
-      setStatusLine(`Tenant ${action}d: ${updated.tenant_id}.`);
+      showToast({ title: `Tenant ${action}d`, description: updated.tenant_id, tone: "success" });
       if (!updated.is_enabled) {
         setArchiveConfirmationName("");
         router.push(
@@ -256,45 +265,23 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
       }
       setArchiveConfirmationName("");
     } catch (error) {
-      setStatusLine(`Unable to ${action} tenant: ${(error as Error).message}`);
+      showToast({ title: `Tenant ${action} failed`, description: (error as Error).message, tone: "error" });
     } finally {
       setArchiveBusy(false);
     }
   }
 
-  async function saveDiscordSettings() {
+  async function saveDiscordSettings(payload: TenantDiscordUpdatePayload) {
     if (!credentials || !tenant) {
       return;
     }
     setSaving(true);
     try {
-      const updated = await updateTenant(credentials, tenant.tenant_id, {
-        name: tenant.name,
-        is_enabled: tenant.is_enabled,
-        jira: tenant.jira,
-        github: tenant.github,
-        repos: tenant.repos,
-        policy: tenant.policy,
-        discord: discordEnabled
-          ? {
-              ...(tenant.discord ?? {}),
-              guild_id: discordServerId.trim() || null,
-              onboarding_channel_id: discordOnboardingChannelId.trim() || null,
-              onboarding_invite_expires_in_seconds: Number(discordInviteExpirySeconds || "0") || null,
-              onboarding_invite_max_uses: Number(discordInviteMaxUses || "0") || null,
-              notify_events: tenant.discord?.notify_events ?? [],
-            }
-          : null,
-      });
+      const updated = await updateTenantDiscord(credentials, tenant.tenant_id, payload);
       setTenant(updated);
-      setDiscordEnabled(Boolean(updated.discord));
-      setDiscordServerId(updated.discord?.guild_id ?? "");
-      setDiscordOnboardingChannelId(updated.discord?.onboarding_channel_id ?? "");
-      setDiscordInviteExpirySeconds(String(updated.discord?.onboarding_invite_expires_in_seconds ?? 86400));
-      setDiscordInviteMaxUses(String(updated.discord?.onboarding_invite_max_uses ?? 1));
-      setStatusLine("Discord tenant settings saved.");
+      showToast({ title: "Discord settings saved", tone: "success" });
     } catch (error) {
-      setStatusLine(`Unable to save Discord settings: ${(error as Error).message}`);
+      showToast({ title: "Discord settings save failed", description: (error as Error).message, tone: "error" });
     } finally {
       setSaving(false);
     }
@@ -342,114 +329,10 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
       return;
     }
     try {
-      const result = await startJiraConnect(credentials, { returnTo: "edit", tenantId: params.tenantId });
+      const result = await startAtlassianConnect(credentials, { returnTo: "edit", tenantId: params.tenantId });
       window.location.href = result.authorize_url;
     } catch (error) {
-      setStatusLine(`Unable to start Jira OAuth: ${(error as Error).message}`);
-    }
-  }
-
-  async function handleProvisionJiraWebhook() {
-    if (!credentials) {
-      return;
-    }
-    setJiraWebhookBusy(true);
-    try {
-      const result = await provisionJiraWebhook(credentials, params.tenantId);
-      setStatusLine(result.details);
-      await loadJiraWebhookDiagnostics();
-      await loadTenant();
-    } catch (error) {
-      setStatusLine(`Unable to provision Jira webhook: ${(error as Error).message}`);
-    } finally {
-      setJiraWebhookBusy(false);
-    }
-  }
-
-  async function handleResetJiraWebhook() {
-    if (!credentials) {
-      return;
-    }
-    setJiraWebhookBusy(true);
-    try {
-      const result = await resetJiraWebhook(credentials, params.tenantId);
-      setStatusLine(result.details);
-      await loadJiraWebhookDiagnostics();
-      await loadTenant();
-    } catch (error) {
-      setStatusLine(`Unable to reset Jira webhook: ${(error as Error).message}`);
-    } finally {
-      setJiraWebhookBusy(false);
-    }
-  }
-
-  async function handleDisconnectJira() {
-    if (!credentials) {
-      return;
-    }
-    setJiraWebhookBusy(true);
-    try {
-      const result = await disconnectJira(credentials, params.tenantId);
-      setStatusLine(result.details);
-      await loadJiraWebhookDiagnostics();
-      await loadTenant();
-    } catch (error) {
-      setStatusLine(`Unable to disconnect Jira: ${(error as Error).message}`);
-    } finally {
-      setJiraWebhookBusy(false);
-    }
-  }
-
-  async function refreshProjectSources() {
-    if (!credentials) {
-      return;
-    }
-    setProjectsBusy(true);
-    try {
-      await loadGitHubRepositories({ silent: true });
-      if (tenant?.jira.connection_id) {
-        const availableProjects = await listJiraProjects(credentials, tenant.jira.connection_id);
-        setJiraProjects(availableProjects);
-      }
-      setStatusLine("Project option sources refreshed.");
-    } catch (error) {
-      setStatusLine(`Unable to refresh project options: ${(error as Error).message}`);
-    } finally {
-      setProjectsBusy(false);
-    }
-  }
-
-  async function handleCreateProject(payload: ProjectCreatePayload) {
-    if (!credentials) {
-      return;
-    }
-    setProjectsBusy(true);
-    try {
-      await createProject(credentials, params.tenantId, payload);
-      const refreshed = await listProjects(credentials, params.tenantId);
-      setProjects(refreshed);
-      setStatusLine("Project created.");
-    } catch (error) {
-      setStatusLine(`Unable to create project: ${(error as Error).message}`);
-    } finally {
-      setProjectsBusy(false);
-    }
-  }
-
-  async function handleUpdateProject(projectId: string, payload: ProjectUpdatePayload) {
-    if (!credentials) {
-      return;
-    }
-    setProjectsBusy(true);
-    try {
-      await updateProject(credentials, params.tenantId, projectId, payload);
-      const refreshed = await listProjects(credentials, params.tenantId);
-      setProjects(refreshed);
-      setStatusLine(payload.is_archived ? "Project archived." : "Project updated.");
-    } catch (error) {
-      setStatusLine(`Unable to update project: ${(error as Error).message}`);
-    } finally {
-      setProjectsBusy(false);
+      setStatusLine(`Unable to start Atlassian: ${(error as Error).message}`);
     }
   }
 
@@ -512,6 +395,27 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
               ? `No webhook delivery within ${jiraWebhook.recent_delivery_window_minutes} minutes.`
               : "Webhook diagnostics are loading."
           };
+  const jiraReauthNotification =
+    notifications.find(
+      (notification) =>
+        notification.kind === "reauth_required" &&
+        notification.scope_type === "jira_connection" &&
+        notification.scope_id === tenant.jira.connection_id
+    ) ?? null;
+
+  function notificationBadgeVariant(notification: AdminNotificationRecord): "destructive" | "warning" | "info" | "outline" {
+    const severity = notification.severity.toUpperCase();
+    if (severity === "CRITICAL" || severity === "HIGH") {
+      return "destructive";
+    }
+    if (severity === "MEDIUM" || severity === "WARNING") {
+      return "warning";
+    }
+    if (notification.status === "resolved") {
+      return "outline";
+    }
+    return "info";
+  }
 
   return (
     <div className="space-y-6">
@@ -537,104 +441,15 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
                 </Link>
               </Button>
               <Button asChild variant="outline">
-                <Link href={getTenantSettingsRoute(tenant.tenant_id, "integrations")}>Open Integrations</Link>
+                <Link href={getTenantSettingsRoute(tenant.tenant_id, "atlassian")}>Open Atlassian</Link>
               </Button>
             </div>
           </div>
         </div>
       ) : null}
 
-      {section === "integrations" ? (
-        <div className="overflow-hidden rounded-2xl border bg-background">
-          <div className="px-6 pt-6">
-            <h2 className="text-base font-semibold">Integrations</h2>
-          </div>
-          <div className="mt-4 divide-y border-t text-sm">
-            <div className="space-y-2 px-6 py-4">
-              <p className="font-medium">Jira</p>
-              <p className="text-muted-foreground">Connect Jira OAuth and verify tenant board access.</p>
-              <Button asChild variant="outline" size="sm">
-                <Link href={getTenantSettingsRoute(tenant.tenant_id, "jira")}>Open Jira</Link>
-              </Button>
-            </div>
-            <div className="space-y-2 px-6 py-4">
-              <p className="font-medium">GitHub</p>
-              <p className="text-muted-foreground">Install or reconnect GitHub App for this tenant.</p>
-              <Button asChild variant="outline" size="sm">
-                <Link href={getTenantSettingsRoute(tenant.tenant_id, "github")}>Open GitHub</Link>
-              </Button>
-            </div>
-            <div className="space-y-2 px-6 py-4">
-              <p className="font-medium">Discord</p>
-              <p className="text-muted-foreground">Manage notification and command settings for tenant channels.</p>
-              <Button asChild variant="outline" size="sm">
-                <Link href={getTenantSettingsRoute(tenant.tenant_id, "discord")}>Open Discord</Link>
-              </Button>
-            </div>
-          </div>
-        </div>
-      ) : null}
-
-      {section === "jira" ? (
-        <div className="overflow-hidden rounded-2xl border bg-background">
-          <div className="px-6 pt-6">
-            <h2 className="text-base font-semibold">Jira Integration</h2>
-          </div>
-          <div className="space-y-3 p-6 text-sm">
-            <p>
-              <strong>Status:</strong> {jiraConnected ? "Connected" : "Not connected"}
-            </p>
-            <p>
-              <strong>Connection ID:</strong> {tenant.jira.connection_id || "-"}
-            </p>
-            <div className="flex flex-wrap gap-2">
-              <Button variant="outline" onClick={() => void connectJira()}>
-                <Link2 className="mr-2 h-4 w-4" />
-                {jiraConnected ? "Reconnect Jira" : "Connect Jira"}
-              </Button>
-              <Button variant="outline" disabled={jiraWebhookBusy} onClick={() => void handleDisconnectJira()}>
-                Disconnect Jira
-              </Button>
-            </div>
-            {isPlatformAdmin ? (
-              <div className="space-y-2 border-t pt-3">
-              <p className="font-medium">Webhook Lifecycle</p>
-              <p>
-                <strong>Webhook URL:</strong> {jiraWebhook?.webhook_url ?? "Loading..."}
-              </p>
-              <p>
-                <strong>Managed webhook IDs:</strong>{" "}
-                {jiraWebhook?.managed_webhook_ids.length ? jiraWebhook.managed_webhook_ids.join(", ") : "-"}
-              </p>
-              <p>
-                <strong>Last received:</strong> {jiraWebhook?.last_received_at ?? "-"}
-              </p>
-              <p>
-                <strong>Last issue key:</strong> {jiraWebhook?.last_issue_key ?? "-"}
-              </p>
-              <p>
-                <strong>Recent delivery:</strong>{" "}
-                {jiraWebhook
-                  ? jiraWebhook.recent_delivery_ok
-                    ? `ok (within ${jiraWebhook.recent_delivery_window_minutes}m)`
-                    : `none within ${jiraWebhook.recent_delivery_window_minutes}m`
-                  : "-"}
-              </p>
-              <p>
-                <strong>Last error:</strong> {jiraWebhook?.last_error ?? "-"}
-              </p>
-              <div className="flex flex-wrap gap-2 pt-1">
-                <Button variant="secondary" disabled={jiraWebhookBusy} onClick={() => void handleProvisionJiraWebhook()}>
-                  Provision Webhook
-                </Button>
-                <Button variant="secondary" disabled={jiraWebhookBusy} onClick={() => void handleResetJiraWebhook()}>
-                  Reset Webhook
-                </Button>
-              </div>
-              </div>
-            ) : null}
-          </div>
-        </div>
+      {section === "atlassian" ? (
+        <TenantAtlassianSettings tenant={tenant} onTenantUpdated={setTenant} onStatus={setStatusLine} />
       ) : null}
 
       {section === "github" ? (
@@ -658,8 +473,10 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
             <TenantForm
               mode="edit"
               initialValues={recordToFormValues(tenant)}
-              onSubmit={handleSave}
+              submitScope="github"
+              onSubmit={saveTenantGithub}
               submitting={saving}
+              submitLabel="Save GitHub settings"
               codexModels={codexModels}
               reasoningEfforts={reasoningEfforts}
               globalCodexModel={globalCodexModel}
@@ -678,126 +495,79 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
       ) : null}
 
       {section === "projects" ? (
-        <div className="overflow-hidden rounded-2xl border bg-background">
-          <div className="px-6 pt-6">
-            <h2 className="text-base font-semibold">Projects</h2>
-          </div>
-          <div className="p-6">
-            <ProjectsManager
-              projects={projects}
-              repositories={githubRepositories}
-              jiraProjects={jiraProjects}
-              busy={projectsBusy || repositoriesLoading}
-              onRefreshOptions={() => void refreshProjectSources()}
-              onCreateProject={handleCreateProject}
-              onUpdateProject={handleUpdateProject}
-            />
-          </div>
-        </div>
+        <TenantProjectsSettings tenant={tenant} />
       ) : null}
 
       {section === "discord" ? (
-        <div className="overflow-hidden rounded-2xl border bg-background">
-          <div className="px-6 pt-6">
-            <h2 className="text-base font-semibold">Discord Integration</h2>
+        <TenantDiscordSettings
+          tenant={tenant}
+          saving={saving}
+          onSave={saveDiscordSettings}
+          onInstall={() => void connectDiscordInstall("edit")}
+        />
+      ) : null}
+
+      {section === "config" ? (
+        <div className="space-y-6">
+          <div className="overflow-hidden rounded-2xl border bg-background">
+            <div className="px-6 pt-6">
+              <h2 className="text-base font-semibold">Workspace configuration</h2>
+            </div>
+            <div className="p-6">
+              <TenantForm
+                mode="edit"
+                initialValues={recordToFormValues(tenant)}
+                submitScope="configuration"
+                onSubmit={saveTenantConfiguration}
+                submitting={saving}
+                submitLabel="Save workspace configuration"
+                codexModels={codexModels}
+                reasoningEfforts={reasoningEfforts}
+                globalCodexModel={globalCodexModel}
+                globalCodexReasoningEffort={globalCodexReasoningEffort}
+                visibleSections={{
+                  identity: true,
+                  jira: false,
+                  github: false,
+                  repository: false,
+                  policy: false,
+                  discord: false
+                }}
+              />
+            </div>
           </div>
-          <div className="space-y-4 p-6">
-            <div className="space-y-2 text-sm">
-              <label className="flex items-center gap-2">
-                <input
-                  type="checkbox"
-                  className="h-4 w-4 rounded border-input"
-                  checked={discordEnabled}
-                  onChange={(event) => setDiscordEnabled(event.target.checked)}
-                />
-                <span>Enable Discord</span>
-              </label>
-              <div className="rounded-xl border bg-background px-4 py-3 text-xs text-muted-foreground">
-                Connected guild: <strong>{tenant.discord?.guild_id ?? "not installed yet"}</strong>
-                <br />
-                Installed at: <strong>{tenant.discord?.installed_at ?? "not installed yet"}</strong>
-              </div>
-              <div className="flex flex-wrap gap-2">
-                <Button variant="outline" onClick={() => void connectDiscordInstall("edit")}>
-                  <Link2 className="mr-2 h-4 w-4" />
-                  {tenant.discord?.guild_id ? "Reinstall Discord Bot" : "Install Discord Bot"}
-                </Button>
-              </div>
-              <div className="space-y-1">
-                <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Server ID</p>
-                <Input
-                  value={discordServerId}
-                  onChange={(event) => setDiscordServerId(event.target.value)}
-                  placeholder="Discord guild/server ID"
-                  disabled={!discordEnabled}
-                />
-              </div>
-              <div className="space-y-1">
-                <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Onboarding Channel ID</p>
-                <Input
-                  value={discordOnboardingChannelId}
-                  onChange={(event) => setDiscordOnboardingChannelId(event.target.value)}
-                  placeholder="Discord channel used for join invites"
-                  disabled={!discordEnabled}
-                />
-              </div>
-              <div className="grid gap-3 md:grid-cols-2">
-                <div className="space-y-1">
-                  <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Invite expiry seconds</p>
-                  <Input
-                    value={discordInviteExpirySeconds}
-                    onChange={(event) => setDiscordInviteExpirySeconds(event.target.value)}
-                    placeholder="86400"
-                    disabled={!discordEnabled}
-                  />
-                </div>
-                <div className="space-y-1">
-                  <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Invite max uses</p>
-                  <Input
-                    value={discordInviteMaxUses}
-                    onChange={(event) => setDiscordInviteMaxUses(event.target.value)}
-                    placeholder="1"
-                    disabled={!discordEnabled}
-                  />
-                </div>
-              </div>
-              <div className="rounded-xl border bg-background px-4 py-3 text-xs text-muted-foreground">
-                Live voice rooms are configured per project on the project Discord page. Onboarding joins use the tenant onboarding channel.
-              </div>
-              <Button onClick={() => void saveDiscordSettings()} disabled={saving}>
-                {saving ? "Saving..." : "Save"}
-              </Button>
+          <div className="overflow-hidden rounded-2xl border bg-background">
+            <div className="px-6 pt-6">
+              <h2 className="text-base font-semibold">Tenant policy</h2>
+            </div>
+            <div className="p-6">
+              <TenantForm
+                mode="edit"
+                initialValues={recordToFormValues(tenant)}
+                submitScope="policy"
+                onSubmit={saveTenantPolicy}
+                submitting={saving}
+                submitLabel="Save policy"
+                codexModels={codexModels}
+                reasoningEfforts={reasoningEfforts}
+                globalCodexModel={globalCodexModel}
+                globalCodexReasoningEffort={globalCodexReasoningEffort}
+                visibleSections={{
+                  identity: false,
+                  jira: false,
+                  github: false,
+                  repository: false,
+                  policy: true,
+                  discord: false
+                }}
+              />
             </div>
           </div>
         </div>
       ) : null}
 
-      {section === "config" ? (
-        <div className="overflow-hidden rounded-2xl border bg-background">
-          <div className="px-6 pt-6">
-            <h2 className="text-base font-semibold">Workspace configuration</h2>
-          </div>
-          <div className="p-6">
-            <TenantForm
-              mode="edit"
-              initialValues={recordToFormValues(tenant)}
-              onSubmit={handleSave}
-              submitting={saving}
-              codexModels={codexModels}
-              reasoningEfforts={reasoningEfforts}
-              globalCodexModel={globalCodexModel}
-              globalCodexReasoningEffort={globalCodexReasoningEffort}
-              visibleSections={{
-                identity: true,
-                jira: false,
-                github: false,
-                repository: false,
-                policy: true,
-                discord: false
-              }}
-            />
-          </div>
-        </div>
+      {section === "observability" ? (
+        <TenantObservabilitySettings tenant={tenant} onTenantUpdated={setTenant} onStatus={setStatusLine} />
       ) : null}
 
       {section === "danger" ? (
@@ -954,16 +724,42 @@ export function TenantEditPage({ section }: { section: TenantEditSection }) {
                 <span>Action</span>
               </div>
               <ul className="divide-y">
-                <li className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-3 px-3 py-3">
-                  <div className="space-y-0.5">
-                    <p className="font-medium">Jira Webhook Delivery</p>
-                    <p className="text-xs text-muted-foreground">{jiraWebhookStatus.detail}</p>
-                  </div>
-                  <span className="rounded-full border px-2 py-0.5 text-xs">{jiraWebhookStatus.label}</span>
-                  <Button asChild size="sm" variant="outline">
-                    <Link href={getTenantSettingsRoute(tenant.tenant_id, "jira")}>Review</Link>
-                  </Button>
-                </li>
+                {notifications.length ? (
+                  notifications.map((notification) => (
+                    <li
+                      key={notification.notification_id}
+                      className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-3 px-3 py-3"
+                    >
+                      <div className="space-y-0.5">
+                        <p className="font-medium">{notification.title}</p>
+                        <p className="text-xs text-muted-foreground">{notification.detail}</p>
+                      </div>
+                      <Badge variant={notificationBadgeVariant(notification)}>{notification.status}</Badge>
+                      {notification.kind === "reauth_required" ? (
+                        <Button size="sm" variant="outline" onClick={() => void connectJira()}>
+                          Reconnect Atlassian
+                        </Button>
+                      ) : (
+                        <Button asChild size="sm" variant="outline">
+                          <Link href={getTenantSettingsRoute(tenant.tenant_id, "atlassian")}>Review</Link>
+                        </Button>
+                      )}
+                    </li>
+                  ))
+                ) : (
+                  <li className="grid grid-cols-[minmax(0,1fr)_auto_auto] items-center gap-3 px-3 py-3">
+                    <div className="space-y-0.5">
+                      <p className="font-medium">Jira Webhook Delivery</p>
+                      <p className="text-xs text-muted-foreground">{jiraWebhookStatus.detail}</p>
+                    </div>
+                    <Badge variant={jiraWebhookStatus.label === "error" ? "destructive" : jiraWebhookStatus.label === "warning" ? "warning" : "outline"}>
+                      {jiraWebhookStatus.label}
+                    </Badge>
+                    <Button asChild size="sm" variant="outline">
+                      <Link href={getTenantSettingsRoute(tenant.tenant_id, "atlassian")}>Review</Link>
+                    </Button>
+                  </li>
+                )}
               </ul>
             </div>
           </div>

@@ -1,4 +1,5 @@
 import os
+from dataclasses import replace
 from types import SimpleNamespace
 import unittest
 from unittest.mock import MagicMock, patch
@@ -7,8 +8,8 @@ from tempfile import TemporaryDirectory
 
 from sqlalchemy.exc import PendingRollbackError
 
-from orchestrator.core.webhook_job_queue import (
-    WEBHOOK_TRANSPORT_COOLIFY_DEPLOYMENT,
+from orchestrator.core.webhooks.job_errors import RetryableWebhookJobError
+from orchestrator.core.webhooks.job_queue import (
     WEBHOOK_TRANSPORT_DISCORD_COMMAND,
     WEBHOOK_TRANSPORT_GITHUB,
     WEBHOOK_TRANSPORT_JIRA,
@@ -175,25 +176,6 @@ class WorkerWebhookJobServiceTests(unittest.TestCase):
                 "installation_id": 12345,
                 "repo_full_name": "example/repo",
             },
-        )
-
-    @staticmethod
-    def _coolify_request(*, request_id: str, project_id: str = "project-1") -> WebhookJobEnqueueRequest:
-        return WebhookJobEnqueueRequest(
-            transport=WEBHOOK_TRANSPORT_COOLIFY_DEPLOYMENT,
-            request_id=request_id,
-            tenant_id="tenant-1",
-            project_id=project_id,
-            subject_key=f"coolify_deployment:tenant-1:{project_id}",
-            dedupe_key=request_id,
-            event_type="deployment.updated",
-            payload_json={
-                "event_type": "deployment.updated",
-                "deployment_uuid": "deployment-uuid-1",
-                "application_uuid": "application-uuid-1",
-                "status": "running",
-            },
-            context_json={"webhook_token": "coolify-webhook-token"},
         )
 
     def test_blocking_reconciliation_does_not_cancel_existing_run(self) -> None:
@@ -384,6 +366,71 @@ class WorkerWebhookJobServiceTests(unittest.TestCase):
             self.assertEqual(session.get(WebhookJob, second.job_id).attempt_count, 1)
             build_result.assert_called_once()
 
+    def test_subject_batch_failure_marks_all_claimed_jobs_failed(self) -> None:
+        first_request = self._request()
+        second_request = replace(
+            first_request,
+            request_id="request-2",
+            dedupe_key="delivery-2",
+        )
+        with self.session_factory() as session:
+            first = enqueue_webhook_job(session, request=first_request).job
+            second = enqueue_webhook_job(session, request=second_request).job
+            session.commit()
+
+        with self.session_factory() as session:
+            with patch(
+                "orchestrator.core.worker.webhook_job_service._process_jira_subject_jobs",
+                side_effect=RuntimeError("atlassian auth failed"),
+            ):
+                processed = process_next_webhook_job(
+                    session=session,
+                    settings=self._settings(),
+                    owner_id="worker-1",
+                )
+
+            self.assertIsNotNone(processed)
+            first_persisted = session.get(WebhookJob, first.job_id)
+            second_persisted = session.get(WebhookJob, second.job_id)
+            self.assertIsNotNone(first_persisted)
+            self.assertIsNotNone(second_persisted)
+            assert first_persisted is not None
+            assert second_persisted is not None
+            self.assertEqual(first_persisted.status, "failed")
+            self.assertEqual(second_persisted.status, "failed")
+            self.assertEqual(first_persisted.last_error, "atlassian auth failed")
+            self.assertEqual(second_persisted.last_error, "atlassian auth failed")
+            self.assertIsNone(first_persisted.owner_id)
+            self.assertIsNone(second_persisted.owner_id)
+
+    def test_subject_batch_failure_stores_root_cause_for_wrapped_workflow_update(self) -> None:
+        root = ValueError("Event attempt_id must belong to the supplied operation_id")
+        terminal = RuntimeError("terminal_workflow_advance_error: Event attempt_id must belong to the supplied operation_id")
+        terminal.__cause__ = root
+        wrapper = RuntimeError("Workflow update failed")
+        wrapper.__cause__ = terminal
+        with self.session_factory() as session:
+            enqueued = enqueue_webhook_job(session, request=self._request()).job
+            session.commit()
+
+        with self.session_factory() as session:
+            with patch(
+                "orchestrator.core.worker.webhook_job_service._process_jira_subject_jobs",
+                side_effect=wrapper,
+            ):
+                processed = process_next_webhook_job(
+                    session=session,
+                    settings=self._settings(),
+                    owner_id="worker-1",
+                )
+
+            self.assertIsNotNone(processed)
+            persisted = session.get(WebhookJob, enqueued.job_id)
+            self.assertIsNotNone(persisted)
+            assert persisted is not None
+            self.assertEqual(persisted.status, "failed")
+            self.assertEqual(persisted.last_error, "Event attempt_id must belong to the supplied operation_id")
+
     def test_process_next_webhook_job_snapshots_job_context_before_rollback(self) -> None:
         class _BrokenJob:
             def __init__(self) -> None:
@@ -399,7 +446,14 @@ class WorkerWebhookJobServiceTests(unittest.TestCase):
                 return WEBHOOK_TRANSPORT_GITHUB
 
         broken_job = _BrokenJob()
-        claim = SimpleNamespace(acquired=True, job=broken_job)
+        claim = SimpleNamespace(
+            acquired=True,
+            batch=SimpleNamespace(
+                primary_job=broken_job,
+                related_jobs=(),
+                job_ids=("job-1",),
+            ),
+        )
         session = MagicMock()
 
         def _fail_processing(*, claimed_job, **_kwargs):  # noqa: ANN001
@@ -407,7 +461,7 @@ class WorkerWebhookJobServiceTests(unittest.TestCase):
             raise RuntimeError("flush failed")
 
         with (
-            patch("orchestrator.core.worker.webhook_job_service.claim_next_webhook_job", return_value=claim),
+            patch("orchestrator.core.worker.webhook_job_service.claim_next_webhook_subject_batch", return_value=claim),
             patch("orchestrator.core.worker.webhook_job_service._process_github_subject_jobs", side_effect=_fail_processing),
             patch(
                 "orchestrator.core.worker.webhook_job_service.mark_webhook_job_ids_failed",
@@ -424,48 +478,30 @@ class WorkerWebhookJobServiceTests(unittest.TestCase):
         session.rollback.assert_called_once()
         mark_failed.assert_called_once()
 
-    def test_coolify_webhook_jobs_call_runtime_ingest_and_mark_done(self) -> None:
+    def test_process_next_webhook_job_requeues_retryable_failures(self) -> None:
         with self.session_factory() as session:
-            enqueue_webhook_job(session, request=self._coolify_request(request_id="coolify-request-1"))
+            enqueued = enqueue_webhook_job(session, request=self._request()).job
             session.commit()
 
         with self.session_factory() as session:
             with patch(
-                "orchestrator.core.worker.webhook_job_service.ingest_coolify_deployment_event",
-                return_value={"ok": True, "updated": True, "release_id": "release-1", "status": "deploying"},
-            ) as ingest_mock:
-                processed = process_next_webhook_job(session=session, settings=self._settings(), owner_id="worker-1")
-
-            self.assertIsNotNone(processed)
-            assert processed is not None
-            ingest_mock.assert_called_once_with(
-                session=session,
-                tenant_id="tenant-1",
-                project_id="project-1",
-                webhook_token="coolify-webhook-token",
-                payload={
-                    "event_type": "deployment.updated",
-                    "deployment_uuid": "deployment-uuid-1",
-                    "application_uuid": "application-uuid-1",
-                    "status": "running",
-                },
-            )
-            self.assertEqual(session.get(WebhookJob, processed.job_id).status, "done")
-
-    def test_coolify_webhook_jobs_mark_failed_when_runtime_ingest_raises(self) -> None:
-        with self.session_factory() as session:
-            enqueue_webhook_job(session, request=self._coolify_request(request_id="coolify-request-2"))
-            session.commit()
-
-        with self.session_factory() as session:
-            with patch(
-                "orchestrator.core.worker.webhook_job_service.ingest_coolify_deployment_event",
-                side_effect=RuntimeError("coolify ingest failed"),
+                "orchestrator.core.worker.webhook_job_service._process_jira_subject_jobs",
+                side_effect=RetryableWebhookJobError("runtime temporarily unavailable", retry_after_seconds=45),
             ):
-                processed = process_next_webhook_job(session=session, settings=self._settings(), owner_id="worker-1")
+                processed = process_next_webhook_job(
+                    session=session,
+                    settings=self._settings(),
+                    owner_id="worker-1",
+                )
 
             self.assertIsNotNone(processed)
             assert processed is not None
-            job = session.get(WebhookJob, processed.job_id)
-            self.assertEqual(job.status, "failed")
-            self.assertIn("coolify ingest failed", str(job.last_error))
+            persisted = session.get(WebhookJob, enqueued.job_id)
+            self.assertIsNotNone(persisted)
+            assert persisted is not None
+            self.assertEqual(processed.status, "pending")
+            self.assertEqual(persisted.status, "pending")
+            self.assertEqual(persisted.attempt_count, 1)
+            self.assertEqual(persisted.last_error, "runtime temporarily unavailable")
+            self.assertIsNone(persisted.owner_id)
+            self.assertGreater(persisted.available_at, persisted.updated_at)

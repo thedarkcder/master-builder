@@ -30,7 +30,7 @@ class ApiErrorObservabilityTests(unittest.TestCase):
             patch("orchestrator.api.main.ensure_execution_snapshot_startup_bootstrap"),
             patch("orchestrator.api.main.register_discord_command_executor"),
             patch("orchestrator.api.main.sync_discord_guild_commands"),
-            patch("orchestrator.core.knowledge_jira_sync_runtime.run_knowledge_jira_sync") as sync_runtime_mock,
+            patch("orchestrator.core.knowledge.jira_sync_runtime.run_knowledge_jira_sync") as sync_runtime_mock,
         ):
             app = create_app()
             with TestClient(app, raise_server_exceptions=False):

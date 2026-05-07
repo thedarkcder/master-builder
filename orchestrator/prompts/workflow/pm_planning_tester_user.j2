@@ -8,13 +8,20 @@ Related issues JSON: {{ related_issues_json }}
 Status counts JSON: {{ status_counts_json }}
 GitHub context JSON: {{ github_context_json }}
 Recent conversation context JSON: {{ conversation_history_json }}
+Allowed governed tools for this stage: {{ governed_tools_json }}
+Native Codex tools available directly in this runtime: {{ native_tools_json }}
 
-Focus on validation, acceptance criteria, regressions, and automation scope.
-Prefer the smallest set of child tasks that proves the feature is correct.
-If the feature is underspecified, ask the narrowest missing behavior question and include a short example in the question text.
-Return strict JSON only with keys:
-- findings
-- recommendations
-- required_tasks
-- open_behavior_questions
-- acceptance_impacts
+Structured tool bridge:
+- Use native Codex tools directly when they are available in this runtime. Do not emit tool_request for native Codex tools.
+- To call an allowed governed tool, return JSON only:
+  {"type":"tool_request","tool_name":"<allowed tool>","tool_args":{...},"reason":"<optional short reason>"}
+- When the stage is complete, return JSON only:
+  {"type":"final_response","result":{...}}
+
+Use tools/context first.
+Record verification decisions as technical_decisions with options, tradeoffs, selected recommendation, rationale, evidence, confidence, and product impact.
+Only create pm_decision_requests for PM-owned product/buildability ambiguity. Do not create stakeholder questions.
+
+Specialist output contract:
+Return JSON matching this domain model:
+{{ domain_model | tojson(indent=2) }}

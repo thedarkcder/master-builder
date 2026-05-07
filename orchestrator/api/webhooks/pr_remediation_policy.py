@@ -8,7 +8,7 @@ from orchestrator.api.webhooks.pr_remediation_issue_service import (
     find_existing_issue_key_for_pr_head,
 )
 from orchestrator.tools.github_app import GitHubAppClient
-from orchestrator.tools.jira_oauth import JiraOAuthError
+from orchestrator.tools.atlassian_oauth import AtlassianOAuthError
 
 @dataclass(frozen=True)
 class ManualPrFixRequest:
@@ -123,6 +123,6 @@ def resolve_pr_remediation_issue_key(
             manual_fix_request=manual_fix_request,
         )
         issue_created = True
-    except (JiraOAuthError, ValueError) as exc:
+    except (AtlassianOAuthError, ValueError) as exc:
         return None, False, f"jira_bug_create_failed:{exc}"
     return issue_key, issue_created, None

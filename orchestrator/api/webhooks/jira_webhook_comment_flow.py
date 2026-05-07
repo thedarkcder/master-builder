@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session
 from orchestrator.api.commands.entrypoint import execute_tenant_jira_comment_command
 from orchestrator.api.discord.ask.context import remove_issue_key_from_tenant_ask_history
 from orchestrator.api.discord.shared.state import remove_issue_key_from_seed_followups
-from orchestrator.api.jira_oauth.connection_service import tenant_jira_oauth_context
+from orchestrator.api.atlassian_oauth.connection_service import tenant_atlassian_oauth_context
 from orchestrator.api.schemas import DiscordCommandRequest
 from orchestrator.api.webhooks.contracts import (
     JIRA_COMMENT_EVENTS,
@@ -19,25 +19,28 @@ from orchestrator.api.webhooks.contracts import (
 from orchestrator.api.webhooks.jira_parent_child_sync import (
     handle_engineering_clarification_command,
     handle_engineering_clarification_reply,
+    handle_parent_planning_clarification_reply,
+    handle_pm_interview_reply,
     is_system_generated_comment,
 )
 from orchestrator.api.webhooks.jira_webhook_types import JiraWebhookContext, jira_webhook_response
 from orchestrator.core.communications.decision_clarification_presentation import (
     build_decision_clarification_presentation,
+    build_decision_clarification_response_fields,
     load_cycle_question_feedback,
 )
-from orchestrator.core.codex_runtime import CodexRuntimeError
-from orchestrator.core.decision_clarification_service import capture_decision_reply_and_recheck
-from orchestrator.core.decision_engine import DecisionEventInput
-from orchestrator.core.decision_reply_service import (
+from orchestrator.core.runtime.runtime import CodexRuntimeError
+from orchestrator.core.decision.clarification_service import capture_decision_reply_and_recheck
+from orchestrator.core.decision.engine import DecisionEventInput
+from orchestrator.core.decision.reply_service import (
     active_case_and_cycle_for_issue,
     is_machine_generated_decision_comment,
 )
-from orchestrator.core.followup_context_service import (
+from orchestrator.core.pm.followup_context_service import (
     FOLLOWUP_CONTEXT_DECISION_GATE,
     close_followup_contexts,
 )
-from orchestrator.core.pre_run_check import evaluate_pre_run_check
+from orchestrator.core.precheck.pre_run_check import evaluate_pre_run_check
 
 logger = logging.getLogger(__name__)
 
@@ -193,7 +196,7 @@ def stage_handle_comment_decision_reply(
                 issue_description=context.issue_description,
                 issue_labels=context.issue_labels,
             ),
-            tenant_jira_oauth_context_fn=tenant_jira_oauth_context,
+            tenant_atlassian_oauth_context_fn=tenant_atlassian_oauth_context,
             evaluate_pre_run_check_fn=evaluate_pre_run_check,
             publish_jira_comment_fn=lambda comment: post_jira_comment(
                 session=session,
@@ -237,11 +240,11 @@ def stage_handle_comment_decision_reply(
         context,
         enqueued=False,
         reason="decision_reply_recorded",
-        classification=clarification_presentation.classification,
         cycle_id=decision_result.cycle_id,
-        questions=list(clarification_presentation.questions),
-        question_feedback=list(clarification_presentation.question_feedback),
         webhook_event=context.webhook_event,
+        **build_decision_clarification_response_fields(
+            presentation=clarification_presentation,
+        ),
     )
 
 
@@ -323,6 +326,32 @@ def stage_handle_comment_engineering_clarification_reply(
     settings,  # noqa: ANN001
 ) -> dict | None:
     return handle_engineering_clarification_reply(
+        context=context,
+        session=session,
+        settings=settings,
+    )
+
+
+def stage_handle_comment_parent_planning_clarification_reply(
+    *,
+    context: JiraWebhookContext,
+    session: Session,
+    settings,  # noqa: ANN001
+) -> dict | None:
+    return handle_parent_planning_clarification_reply(
+        context=context,
+        session=session,
+        settings=settings,
+    )
+
+
+def stage_handle_comment_pm_interview_reply(
+    *,
+    context: JiraWebhookContext,
+    session: Session,
+    settings,  # noqa: ANN001
+) -> dict | None:
+    return handle_pm_interview_reply(
         context=context,
         session=session,
         settings=settings,

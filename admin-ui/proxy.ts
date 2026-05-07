@@ -16,6 +16,8 @@ function defaultRouteForSession(session: Session | null, preferredTenantId?: str
 
 export default auth((request: NextRequest & { auth: Session | null }) => {
   const { pathname } = request.nextUrl;
+  const pathSegments = pathname.split("/").filter(Boolean);
+  const tenantScopedSurface = pathSegments[1] ?? null;
   const isPublicPath =
     pathname === "/" ||
     pathname === "/login" ||
@@ -23,19 +25,36 @@ export default auth((request: NextRequest & { auth: Session | null }) => {
     pathname === "/forgot-password" ||
     pathname === "/reset-password" ||
     pathname === "/privacy" ||
-    pathname.startsWith("/invite/accept");
+    pathname.startsWith("/invite/accept") ||
+    tenantScopedSurface === "start" ||
+    tenantScopedSurface === "start-engineering";
   const session = request.auth;
   const preferredTenantId = request.cookies.get(getLastWorkspaceCookieName())?.value ?? null;
+  const principal = ((session?.user ?? {}) as { principal?: AuthenticatedPrincipalRecord }).principal;
 
   if (pathname.startsWith("/_next") || pathname === "/favicon.ico") {
     return NextResponse.next();
   }
 
   if (!session && !isPublicPath) {
-    return NextResponse.redirect(new URL("/login", request.url));
+    const loginUrl = new URL("/login", request.url);
+    loginUrl.searchParams.set("next", `${pathname}${request.nextUrl.search}`);
+    return NextResponse.redirect(loginUrl);
   }
 
   if (session && (pathname === "/login" || pathname === "/register")) {
+    const nextPath = request.nextUrl.searchParams.get("next");
+    if (nextPath?.startsWith("/") && !nextPath.startsWith("//")) {
+      return NextResponse.redirect(new URL(nextPath, request.url));
+    }
+    return NextResponse.redirect(new URL(defaultRouteForSession(session, preferredTenantId), request.url));
+  }
+
+  if (
+    session &&
+    principal?.principal_type !== "platform_super_admin" &&
+    (tenantScopedSurface === "workflows" || tenantScopedSurface === "executions")
+  ) {
     return NextResponse.redirect(new URL(defaultRouteForSession(session, preferredTenantId), request.url));
   }
 

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from collections.abc import Iterable
+from datetime import datetime, timezone
 
+from fastapi import HTTPException, status
 from sqlalchemy import func, select
 
 from orchestrator.api.schemas import WebhookQueueJobPageRead, WebhookQueueJobRead, WebhookQueueSummaryRead
@@ -46,6 +48,29 @@ def _count_by_status(*, session, filters: Iterable[object]) -> dict[str, int]:  
     ).all()
     counts = {str(status): int(count or 0) for status, count in rows}
     return counts
+
+
+def _serialize_job(row: WebhookJob) -> WebhookQueueJobRead:
+    return WebhookQueueJobRead(
+        job_id=row.job_id,
+        transport=row.transport,
+        tenant_id=row.tenant_id,
+        project_id=row.project_id,
+        subject_key=row.subject_key,
+        related_run_id=_normalized_string((row.context_json or {}).get("related_run_id")),
+        dedupe_key=row.dedupe_key,
+        request_id=row.request_id,
+        event_type=row.event_type,
+        status=row.status,
+        lease_expires_at=row.lease_expires_at,
+        available_at=row.available_at,
+        attempt_count=int(row.attempt_count or 0),
+        last_error=row.last_error,
+        created_at=row.created_at,
+        updated_at=row.updated_at,
+        started_at=row.started_at,
+        completed_at=row.completed_at,
+    )
 
 
 def list_webhook_queue_jobs(
@@ -95,29 +120,7 @@ def list_webhook_queue_jobs(
         failed_count=int(counts.get("failed", 0)),
         done_count=int(counts.get("done", 0)),
     )
-    items = [
-        WebhookQueueJobRead(
-            job_id=row.job_id,
-            transport=row.transport,
-            tenant_id=row.tenant_id,
-            project_id=row.project_id,
-            subject_key=row.subject_key,
-            dedupe_key=row.dedupe_key,
-            request_id=row.request_id,
-            event_type=row.event_type,
-            status=row.status,
-            owner_id=row.owner_id,
-            lease_expires_at=row.lease_expires_at,
-            available_at=row.available_at,
-            attempt_count=int(row.attempt_count or 0),
-            last_error=row.last_error,
-            created_at=row.created_at,
-            updated_at=row.updated_at,
-            started_at=row.started_at,
-            completed_at=row.completed_at,
-        )
-        for row in rows
-    ]
+    items = [_serialize_job(row) for row in rows]
     return WebhookQueueJobPageRead(
         items=items,
         total=total,
@@ -125,3 +128,43 @@ def list_webhook_queue_jobs(
         offset=offset,
         summary=summary,
     )
+
+
+def retry_failed_webhook_job(
+    *,
+    session,
+    tenant_id: str,
+    project_id: str,
+    job_id: str,
+) -> WebhookQueueJobRead:  # noqa: ANN001
+    persisted = session.execute(
+        select(WebhookJob).where(
+            WebhookJob.job_id == job_id,
+            WebhookJob.tenant_id == tenant_id,
+            WebhookJob.project_id == project_id,
+        )
+    ).scalar_one_or_none()
+    if persisted is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Webhook job not found")
+    if persisted.status != "failed":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Webhook job retry is only allowed for failed webhook jobs",
+        )
+    if persisted.owner_id is not None or persisted.lease_expires_at is not None or persisted.completed_at is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Webhook job retry requires a terminal failed webhook job",
+        )
+
+    now = datetime.now(timezone.utc)
+    persisted.status = "pending"
+    persisted.available_at = now
+    persisted.last_error = None
+    persisted.updated_at = now
+    persisted.started_at = None
+    persisted.completed_at = None
+    session.flush()
+    session.commit()
+    session.refresh(persisted)
+    return _serialize_job(persisted)

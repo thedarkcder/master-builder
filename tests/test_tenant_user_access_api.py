@@ -1,5 +1,4 @@
 import os
-import unittest
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -9,7 +8,7 @@ from urllib.parse import parse_qs, urlparse
 from cryptography.fernet import Fernet
 
 from orchestrator.core.config import get_settings
-from orchestrator.core.email_delivery import EmailDeliveryError
+from orchestrator.core.platform.email_delivery import EmailDeliveryError
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.models import Project, Run, Tenant, WebhookJob, WorkflowCheckpoint, WorkflowExecution
 from orchestrator.tools.discord_api import DiscordApiError
@@ -37,14 +36,13 @@ class TenantUserAccessApiTests(SqliteTemplateApiTestCase):
             "ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET": "unit-test-secret",
             "ORCHESTRATOR_ADMIN_UI_BASE_URL": "http://localhost:4100",
             "ORCHESTRATOR_PUBLIC_API_BASE_URL": "http://localhost:4000",
-            "ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET": "jira-oauth-state-secret",
+            "ORCHESTRATOR_ATLASSIAN_OAUTH_STATE_SECRET": "atlassian-oauth-state-secret",
             "ORCHESTRATOR_GITHUB_APP_SLUG": "master-builder-app",
             "ORCHESTRATOR_DISCORD_OAUTH_CLIENT_ID": "discord-client-id-123",
             "ORCHESTRATOR_DISCORD_INSTALL_STATE_SECRET": "discord-install-state-secret",
             "ORCHESTRATOR_DISCORD_CHANNEL_CATEGORY_ID": "text-category-1",
             "ORCHESTRATOR_SECRETS_ENCRYPTION_KEY": cls._secrets_encryption_key,
-            "ORCHESTRATOR_CODEX_MODEL": "gpt-5.4",
-            "ORCHESTRATOR_CODEX_SUPPORTED_MODELS": "gpt-5.4,gpt-5.3-codex,gpt-5.3-codex-spark",
+            "ORCHESTRATOR_CODEX_SUPPORTED_MODELS": "gpt-5.4,gpt-5.4-mini,gpt-5.3-codex",
         }
 
     @classmethod
@@ -70,8 +68,14 @@ class TenantUserAccessApiTests(SqliteTemplateApiTestCase):
 
         get_settings.cache_clear()
         reset_db_engine_cache()
+        self._jira_project_reconciliation_patch = patch(
+            "orchestrator.api.admin.route_helpers.start_jira_project_reconciliation",
+            return_value=None,
+        )
+        self._jira_project_reconciliation_patch.start()
 
     def tearDown(self) -> None:
+        self._jira_project_reconciliation_patch.stop()
         self._cleanup_test_database()
         get_settings.cache_clear()
         reset_db_engine_cache()
@@ -207,14 +211,18 @@ class TenantUserAccessApiTests(SqliteTemplateApiTestCase):
             session.add(
                 WorkflowExecution(
                     workflow_id="workflow-tenant-user-visible-run",
+                    execution_id="workflow-tenant-user-visible-run",
+                    workflow_type_key="issue_execution",
                     tenant_id=tenant_id,
                     project_id=f"{tenant_id}-default",
-                    issue_key="TP-101",
-                    issue_summary="Tenant run",
-                    issue_description="desc",
+                    source_system="jira",
+                    source_ref="TP-101",
+                    display_name="Tenant run",
+                    source_description="desc",
                     repo_url="https://github.com/example/repo",
                     branch=None,
                     pr_url=None,
+                    orchestration_backend="temporal",
                     dedupe_scope="issue_execution",
                     status="queued",
                     last_error=None,
@@ -222,7 +230,6 @@ class TenantUserAccessApiTests(SqliteTemplateApiTestCase):
                     latest_checkpoint_id=None,
                     source_workflow_id=None,
                     source_run_id=None,
-                    blocked_reason=None,
                     created_at=now,
                     started_at=None,
                     finished_at=None,
@@ -294,7 +301,7 @@ class TenantUserAccessApiTests(SqliteTemplateApiTestCase):
                         attempt_count=0,
                         last_error=None,
                         payload_json={},
-                        context_json={},
+                        context_json={"related_run_id": "tenant-run-11"},
                         created_at=now,
                         updated_at=now,
                         started_at=None,
@@ -338,8 +345,60 @@ class TenantUserAccessApiTests(SqliteTemplateApiTestCase):
         payload = response.json()
         self.assertEqual(payload["total"], 1)
         self.assertEqual(payload["items"][0]["job_id"], "tenant-webhook-job-1")
+        self.assertEqual(payload["items"][0]["related_run_id"], "tenant-run-11")
+        self.assertNotIn("owner_id", payload["items"][0])
         self.assertEqual(payload["summary"]["pending_count"], 1)
         self.assertEqual(payload["summary"]["failed_count"], 0)
+
+    def test_tenant_user_can_retry_failed_webhook_jobs_for_project_scope(self) -> None:
+        registration = self._register()
+        token = self._login()
+        tenant_id = registration["tenant"]["tenant_id"]
+        default_project_id = f"{tenant_id}-default"
+        now = datetime.now(timezone.utc)
+
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            session.add(
+                WebhookJob(
+                    job_id="tenant-webhook-job-retry",
+                    transport="jira_webhook",
+                    tenant_id=tenant_id,
+                    project_id=default_project_id,
+                    subject_key=f"jira:{tenant_id}:TP-229",
+                    dedupe_key="webhook-delivery-retry",
+                    request_id="req-retry",
+                    event_type="jira:issue_updated",
+                    status="failed",
+                    owner_id=None,
+                    lease_expires_at=None,
+                    available_at=now,
+                    attempt_count=4,
+                    last_error="workflow failed",
+                    payload_json={},
+                    context_json={"related_run_id": "tenant-run-229"},
+                    created_at=now - timedelta(minutes=5),
+                    updated_at=now - timedelta(minutes=1),
+                    started_at=now - timedelta(minutes=4),
+                    completed_at=now - timedelta(minutes=1),
+                )
+            )
+            session.commit()
+
+        response = self.client.post(
+            (
+                f"/api/admin/observability/webhook-jobs/tenant-webhook-job-retry/retry"
+                f"?tenant_id={tenant_id}&project_id={default_project_id}"
+            ),
+            headers={"Authorization": f"Bearer {token}"},
+        )
+
+        self.assertEqual(response.status_code, 200, response.text)
+        payload = response.json()
+        self.assertEqual(payload["job_id"], "tenant-webhook-job-retry")
+        self.assertEqual(payload["status"], "pending")
+        self.assertEqual(payload["related_run_id"], "tenant-run-229")
+        self.assertIsNone(payload["last_error"])
 
     def test_tenant_user_can_list_and_get_workflows_for_their_workspace(self) -> None:
         registration = self._register()
@@ -351,14 +410,18 @@ class TenantUserAccessApiTests(SqliteTemplateApiTestCase):
             session.add(
                 WorkflowExecution(
                     workflow_id="tenant-user-visible-workflow",
+                    execution_id="tenant-user-visible-workflow",
+                    workflow_type_key="issue_execution",
                     tenant_id=tenant_id,
                     project_id=f"{tenant_id}-default",
-                    issue_key="TP-111",
-                    issue_summary="Tenant workflow",
-                    issue_description="desc",
+                    source_system="jira",
+                    source_ref="TP-111",
+                    display_name="Tenant workflow",
+                    source_description="desc",
                     repo_url="https://github.com/example/repo",
                     branch="feature/workflow",
                     pr_url=None,
+                    orchestration_backend="temporal",
                     dedupe_scope="issue_execution",
                     status="waiting_for_input",
                     last_error=None,
@@ -366,7 +429,6 @@ class TenantUserAccessApiTests(SqliteTemplateApiTestCase):
                     latest_checkpoint_id="tenant-user-workflow-checkpoint",
                     source_workflow_id=None,
                     source_run_id=None,
-                    blocked_reason=None,
                     created_at=now,
                     started_at=now,
                     finished_at=None,
@@ -1430,12 +1492,12 @@ class TenantUserAccessApiTests(SqliteTemplateApiTestCase):
                 repo_url=None,
                 created_at=now - timedelta(days=1),
                 run_status="blocked",
-                workflow_status="blocked",
+                workflow_status="failed",
                 last_error="blocked",
                 started_at=now - timedelta(days=1, minutes=-3),
                 last_heartbeat_at=now - timedelta(days=1),
                 finished_at=now - timedelta(days=1, minutes=-7),
-                blocked_reason="blocked",
+                failure_reason="blocked",
             )
             add_workflow_attempt(
                 session,

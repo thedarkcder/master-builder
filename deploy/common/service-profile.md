@@ -11,7 +11,7 @@
 - `discord-live-voice`
 - `llama-cpp`
 - `postgres`
-- `redis`
+- `clickhouse`
 
 ## Excluded By Default In Production
 - `mailpit`
@@ -21,8 +21,9 @@
 - API endpoint `/health` must return healthy status.
 - All background worker processes must be alive and restartable.
 - Database migrations must complete before runtime is marked ready.
+- ClickHouse must accept authenticated writes before API startup is marked ready.
 
 ## Persistence Requirements
 - Database data must be persisted.
-- Redis data persistence must be configured where supported.
+- ClickHouse data must be persisted.
 - Codex home and voice model caches must persist across restarts.

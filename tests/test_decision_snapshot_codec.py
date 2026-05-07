@@ -2,15 +2,15 @@ from __future__ import annotations
 
 from types import SimpleNamespace
 
-from orchestrator.core.decision_gate import DecisionGateResult
-from orchestrator.core.decision_snapshot_codec import (
+from orchestrator.core.decision.gate import DecisionGateResult
+from orchestrator.core.decision.state_machine import (
     DecisionResultSnapshot,
     PrecheckSnapshot,
     apply_frozen_cycle_questions,
     build_question_set,
 )
 from orchestrator.core.gtd import GoodToDoValidationResult
-from orchestrator.core.pre_run_check import PreRunCheckResult
+from orchestrator.core.precheck.pre_run_check import PreRunCheckResult
 
 
 def _precheck() -> PreRunCheckResult:

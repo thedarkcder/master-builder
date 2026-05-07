@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-from orchestrator.core.decision_types import (
+from orchestrator.core.decision.state_machine import (
     ReadinessState,
     blocking_reason_for_outcome,
     resolve_readiness_decision,
 )
-from orchestrator.core.pre_run_check import resolve_precheck_outcome
+from orchestrator.core.precheck.pre_run_check import resolve_precheck_outcome
 
 
 def test_blocking_reason_for_outcome_allows_only_blocking_outcomes() -> None:

@@ -3,13 +3,13 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from orchestrator.api.schemas import ReleaseBootstrapReportRead
-from orchestrator.core.decision_types import (
+from orchestrator.core.decision.types import (
     JiraConfigKey,
     jira_config_project_keys,
     jira_config_text,
 )
-from orchestrator.storage.models import JiraOAuthConnection, Tenant
-from orchestrator.tools.jira_oauth import JiraOAuthError
+from orchestrator.storage.models import AtlassianOAuthConnection, Tenant
+from orchestrator.tools.atlassian_oauth import AtlassianOAuthError
 
 
 def release_bootstrap_report_from_config(*, tenant_id: str, jira_config: dict) -> ReleaseBootstrapReportRead | None:
@@ -44,8 +44,8 @@ def compute_release_bootstrap_result(
     tenant_id: str,
     settings,
     required_statuses: tuple[str, ...],
-    refresh_jira_connection_tokens_fn,
-    jira_oauth_client_fn,
+    refresh_atlassian_connection_tokens_fn,
+    atlassian_oauth_client_fn,
 ) -> tuple[bool, dict[str, bool], list[str], dict]:  # noqa: ANN001
     checks: dict[str, bool] = {
         "jira_connection": False,
@@ -63,23 +63,23 @@ def compute_release_bootstrap_result(
 
     connection_id = jira_config_text(jira_config=jira_config, key=JiraConfigKey.CONNECTION_ID)
     if not connection_id:
-        details.append("Jira OAuth connection is not linked.")
+        details.append("Atlassian connection is not linked.")
         connection = None
     else:
-        connection = session.get(JiraOAuthConnection, connection_id)
+        connection = session.get(AtlassianOAuthConnection, connection_id)
         if connection is None:
-            details.append("Configured Jira OAuth connection was not found.")
+            details.append("Configured Atlassian connection was not found.")
     checks["jira_connection"] = connection is not None
 
     if connection is not None and normalized_project_keys:
         try:
-            access_token = refresh_jira_connection_tokens_fn(
+            access_token = refresh_atlassian_connection_tokens_fn(
                 session,
                 connection=connection,
                 settings=settings,
                 tenant_id=tenant_id,
             )
-            client = jira_oauth_client_fn(session=session, settings=settings, tenant_id=tenant_id)
+            client = atlassian_oauth_client_fn(session=session, settings=settings, tenant_id=tenant_id)
             quoted_projects = ", ".join(f'"{key}"' for key in normalized_project_keys)
             for required_status in required_statuses:
                 jql = (
@@ -93,7 +93,7 @@ def compute_release_bootstrap_result(
                     max_results=1,
                 )
             checks["jira_required_statuses"] = True
-        except (ValueError, JiraOAuthError) as exc:
+        except (ValueError, AtlassianOAuthError) as exc:
             details.append(
                 "Jira required status validation failed "
                 f"for {', '.join(required_statuses)}: {exc}"

@@ -7,12 +7,12 @@ import unittest
 from unittest.mock import patch
 import wave
 
-from orchestrator.core.project_automation_execution_service import (
+from orchestrator.core.projects.automation_execution_service import (
     mark_project_automation_execution_failure,
     mark_project_automation_execution_success,
     prepare_project_automation_execution,
 )
-from orchestrator.core.project_automation_service import (
+from orchestrator.core.projects.automation_service import (
     PROJECT_AUTOMATION_KIND_STANDUP,
     ProjectAutomationWrite,
     upsert_project_automation,
@@ -101,11 +101,11 @@ class ProjectAutomationExecutionServiceTests(unittest.TestCase):
             session.commit()
             with (
                 patch(
-                    "orchestrator.core.project_automation_execution_service.safe_build_project_automation_briefing",
+                    "orchestrator.core.projects.automation_execution_service.safe_build_project_automation_briefing",
                     return_value=type("Briefing", (), {"transcript": "hello world", "summary": "brief summary"})(),
                 ),
                 patch(
-                    "orchestrator.core.project_automation_execution_service.synthesize_reply_audio",
+                    "orchestrator.core.projects.automation_execution_service.synthesize_reply_audio",
                     return_value=VoiceReplyAudio(
                         audio_bytes=self._wav_bytes(b"\x01\x00"),
                         filename="voice.wav",
@@ -246,7 +246,7 @@ class ProjectAutomationExecutionServiceTests(unittest.TestCase):
             )
             with (
                 patch(
-                    "orchestrator.core.project_automation_execution_service.safe_build_project_automation_briefing",
+                    "orchestrator.core.projects.automation_execution_service.safe_build_project_automation_briefing",
                     return_value=type(
                         "Briefing",
                         (),
@@ -254,7 +254,7 @@ class ProjectAutomationExecutionServiceTests(unittest.TestCase):
                     )(),
                 ),
                 patch(
-                    "orchestrator.core.project_automation_execution_service.synthesize_reply_audio",
+                    "orchestrator.core.projects.automation_execution_service.synthesize_reply_audio",
                     side_effect=[
                         VoiceReplyAudio(audio_bytes=self._wav_bytes(b"\x01\x00"), filename="a.wav", content_type="audio/wav"),
                         VoiceReplyAudio(audio_bytes=self._wav_bytes(b"\x02\x00"), filename="b.wav", content_type="audio/wav"),

@@ -23,22 +23,22 @@ def upgrade() -> None:
     bind = op.get_bind()
     metadata = sa.MetaData()
     inspector = sa.inspect(bind)
-    run_columns = {column["name"] for column in inspector.get_columns("runs")}
-    run_indexes = {index["name"] for index in inspector.get_indexes("runs")}
+    existing_columns = {column["name"] for column in inspector.get_columns("runs")}
+    existing_indexes = {index["name"] for index in inspector.get_indexes("runs")}
 
     with op.batch_alter_table("runs") as batch_op:
-        if "pre_check_outcome" not in run_columns:
+        if "pre_check_outcome" not in existing_columns:
             batch_op.add_column(sa.Column("pre_check_outcome", sa.String(length=32), nullable=True))
-        if "required_worker_capability" not in run_columns:
+        if "required_worker_capability" not in existing_columns:
             batch_op.add_column(sa.Column("required_worker_capability", sa.String(length=32), nullable=True))
-        if "dispatch_claimed_at" not in run_columns:
+        if "dispatch_claimed_at" not in existing_columns:
             batch_op.add_column(sa.Column("dispatch_claimed_at", sa.DateTime(timezone=True), nullable=True))
 
-    if "ix_runs_pre_check_outcome" not in run_indexes:
+    if "ix_runs_pre_check_outcome" not in existing_indexes:
         op.create_index("ix_runs_pre_check_outcome", "runs", ["pre_check_outcome"], unique=False)
-    if "ix_runs_required_worker_capability" not in run_indexes:
+    if "ix_runs_required_worker_capability" not in existing_indexes:
         op.create_index("ix_runs_required_worker_capability", "runs", ["required_worker_capability"], unique=False)
-    if "ix_runs_dispatch_claimed_at" not in run_indexes:
+    if "ix_runs_dispatch_claimed_at" not in existing_indexes:
         op.create_index("ix_runs_dispatch_claimed_at", "runs", ["dispatch_claimed_at"], unique=False)
     runs = sa.Table("runs", metadata, autoload_with=bind)
 

@@ -1,9 +1,14 @@
 import unittest
-from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from orchestrator.api.discord.ingress.executor import execute_discord_command
 from orchestrator.api.schemas import DiscordCommandRequest
+from orchestrator.core.planning.specialist import (
+    ArchitectStageOutput,
+    SecurityStageOutput,
+    SpecialistPlanningResult,
+    TestingStageOutput,
+)
 from tests.test_discord_commands import DiscordCommandApiTestHarness
 
 
@@ -15,9 +20,8 @@ class PmInterviewFlowTests(DiscordCommandApiTestHarness):
                 "orchestrator.api.discord.ingress.ask_runtime.collect_ask_context_with_history_context",
                 return_value=(None, None, [], {}, []),
             ),
-            patch("orchestrator.api.discord.commands.ask.build_codex_runtime"),
             patch(
-                "orchestrator.api.discord.commands.ask.plan_pm_interview_with_codex",
+                "orchestrator.api.discord.commands.ask.plan_pm_interview_with_runtime",
                 return_value={
                     "message": (
                         "What kind of share feature do you mean?\n"
@@ -46,7 +50,7 @@ class PmInterviewFlowTests(DiscordCommandApiTestHarness):
                 },
             ),
             patch(
-                "orchestrator.api.discord.ingress.seed_runtime.seed_parent_issues_with_codex",
+                "orchestrator.runtime.issue_fanout.seed_parent_issues_with_runtime",
                 new=MagicMock(side_effect=AssertionError("PM interview should not seed Jira before completion")),
             ) as seed_mock,
         ):
@@ -68,45 +72,76 @@ class PmInterviewFlowTests(DiscordCommandApiTestHarness):
         seed_mock.assert_not_called()
 
     def test_complete_pm_request_writes_parent_and_plans_children(self) -> None:
-        planning_result = SimpleNamespace(
+        architect_stage = ArchitectStageOutput.from_payload(
+            planning_state="engineering_planning",
+            persona_id="architect",
+            role_label="Architect",
+            payload={
+                "findings": ["Break the work into onboarding and profile slices."],
+                "recommendations": ["Use one child ticket per implementation slice."],
+                "required_tasks": ["Implement share entry points"],
+                "child_ticket_specs": [
+                    {
+                        "summary": "Implement share entry points",
+                        "capability": "Share entry points",
+                        "delivery": "Build share entry points in onboarding and Profile so users can start the share flow from the intended surfaces.",
+                        "expected_outcome": "Users can reach the share flow from onboarding and Profile.",
+                        "acceptance_criteria": ["Needs entry points in onboarding and profile."],
+                        "how_to_test": ["Verify onboarding and Profile both expose the share entry point"],
+                        "done_means": ["Share entry points are live and covered by automation"],
+                        "dependencies": [],
+                        "risks": ["Entry-point behavior can drift between surfaces"],
+                        "labels": ["engineering"],
+                    }
+                ],
+                "technical_decisions": [],
+                "pm_decision_requests": [],
+                "acceptance_impacts": ["Needs entry points in onboarding and profile."],
+                "mermaid_diagram": "flowchart TD\n  Parent[Parent brief] --> Child[Engineering child]",
+            },
+        )
+        security_stage = SecurityStageOutput.from_payload(
+            planning_state="security_planning",
+            persona_id="security",
+            role_label="Security",
+            payload={
+                "findings": ["The link flow needs abuse controls."],
+                "recommendations": ["Enforce rate limiting."],
+                "required_tasks": ["Add share-link verification"],
+                "technical_decisions": [],
+                "pm_decision_requests": [],
+                "acceptance_impacts": ["Security checks must be covered in acceptance."],
+            },
+        )
+        testing_stage = TestingStageOutput.from_payload(
+            planning_state="test_planning",
+            persona_id="qa",
+            role_label="QA",
+            payload={
+                "findings": ["Regression coverage is required."],
+                "recommendations": ["Cover repeat-share misuse."],
+                "required_tasks": [],
+                "technical_decisions": [],
+                "pm_decision_requests": [],
+                "acceptance_impacts": ["Tests should prove the visible share outcome."],
+            },
+        )
+        planning_result = SpecialistPlanningResult(
             planning_state="planning_completed",
             required_tasks=("Implement share entry points", "Add share-link verification"),
             findings=("Share flows need abuse checks.",),
             recommendations=("Keep the first version link-only.",),
             acceptance_impacts=("Acceptance criteria should cover store fallback.",),
-            open_behavior_questions=(),
-            stages=(
-                SimpleNamespace(
-                    planning_state="engineering_planning",
-                    to_payload=lambda: {
-                        "findings": ["Break the work into onboarding and profile slices."],
-                        "recommendations": ["Use one child ticket per implementation slice."],
-                        "required_tasks": ["Implement share entry points"],
-                        "open_behavior_questions": [],
-                        "acceptance_impacts": ["Needs entry points in onboarding and profile."],
-                    },
-                ),
-                SimpleNamespace(
-                    planning_state="security_planning",
-                    to_payload=lambda: {
-                        "findings": ["The link flow needs abuse controls."],
-                        "recommendations": ["Enforce rate limiting."],
-                        "required_tasks": ["Add share-link verification"],
-                        "open_behavior_questions": [],
-                        "acceptance_impacts": ["Security checks must be covered in acceptance."],
-                    },
-                ),
-                SimpleNamespace(
-                    planning_state="test_planning",
-                    to_payload=lambda: {
-                        "findings": ["Regression coverage is required."],
-                        "recommendations": ["Cover repeat-share misuse."],
-                        "required_tasks": [],
-                        "open_behavior_questions": [],
-                        "acceptance_impacts": ["Tests should prove the visible share outcome."],
-                    },
-                ),
+            technical_decisions=(),
+            pm_decision_requests=(),
+            architecture_summary=(
+                "Break the work into onboarding and profile slices.",
+                "Use one child ticket per implementation slice.",
             ),
+            architecture_diagram="flowchart TD\n  Parent[Parent brief] --> Child[Engineering child]",
+            stages=(architect_stage, security_stage, testing_stage),
+            blocked_stage_states=(),
+            block_reason=None,
         )
         with (
             self.session_factory() as session,
@@ -115,7 +150,7 @@ class PmInterviewFlowTests(DiscordCommandApiTestHarness):
                 return_value=(None, None, [], {}, []),
             ),
             patch(
-                "orchestrator.api.discord.commands.ask.plan_pm_interview_with_codex",
+                "orchestrator.api.discord.commands.ask.plan_pm_interview_with_runtime",
                 return_value={
                     "message": "The PM brief is complete and ready for parent creation.",
                     "brief": {
@@ -142,7 +177,7 @@ class PmInterviewFlowTests(DiscordCommandApiTestHarness):
                 },
             ),
             patch(
-                "orchestrator.api.discord.ingress.seed_runtime.seed_parent_issues_with_codex",
+                "orchestrator.runtime.issue_fanout.seed_parent_issues_with_runtime",
                 return_value=(
                     "PM parent issue upsert complete. Created 1: TP-501. Updated 0: none.",
                     {
@@ -159,7 +194,7 @@ class PmInterviewFlowTests(DiscordCommandApiTestHarness):
                 return_value=planning_result,
             ) as planning_mock,
             patch(
-                "orchestrator.api.discord.ingress.seed_runtime.seed_issues_with_codex",
+                "orchestrator.runtime.issue_fanout.seed_issues_with_runtime",
                 return_value=(
                     "Issue upsert complete. Parent: TP-501. Created 2: TP-502, TP-503.",
                     {
@@ -193,7 +228,10 @@ class PmInterviewFlowTests(DiscordCommandApiTestHarness):
         self.assertEqual(seed_children_mock.call_args.kwargs["pm_status"], "pm_completed")
         planning_package = seed_children_mock.call_args.kwargs["planning_package"]
         self.assertEqual(planning_package["planning_state"], "planning_completed")
-        self.assertEqual(len(planning_package["child_issues"]), 2)
+        self.assertEqual(len(planning_package["child_issues"]), 1)
+        self.assertEqual(planning_package["child_issues"][0]["summary"], "Implement share entry points")
+        self.assertIn("architecture", planning_package["specialist_outputs"])
+        self.assertIn("Parent[Parent brief] --> Child[Engineering child]", planning_package["architecture_diagram"])
         planning_mock.assert_called_once()
 
 

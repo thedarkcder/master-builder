@@ -10,7 +10,7 @@ from orchestrator.api.transport_runtime import http_json_response_action, json_r
 from orchestrator.api.webhooks.github_webhook_context import resolve_github_webhook_context
 from orchestrator.core.communications import IngressResult
 from orchestrator.core.communications import TransportEnvelope
-from orchestrator.core.webhook_job_queue import (
+from orchestrator.core.webhooks.job_queue import (
     WEBHOOK_TRANSPORT_GITHUB,
     WebhookJobEnqueueRequest,
     enqueue_webhook_job,

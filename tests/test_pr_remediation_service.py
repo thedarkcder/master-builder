@@ -12,7 +12,7 @@ from orchestrator.api.webhooks.pr_remediation_service import (
     count_pr_remediation_attempts,
     enqueue_pr_remediation_if_needed,
 )
-from orchestrator.core.runs import EnqueueRunResult
+from orchestrator.core.runs.service import EnqueueRunResult
 from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 
 
@@ -251,6 +251,97 @@ class PrRemediationServiceTests(unittest.TestCase):
         bootstrap = enqueue_run_mock.call_args.kwargs["bootstrap"]
         self.assertEqual(bootstrap.branch, "feature/no-key")
         self.assertEqual(bootstrap.pr_url, "https://github.com/org/repo/pull/11")
+
+    def test_existing_issue_key_from_automatic_trigger_is_not_reenqueued(self) -> None:
+        session, tenant, project, github_client, payload, settings = self._base_context()
+        existing_run = SimpleNamespace(run_id="run-existing", plan={})
+        payload = {
+            **payload,
+            "comment": {
+                "id": 777,
+                "body": "plain comment",
+                "html_url": "https://github.com/org/repo/pull/11#discussion_r777",
+                "user": {"login": "owner-a"},
+            },
+            "check_run": {
+                "conclusion": "failure",
+            },
+        }
+
+        with (
+            patch(
+                "orchestrator.api.webhooks.pr_remediation_policy.find_existing_issue_key_for_pr_head",
+                return_value="GP-122",
+            ),
+            patch(
+                "orchestrator.api.webhooks.pr_remediation_service._latest_issue_run",
+                return_value=existing_run,
+            ) as latest_run_mock,
+            patch(
+                "orchestrator.api.webhooks.pr_remediation_enqueue.enqueue_run",
+            ) as enqueue_run_mock,
+        ):
+            result = enqueue_pr_remediation_if_needed(
+                session=session,
+                tenant=tenant,
+                project=project,
+                github_client=github_client,
+                event="check_run",
+                action="completed",
+                payload=payload,
+                pr_number=11,
+                repo_full_name="org/repo",
+                settings=settings,
+            )
+
+        self.assertTrue(result.triggered)
+        self.assertFalse(result.enqueued)
+        self.assertEqual(result.issue_key, "GP-122")
+        self.assertFalse(result.issue_created)
+        self.assertEqual(result.reason, "existing_issue_already_tracked")
+        self.assertIs(result.run, existing_run)
+        latest_run_mock.assert_called_once()
+        enqueue_run_mock.assert_not_called()
+
+    def test_manual_fix_request_still_enqueues_when_issue_already_exists(self) -> None:
+        session, tenant, project, github_client, payload, settings = self._base_context()
+        enqueue_result = EnqueueRunResult(
+            enqueued=True,
+            reason=None,
+            run=SimpleNamespace(run_id="run-manual", plan={}),
+        )
+
+        with (
+            patch(
+                "orchestrator.api.webhooks.pr_remediation_policy.find_existing_issue_key_for_pr_head",
+                return_value="GP-122",
+            ),
+            patch(
+                "orchestrator.api.webhooks.pr_remediation_service._latest_issue_run",
+            ) as latest_run_mock,
+            patch(
+                "orchestrator.api.webhooks.pr_remediation_enqueue.enqueue_run",
+                return_value=enqueue_result,
+            ) as enqueue_run_mock,
+        ):
+            result = enqueue_pr_remediation_if_needed(
+                session=session,
+                tenant=tenant,
+                project=project,
+                github_client=github_client,
+                event="pull_request_review_comment",
+                action="created",
+                payload=payload,
+                pr_number=11,
+                repo_full_name="org/repo",
+                settings=settings,
+            )
+
+        self.assertTrue(result.triggered)
+        self.assertTrue(result.enqueued)
+        self.assertEqual(result.issue_key, "GP-122")
+        latest_run_mock.assert_not_called()
+        enqueue_run_mock.assert_called_once()
 
     def test_creates_bug_when_issue_key_missing(self) -> None:
         session, tenant, project, github_client, payload, settings = self._base_context()

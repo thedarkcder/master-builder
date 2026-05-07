@@ -11,7 +11,7 @@ from orchestrator.core.worker.queue_selector import (
     probe_claimable_queued_run,
     select_next_queued_run,
 )
-from orchestrator.core.runs import resolve_required_worker_capability_from_plan
+from orchestrator.core.runs.service import resolve_required_worker_capability_from_plan
 from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
@@ -178,11 +178,13 @@ class WorkerQueueSelectorTests(unittest.TestCase):
             )
 
             self.assertIsNone(result.terminal_run)
-            self.assertIsNotNone(result.run)
-            self.assertIsNotNone(result.tenant)
-            self.assertEqual(result.run.run_id, "run-b-queued")
-            self.assertEqual(result.tenant.tenant_id, "tenant-b")
-            self.assertEqual(result.run.status, "dispatching")
+            self.assertIsNotNone(result.claimed_run)
+            assert result.claimed_run is not None
+            self.assertEqual(result.claimed_run.run_id, "run-b-queued")
+            self.assertEqual(result.claimed_run.tenant.tenant_id, "tenant-b")
+            self.assertEqual(result.claimed_run.status, "dispatching")
+            self.assertEqual(result.claimed_run.worker_service_instance_id, "node-a:1234")
+            self.assertTrue(result.claimed_run.claim_id)
             claim_row = session.get(TenantRunClaim, "tenant-b")
             self.assertIsNotNone(claim_row)
 
@@ -248,9 +250,10 @@ class WorkerQueueSelectorTests(unittest.TestCase):
                 running_stale_timeout_seconds=300,
             )
 
-            self.assertIsNotNone(result.run)
-            self.assertEqual(result.run.run_id, "run-a-queued-fresh")
-            self.assertEqual(result.run.status, "dispatching")
+            self.assertIsNotNone(result.claimed_run)
+            assert result.claimed_run is not None
+            self.assertEqual(result.claimed_run.run_id, "run-a-queued-fresh")
+            self.assertEqual(result.claimed_run.status, "dispatching")
 
     def test_claim_next_queued_run_recovers_when_claim_row_is_inserted_concurrently(self) -> None:
         now = datetime.now(timezone.utc)
@@ -308,9 +311,10 @@ class WorkerQueueSelectorTests(unittest.TestCase):
                     worker_service_instance_id="node-a:1234",
                 )
 
-            self.assertIsNotNone(result.run)
-            self.assertEqual(result.run.run_id, "run-race-queued")
-            self.assertEqual(result.run.status, "dispatching")
+            self.assertIsNotNone(result.claimed_run)
+            assert result.claimed_run is not None
+            self.assertEqual(result.claimed_run.run_id, "run-race-queued")
+            self.assertEqual(result.claimed_run.status, "dispatching")
 
     def test_select_next_queued_run_applies_project_overrides_when_project_id_unset(self) -> None:
         now = datetime.now(timezone.utc)

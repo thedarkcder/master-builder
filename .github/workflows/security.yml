@@ -16,9 +16,7 @@ concurrency:
 jobs:
   detect:
     name: Detect SAST languages
-    runs-on: 
-        - self-hosted
-        - Linux
+    runs-on: ubuntu-latest
     outputs:
       codeql_languages: ${{ steps.detect.outputs.codeql_languages }}
       is_python: ${{ steps.detect.outputs.is_python }}
@@ -33,7 +31,9 @@ jobs:
 
           has_file_pattern() {
             local pattern="$1"
-            find . -path './.git' -prune -o -type f -name "$pattern" -print -quit | grep -q .
+            local found
+            found="$(find . -path './.git' -prune -o -type f -name "$pattern" -print -quit)"
+            [ -n "$found" ]
           }
 
           languages=()
@@ -65,7 +65,7 @@ jobs:
   dependency-review:
     name: Dependency review
     needs: detect
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     if: github.event_name == 'pull_request' && vars.ENABLE_DEPENDENCY_REVIEW == 'true'
     permissions:
       contents: read
@@ -82,7 +82,7 @@ jobs:
     name: Python dependency audit
     needs: detect
     if: needs.detect.outputs.is_python == 'true'
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     permissions:
       contents: read
     steps:
@@ -114,7 +114,7 @@ jobs:
   gitleaks:
     name: Secret scanning (gitleaks)
     needs: detect
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     permissions:
       contents: read
       pull-requests: read
@@ -133,7 +133,7 @@ jobs:
     name: SAST (CodeQL)
     needs: detect
     if: needs.detect.outputs.codeql_languages != '' && vars.ENABLE_CODEQL == 'true'
-    runs-on: self-hosted
+    runs-on: ubuntu-latest
     permissions:
       actions: read
       contents: read

@@ -23,7 +23,7 @@ import {
   type DeploymentHostRecord,
   type TenantDeploymentPlaneRecord,
   type TenantDeploymentsOverviewRecord,
-} from "@/lib/api";
+} from "@/lib/api/deployments";
 import { canAccessPlatformAdmin } from "@/lib/auth-routing";
 import { cn } from "@/lib/utils";
 

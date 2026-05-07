@@ -4,26 +4,22 @@ import asyncio
 import logging
 import os
 import signal
-import sys
 from contextlib import suppress
-from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
-from sqlalchemy import and_, func, or_, select
+from sqlalchemy import func, select
+from sqlalchemy.exc import OperationalError as SQLAlchemyOperationalError
 from sqlalchemy.orm import Session, sessionmaker
 
 from orchestrator.api.admin.tenant_crud import purge_expired_archived_tenants
-from orchestrator.api.admin.deployment_restore_service import complete_project_deployment_restore_run
-from orchestrator.core.codex_runtime import CodexRuntimeError
 from orchestrator.core.config import Settings, get_settings
-from orchestrator.core.deployment_host_queue import fail_stale_running_deployment_host_commands
-from orchestrator.core.discord.notifications import send_tenant_discord_message
-from orchestrator.core.logging import configure_logging
-from orchestrator.core.knowledge_prewarm import prewarm_knowledge_dependencies
-from orchestrator.core.platform_metrics import platform_metrics
-from orchestrator.core.project_policy import resolve_effective_policy
-from orchestrator.core.runs import (
+from orchestrator.core.observability.logging import configure_logging
+from orchestrator.core.knowledge.prewarm import prewarm_knowledge_dependencies
+from orchestrator.core.observability.metrics import platform_metrics
+from orchestrator.core.observability.otel_telemetry import initialize_telemetry
+from orchestrator.core.projects.policy import resolve_effective_policy
+from orchestrator.core.runs.service import (
     RUN_STATUS_BLOCKED,
     RUN_STATUS_CANCELLED,
     RUN_STATUS_DISPATCHING,
@@ -31,19 +27,20 @@ from orchestrator.core.runs import (
     RUN_STATUS_RUNNING,
     RUN_STATUS_SUCCEEDED,
     RUN_STATUS_WAITING_FOR_INPUT,
-    mark_run_terminal,
 )
+from orchestrator.core.worker.child_process import WORKER_CHILD_EXIT_DEPENDENCY_FAILURE
+from orchestrator.core.worker.child_process import WORKER_CHILD_EXIT_IDLE
+from orchestrator.core.worker.child_process import WORKER_CHILD_EXIT_PROCESSED
+from orchestrator.core.worker.child_process import WORKER_CHILD_EXIT_RUNTIME_FAILURE
+from orchestrator.core.worker.child_process import WorkerChildProcessHandle
+from orchestrator.core.worker.child_process import WorkerChildProcessResult
+from orchestrator.core.worker.child_process import spawn_worker_child_process as _spawn_worker_child_process
+from orchestrator.core.worker.child_process import terminate_worker_child_processes as _terminate_worker_child_processes
 from orchestrator.core.worker.run_health import (
     recover_stale_running_runs,
     worker_service_instance_id_for_mode,
 )
-from orchestrator.core.worker.queue_selector import (
-    QueueClaimabilityProbe,
-    claim_next_queued_run,
-    probe_claimable_queued_run,
-)
 from orchestrator.core.worker.execution_service import (
-    process_claimed_run_with_dependencies as _process_claimed_run_with_dependencies,
     process_next_webhook_job_with_dependencies as _process_next_webhook_job_with_dependencies,
 )
 from orchestrator.core.worker.queue_listener import (
@@ -57,17 +54,22 @@ from orchestrator.core.worker.runtime_dependencies import (
     stop_all_live_runtime_auth_sessions,
     worker_runtime_dependency_snapshot,
 )
-from orchestrator.core.worker.runtime_factory import build_workflow_runner_for_session
-from orchestrator.core.worker_capabilities import resolve_worker_capability_context
-from orchestrator.core.workflow.runner import WorkflowRunner
+from orchestrator.core.worker.run_dispatch import WorkerDependencyFailure
+from orchestrator.core.worker.run_dispatch import claim_next_run_once as _claim_next_run_once
+from orchestrator.core.worker.run_dispatch import has_available_webhook_job_once as _has_available_webhook_job_once
+from orchestrator.core.worker.run_dispatch import probe_claimable_run_once as _probe_claimable_run_once
+from orchestrator.core.worker.run_dispatch import process_next_run_once as _process_next_run_once
+from orchestrator.core.worker.run_dispatch import reconcile_claimed_run_after_child_exit as _reconcile_claimed_run_after_child_exit
+from orchestrator.core.worker.capabilities import resolve_worker_capability_context
 from orchestrator.core.workflow.execution_snapshot_startup import ensure_execution_snapshot_startup_bootstrap
+from orchestrator.core.workflow.type_catalog import validate_persisted_workflow_definitions
 from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.run_queue_events import (
     RUN_QUEUE_NOTIFY_CHANNEL,
     is_postgres_database_url,
     postgres_dsn_from_database_url,
 )
-from orchestrator.storage.models import Project, Run, Tenant, WebhookJob, WorkerRuntimeState
+from orchestrator.storage.models import Project, Run, Tenant, WorkerRuntimeState
 
 try:
     import psycopg
@@ -78,12 +80,13 @@ logger = logging.getLogger(__name__)
 WORKER_RUNTIME_HEARTBEAT_INTERVAL_SECONDS = 30
 WORKER_MODE_RUNS = "runs"
 WORKER_MODE_WEBHOOKS = "webhooks"
-WORKER_CHILD_EXIT_PROCESSED = 0
-WORKER_CHILD_EXIT_IDLE = 3
-WORKER_CHILD_EXIT_DEPENDENCY_FAILURE = 4
-WORKER_CHILD_EXIT_RUNTIME_FAILURE = 5
+WORKER_STARTUP_DB_RETRY_MAX_ATTEMPTS = 6
+WORKER_STARTUP_DB_RETRY_BASE_DELAY_SECONDS = 1.0
+WORKER_STARTUP_DB_RETRY_MAX_DELAY_SECONDS = 8.0
 _VALID_POST_CHILD_RUN_STATUSES = {
     "queued",
+    "ownership_lost",
+    "temporal_handoff",
     RUN_STATUS_RUNNING,
     RUN_STATUS_WAITING_FOR_INPUT,
     RUN_STATUS_BLOCKED,
@@ -91,37 +94,6 @@ _VALID_POST_CHILD_RUN_STATUSES = {
     RUN_STATUS_FAILED,
     RUN_STATUS_CANCELLED,
 }
-_CHILD_DISPATCH_STUCK_ERROR = "Run child completed without moving the run out of dispatching"
-
-
-class WorkerDependencyFailure(RuntimeError):
-    pass
-
-
-@dataclass(frozen=True)
-class WorkerChildProcessResult:
-    return_code: int
-    processed: bool
-    dependency_failure: bool
-    timed_out: bool = False
-
-
-@dataclass(frozen=True)
-class WorkerChildProcessHandle:
-    process: asyncio.subprocess.Process
-    wait_task: asyncio.Task[WorkerChildProcessResult]
-    claimed_run_id: str | None = None
-    claim_id: str | None = None
-
-
-@dataclass(frozen=True)
-class ClaimedRunDispatch:
-    run_id: str
-    claim_id: str
-    tenant_id: str
-    issue_key: str
-
-
 def _coerce_parallel_slots(raw_value: object) -> int:
     try:
         parsed = int(raw_value)
@@ -344,96 +316,9 @@ def _process_next_webhook_job_once(
     )
 
 
-def _process_next_run_once(
-    *,
-    session_factory: sessionmaker[Session],
-    claimed_run_id: str,
-    claim_id: str,
-) -> object | None:
-    class _LazyWorkflowRunner:
-        def __init__(self, *, session: Session) -> None:
-            self._session = session
-            self._runner: WorkflowRunner | None = None
-
-        def run(self, *args, **kwargs):  # noqa: ANN002, ANN003, ANN202
-            if self._runner is None:
-                try:
-                    self._runner = build_workflow_runner_for_session(session=self._session)
-                except CodexRuntimeError as exc:
-                    platform_metrics.record_worker_failure(kind="dependency")
-                    raise WorkerDependencyFailure(f"Worker runtime unavailable: {exc}") from exc
-            return self._runner.run(*args, **kwargs)
-
-    with session_factory() as session:
-        normalized_claimed_run_id = str(claimed_run_id or "").strip()
-        normalized_claim_id = str(claim_id or "").strip()
-        if not normalized_claimed_run_id:
-            raise RuntimeError("Run worker child started without claimed_run_id")
-        if not normalized_claim_id:
-            raise RuntimeError(f"Claimed run {normalized_claimed_run_id} missing claim_id")
-        result = _process_claimed_run_with_dependencies(
-            session=session,
-            runner=_LazyWorkflowRunner(session=session),
-            run_id=normalized_claimed_run_id,
-            claim_id=normalized_claim_id,
-            send_discord_message_fn=send_tenant_discord_message,
-        )
-        if result is None or isinstance(result, Run):
-            return result
-        logger.warning(
-            "worker_run_child_non_run_result type=%s",
-            type(result).__name__,
-        )
-        return None
-
-
-def _claim_next_run_once(
-    *,
-    session_factory: sessionmaker[Session],
-    settings: Settings,
-    service_instance_id: str,
-    ready_runtime_kinds: set[str],
-) -> ClaimedRunDispatch | None:
-    capability_context = resolve_worker_capability_context(
-        raw_value=getattr(settings, "worker_capabilities", None),
-        source="ORCHESTRATOR_WORKER_CAPABILITIES",
-    )
-    with session_factory() as session:
-        selection = claim_next_queued_run(
-            session,
-            queued_status="queued",
-            running_status="running",
-            failed_status="failed",
-            worker_service_instance_id=service_instance_id,
-            worker_capabilities=set(capability_context.available),
-            ready_runtime_kinds=ready_runtime_kinds,
-            running_stale_timeout_seconds=max(
-                60,
-                int(getattr(settings, "worker_run_stale_timeout_seconds", 300)),
-            ),
-        )
-        if selection.run is None or selection.tenant is None:
-            return None
-        return ClaimedRunDispatch(
-            run_id=selection.run.run_id,
-            claim_id=str(selection.run.claim_id or "").strip(),
-            tenant_id=selection.run.tenant_id,
-            issue_key=selection.run.issue_key,
-        )
-
-
 def _resolve_webhook_owner_id(*, settings: Settings) -> str:
     service_instance_id = worker_service_instance_id_for_mode(settings=settings, mode=WORKER_MODE_WEBHOOKS)
     return f"worker:{service_instance_id}:child:{uuid4().hex}"
-
-
-def _child_command_for_mode(*, mode: str) -> str:
-    normalized_mode = str(mode or "").strip().lower()
-    if normalized_mode == WORKER_MODE_RUNS:
-        return "worker-child-runs"
-    if normalized_mode == WORKER_MODE_WEBHOOKS:
-        return "worker-child-webhooks"
-    raise ValueError(f"Unsupported worker mode '{mode}'")
 
 
 def _resolve_worker_child_capacity(
@@ -454,178 +339,39 @@ def _resolve_worker_child_timeout_seconds(*, settings: Settings) -> int:
     return max(60, workflow_timeout_minutes * 60)
 
 
-def _probe_claimable_run_once(
-    *,
-    session_factory: sessionmaker[Session],
-    settings: Settings,
-    ready_runtime_kinds: set[str],
-) -> QueueClaimabilityProbe:
-    capability_context = resolve_worker_capability_context(
-        raw_value=getattr(settings, "worker_capabilities", None),
-        source="ORCHESTRATOR_WORKER_CAPABILITIES",
+def _worker_startup_db_retry_delay_seconds(*, attempt: int) -> float:
+    bounded_attempt = max(1, int(attempt))
+    return min(
+        WORKER_STARTUP_DB_RETRY_MAX_DELAY_SECONDS,
+        WORKER_STARTUP_DB_RETRY_BASE_DELAY_SECONDS * (2 ** (bounded_attempt - 1)),
     )
-    with session_factory() as session:
-        return probe_claimable_queued_run(
-            session,
-            queued_status="queued",
-            running_status="running",
-            worker_capabilities=set(capability_context.available),
-            ready_runtime_kinds=ready_runtime_kinds,
-            running_stale_timeout_seconds=max(
-                60,
-                int(getattr(settings, "worker_run_stale_timeout_seconds", 300)),
-            ),
+
+
+def _is_retryable_worker_startup_db_error(exc: BaseException) -> bool:
+    if not isinstance(exc, SQLAlchemyOperationalError):
+        return False
+    message = " ".join(
+        part
+        for part in (
+            str(getattr(exc, "orig", "") or "").strip(),
+            str(exc).strip(),
         )
-
-
-def _has_available_webhook_job_once(
-    *,
-    session_factory: sessionmaker[Session],
-) -> bool:
-    now = datetime.now(timezone.utc)
-    with session_factory() as session:
-        stale_commands = fail_stale_running_deployment_host_commands(session=session, now=now)
-        for stale_command in stale_commands:
-            if stale_command.kind == "restore_database" and stale_command.restore_run_id:
-                complete_project_deployment_restore_run(
-                    session=session,
-                    restore_run_id=stale_command.restore_run_id,
-                    status="failed",
-                    last_error=stale_command.last_error,
-                )
-        if stale_commands:
-            session.commit()
-        job_id = session.execute(
-            select(WebhookJob.job_id)
-            .where(
-                WebhookJob.available_at <= now,
-                or_(
-                    WebhookJob.status == "pending",
-                    and_(
-                        WebhookJob.status == "processing",
-                        WebhookJob.lease_expires_at.is_not(None),
-                        WebhookJob.lease_expires_at <= now,
-                    ),
-                ),
-            )
-            .order_by(WebhookJob.created_at.asc())
-            .limit(1)
-        ).scalar_one_or_none()
-        return job_id is not None
-
-
-async def _spawn_worker_child_process(
-    *,
-    mode: str,
-    wake_event: asyncio.Event,
-    child_timeout_seconds: int,
-    claimed_run_id: str | None = None,
-    claim_id: str | None = None,
-) -> WorkerChildProcessHandle:
-    _ = wake_event
-    child_env = None
-    if claimed_run_id:
-        child_env = os.environ.copy()
-        child_env["ORCHESTRATOR_WORKER_CLAIMED_RUN_ID"] = claimed_run_id
-        child_env["ORCHESTRATOR_WORKER_CLAIM_ID"] = str(claim_id or "").strip()
-    process = await asyncio.create_subprocess_exec(
-        sys.executable,
-        "-m",
-        "orchestrator",
-        _child_command_for_mode(mode=mode),
-        env=child_env,
-    )
-    logger.info(
-        "worker_child_spawned mode=%s pid=%s timeout_seconds=%s run_id=%s",
-        mode,
-        process.pid,
-        child_timeout_seconds,
-        claimed_run_id,
-    )
-
-    async def _await_result() -> WorkerChildProcessResult:
-        try:
-            return_code = await asyncio.wait_for(
-                process.wait(),
-                timeout=max(1, int(child_timeout_seconds)),
-            )
-        except asyncio.TimeoutError:
-            logger.error(
-                "worker_child_timed_out mode=%s pid=%s timeout_seconds=%s",
-                mode,
-                process.pid,
-                child_timeout_seconds,
-            )
-            with suppress(ProcessLookupError):
-                process.terminate()
-            try:
-                return_code = await asyncio.wait_for(process.wait(), timeout=5.0)
-            except asyncio.TimeoutError:
-                logger.error(
-                    "worker_child_terminate_grace_expired mode=%s pid=%s",
-                    mode,
-                    process.pid,
-                )
-                with suppress(ProcessLookupError):
-                    process.kill()
-                return_code = await process.wait()
-            return WorkerChildProcessResult(
-                return_code=WORKER_CHILD_EXIT_RUNTIME_FAILURE,
-                processed=False,
-                dependency_failure=False,
-                timed_out=True,
-            )
-        return WorkerChildProcessResult(
-            return_code=return_code,
-            processed=return_code == WORKER_CHILD_EXIT_PROCESSED,
-            dependency_failure=return_code == WORKER_CHILD_EXIT_DEPENDENCY_FAILURE,
+        if part
+    ).lower()
+    if not message:
+        return False
+    return any(
+        needle in message
+        for needle in (
+            "database system is in recovery mode",
+            "connection failed",
+            "could not connect",
+            "connection refused",
+            "server closed the connection unexpectedly",
+            "the database system is starting up",
+            "timeout expired",
         )
-
-    wait_task = asyncio.create_task(_await_result())
-    return WorkerChildProcessHandle(
-        process=process,
-        wait_task=wait_task,
-        claimed_run_id=claimed_run_id,
-        claim_id=claim_id,
     )
-
-
-def _reconcile_claimed_run_after_child_exit(
-    *,
-    session_factory: sessionmaker[Session],
-    run_id: str,
-    claim_id: str,
-) -> str | None:
-    with session_factory() as session:
-        run = session.get(Run, run_id)
-        if run is None:
-            return None
-        status = str(getattr(run, "status", "") or "").strip().lower()
-        if status == RUN_STATUS_DISPATCHING:
-            failed_run = mark_run_terminal(
-                session,
-                run_id=run_id,
-                terminal_status=RUN_STATUS_FAILED,
-                last_error=_CHILD_DISPATCH_STUCK_ERROR,
-                expected_claim_id=claim_id,
-            )
-            return str(getattr(failed_run, "status", "") or "").strip().lower()
-        return status
-
-
-async def _terminate_worker_child_processes(
-    *,
-    active_children: dict[asyncio.Task[WorkerChildProcessResult], WorkerChildProcessHandle],
-) -> None:
-    handles = list(active_children.values())
-    for handle in handles:
-        if handle.process.returncode is not None:
-            continue
-        with suppress(ProcessLookupError):
-            handle.process.terminate()
-    waiters: list[asyncio.Task[WorkerChildProcessResult]] = [handle.wait_task for handle in handles]
-    if waiters:
-        await asyncio.gather(*waiters, return_exceptions=True)
 
 
 def _recover_worker_run_health_once(
@@ -750,12 +496,18 @@ def run_worker_child_once(*, mode: str = WORKER_MODE_RUNS) -> int:
         platform_version=settings.sentry_release or "dev-local",
         default_agent_id=str(settings.agent_id or "").strip() or "worker",
     )
+    initialize_telemetry(
+        settings=settings,
+        service_name="run-worker-child" if str(mode or "").strip().lower() == WORKER_MODE_RUNS else "webhook-worker-child",
+    )
     session_factory = create_session_factory()
     ensure_execution_snapshot_startup_bootstrap(
         session_factory=session_factory,
         database_url=settings.database_url,
         actor=f"worker_child:{mode}",
     )
+    with session_factory() as session:
+        validate_persisted_workflow_definitions(session=session)
     try:
         normalized_mode = str(mode or "").strip().lower()
         if normalized_mode == WORKER_MODE_RUNS:
@@ -792,6 +544,10 @@ async def run_worker(*, mode: str = WORKER_MODE_RUNS) -> None:
         environment=settings.sentry_environment,
         platform_version=settings.sentry_release or "dev-local",
         default_agent_id=str(settings.agent_id or "").strip() or "worker",
+    )
+    initialize_telemetry(
+        settings=settings,
+        service_name="run-worker" if str(mode or "").strip().lower() == WORKER_MODE_RUNS else "webhook-worker",
     )
     session_factory = create_session_factory()
     await asyncio.to_thread(
@@ -837,6 +593,8 @@ async def run_worker(*, mode: str = WORKER_MODE_RUNS) -> None:
     next_readiness_refresh_at: datetime | None = None
     next_auth_request_refresh_at: datetime | None = None
     runtime_block_logged_keys: tuple[str, ...] = ()
+    startup_db_access_verified = False
+    startup_db_retry_attempts = 0
     try:
         listener.start()
         await asyncio.to_thread(
@@ -982,12 +740,14 @@ async def run_worker(*, mode: str = WORKER_MODE_RUNS) -> None:
                         mode == WORKER_MODE_RUNS
                         and handle.claimed_run_id
                         and handle.claim_id
+                        and handle.worker_service_instance_id
                     ):
                         post_child_status = await asyncio.to_thread(
                             _reconcile_claimed_run_after_child_exit,
                             session_factory=session_factory,
                             run_id=handle.claimed_run_id,
                             claim_id=handle.claim_id,
+                            worker_service_instance_id=handle.worker_service_instance_id,
                         )
                         if post_child_status not in _VALID_POST_CHILD_RUN_STATUSES:
                             platform_metrics.record_worker_failure(kind="child_crash")
@@ -1019,52 +779,94 @@ async def run_worker(*, mode: str = WORKER_MODE_RUNS) -> None:
                 session_factory=session_factory,
             )
             while drain_requested and len(active_children) < parallel_slots and not stop_event.is_set():
-                if mode == WORKER_MODE_RUNS:
-                    claimed_run = await asyncio.to_thread(
-                        _claim_next_run_once,
-                        session_factory=session_factory,
-                        settings=settings,
-                        service_instance_id=service_instance_id,
-                        ready_runtime_kinds=runtime_dependency_snapshot.ready_runtime_kinds,
-                    )
-                    if claimed_run is None:
-                        run_probe = await asyncio.to_thread(
-                            _probe_claimable_run_once,
+                try:
+                    if mode == WORKER_MODE_RUNS:
+                        claimed_run = await asyncio.to_thread(
+                            _claim_next_run_once,
                             session_factory=session_factory,
                             settings=settings,
+                            service_instance_id=service_instance_id,
                             ready_runtime_kinds=runtime_dependency_snapshot.ready_runtime_kinds,
                         )
+                        if claimed_run is None:
+                            run_probe = await asyncio.to_thread(
+                                _probe_claimable_run_once,
+                                session_factory=session_factory,
+                                settings=settings,
+                                ready_runtime_kinds=runtime_dependency_snapshot.ready_runtime_kinds,
+                            )
+                            startup_db_access_verified = True
+                            startup_db_retry_attempts = 0
+                            logger.info(
+                                "worker_no_claimable_run reason=%s run_id=%s tenant_id=%s issue_key=%s",
+                                run_probe.reason.value,
+                                run_probe.run_id,
+                                run_probe.tenant_id,
+                                run_probe.issue_key,
+                            )
+                            drain_requested = False
+                            break
+                        startup_db_access_verified = True
+                        startup_db_retry_attempts = 0
                         logger.info(
-                            "worker_no_claimable_run reason=%s run_id=%s tenant_id=%s issue_key=%s",
-                            run_probe.reason.value,
-                            run_probe.run_id,
-                            run_probe.tenant_id,
-                            run_probe.issue_key,
+                            "worker_claimed_run_for_child run_id=%s tenant_id=%s issue_key=%s worker_service_instance_id=%s claim_id=%s",
+                            claimed_run.run_id,
+                            claimed_run.tenant_id,
+                            claimed_run.issue_key,
+                            service_instance_id,
+                            claimed_run.claim_id,
                         )
-                        drain_requested = False
-                        break
-                    logger.info(
-                        "worker_claimed_run_for_child run_id=%s tenant_id=%s issue_key=%s worker_service_instance_id=%s claim_id=%s",
-                        claimed_run.run_id,
-                        claimed_run.tenant_id,
-                        claimed_run.issue_key,
-                        service_instance_id,
-                        claimed_run.claim_id,
-                    )
-                else:
-                    has_webhook_job = await asyncio.to_thread(
-                        _has_available_webhook_job_once,
-                        session_factory=session_factory,
-                    )
-                    if not has_webhook_job:
-                        drain_requested = False
-                        break
+                    else:
+                        has_webhook_job = await asyncio.to_thread(
+                            _has_available_webhook_job_once,
+                            session_factory=session_factory,
+                        )
+                        startup_db_access_verified = True
+                        startup_db_retry_attempts = 0
+                        if not has_webhook_job:
+                            drain_requested = False
+                            break
+                except Exception as exc:
+                    if (
+                        not startup_db_access_verified
+                        and _is_retryable_worker_startup_db_error(exc)
+                    ):
+                        startup_db_retry_attempts += 1
+                        retry_delay_seconds = _worker_startup_db_retry_delay_seconds(
+                            attempt=startup_db_retry_attempts
+                        )
+                        logger.warning(
+                            "worker_startup_database_unavailable mode=%s attempt=%s max_attempts=%s retry_in_seconds=%.1f error=%s",
+                            mode,
+                            startup_db_retry_attempts,
+                            WORKER_STARTUP_DB_RETRY_MAX_ATTEMPTS,
+                            retry_delay_seconds,
+                            exc,
+                        )
+                        if startup_db_retry_attempts >= WORKER_STARTUP_DB_RETRY_MAX_ATTEMPTS:
+                            logger.exception(
+                                "worker_startup_database_retry_exhausted mode=%s attempts=%s",
+                                mode,
+                                startup_db_retry_attempts,
+                            )
+                            raise
+                        await wait_for_wake_or_stop(
+                            wake_event=wake_event,
+                            stop_event=stop_event,
+                            timeout_seconds=retry_delay_seconds,
+                        )
+                        drain_requested = True
+                        continue
+                    raise
                 child = await _spawn_worker_child_process(
                     mode=mode,
                     wake_event=wake_event,
                     child_timeout_seconds=child_timeout_seconds,
                     claimed_run_id=claimed_run.run_id if mode == WORKER_MODE_RUNS else None,
                     claim_id=claimed_run.claim_id if mode == WORKER_MODE_RUNS else None,
+                    worker_service_instance_id=(
+                        claimed_run.worker_service_instance_id if mode == WORKER_MODE_RUNS else None
+                    ),
                 )
                 active_children[child.wait_task] = child
 

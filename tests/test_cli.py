@@ -11,7 +11,6 @@ from datetime import datetime, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
-from types import SimpleNamespace
 
 from orchestrator.cli import main as cli_main
 from orchestrator.core.config import get_settings
@@ -211,29 +210,3 @@ class CliEntrypointTests(unittest.TestCase):
         self.assertTrue(payload["transcription_ready"])
         self.assertEqual(payload["prewarmed_voice_ids"], ["alba", "jean"])
         prewarm_mock.assert_called_once()
-
-    def test_migrate_execution_snapshots_command_invokes_migration(self) -> None:
-        output = io.StringIO()
-        migration_report = SimpleNamespace(
-            scanned_runs=3,
-            converted_runs=2,
-            invalid_runs=0,
-            scanned_checkpoints=4,
-            converted_checkpoints=1,
-            invalid_checkpoints=0,
-            invalid_run_ids=(),
-            invalid_checkpoint_ids=(),
-        )
-        with (
-            redirect_stdout(output),
-            patch("orchestrator.cli.migrate_execution_snapshots", return_value=migration_report) as migrate_mock,
-        ):
-            exit_code = cli_main(["migrate-execution-snapshots", "--apply"])
-
-        payload = json.loads(output.getvalue())
-        self.assertEqual(exit_code, 0)
-        self.assertTrue(payload["ok"])
-        self.assertTrue(payload["apply"])
-        self.assertEqual(payload["converted_runs"], 2)
-        self.assertEqual(payload["converted_checkpoints"], 1)
-        migrate_mock.assert_called_once()

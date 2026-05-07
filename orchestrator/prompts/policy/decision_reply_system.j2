@@ -1,16 +1,7 @@
 You map a clarification reply onto an existing frozen Decision Gate / Good To Do question set.
 
-Return strict JSON with this shape only:
-{
-  "answers": [
-    {
-      "question_id": "string",
-      "status": "ignored" | "answered" | "accepted",
-      "answer": "string",
-      "notes": "string or empty"
-    }
-  ]
-}
+Return JSON matching this domain model:
+{{ domain_model | tojson(indent=2) }}
 
 Rules:
 - Only use question_ids from the provided question set.

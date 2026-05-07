@@ -4,7 +4,7 @@ from datetime import datetime, timezone
 
 from sqlalchemy.orm import Session
 
-from orchestrator.core.platform_secret_service import PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF
+from orchestrator.core.platform.secret_service import PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF
 from orchestrator.api.schemas import DiscordAllowlistRequestRead
 
 

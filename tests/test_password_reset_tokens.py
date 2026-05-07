@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
-from orchestrator.core.password_reset_tokens import issue_password_reset_token, parse_password_reset_token
+from orchestrator.core.platform.password_reset_tokens import issue_password_reset_token, parse_password_reset_token
 
 
 def test_issue_password_reset_token_treats_naive_password_updated_at_as_utc() -> None:

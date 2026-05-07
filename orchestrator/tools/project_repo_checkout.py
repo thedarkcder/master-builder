@@ -18,6 +18,17 @@ class ProjectRepoCheckoutError(RuntimeError):
     pass
 
 
+@dataclass(frozen=True)
+class PreparedExecutionRepo:
+    repo_dir: Path
+    execution_branch: str
+    start_point_ref: str
+    start_point_sha: str
+    workspace_key: str
+    repo_kind: str
+    issue_key: str | None = None
+
+
 _SEEDED_GITIGNORE_CONTENT = """# Seeded by Master Builder
 # Add project-specific ignore rules below.
 .DS_Store
@@ -114,6 +125,10 @@ def _resolve_git_path(*, repo_dir: Path, git_path: str) -> Path:
 
 def project_repo_dir(*, base_dir: str, tenant_id: str, project_id: str) -> Path:
     return Path(base_dir) / tenant_id / project_id / "repo"
+
+
+def project_checkout_root_dir(*, base_dir: str, tenant_id: str, project_id: str) -> Path:
+    return Path(base_dir) / tenant_id / project_id
 
 
 def project_run_root_dir(*, base_dir: str, tenant_id: str, project_id: str, run_id: str) -> Path:
@@ -238,7 +253,7 @@ def _sync_agent_workspace_files(*, repo_dir: Path) -> None:
             for line in exclude_path.read_text(encoding="utf-8").splitlines()
             if line.strip()
         }
-    required_lines = {"AGENTS.md", ".codex/", ".master-builder-run.json"}
+    required_lines = {"AGENTS.md", ".codex/", ".master-builder-run.json", ".master-builder-execution-repo.json"}
     if seeded_gitignore:
         required_lines.add(".gitignore")
     missing_lines = [line for line in sorted(required_lines) if line not in existing_lines]
@@ -250,6 +265,10 @@ def _sync_agent_workspace_files(*, repo_dir: Path) -> None:
 
 def _run_metadata_path(*, repo_dir: Path | str) -> Path:
     return Path(repo_dir) / ".master-builder-run.json"
+
+
+def _execution_repo_metadata_path(*, repo_dir: Path | str) -> Path:
+    return Path(repo_dir) / ".master-builder-execution-repo.json"
 
 
 def read_run_worktree_metadata(*, repo_dir: Path | str) -> dict[str, str] | None:
@@ -296,6 +315,82 @@ def _read_run_metadata(*, repo_dir: Path | str) -> dict[str, str] | None:
     except json.JSONDecodeError:
         return None
     return payload if isinstance(payload, dict) else None
+
+
+def read_execution_repo_metadata(*, repo_dir: Path | str) -> dict[str, str] | None:
+    path = _execution_repo_metadata_path(repo_dir=repo_dir)
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def validate_execution_repo(
+    *,
+    checkout_root: Path,
+    repo_dir: Path | str,
+    run_id: str,
+    execution_branch: str,
+    workspace_key: str,
+) -> PreparedExecutionRepo:
+    resolved_checkout_root = checkout_root.resolve()
+    resolved_repo_dir = Path(repo_dir).resolve()
+    try:
+        resolved_repo_dir.relative_to(resolved_checkout_root)
+    except ValueError as exc:
+        raise ProjectRepoCheckoutError(
+            f"Execution repo {resolved_repo_dir} is outside checkout root {resolved_checkout_root}"
+        ) from exc
+    if not (resolved_repo_dir / ".git").exists():
+        raise ProjectRepoCheckoutError(f"Execution repo is missing git metadata at {resolved_repo_dir}")
+
+    _sync_agent_workspace_files(repo_dir=resolved_repo_dir)
+    metadata = read_execution_repo_metadata(repo_dir=resolved_repo_dir)
+    if metadata is None:
+        raise ProjectRepoCheckoutError(f"Execution repo metadata is missing at {resolved_repo_dir}")
+    if str(metadata.get("run_id") or "").strip() != str(run_id or "").strip():
+        raise ProjectRepoCheckoutError(f"Execution repo metadata does not match run_id={run_id}")
+
+    normalized_workspace_key = _normalize_workspace_key(workspace_key)
+    actual_workspace_key = str(metadata.get("workspace_key") or "").strip()
+    if actual_workspace_key != normalized_workspace_key:
+        raise ProjectRepoCheckoutError(
+            "Execution repo metadata workspace_key mismatch: "
+            f"expected {normalized_workspace_key}, found {actual_workspace_key or '<missing>'}"
+        )
+
+    expected_branch = str(metadata.get("execution_branch") or "").strip() or str(execution_branch or "").strip()
+    if not expected_branch:
+        raise ProjectRepoCheckoutError("Execution repo metadata is missing execution_branch")
+    current_branch = _run_git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=resolved_repo_dir).strip()
+    if current_branch != expected_branch:
+        raise ProjectRepoCheckoutError(
+            f"Execution repo branch mismatch: expected {expected_branch}, found {current_branch}"
+        )
+    if _run_git(["status", "--porcelain"], cwd=resolved_repo_dir).strip():
+        raise ProjectRepoCheckoutError("Execution repo is unexpectedly dirty before execution")
+
+    start_point_ref = str(metadata.get("start_point_ref") or "").strip()
+    start_point_sha = str(metadata.get("start_point_sha") or "").strip()
+    repo_kind = str(metadata.get("repo_kind") or "").strip()
+    if not start_point_ref or not start_point_sha:
+        raise ProjectRepoCheckoutError("Execution repo metadata is missing start point data")
+    if not repo_kind:
+        raise ProjectRepoCheckoutError("Execution repo metadata is missing repo_kind")
+
+    issue_key = str(metadata.get("issue_key") or "").strip() or None
+    return PreparedExecutionRepo(
+        repo_dir=resolved_repo_dir,
+        execution_branch=expected_branch,
+        start_point_ref=start_point_ref,
+        start_point_sha=start_point_sha,
+        workspace_key=normalized_workspace_key,
+        repo_kind=repo_kind,
+        issue_key=issue_key,
+    )
 
 
 def _git_ref_exists(*, cwd: Path, ref: str) -> bool:

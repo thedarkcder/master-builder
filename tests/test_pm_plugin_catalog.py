@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import unittest
 
-from orchestrator.core.pm_plugin_catalog import plugin_catalog_payload, tool_catalog_payload
+from orchestrator.core.pm.plugin_catalog import plugin_catalog_payload, tool_catalog_payload
 
 
 class PmPluginCatalogTests(unittest.TestCase):

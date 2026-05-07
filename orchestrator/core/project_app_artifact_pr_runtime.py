@@ -11,12 +11,12 @@ from typing import Iterable
 
 from sqlalchemy.orm import Session
 
-from orchestrator.core.platform_secret_service import resolve_platform_secret_ref
+from orchestrator.core.platform.secret_service import resolve_platform_secret_ref
 from orchestrator.core.project_app_planner import (
     ProjectAppAnalysisResult,
     ProjectAppNormalizedCandidate,
 )
-from orchestrator.core.tenant_secret_service import resolve_scoped_secret_ref
+from orchestrator.core.platform.tenant_secret_service import resolve_scoped_secret_ref
 from orchestrator.storage.models import Project, Tenant
 from orchestrator.tools.github_app import GitHubApiError, github_client_from_tenant_config
 from orchestrator.tools.repo_allowlist import normalize_repo_identifier

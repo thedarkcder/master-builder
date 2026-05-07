@@ -1,0 +1,1037 @@
+import { expect, test } from "@playwright/test";
+
+import {
+  fulfillJson,
+  installBffApiMocks,
+  makeRun,
+  makeTenantUserPrincipal,
+  makeWorkflow,
+  mockTenantWorkflowApis,
+  seedAdminSession,
+  seedTenantSession,
+} from "./support/admin-ui";
+
+test("shows workflow definitions and retries a failed execution operation", async ({ page }) => {
+  await seedAdminSession(page);
+
+  const workflow = makeWorkflow({
+    execution_id: "wfexec-mab-215",
+    workflow_id: "parent_planning:MAB-215",
+    tenant_id: "example",
+    project_id: "example-default",
+    source_system: "jira",
+    source_ref: "MAB-215",
+    display_name: "Identity and authorization v1 contract",
+    orchestration_backend: "temporal",
+    dedupe_scope: "parent_planning",
+    status: "failed",
+    workflow_type: {
+      key: "parent_planning",
+      label: "Parent Planning",
+      description: "Parent planning workflow",
+      retry_policy: {
+        manual_retry_enabled: true,
+        max_attempts: 4,
+        initial_interval_seconds: 60,
+        max_interval_seconds: 1800,
+        backoff_coefficient: 2,
+      },
+      capabilities: {
+        child_issue_links: true,
+      },
+      lifecycle: {
+        state_path_kind: "operation",
+        execution_modes: ["fresh", "resume"],
+        conditional_paths: ["Human input clarification", "Retry failed operation", "Child issue fanout"],
+        states: [
+          { key: "running", label: "Running", terminal: false, waits_for_input: false },
+          { key: "waiting_for_input", label: "Waiting for input", terminal: false, waits_for_input: true },
+          { key: "completed", label: "Completed", terminal: true, waits_for_input: false },
+          { key: "failed", label: "Failed", terminal: true, waits_for_input: false },
+        ],
+        transitions: [
+          { from_state: "running", to_state: "waiting_for_input", label: "Ask PM clarification" },
+          { from_state: "waiting_for_input", to_state: "running", label: "Resume from answer" },
+          { from_state: "running", to_state: "completed", label: "Fan out child work" },
+          { from_state: "running", to_state: "failed", label: "Persist operation failure" },
+        ],
+      },
+      operations: [
+        {
+          operation_type: "jira_child_fanout",
+          label: "Fan out engineering child tickets",
+          description: "Create or refresh engineering child tickets.",
+          completion_required: true,
+          kind: "integration",
+          after: ["backlog_planning"],
+          supports: [],
+          required: true,
+          retryable: true,
+          graph_index: 5,
+          status: "failed",
+        },
+      ],
+      orchestration_backend: "legacy",
+    },
+    current_state: "failed",
+    waiting_on: null,
+    next_step: "Retry failed operation",
+    active_run_id: null,
+    latest_checkpoint_id: null,
+    latest_checkpoint_kind: null,
+    state_path: [
+      {
+        key: "jira_child_fanout",
+        label: "Fan out engineering child tickets",
+        status: "failed",
+        recorded_at: "2026-04-17T12:22:11Z",
+        detail: "Jira fanout failed on content limit.",
+      },
+    ],
+    completed_steps: [],
+    failed_steps: ["Fan out engineering child tickets"],
+    pending_steps: [],
+    retrying_steps: [],
+    conditional_branches_taken: [],
+    conditional_branches_available: [],
+    can_resume: true,
+    resume_unavailable_reason: null,
+    links: [{ kind: "jira_issue", label: "Jira issue MAB-215", ref: "MAB-215", url: "https://jira.example.test/browse/MAB-215", status: "failed" }],
+    failure_reason:
+      'Failed to seed Jira issues: Jira API request failed (400): {"errorMessages":["CONTENT_LIMIT_EXCEEDED"],"errors":{}}',
+    operations: [
+      {
+        operation_id: "operation-jira-child-fanout",
+        run_id: null,
+        operation_type: "jira_child_fanout",
+        label: "Fan out engineering child tickets",
+        description: "Create or refresh engineering child tickets.",
+        required: true,
+        kind: "integration",
+        after: ["backlog_planning"],
+        supports: [],
+        definition_only: false,
+        status: "failed",
+        target_system: "jira",
+        target_ref: "MAB-215",
+        summary:
+          'Failed to seed Jira issues: Jira API request failed (400): {"errorMessages":["CONTENT_LIMIT_EXCEEDED"],"errors":{}}',
+        can_retry: true,
+        retry_unavailable_reason: null,
+        attempts: [
+          {
+            attempt_id: "attempt-1",
+            attempt_number: 1,
+            status: "failed",
+            error_category: "content_limit",
+            error_message:
+              'Failed to seed Jira issues: Jira API request failed (400): {"errorMessages":["CONTENT_LIMIT_EXCEEDED"],"errors":{}}',
+            status_detail: null,
+            retryable: true,
+            next_retry_at: null,
+            started_at: "2026-04-17T12:22:11Z",
+            finished_at: "2026-04-17T12:22:11Z",
+          },
+        ],
+        events: [
+          {
+            event_id: "audit-event-1",
+            source: "audit",
+            level: "error",
+            event_kind: "attempt_failed",
+            message:
+              'Failed to seed Jira issues: Jira API request failed (400): {"errorMessages":["CONTENT_LIMIT_EXCEEDED"],"errors":{}}',
+            source_component: "workflow_operation_service",
+            run_id: null,
+            operation_id: "operation-jira-child-fanout",
+            attempt_id: "attempt-1",
+            agent_id: null,
+            invocation_id: null,
+            stage: null,
+            attempt: null,
+            stream: null,
+            payload: { error_category: "content_limit" },
+            recorded_at: "2026-04-17T12:22:11Z",
+          },
+        ],
+      },
+    ],
+    runs: [],
+    created_at: "2026-04-17T12:22:11Z",
+    started_at: "2026-04-17T12:22:11Z",
+    finished_at: null,
+  });
+
+  const retriedWorkflow = {
+    ...workflow,
+    status: "running",
+    current_state: "running",
+    waiting_on: null,
+    next_step: "Create or refresh engineering child tickets.",
+    failure_reason: null,
+    failed_steps: [],
+    pending_steps: ["Fan out engineering child tickets"],
+    operations: [
+      {
+        ...workflow.operations[0],
+        status: "running",
+        can_retry: false,
+        retry_unavailable_reason: "Latest attempt is not in a failed state.",
+        attempts: [
+          ...workflow.operations[0].attempts,
+          {
+            attempt_id: "attempt-2",
+            attempt_number: 2,
+            status: "running",
+            error_category: null,
+            error_message: null,
+            status_detail: null,
+            retryable: false,
+            next_retry_at: null,
+            started_at: "2026-04-17T12:40:00Z",
+            finished_at: null,
+          },
+        ],
+      },
+    ],
+    links: [
+      ...workflow.links,
+      {
+        kind: "child_issue",
+        label: "Create tenant assurance boundary",
+        ref: "MAB-300",
+        url: "https://jira.example.test/browse/MAB-300",
+        status: "To Do",
+      },
+    ],
+  };
+
+  let retriedOperation: { workflowId: string; operationId: string } | null = null;
+  let resumedExecution = false;
+  let telemetrySnapshotRequests = 0;
+  await mockTenantWorkflowApis(page, {
+    workflows: [workflow],
+    retriedWorkflowResponse: retriedWorkflow,
+    telemetryEventsByOperationId: {
+      "operation-jira-child-fanout": [
+        {
+          event_id: "telemetry:11719001157677308257",
+          event_sequence: "11719001157677308257",
+          source: "telemetry",
+          level: "info",
+          event_kind: "stage_request",
+          message: "Submitted runtime request.",
+          source_component: "runtime_invocation",
+          run_id: null,
+          operation_id: "operation-jira-child-fanout",
+          attempt_id: "attempt-1",
+          agent_id: null,
+          invocation_id: null,
+          stage: null,
+          attempt: 1,
+          stream: null,
+          payload: {
+            user_prompt: "Create or refresh engineering child tickets from the parent brief.",
+          },
+          recorded_at: "2026-04-17T12:23:00Z",
+        },
+        {
+          event_id: "telemetry:11719001157677308258",
+          event_sequence: 11719001157677308000,
+          source: "telemetry",
+          level: "info",
+          event_kind: "runtime_log",
+          message: "Older large-sequence runtime line from seed invocation.",
+          source_component: "runtime_invocation",
+          run_id: null,
+          operation_id: "operation-jira-child-fanout",
+          attempt_id: "attempt-1",
+          agent_id: null,
+          invocation_id: "inv-seed-1",
+          stage: "seed",
+          attempt: 1,
+          stream: "stdout",
+          payload: {
+            invocation_id: "inv-seed-1",
+            stage: "seed",
+          },
+          recorded_at: "2026-04-17T12:23:01Z",
+        },
+        {
+          event_id: "telemetry:11719001157677308256",
+          event_sequence: "11719001157677308256",
+          source: "telemetry",
+          level: "info",
+          event_kind: "stage_invocation_finished",
+          message: "stage invocation finished",
+          source_component: "runtime_invocation",
+          run_id: null,
+          operation_id: "operation-jira-child-fanout",
+          attempt_id: "attempt-1",
+          agent_id: null,
+          invocation_id: "inv-seed-1",
+          stage: "seed",
+          attempt: 1,
+          stream: "system",
+          payload: {
+            duration_ms: 541694,
+            actual_prompt_tokens: 22920,
+            actual_completion_tokens: 5384,
+            actual_total_tokens: 28304,
+            estimated_prompt_tokens: 13269,
+            model: "gpt-5.4",
+            reasoning_effort: "high",
+            db_persisted_lines: 4,
+            raw_lines_written: 7,
+            kb_hits: 3,
+          },
+          recorded_at: "2026-04-17T12:23:01Z",
+        },
+        {
+          event_id: "telemetry:11719001157677308259",
+          event_sequence: 11719001157677308000,
+          source: "telemetry",
+          level: "info",
+          event_kind: "runtime_log",
+          message: "Newest large-sequence runtime line from seed invocation.",
+          source_component: "runtime_invocation",
+          run_id: null,
+          operation_id: "operation-jira-child-fanout",
+          attempt_id: "attempt-1",
+          agent_id: null,
+          invocation_id: "inv-seed-1",
+          stage: "seed",
+          attempt: 1,
+          stream: "stdout",
+          payload: {
+            invocation_id: "inv-seed-1",
+            stage: "seed",
+          },
+          recorded_at: "2026-04-17T12:23:01Z",
+        },
+        {
+          event_id: "telemetry:11719001157677308260",
+          event_sequence: "11719001157677308260",
+          source: "telemetry",
+          level: "info",
+          event_kind: "runtime_log",
+          message: "Runtime line from validation invocation.",
+          source_component: "runtime_invocation",
+          run_id: null,
+          operation_id: "operation-jira-child-fanout",
+          attempt_id: "attempt-1",
+          agent_id: null,
+          invocation_id: "inv-validation-1",
+          stage: "validation",
+          attempt: 1,
+          stream: "stdout",
+          payload: {
+            invocation_id: "inv-validation-1",
+            stage: "validation",
+          },
+          recorded_at: "2026-04-17T12:23:02Z",
+        },
+        {
+          event_id: "telemetry:11719001157677308261",
+          event_sequence: "11719001157677308261",
+          source: "telemetry",
+          level: "info",
+          event_kind: "jira_child_upsert_request",
+          message: "Submitting child Jira issue upsert for Create tenant assurance boundary.",
+          source_component: "jira_seed",
+          run_id: null,
+          operation_id: "operation-jira-child-fanout",
+          attempt_id: "attempt-1",
+          agent_id: null,
+          invocation_id: null,
+          stage: null,
+          attempt: 1,
+          stream: null,
+          payload: {
+            summary: "Create tenant assurance boundary",
+          },
+          recorded_at: "2026-04-17T12:23:10Z",
+        },
+        {
+          event_id: "telemetry:11719001157677308262",
+          event_sequence: "11719001157677308262",
+          source: "telemetry",
+          level: "error",
+          event_kind: "attempt_failed",
+          message:
+            'Failed to seed Jira issues: Jira API request failed (400): {"errorMessages":["CONTENT_LIMIT_EXCEEDED"],"errors":{}}',
+          source_component: "workflow_operation_attempt",
+          run_id: null,
+          operation_id: "operation-jira-child-fanout",
+          attempt_id: "attempt-1",
+          agent_id: null,
+          invocation_id: null,
+          stage: null,
+          attempt: 1,
+          stream: null,
+          payload: {
+            status: "failed",
+            attempt_number: 1,
+          },
+          recorded_at: "2026-04-17T12:23:30Z",
+        },
+        {
+          event_id: "telemetry:11719001157677308263",
+          event_sequence: "11719001157677308263",
+          source: "telemetry",
+          level: "info",
+          event_kind: "runtime_log",
+          message: "Retry runtime log line attached to attempt 2.",
+          source_component: "logging_pane",
+          run_id: null,
+          operation_id: "operation-jira-child-fanout",
+          attempt_id: "attempt-2",
+          agent_id: null,
+          invocation_id: "inv-retry",
+          stage: "seed",
+          attempt: 2,
+          stream: "stdout",
+          payload: {
+            stream: "stdout",
+          },
+          recorded_at: "2026-04-17T12:40:01Z",
+        },
+      ],
+    },
+    auditTranscriptByOperationId: {
+      "operation-jira-child-fanout": {
+        execution_id: "wfexec-mab-215",
+        operation_id: "operation-jira-child-fanout",
+        operation_label: "Fan out engineering child tickets",
+        current_status: "failed",
+        source: "audit",
+        attempts: [
+          {
+            attempt_id: "attempt-1",
+            attempt_number: 1,
+            status: "failed",
+            started_at: "2026-04-17T12:22:11Z",
+            finished_at: "2026-04-17T12:23:00Z",
+            duration_ms: 49000,
+            error_category: "content_limit",
+            failure_message:
+              'Failed to seed Jira issues: Jira API request failed (400): {"errorMessages":["CONTENT_LIMIT_EXCEEDED"],"errors":{}}',
+            status_detail: null,
+            recommended_next_action: "Retry engineering child fanout after reducing Jira payload size.",
+            sections: [
+              {
+                kind: "outcome",
+                label: "Outcome",
+                entries: [
+                  {
+                    entry_id: "audit-outcome",
+                    recorded_at: "2026-04-17T12:23:30Z",
+                    level: "error",
+                    title: "Attempt failure",
+                    message:
+                      'Failed to seed Jira issues: Jira API request failed (400): {"errorMessages":["CONTENT_LIMIT_EXCEEDED"],"errors":{}}',
+                    source_component: "workflow_operation_service",
+                    payload: {
+                      error_category: "content_limit",
+                    },
+                  },
+                ],
+              },
+            ],
+          },
+        ],
+      },
+    },
+    onResumeExecution: () => {
+      resumedExecution = true;
+    },
+    onRetryOperation: (payload) => {
+      retriedOperation = payload;
+    },
+    onTelemetrySnapshotRequest: () => {
+      telemetrySnapshotRequests += 1;
+    },
+  });
+
+  await page.goto("/example/workflows", { waitUntil: "domcontentloaded" });
+
+  const parentPlanningLink = page.getByRole("link", { name: "Parent Planning" });
+  await expect(parentPlanningLink).toBeVisible();
+  await expect(parentPlanningLink).toHaveAttribute("href", "/example/workflows/parent_planning");
+  await page.goto("/example/workflows/parent_planning", { waitUntil: "domcontentloaded" });
+  await expect(page).toHaveURL(/\/example\/workflows\/parent_planning$/);
+  await expect(page.getByRole("button", { name: "Settings" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Recent executions" })).toBeVisible();
+  await page.getByRole("button", { name: "Recent executions" }).click();
+  await expect(page.getByRole("button", { name: "Recent executions" })).toBeVisible();
+  const executionLink = page.getByRole("link", { name: "Identity and authorization v1 contract" });
+  await expect(executionLink).toBeVisible();
+  await expect(executionLink).toHaveAttribute("href", "/example/executions/wfexec-mab-215");
+  await page.goto("/example/executions/wfexec-mab-215", { waitUntil: "domcontentloaded" });
+  await expect(page).toHaveURL(/\/example\/executions\/wfexec-mab-215$/);
+  await expect(page.getByText("Workflow type")).toBeVisible();
+  await expect(page.getByText("Parent Planning")).toBeVisible();
+  await expect(page.getByRole("button", { name: "Resume execution" })).toBeEnabled();
+  await page.getByRole("button", { name: "Step details" }).click();
+  await expect(page.getByRole("heading", { name: "Step details" })).toBeVisible();
+  await expect(page.locator("table").getByText("Fan out engineering child tickets").first()).toBeVisible();
+  await page.getByRole("button", { name: "Fan out engineering child tickets" }).click();
+  await expect(page.getByRole("heading", { name: "Fan out engineering child tickets" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Live telemetry" })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Auto-scroll on" })).toBeVisible();
+  await page.getByRole("button", { name: "Auto-scroll on" }).click();
+  await expect(page.getByRole("button", { name: "Auto-scroll off" })).toBeVisible();
+  await page.getByRole("button", { name: "Auto-scroll off" }).click();
+  await expect(page.getByRole("button", { name: "Auto-scroll on" })).toBeVisible();
+  await expect(page.getByRole("button", { name: /Attempt 1/i })).toBeVisible();
+  await expect(page.getByText("Attempt 1").last()).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Attempt metrics" })).toHaveCount(0);
+  await expect(page.getByText("Live log stream")).toBeVisible();
+  const olderLargeSequenceLog = page.getByText("Older large-sequence runtime line from seed invocation.");
+  const newerLargeSequenceLog = page.getByText("Newest large-sequence runtime line from seed invocation.");
+  await expect(olderLargeSequenceLog).toBeVisible();
+  await expect(newerLargeSequenceLog).toBeVisible();
+  const olderLargeSequenceBox = await olderLargeSequenceLog.boundingBox();
+  const newerLargeSequenceBox = await newerLargeSequenceLog.boundingBox();
+  expect(olderLargeSequenceBox).not.toBeNull();
+  expect(newerLargeSequenceBox).not.toBeNull();
+  expect(olderLargeSequenceBox!.y).toBeLessThan(newerLargeSequenceBox!.y);
+  const telemetryContent = page.getByTestId("execution-observability-content");
+  const promptLog = telemetryContent.getByText("Submitted runtime request.");
+  const externalLog = telemetryContent.getByText("Submitting child Jira issue upsert for Create tenant assurance boundary.");
+  const failureLog = telemetryContent.getByText(
+    'Failed to seed Jira issues: Jira API request failed (400): {"errorMessages":["CONTENT_LIMIT_EXCEEDED"],"errors":{}}',
+  );
+  await expect(promptLog).toBeVisible();
+  await expect(externalLog).toBeVisible();
+  await expect(failureLog).toBeVisible();
+  const promptBox = await promptLog.boundingBox();
+  const externalBox = await externalLog.boundingBox();
+  const failureBox = await failureLog.boundingBox();
+  expect(promptBox).not.toBeNull();
+  expect(externalBox).not.toBeNull();
+  expect(failureBox).not.toBeNull();
+  expect(promptBox!.y).toBeLessThan(externalBox!.y);
+  expect(externalBox!.y).toBeLessThan(failureBox!.y);
+  expect(telemetrySnapshotRequests).toBe(0);
+  await page.getByRole("button", { name: "Metrics" }).click();
+  const metricsPanel = page.getByRole("heading", { name: "Attempt metrics" }).locator("xpath=ancestor::section[1]");
+  await expect(metricsPanel).toBeVisible();
+  await expect(metricsPanel.getByText("9m 1s")).toBeVisible();
+  await expect(metricsPanel.getByText("28,304")).toBeVisible();
+  await expect(metricsPanel.getByText("22,920 in / 5,384 out")).toBeVisible();
+  await expect(metricsPanel.getByText("gpt-5.4", { exact: true })).toBeVisible();
+  await expect(page.getByText("Live log stream")).toHaveCount(0);
+  await page.getByRole("button", { name: "Audit history" }).click();
+  await expect(page.getByText("Retry engineering child fanout after reducing Jira payload size.").first()).toBeVisible();
+  await expect(page.getByText("Outcome")).toBeVisible();
+  await expect(
+    page.getByText('Failed to seed Jira issues: Jira API request failed (400): {"errorMessages":["CONTENT_LIMIT_EXCEEDED"],"errors":{}}').last(),
+  ).toBeVisible();
+  await page.getByRole("button", { name: "Close", exact: true }).click();
+  const retryStepButton = page.getByRole("button", { name: "Retry step" }).last();
+  await retryStepButton.scrollIntoViewIfNeeded();
+  await expect(retryStepButton).toBeEnabled();
+
+  await retryStepButton.click();
+
+  expect(retriedOperation).toEqual({
+    workflowId: "wfexec-mab-215",
+    operationId: "operation-jira-child-fanout",
+  });
+  await expect(page.getByRole("button", { name: /Attempt 2/i })).toBeVisible();
+  await expect(page.getByText("running").last()).toBeVisible();
+  await expect(page.getByText("Retry runtime log line attached to attempt 2.")).toBeVisible();
+  expect(resumedExecution).toBe(false);
+  await page.getByLabel("Dismiss notification").click();
+  await page.getByRole("button", { name: "Close", exact: true }).click();
+  await page.getByRole("button", { name: "Links" }).click();
+  await expect(page.getByText("Create tenant assurance boundary")).toBeVisible({ timeout: 15000 });
+  await expect(page.getByText("MAB-300")).toBeVisible({ timeout: 15000 });
+
+  await page.getByRole("button", { name: "Execution path" }).click();
+  await expect(page.getByRole("button", { name: "Execution path" })).toBeVisible();
+  await expect(page.getByText("Fan out engineering child tickets").first()).toBeVisible();
+});
+
+test("starts engineering work from the standalone signed Jira action page", async ({ page }) => {
+  await seedTenantSession(page, {
+    principal: makeTenantUserPrincipal(),
+    userEmail: "person@example.com",
+  });
+
+  let previewToken: string | null = null;
+  let submittedActionToken: string | null = null;
+  await installBffApiMocks(page, [
+    {
+      method: "GET",
+      pathname: "/api/bff/api/app/auth/me",
+      handler: (route) => fulfillJson(route, makeTenantUserPrincipal()),
+    },
+    {
+      method: "GET",
+      pathname: "/api/bff/api/app/start-engineering/wfexec-mab-243/preview",
+      handler: (route, url) => {
+        previewToken = url.searchParams.get("action_token");
+        return fulfillJson(route, {
+          tenant_id: "example",
+          project_id: "example-default",
+          execution_id: "wfexec-mab-243",
+          issue_key: "MAB-243",
+          display_name: "Identity redesign",
+          workflow_status: "completed",
+          can_start: true,
+          unavailable_reason: null,
+        });
+      },
+    },
+    {
+      method: "POST",
+      pathname: "/api/bff/api/app/start-engineering/wfexec-mab-243/start",
+      handler: (route) => {
+        const payload = route.request().postDataJSON() as { action_token?: string | null };
+        submittedActionToken = payload.action_token ?? null;
+        return fulfillJson(route, {
+          workflow: makeWorkflow({
+            execution_id: "wfexec-mab-243",
+            workflow_id: "parent_planning:MAB-243",
+            tenant_id: "example",
+            project_id: "example-default",
+            source_ref: "MAB-243",
+            display_name: "Identity redesign",
+            status: "completed",
+          }),
+          queued: [
+            { issue_key: "MAB-244", run_id: "run-mab-244", status: "queued", reason: null },
+            { issue_key: "MAB-245", run_id: "run-mab-245", status: "queued", reason: null },
+          ],
+          skipped: [],
+          promoted_issue_keys: ["MAB-244", "MAB-245"],
+          started_attempt: null,
+        });
+      },
+    },
+  ]);
+
+  await page.goto("/example/start/wfexec-mab-243?startDevelopmentToken=signed-token-from-jira");
+
+  await expect(page.getByRole("heading", { name: "Start engineering work" })).toBeVisible();
+  await expect(page.getByText("MAB-243")).toBeVisible();
+  await page.getByRole("button", { name: "Start ready engineering work" }).click();
+
+  expect(previewToken).toBe("signed-token-from-jira");
+  expect(submittedActionToken).toBe("signed-token-from-jira");
+  await expect(page.getByText("Engineering work has been started.")).toBeVisible();
+  await expect(page.getByText("MAB-244")).toBeVisible();
+  await expect(page.getByText("MAB-245")).toBeVisible();
+});
+
+test("shows the new live retry attempt when retry submission returns before started_attempt is available", async ({ page }) => {
+  await seedAdminSession(page);
+
+  const operationId = "workflow-retry-accepted:run_attempt_execution";
+  const attempt1 = {
+    attempt_id: "attempt-1",
+    attempt_number: 1,
+    status: "failed",
+    error_category: "external_failure",
+    error_message: "Previous attempt failed.",
+    status_detail: null,
+    retryable: true,
+    next_retry_at: null,
+    started_at: "2026-04-28T20:00:00Z",
+    finished_at: "2026-04-28T20:01:00Z",
+  };
+  const attempt2 = {
+    attempt_id: "attempt-2",
+    attempt_number: 2,
+    status: "running",
+    error_category: null,
+    error_message: null,
+    status_detail: null,
+    retryable: false,
+    next_retry_at: null,
+    started_at: "2026-04-28T20:02:00Z",
+    finished_at: null,
+  };
+  const operation = {
+    operation_id: operationId,
+    run_id: null,
+    operation_type: "run_attempt_execution",
+    status: "failed",
+    label: "Execute run attempt",
+    description: "Dispatch the current run attempt through the central execution engine.",
+    required: true,
+    kind: "business",
+    after: [],
+    supports: [],
+    definition_only: false,
+    target_system: null,
+    target_ref: null,
+    summary: "Previous attempt failed.",
+    can_retry: true,
+    retry_unavailable_reason: null,
+    attempts: [attempt1],
+    events: [],
+  };
+  const workflow = makeWorkflow({
+    execution_id: "wfexec-retry-accepted",
+    workflow_id: "workflow-retry-accepted",
+    tenant_id: "example",
+    project_id: "example-default",
+    status: "failed",
+    current_state: "failed",
+    failure_reason: "Previous attempt failed.",
+    operations: [operation],
+  });
+  const retriedWorkflow = {
+    ...workflow,
+    status: "running",
+    current_state: "running",
+    failure_reason: null,
+    operations: [
+      {
+        ...operation,
+        status: "running",
+        summary: "Started run_attempt_execution attempt 2.",
+        can_retry: false,
+        attempts: [attempt1, attempt2],
+      },
+    ],
+  };
+
+  await mockTenantWorkflowApis(page, {
+    workflows: [workflow],
+    retriedWorkflowResponse: retriedWorkflow,
+    retriedOperationStartedAttempt: null,
+    telemetryEventsByOperationId: {
+      [operationId]: [
+        {
+          event_id: "attempt-2-started",
+          event_sequence: 2,
+          source: "telemetry",
+          level: "info",
+          event_kind: "workflow_operation_attempt_started",
+          message: "Started run_attempt_execution attempt 2.",
+          source_component: "workflow_operation_service",
+          run_id: null,
+          operation_id: operationId,
+          attempt_id: "attempt-2",
+          agent_id: null,
+          invocation_id: null,
+          stage: null,
+          attempt: 2,
+          stream: "system",
+          payload: { attempt_number: 2, status: "running" },
+          recorded_at: "2026-04-28T20:02:00Z",
+        },
+      ],
+    },
+  });
+
+  await page.goto("/example/executions/wfexec-retry-accepted");
+  await page.getByRole("button", { name: "Step details" }).click();
+  await page.getByRole("button", { name: "Retry step" }).click();
+
+  await expect(page.getByRole("button", { name: /Attempt 2/i })).toBeVisible();
+  await expect(page.getByText("Started run_attempt_execution attempt 2.")).toBeVisible();
+});
+
+test("groups supporting workflow steps under their declared owning operation", async ({ page }) => {
+  await seedAdminSession(page);
+
+  const workflow = makeWorkflow({
+    execution_id: "wfexec-mab-supporting",
+    workflow_id: "parent_planning:MAB-233",
+    tenant_id: "example",
+    project_id: "example-default",
+    source_system: "jira",
+    source_ref: "MAB-233",
+    display_name: "Parent planning support grouping",
+    status: "failed",
+    current_state: "failed",
+    failure_reason: "Codex returned engineering_planning child_ticket_specs[1] without done_means",
+    operations: [
+      {
+        operation_id: "operation-backlog-planning",
+        run_id: null,
+        operation_type: "backlog_planning",
+        status: "failed",
+        label: "Backlog planning",
+        description: "Build the planning package.",
+        required: true,
+        kind: "business",
+        after: ["brief_normalization"],
+        supports: [],
+        definition_only: false,
+        target_system: "jira",
+        target_ref: "MAB-233",
+        summary: "Codex returned engineering_planning child_ticket_specs[1] without done_means",
+        can_retry: true,
+        retry_unavailable_reason: null,
+        attempts: [],
+        events: [],
+      },
+      {
+        operation_id: "operation-jira-child-fanout",
+        run_id: null,
+        operation_type: "jira_child_fanout",
+        status: "pending",
+        label: "Engineering child fanout",
+        description: "Create or refresh engineering child tickets.",
+        required: true,
+        kind: "integration",
+        after: ["backlog_planning"],
+        supports: [],
+        definition_only: false,
+        target_system: "jira",
+        target_ref: "MAB-233",
+        summary: null,
+        can_retry: false,
+        retry_unavailable_reason: "Operation has not started yet.",
+        attempts: [],
+        events: [],
+      },
+      {
+        operation_id: "operation-jira-comment-projection",
+        run_id: null,
+        operation_type: "jira_comment_projection",
+        status: "completed",
+        label: "Jira comment projection",
+        description: "Publish clarification questions to Jira.",
+        required: false,
+        kind: "notification",
+        after: ["brief_normalization"],
+        supports: ["backlog_planning", "jira_child_fanout"],
+        definition_only: false,
+        target_system: "jira",
+        target_ref: "MAB-233",
+        summary: "Posted clarification questions to Jira.",
+        can_retry: false,
+        retry_unavailable_reason: "Manual retry is disabled by the workflow definition.",
+        attempts: [],
+        events: [],
+      },
+      {
+        operation_id: "operation-jira-parent-update",
+        run_id: null,
+        operation_type: "jira_parent_update",
+        status: "completed",
+        label: "Jira parent update",
+        description: "Synchronize parent Jira issue metadata.",
+        required: false,
+        kind: "integration",
+        after: ["brief_normalization"],
+        supports: ["backlog_planning", "jira_child_fanout"],
+        definition_only: false,
+        target_system: "jira",
+        target_ref: "MAB-233",
+        summary: "Parent metadata synced.",
+        can_retry: false,
+        retry_unavailable_reason: null,
+        attempts: [],
+        events: [],
+      },
+    ],
+  });
+
+  await mockTenantWorkflowApis(page, { workflows: [workflow] });
+
+  await page.goto("/example/executions/wfexec-mab-supporting");
+  await page.getByRole("button", { name: "Execution path" }).click();
+
+  const backlogGroup = page.locator('[data-workflow-flow-group="backlog_planning"]');
+  const fanoutGroup = page.locator('[data-workflow-flow-group="jira_child_fanout"]');
+  await expect(backlogGroup.getByText("Backlog planning")).toBeVisible();
+  await expect(backlogGroup.getByText("Jira comment projection")).toBeVisible();
+  await expect(backlogGroup.getByText("Jira parent update")).toBeVisible();
+  await expect(fanoutGroup.getByText("Engineering child fanout")).toBeVisible();
+  await expect(fanoutGroup.getByText("Jira comment projection")).toHaveCount(0);
+  await expect(fanoutGroup.getByText("Jira parent update")).toHaveCount(0);
+});
+
+test("keeps retry available for missing-input workflow failures", async ({ page }) => {
+  await seedAdminSession(page);
+
+  const workflow = makeWorkflow({
+    execution_id: "wfexec-mab-clarification",
+    workflow_id: "parent_planning:MAB-215",
+    tenant_id: "example",
+    project_id: "example-default",
+    source_system: "jira",
+    source_ref: "MAB-215",
+    display_name: "Identity and authorization v1 contract",
+    orchestration_backend: "temporal",
+    dedupe_scope: "parent_planning",
+    status: "failed",
+    workflow_type: {
+      key: "parent_planning",
+      label: "Parent Planning",
+      description: "Parent planning workflow",
+      retry_policy: {
+        manual_retry_enabled: true,
+        max_attempts: 4,
+        initial_interval_seconds: 60,
+        max_interval_seconds: 1800,
+        backoff_coefficient: 2,
+      },
+      capabilities: {
+        child_issue_links: true,
+      },
+      lifecycle: {
+        state_path_kind: "operation",
+        execution_modes: ["fresh", "resume"],
+        conditional_paths: ["Human input clarification", "Retry failed operation", "Child issue fanout"],
+        states: [
+          { key: "running", label: "Running", terminal: false, waits_for_input: false },
+          { key: "waiting_for_input", label: "Waiting for input", terminal: false, waits_for_input: true },
+          { key: "completed", label: "Completed", terminal: true, waits_for_input: false },
+          { key: "failed", label: "Failed", terminal: true, waits_for_input: false },
+        ],
+        transitions: [
+          { from_state: "running", to_state: "waiting_for_input", label: "Ask PM clarification" },
+          { from_state: "waiting_for_input", to_state: "running", label: "Resume from answer" },
+          { from_state: "running", to_state: "completed", label: "Fan out child work" },
+          { from_state: "running", to_state: "failed", label: "Persist operation failure" },
+        ],
+      },
+      operations: [
+        {
+          operation_type: "jira_child_fanout",
+          label: "Fan out engineering child tickets",
+          description: "Create or refresh engineering child tickets.",
+          completion_required: true,
+          kind: "integration",
+          after: ["backlog_planning"],
+          supports: [],
+          required: true,
+          retryable: true,
+          graph_index: 5,
+          status: "failed",
+        },
+      ],
+      orchestration_backend: "legacy",
+    },
+    current_state: "failed",
+    waiting_on: "pm_clarification",
+    next_step: "Retry failed operation",
+    active_run_id: null,
+    latest_checkpoint_id: null,
+    latest_checkpoint_kind: null,
+    state_path: [
+      {
+        key: "jira_child_fanout",
+        label: "Fan out engineering child tickets",
+        status: "failed",
+        recorded_at: "2026-04-21T09:22:11Z",
+        detail: "Waiting on PM clarification answers.",
+      },
+    ],
+    completed_steps: [],
+    failed_steps: ["Fan out engineering child tickets"],
+    pending_steps: [],
+    retrying_steps: [],
+    conditional_branches_taken: [],
+    conditional_branches_available: [],
+    can_resume: true,
+    resume_unavailable_reason: null,
+    links: [{ kind: "jira_issue", label: "Jira issue MAB-215", ref: "MAB-215", url: "https://jira.example.test/browse/MAB-215", status: "failed" }],
+    failure_reason: "Answer the product clarification on Jira issue MAB-215, then retry engineering child fanout.",
+    operations: [
+      {
+        operation_id: "operation-jira-child-fanout-missing-input",
+        run_id: null,
+        operation_type: "jira_child_fanout",
+        label: "Fan out engineering child tickets",
+        description: "Create or refresh engineering child tickets.",
+        required: true,
+        kind: "integration",
+        after: ["backlog_planning"],
+        supports: [],
+        definition_only: false,
+        status: "failed",
+        target_system: "jira",
+        target_ref: "MAB-215",
+        summary: "Answer the product clarification on Jira issue MAB-215, then retry engineering child fanout.",
+        can_retry: true,
+        retry_unavailable_reason: null,
+        events: [],
+        attempts: [
+          {
+            attempt_id: "attempt-missing-input-1",
+            attempt_number: 7,
+            status: "failed",
+            error_category: "missing_input",
+            error_message:
+              "Answer the product clarification on Jira issue MAB-215, then retry engineering child fanout.\n\nQuestions to answer:\n- What invitation TTL should v1 enforce?",
+            status_detail: null,
+            retryable: true,
+            next_retry_at: null,
+            started_at: "2026-04-21T09:22:11Z",
+            finished_at: "2026-04-21T09:22:11Z",
+          },
+        ],
+      },
+    ],
+    runs: [],
+    created_at: "2026-04-21T09:22:00Z",
+    started_at: "2026-04-21T09:22:11Z",
+    finished_at: "2026-04-21T09:22:11Z",
+  });
+
+  let retriedOperation: { workflowId: string; operationId: string } | null = null;
+  mockTenantWorkflowApis(page, {
+    workflows: [workflow],
+    retriedWorkflowResponse: makeWorkflow({
+      ...workflow,
+      status: "running",
+      current_state: "running",
+      failed_steps: [],
+      retrying_steps: ["Fan out engineering child tickets"],
+      operations: workflow.operations.map((operation) =>
+        operation.operation_id === "operation-jira-child-fanout-missing-input"
+          ? {
+              ...operation,
+              status: "running",
+              summary: "Retrying engineering child fanout.",
+              attempts: [
+                ...(operation.attempts ?? []),
+                {
+                  attempt_id: "attempt-missing-input-2",
+                  attempt_number: 8,
+                  status: "running",
+                  error_category: null,
+                  error_message: null,
+                  status_detail: null,
+                  retryable: true,
+                  next_retry_at: null,
+                  started_at: "2026-04-21T10:00:00Z",
+                  finished_at: null,
+                },
+              ],
+            }
+          : operation
+      ),
+    }),
+    onRetryOperation: (payload) => {
+      retriedOperation = payload;
+    },
+  });
+
+  await page.goto("/example/executions/wfexec-mab-clarification");
+  await page.getByRole("button", { name: "Step details" }).click();
+
+  const retryStepButton = page.getByRole("button", { name: "Retry step" }).last();
+  await retryStepButton.scrollIntoViewIfNeeded();
+  await expect(retryStepButton).toBeEnabled();
+  await expect(page.getByRole("link", { name: "Open Jira issue" }).last()).toBeVisible();
+
+  await retryStepButton.click();
+
+  expect(retriedOperation).toEqual({
+    workflowId: "wfexec-mab-clarification",
+    operationId: "operation-jira-child-fanout-missing-input",
+  });
+  await expect(page.getByRole("button", { name: /Attempt 8/i })).toBeVisible();
+  await expect(page.getByText("running").last()).toBeVisible();
+});

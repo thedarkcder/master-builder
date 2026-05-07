@@ -13,8 +13,6 @@ _TOP_REVISION_IDS = {
     "20260327_0039",
     "20260327_0040",
     "20260327_0041",
-    "20260327_0042",
-    "20260327_0043",
 }
 
 
@@ -48,17 +46,10 @@ def _desired_top_revisions(inspector: sa.Inspector) -> list[str] | None:
     elif _column_exists(inspector, "tenants", "experience_config") or _table_exists(inspector, "tenant_users"):
         tenant_revision = "20260327_0039"
 
-    stream_revision: str | None = None
-    if _table_exists(inspector, "run_stream_events"):
-        stream_revision = "20260327_0042"
-    elif _review_id_is_bigint(inspector):
-        stream_revision = "20260327_0041"
-
-    desired = {revision for revision in (tenant_revision, stream_revision) if revision is not None}
+    review_revision = "20260327_0041" if _review_id_is_bigint(inspector) else None
+    desired = {revision for revision in (tenant_revision, review_revision) if revision is not None}
     if not desired:
         return None
-    if desired == {"20260327_0040", "20260327_0042"}:
-        return ["20260327_0043"]
     return sorted(desired)
 
 
@@ -75,6 +66,14 @@ def _normalize_repaired_top_revisions(database_url: str) -> None:
             ]
             current = set(current_rows)
             if not current or not current.issubset(_TOP_REVISION_IDS):
+                return
+            if current.issubset({"20260327_0039", "20260327_0040"}) and not (
+                _table_exists(inspector, "tenant_users")
+                or _table_exists(inspector, "tenant_user_discord_identities")
+                or _column_exists(inspector, "tenant_memberships", "discord_state")
+            ):
+                connection.execute(text("DELETE FROM alembic_version"))
+                connection.execute(text("INSERT INTO alembic_version (version_num) VALUES ('20260323_0038')"))
                 return
             desired_rows = _desired_top_revisions(inspector)
             if desired_rows is None or current_rows == desired_rows:

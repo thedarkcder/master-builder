@@ -8,9 +8,10 @@ from unittest.mock import MagicMock
 
 from fastapi import HTTPException
 
-from orchestrator.api.admin import jira_route_service, runs_service
+from orchestrator.api.admin import jira_route_service, jira_webhook_route_service
+from orchestrator.api.admin.runs import service as runs_service
 from orchestrator.api.routes import runs as runs_route
-from orchestrator.core import project_routing
+from orchestrator.core.projects import routing as project_routing
 
 
 class JiraRouteServiceTests(unittest.TestCase):
@@ -22,16 +23,16 @@ class JiraRouteServiceTests(unittest.TestCase):
             jira_route_service.list_jira_projects_for_connection(
                 session=session,
                 connection_id="conn-1",
-                jira_oauth_connection_model=object,
+                atlassian_oauth_connection_model=object,
                 settings=SimpleNamespace(),
-                refresh_jira_connection_tokens_fn=MagicMock(),
-                jira_oauth_client_fn=MagicMock(),
+                refresh_atlassian_connection_tokens_fn=MagicMock(),
+                atlassian_oauth_client_fn=MagicMock(),
             )
 
         self.assertEqual(exc_ctx.exception.status_code, 404)
 
     def test_list_jira_projects_for_connection_success(self) -> None:
-        connection = SimpleNamespace(cloud_id="cloud-1")
+        connection = SimpleNamespace(connection_id="conn-1", cloud_id="cloud-1", site_url="https://example.atlassian.net")
         session = MagicMock()
         session.get.return_value = connection
 
@@ -46,10 +47,10 @@ class JiraRouteServiceTests(unittest.TestCase):
         projects = jira_route_service.list_jira_projects_for_connection(
             session=session,
             connection_id="conn-1",
-            jira_oauth_connection_model=object,
+            atlassian_oauth_connection_model=object,
             settings=SimpleNamespace(),
-            refresh_jira_connection_tokens_fn=refresh_fn,
-            jira_oauth_client_fn=client_factory,
+            refresh_atlassian_connection_tokens_fn=refresh_fn,
+            atlassian_oauth_client_fn=client_factory,
         )
 
         self.assertEqual([p.key for p in projects], ["MAB", "example"])
@@ -62,7 +63,7 @@ class JiraRouteServiceTests(unittest.TestCase):
         session.get.return_value = SimpleNamespace(jira_config={"managed_webhook_ids": [1, 2]})
         build_fn = MagicMock(return_value={"ok": True})
 
-        payload = jira_route_service.get_jira_webhook_diagnostics(
+        payload = jira_webhook_route_service.get_jira_webhook_diagnostics(
             session=session,
             tenant_id="example",
             within_minutes=30,
@@ -81,7 +82,7 @@ class JiraRouteServiceTests(unittest.TestCase):
         session.get.return_value = None
 
         with self.assertRaises(HTTPException) as exc_ctx:
-            jira_route_service.get_jira_webhook_diagnostics(
+                jira_webhook_route_service.get_jira_webhook_diagnostics(
                 session=session,
                 tenant_id="missing",
                 within_minutes=30,
@@ -99,19 +100,40 @@ class JiraRouteServiceTests(unittest.TestCase):
         tenant = SimpleNamespace(tenant_id="example")
         session.get.return_value = tenant
 
-        result = SimpleNamespace(model_dump=lambda: {"ok": True, "action": "provision"})
-        response = jira_route_service.run_tenant_jira_webhook_action(
+        result = SimpleNamespace(ok=True, model_dump=lambda: {"ok": True, "action": "provision"})
+        response = jira_webhook_route_service.run_tenant_jira_webhook_action(
             session=session,
             tenant_id="example",
             tenant_model=object,
             settings=SimpleNamespace(),
             provision_jira_webhook_fn=MagicMock(return_value=result),
-            jira_webhook_action_status_code_fn=MagicMock(return_value=202),
             replace_existing=True,
         )
 
-        self.assertEqual(response.status_code, 202)
+        self.assertEqual(response.status_code, 200)
         self.assertEqual(json.loads(response.body), {"ok": True, "action": "provision"})
+
+    def test_run_tenant_jira_webhook_action_fails_when_provider_does_not_confirm(self) -> None:
+        session = MagicMock()
+        session.get.return_value = SimpleNamespace(tenant_id="example")
+        result = SimpleNamespace(
+            ok=False,
+            details="Jira webhook creation failed",
+            model_dump=lambda: {"ok": False, "details": "Jira webhook creation failed"},
+        )
+
+        with self.assertRaises(HTTPException) as exc_ctx:
+            jira_webhook_route_service.run_tenant_jira_webhook_action(
+                session=session,
+                tenant_id="example",
+                tenant_model=object,
+                settings=SimpleNamespace(),
+                provision_jira_webhook_fn=MagicMock(return_value=result),
+                replace_existing=True,
+            )
+
+        self.assertEqual(exc_ctx.exception.status_code, 502)
+        self.assertEqual(exc_ctx.exception.detail, "Jira webhook creation failed")
 
 
 class RunsServiceTests(unittest.TestCase):

@@ -9,6 +9,7 @@ import { useAuth } from "@/components/auth-provider";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { useToast } from "@/components/ui/toast-provider";
 import { createProject, getTenant, listGitHubRepositories, listJiraProjects } from "@/lib/api";
 import { canManageProjects } from "@/lib/auth-routing";
 
@@ -25,6 +26,7 @@ export function ProjectSetupWizard() {
   const params = useParams<{ tenantId: string }>();
   const router = useRouter();
   const { credentials, ready, principal } = useAuth();
+  const { showToast } = useToast();
 
   const [step, setStep] = useState<Step>(1);
   const [busy, setBusy] = useState(false);
@@ -56,7 +58,7 @@ export function ProjectSetupWizard() {
         setJiraOptions(jiraProjects.map((p) => p.key));
       } else {
         setJiraOptions([]);
-        setStatusLine("Jira is not connected for this tenant. Connect Jira first.");
+        setStatusLine("Atlassian is not connected for this tenant. Connect Atlassian first.");
       }
     } catch (error) {
       setStatusLine(`Failed to load setup options: ${(error as Error).message}`);
@@ -89,7 +91,7 @@ export function ProjectSetupWizard() {
       });
       router.push(`/${encodeURIComponent(params.tenantId)}/projects/${encodeURIComponent(created.project_id)}`);
     } catch (error) {
-      setStatusLine(`Create failed: ${(error as Error).message}`);
+      showToast({ title: "Project create failed", description: (error as Error).message, tone: "error" });
       setBusy(false);
     }
   }
@@ -106,9 +108,9 @@ export function ProjectSetupWizard() {
           <CardContent className="space-y-4 text-sm text-muted-foreground">
             <p>You do not have permission to create or edit projects in this workspace.</p>
             <Button asChild variant="outline" size="sm">
-              <Link href={`/${encodeURIComponent(params.tenantId)}/projects`}>
+              <Link href={`/${encodeURIComponent(params.tenantId)}/dashboard`}>
                 <ArrowLeft className="mr-1.5 h-3.5 w-3.5" />
-                Back to Projects
+                Back to dashboard
               </Link>
             </Button>
           </CardContent>
@@ -122,9 +124,9 @@ export function ProjectSetupWizard() {
       {/* Back link */}
       <div>
         <Button asChild variant="ghost" size="sm" className="-ml-1">
-          <Link href={`/${encodeURIComponent(params.tenantId)}/projects`}>
+          <Link href={`/${encodeURIComponent(params.tenantId)}/dashboard`}>
             <ArrowLeft className="mr-1.5 h-3.5 w-3.5" />
-            Back to Projects
+            Back to dashboard
           </Link>
         </Button>
       </div>

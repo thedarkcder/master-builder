@@ -4,13 +4,13 @@ import Link from "next/link";
 import { useParams, usePathname } from "next/navigation";
 
 const tabs = [
-  { label: "Integrations", section: "integrations" },
-  { label: "Jira", section: "jira" },
-  { label: "GitHub", section: "github" },
-  { label: "Discord", section: "discord" },
   { label: "Configuration", section: "config" },
+  { label: "Observability", section: "observability" },
   { label: "Health", section: "health" },
   { label: "Notifications", section: "notifications" },
+  { label: "Atlassian", section: "atlassian" },
+  { label: "GitHub", section: "github" },
+  { label: "Discord", section: "discord" },
   { label: "Danger", section: "danger" },
 ];
 
@@ -31,6 +31,7 @@ export default function SettingsLayout({ children }: { children: React.ReactNode
               <Link
                 key={tab.section}
                 href={href}
+                aria-current={active ? "page" : undefined}
                 className={[
                   "inline-flex items-center border-b-2 px-4 py-2.5 text-sm font-medium whitespace-nowrap transition-colors",
                   isDanger && active

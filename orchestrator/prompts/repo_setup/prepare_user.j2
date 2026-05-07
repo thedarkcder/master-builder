@@ -1,0 +1,51 @@
+Stage: repo_setup.prepare
+Tenant ID: {{ tenant_id }}
+Project ID: {{ project_id }}
+Project Name: {{ project_name }}
+GitHub Repository: {{ github_repository }}
+Run ID: {{ run_id }}
+Issue key: {{ issue_key }}
+Issue summary: {{ issue_summary }}
+Issue description:
+{{ issue_description }}
+
+Checkout root: {{ checkout_root }}
+Shared repo path: {{ shared_repo_dir }}
+Expected run repo path: {{ expected_run_repo_dir }}
+Workspace key: {{ workspace_key }}
+Execution branch: {{ execution_branch }}
+Base branch: {{ base_branch }}
+Integration branch: {{ integration_branch }}
+
+Allowed governed tools for this stage: {{ allowed_tools_json }}
+Governed tool catalog JSON: {{ tool_catalog_json }}
+
+Structured tool bridge:
+- To call an allowed governed tool, return JSON only:
+  {"type":"tool_request","tool_name":"<allowed tool>","tool_args":{...},"reason":"<optional short reason>"}
+- When repo setup is complete, return JSON only:
+  {"type":"final_response","result":{...}}
+- Do not shell out to `python -m orchestrator agent-tool`.
+
+Required process:
+1. The goal is the final execution repo, not a diagnosis.
+2. Use `repo.exec_bootstrap` for any mutation: clone, fetch, prune, repair refs, create worktrees, remove stale lockfiles inside the checkout root, or write metadata files.
+3. Use `repo.read` when inspection is useful before or after mutations.
+4. You may mutate anything under the checkout root. Do not rely on paths outside it.
+5. The execution repo may be the expected run repo path or another repo path under the checkout root, but it must be a clean git checkout ready for downstream workflow stages.
+6. Before returning `ready`, ensure the execution repo contains `.master-builder-execution-repo.json` with this JSON object shape:
+   {
+     "run_id": "{{ run_id }}",
+     "issue_key": "{{ issue_key }}",
+     "workspace_key": "{{ workspace_key }}",
+     "execution_branch": "{{ execution_branch }}",
+     "start_point_ref": "<git ref used to create the execution repo>",
+     "start_point_sha": "<commit sha at that ref>",
+     "repo_kind": "run_worktree" | "repo_clone" | "existing_repo"
+   }
+7. Before returning `ready`, ensure `git status --porcelain` is empty in the execution repo.
+8. If the repo can likely be made ready by another attempt, return `retryable_failure`.
+9. Return `terminal_failure` only when the repo cannot be prepared without operator intervention.
+
+Return JSON matching this domain model:
+{{ domain_model | tojson(indent=2) }}
