@@ -7,6 +7,7 @@ import { useAuth } from "@/components/auth-provider";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useToast } from "@/components/ui/toast-provider";
 import {
   createTenantInvite,
   createTenantTeam,
@@ -79,6 +80,7 @@ function summarizePermissions(permissionKeys: string[]): string {
 export function TenantTeamPage({ section }: { section: TenantTeamSection }) {
   const params = useParams<{ tenantId: string }>();
   const { credentials, ready } = useAuth();
+  const { showToast } = useToast();
   const tenantId = decodeURIComponent(params.tenantId);
 
   const [members, setMembers] = useState<TenantMemberRecord[]>([]);
@@ -151,9 +153,9 @@ export function TenantTeamPage({ section }: { section: TenantTeamSection }) {
       setInviteName("");
       setInviteTeamIds([]);
       await loadTeamData();
-      setStatusLine("Invite created.");
+      showToast({ title: "Invite created", description: inviteEmail.trim(), tone: "success" });
     } catch (error) {
-      setStatusLine(`Unable to create invite: ${(error as Error).message}`);
+      showToast({ title: "Invite create failed", description: (error as Error).message, tone: "error" });
     } finally {
       setBusy(false);
     }
@@ -175,9 +177,9 @@ export function TenantTeamPage({ section }: { section: TenantTeamSection }) {
       setNewTeamPermissions([]);
       setShowCreateTeamForm(false);
       await loadTeamData();
-      setStatusLine("Team created.");
+      showToast({ title: "Team created", description: newTeamName.trim(), tone: "success" });
     } catch (error) {
-      setStatusLine(`Unable to create team: ${(error as Error).message}`);
+      showToast({ title: "Team create failed", description: (error as Error).message, tone: "error" });
     } finally {
       setBusy(false);
     }
@@ -198,9 +200,9 @@ export function TenantTeamPage({ section }: { section: TenantTeamSection }) {
         permission_keys: nextPermissions,
       });
       await loadTeamData();
-      setStatusLine(`Updated team ${team.name}.`);
+      showToast({ title: "Team updated", description: team.name, tone: "success" });
     } catch (error) {
-      setStatusLine(`Unable to update team: ${(error as Error).message}`);
+      showToast({ title: "Team update failed", description: (error as Error).message, tone: "error" });
     } finally {
       setBusy(false);
     }
@@ -222,9 +224,9 @@ export function TenantTeamPage({ section }: { section: TenantTeamSection }) {
         is_active: patch.is_active ?? member.is_active,
       });
       await loadTeamData();
-      setStatusLine(`Updated member ${member.email}.`);
+      showToast({ title: "Member updated", description: member.email, tone: "success" });
     } catch (error) {
-      setStatusLine(`Unable to update member: ${(error as Error).message}`);
+      showToast({ title: "Member update failed", description: (error as Error).message, tone: "error" });
     } finally {
       setBusy(false);
     }
@@ -242,9 +244,9 @@ export function TenantTeamPage({ section }: { section: TenantTeamSection }) {
         await revokeTenantInvite(credentials, tenantId, inviteId);
       }
       await loadTeamData();
-      setStatusLine(`Invite ${action} complete.`);
+      showToast({ title: `Invite ${action} complete`, tone: "success" });
     } catch (error) {
-      setStatusLine(`Unable to ${action} invite: ${(error as Error).message}`);
+      showToast({ title: `Invite ${action} failed`, description: (error as Error).message, tone: "error" });
     } finally {
       setBusy(false);
     }

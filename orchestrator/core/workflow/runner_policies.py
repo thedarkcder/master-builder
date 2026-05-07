@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import re
 
-from orchestrator.core.followups import build_backlog_follow_up_draft
+from orchestrator.core.pm.followups import build_backlog_follow_up_draft
 
 PLACEHOLDER_PATTERN = re.compile(r"\b(todo|fixme|tbd|placeholder|stub)\b", re.IGNORECASE)
 ISSUE_KEY_PATTERN = re.compile(r"\b[A-Z][A-Z0-9]+-\d+\b")

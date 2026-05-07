@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 
-from orchestrator.core.email_delivery import EmailMessagePayload, deliver_email
+from orchestrator.core.platform.email_delivery import EmailMessagePayload, deliver_email
 
 logger = logging.getLogger(__name__)
 

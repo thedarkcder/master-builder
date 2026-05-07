@@ -17,14 +17,11 @@ Structured tool bridge:
   {"type":"tool_request","tool_name":"<allowed tool>","tool_args":{...},"reason":"<optional short reason>"}
 - When the stage is complete, return JSON only:
   {"type":"final_response","result":{...}}
-- Do not shell out to `python -m orchestrator agent-tool`.
 
-Focus on trust boundaries, data handling, abuse cases, and permission checks.
-Prefer concrete safeguards and functional slices a delivery team could own, not internal-only chores.
-If the feature is underspecified, ask the narrowest missing behavior or non-functional question and include a short example in the question text.
-Return strict JSON only with keys:
-- findings
-- recommendations
-- required_tasks
-- open_behavior_questions
-- acceptance_impacts
+Use tools/context first.
+Record security decisions as technical_decisions with options, tradeoffs, selected recommendation, rationale, evidence, confidence, and product impact.
+Only create pm_decision_requests for PM-owned product/buildability ambiguity. Do not create stakeholder questions.
+
+Specialist output contract:
+Return JSON matching this domain model:
+{{ domain_model | tojson(indent=2) }}

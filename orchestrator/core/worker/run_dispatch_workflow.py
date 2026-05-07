@@ -4,7 +4,7 @@ import json
 from dataclasses import dataclass
 from uuid import uuid4
 
-from orchestrator.core.run_logs import record_run_log_event
+from orchestrator.core.observability.logging_pane import emit_logging_pane_event
 from orchestrator.core.worker.run_dispatch_gateways import RunExecutionGateway
 from orchestrator.core.worker.run_dispatch_gateways import RunDispatchIdentityGateway
 from orchestrator.core.worker.run_dispatch_gateways import RunProjectGateway
@@ -12,7 +12,7 @@ from orchestrator.core.worker.run_dispatch_gateways import RunDispatchStatusConf
 from orchestrator.core.worker.run_dispatch_gateways import RunStageUpdateGateway
 from orchestrator.core.worker.run_outcome_policy import RunOutcomePolicy
 from orchestrator.core.worker.run_preparation_service import RunPreparationService
-from orchestrator.core.worker_workspace import resolve_worker_workspace_key
+from orchestrator.core.worker.workspace import resolve_worker_workspace_key
 
 
 @dataclass(frozen=True)
@@ -153,7 +153,7 @@ def _emit_queue_wait_metric(*, session, run, project_id: str | None, agent_id: s
     if run.started_at is None or run.created_at is None:
         return
     wait_ms = max(0, int((run.started_at - run.created_at).total_seconds() * 1000))
-    record_run_log_event(
+    emit_logging_pane_event(
         session=session,
         tenant_id=run.tenant_id,
         project_id=project_id,

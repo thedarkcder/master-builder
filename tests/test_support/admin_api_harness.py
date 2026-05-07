@@ -2,25 +2,24 @@ from __future__ import annotations
 
 import os
 from datetime import datetime, timedelta, timezone
-from types import SimpleNamespace
 from unittest.mock import patch
 
 from cryptography.fernet import Fernet
 from fastapi.testclient import TestClient
 from orchestrator.api.main import create_app
-from orchestrator.core.agent_observability import reset_agent_observability_for_tests
+from orchestrator.core.observability.agent_observability import reset_agent_observability_for_tests
 from orchestrator.core.config import get_settings
-from orchestrator.core.secrets import encrypt_value
+from orchestrator.core.platform.secrets import encrypt_value
 from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
-from orchestrator.storage.models import JiraOAuthConnection, Run
+from orchestrator.storage.models import AtlassianOAuthConnection, Run
 from tests.test_support.db_harness import SqliteTemplateApiTestCase
 from tests.workflow_test_support import add_human_input_request, add_run_with_workflow, add_workflow_attempt, make_run
 
 
 class AdminApiTestHarness(SqliteTemplateApiTestCase):
     _secrets_encryption_key: str
-    _provision_jira_webhook_patcher: object
+    _start_jira_reconciliation_patcher: object
     client: TestClient
     database_url: str
 
@@ -38,7 +37,7 @@ class AdminApiTestHarness(SqliteTemplateApiTestCase):
             "ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET": "unit-test-secret",
             "ORCHESTRATOR_ADMIN_UI_BASE_URL": "http://localhost:4100",
             "ORCHESTRATOR_PUBLIC_API_BASE_URL": "http://localhost:4000",
-            "ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET": "jira-oauth-state-secret",
+            "ORCHESTRATOR_ATLASSIAN_OAUTH_STATE_SECRET": "atlassian-oauth-state-secret",
             "ORCHESTRATOR_GITHUB_APP_SLUG": "master-builder-app",
             "ORCHESTRATOR_SECRETS_ENCRYPTION_KEY": cls._secrets_encryption_key,
             "ORCHESTRATOR_CODEX_SUPPORTED_MODELS": "gpt-5.4,gpt-5.4-mini,gpt-5.3-codex",
@@ -67,12 +66,12 @@ class AdminApiTestHarness(SqliteTemplateApiTestCase):
             auth=("admin", "secret"),
         )
         cls._class_client.put(
-            "/api/admin/secrets/platform%2FJIRA_OAUTH_CLIENT_ID",
+            "/api/admin/secrets/platform%2FATLASSIAN_OAUTH_CLIENT_ID",
             json={"value": "jira-client-id"},
             auth=("admin", "secret"),
         )
         cls._class_client.put(
-            "/api/admin/secrets/platform%2FJIRA_OAUTH_CLIENT_SECRET",
+            "/api/admin/secrets/platform%2FATLASSIAN_OAUTH_CLIENT_SECRET",
             json={"value": "jira-client-secret"},
             auth=("admin", "secret"),
         )
@@ -84,25 +83,15 @@ class AdminApiTestHarness(SqliteTemplateApiTestCase):
         reset_db_engine_cache()
         reset_agent_observability_for_tests()
 
-        def _stub_provision_jira_webhook(**kwargs: object) -> SimpleNamespace:
-            _ = kwargs
-            return SimpleNamespace(
-                ok=True,
-                action="provision",
-                details="Provisioned 0 Jira webhook(s).",
-                webhook_ids=[],
-            )
-
-        self._provision_jira_webhook_patcher = patch(
-            "orchestrator.api.routes.admin_tenants.provision_jira_webhook",
-            side_effect=_stub_provision_jira_webhook,
+        self._start_jira_reconciliation_patcher = patch(
+            "orchestrator.api.admin.route_helpers.start_jira_project_reconciliation"
         )
-        self._provision_jira_webhook_patcher.start()
+        self._start_jira_reconciliation_patcher.start()
         self.client = TestClient(create_app(), raise_server_exceptions=False)
 
     def tearDown(self) -> None:
         self.client.close()
-        self._provision_jira_webhook_patcher.stop()
+        self._start_jira_reconciliation_patcher.stop()
         self._cleanup_test_database()
         os.environ.pop("ORCHESTRATOR_WORKER_CAPABILITIES", None)
 
@@ -157,19 +146,19 @@ class AdminApiTestHarness(SqliteTemplateApiTestCase):
             },
         }
 
-    def _insert_jira_connection(self, connection_id: str = "conn-1") -> None:
+    def _insert_jira_connection(self, connection_id: str = "conn-1", scopes: list[str] | None = None) -> None:
         session_factory = create_session_factory(self.database_url)
         settings = get_settings()
         now = datetime.now(timezone.utc)
         with session_factory() as session:
             session.add(
-                JiraOAuthConnection(
+                AtlassianOAuthConnection(
                     connection_id=connection_id,
                     account_id="account-1",
                     account_email="test@example.com",
                     cloud_id="cloud-1",
                     site_url="https://example.atlassian.net",
-                    scopes=["read:jira-work", "write:jira-work"],
+                    scopes=scopes or ["read:jira-work", "write:jira-work"],
                     access_token_encrypted=encrypt_value(
                         plaintext="access-token",
                         encryption_key=settings.secrets_encryption_key,
@@ -223,7 +212,7 @@ class AdminApiTestHarness(SqliteTemplateApiTestCase):
                 checkpoint_stage=checkpoint_stage or ("pm" if checkpoint_kind == "pm" else "test"),
                 checkpoint_payload={"checkpoint": checkpoint_kind, "run_id": run_id},
                 checkpoint_session_id="checkpoint-session" if checkpoint_kind == "pm" else None,
-                blocked_reason="human_input_expired" if workflow_status == "blocked" else None,
+                failure_reason="human_input_expired" if workflow_status == "failed" else None,
                 last_error=None if workflow_status != "failed" and run_status not in {"failed", "blocked"} else "run failed",
                 plan=(
                     ExecutionSnapshot.empty(trigger_context={"source": "test"}).dump()

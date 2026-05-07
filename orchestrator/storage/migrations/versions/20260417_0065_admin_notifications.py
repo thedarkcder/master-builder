@@ -9,7 +9,6 @@ from __future__ import annotations
 
 from alembic import op
 import sqlalchemy as sa
-from sqlalchemy import inspect
 
 
 revision = "20260417_0065"
@@ -19,14 +18,14 @@ depends_on = None
 
 
 def _has_table(table_name: str) -> bool:
-    bind = op.get_bind()
-    inspector = inspect(bind)
-    return bool(inspector.has_table(table_name))
+    inspector = sa.inspect(op.get_bind())
+    return table_name in inspector.get_table_names()
 
 
 def _has_index(table_name: str, index_name: str) -> bool:
-    bind = op.get_bind()
-    inspector = inspect(bind)
+    inspector = sa.inspect(op.get_bind())
+    if table_name not in inspector.get_table_names():
+        return False
     return any(index.get("name") == index_name for index in inspector.get_indexes(table_name))
 
 
@@ -58,30 +57,14 @@ def upgrade() -> None:
             sa.PrimaryKeyConstraint("notification_id"),
             sa.UniqueConstraint("fingerprint", name="uq_admin_notifications_fingerprint"),
         )
-    if not _has_index("admin_notifications", "ix_admin_notifications_status_last_emitted_at"):
-        op.create_index(
-            "ix_admin_notifications_status_last_emitted_at",
-            "admin_notifications",
-            ["status", "last_emitted_at"],
-        )
-    if not _has_index("admin_notifications", "ix_admin_notifications_scope_type_scope_id"):
-        op.create_index(
-            "ix_admin_notifications_scope_type_scope_id",
-            "admin_notifications",
-            ["scope_type", "scope_id"],
-        )
-    if not _has_index("admin_notifications", "ix_admin_notifications_tenant_id_status"):
-        op.create_index(
-            "ix_admin_notifications_tenant_id_status",
-            "admin_notifications",
-            ["tenant_id", "status"],
-        )
-    if not _has_index("admin_notifications", "ix_admin_notifications_kind_status"):
-        op.create_index(
-            "ix_admin_notifications_kind_status",
-            "admin_notifications",
-            ["kind", "status"],
-        )
+    for index_name, columns in (
+        ("ix_admin_notifications_status_last_emitted_at", ["status", "last_emitted_at"]),
+        ("ix_admin_notifications_scope_type_scope_id", ["scope_type", "scope_id"]),
+        ("ix_admin_notifications_tenant_id_status", ["tenant_id", "status"]),
+        ("ix_admin_notifications_kind_status", ["kind", "status"]),
+    ):
+        if not _has_index("admin_notifications", index_name):
+            op.create_index(index_name, "admin_notifications", columns)
 
 
 def downgrade() -> None:

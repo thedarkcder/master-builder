@@ -35,7 +35,6 @@ class RunQueueEventsTests(unittest.TestCase):
             tenant_id="t1",
             project_id="p1",
             run_id="r1",
-            issue_key="MAB-1",
         )
 
         session.execute.assert_not_called()
@@ -50,7 +49,6 @@ class RunQueueEventsTests(unittest.TestCase):
             tenant_id="t1",
             project_id="p1",
             run_id="r1",
-            issue_key="MAB-1",
         )
 
         session.execute.assert_called_once()
@@ -60,7 +58,21 @@ class RunQueueEventsTests(unittest.TestCase):
         self.assertEqual(payload["tenant_id"], "t1")
         self.assertEqual(payload["project_id"], "p1")
         self.assertEqual(payload["run_id"], "r1")
-        self.assertEqual(payload["issue_key"], "MAB-1")
+        self.assertNotIn("subject_key", payload)
+        self.assertNotIn("issue_key", payload)
+
+    def test_notify_run_enqueued_rejects_empty_run_id(self) -> None:
+        session = MagicMock()
+
+        with self.assertRaisesRegex(ValueError, "requires run_id"):
+            notify_run_enqueued(
+                session,
+                tenant_id="t1",
+                project_id="p1",
+                run_id=" ",
+            )
+
+        session.execute.assert_not_called()
 
     def test_notify_run_enqueued_logs_failures(self) -> None:
         session = MagicMock()
@@ -74,7 +86,6 @@ class RunQueueEventsTests(unittest.TestCase):
                 tenant_id="t1",
                 project_id=None,
                 run_id="r1",
-                issue_key="MAB-1",
             )
 
         logger_mock.assert_called_once()

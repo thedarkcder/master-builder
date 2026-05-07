@@ -7,11 +7,31 @@ from orchestrator.api.schemas import (
     ProjectRead,
     RunRead,
     TenantRead,
+    WorkflowLinkRead,
+    WorkflowObservabilityEventRead,
+    WorkflowOperationAttemptRead,
+    WorkflowOperationRead,
+    WorkflowOperationWorkUnitAttemptRead,
+    WorkflowOperationWorkUnitRead,
     WorkflowRead,
+    WorkflowStatePathEntryRead,
+    WorkflowTypeRead,
 )
 from orchestrator.core.config import get_settings
-from orchestrator.core.project_policy import resolve_effective_policy
-from orchestrator.storage.models import Project, ProjectInstall, ProjectInstallRequest, Run, Tenant, WorkflowExecution
+from orchestrator.core.projects.policy import resolve_effective_policy
+from orchestrator.storage.models import (
+    Project,
+    ProjectInstall,
+    ProjectInstallRequest,
+    Run,
+    Tenant,
+    WorkflowExecution,
+    WorkflowOperation,
+    WorkflowOperationAttempt,
+    WorkflowOperationWorkUnit,
+    WorkflowOperationWorkUnitAttempt,
+)
+from orchestrator.core.observability.events import ProductEvent
 
 
 def tenant_to_schema(tenant: Tenant) -> TenantRead:
@@ -61,25 +81,219 @@ def run_to_schema(run: Run) -> RunRead:
     )
 
 
-def workflow_to_schema(workflow: WorkflowExecution, *, runs: list[RunRead], pending_input_request_id: str | None, latest_checkpoint_kind: str | None) -> WorkflowRead:
+def workflow_operation_work_unit_to_schema(
+    work_unit: WorkflowOperationWorkUnit,
+    *,
+    attempts: list[WorkflowOperationWorkUnitAttempt],
+) -> WorkflowOperationWorkUnitRead:
+    return WorkflowOperationWorkUnitRead(
+        work_unit_id=work_unit.work_unit_id,
+        unit_key=work_unit.unit_key,
+        unit_kind=work_unit.unit_kind,
+        idempotency_key=work_unit.idempotency_key,
+        input_fingerprint=work_unit.input_fingerprint,
+        status=work_unit.status,
+        error_category=work_unit.error_category,
+        error_message=work_unit.error_message,
+        completed_at=work_unit.completed_at,
+        attempts=[
+            WorkflowOperationWorkUnitAttemptRead(
+                work_unit_attempt_id=unit_attempt.work_unit_attempt_id,
+                operation_attempt_id=unit_attempt.operation_attempt_id,
+                attempt_number=unit_attempt.attempt_number,
+                status=unit_attempt.status,
+                error_category=unit_attempt.error_category,
+                error_message=unit_attempt.error_message,
+                next_retry_at=unit_attempt.next_retry_at,
+                started_at=unit_attempt.started_at,
+                finished_at=unit_attempt.finished_at,
+            )
+            for unit_attempt in attempts
+        ],
+    )
+
+
+def workflow_operation_attempt_to_schema(
+    attempt: WorkflowOperationAttempt,
+    *,
+    work_units: list[WorkflowOperationWorkUnit] | None = None,
+    work_unit_attempts: dict[str, list[WorkflowOperationWorkUnitAttempt]] | None = None,
+) -> WorkflowOperationAttemptRead:
+    unit_attempts = work_unit_attempts or {}
+    return WorkflowOperationAttemptRead(
+        attempt_id=attempt.attempt_id,
+        attempt_number=attempt.attempt_number,
+        status=attempt.status,
+        error_category=attempt.error_category,
+        error_message=attempt.error_message,
+        status_detail=attempt.status_detail,
+        retryable=attempt.retryable,
+        next_retry_at=attempt.next_retry_at,
+        started_at=attempt.started_at,
+        finished_at=attempt.finished_at,
+        work_units=[
+            workflow_operation_work_unit_to_schema(
+                work_unit,
+                attempts=[
+                    unit_attempt
+                    for unit_attempt in unit_attempts.get(work_unit.work_unit_id, [])
+                    if unit_attempt.operation_attempt_id == attempt.attempt_id
+                ],
+            )
+            for work_unit in list(work_units or [])
+            if any(
+                unit_attempt.operation_attempt_id == attempt.attempt_id
+                for unit_attempt in unit_attempts.get(work_unit.work_unit_id, [])
+            )
+        ],
+    )
+
+
+def workflow_observability_event_to_schema(event: ProductEvent | dict) -> WorkflowObservabilityEventRead:
+    if isinstance(event, dict):
+        return WorkflowObservabilityEventRead(**event)
+    payload = dict(event.payload_json or {})
+    attempt: int | None = None
+    raw_attempt = payload.get("attempt")
+    if isinstance(raw_attempt, int):
+        attempt = raw_attempt
+    elif isinstance(raw_attempt, str):
+        try:
+            attempt = int(raw_attempt)
+        except ValueError:
+            attempt = None
+    return WorkflowObservabilityEventRead(
+        event_id=f"audit:{event.event_sequence}",
+        event_sequence=event.event_sequence,
+        source="audit",
+        level=event.level,
+        event_kind=event.event_kind,
+        message=event.message,
+        source_component=event.source_component,
+        run_id=event.run_id,
+        operation_id=event.operation_id,
+        attempt_id=event.attempt_id,
+        agent_id=str(payload.get("actor_id") or "").strip() if str(payload.get("actor_type") or "") == "agent" else None,
+        invocation_id=str(payload.get("invocation_id") or "").strip() or None,
+        stage=str(payload.get("stage") or "").strip() or None,
+        attempt=attempt,
+        stream=str(payload.get("stream") or "").strip() or None,
+        payload=payload,
+        recorded_at=event.recorded_at,
+    )
+
+
+def workflow_operation_to_schema(
+    operation: WorkflowOperation | None,
+    *,
+    operation_id: str,
+    operation_type: str,
+    status: str,
+    label: str | None,
+    description: str | None,
+    required: bool,
+    definition_only: bool,
+    attempts: list[WorkflowOperationAttempt],
+    work_units: list[WorkflowOperationWorkUnit] | None = None,
+    work_unit_attempts: dict[str, list[WorkflowOperationWorkUnitAttempt]] | None = None,
+    kind: str = "business",
+    after: list[str] | None = None,
+    supports: list[str] | None = None,
+    events: list[ProductEvent | dict] | None = None,
+    can_retry: bool = False,
+    retry_unavailable_reason: str | None = None,
+    can_restart: bool = False,
+    restart_unavailable_reason: str | None = None,
+) -> WorkflowOperationRead:
+    return WorkflowOperationRead(
+        operation_id=operation_id,
+        run_id=(operation.run_id if operation is not None else None),
+        operation_type=operation_type,
+        status=status,
+        label=label,
+        description=description,
+        required=required,
+        kind=kind,
+        after=list(after or []),
+        supports=list(supports or []),
+        definition_only=definition_only,
+        target_system=(operation.target_system if operation is not None else None),
+        target_ref=(operation.target_ref if operation is not None else None),
+        summary=(operation.summary if operation is not None else None),
+        can_retry=can_retry,
+        retry_unavailable_reason=retry_unavailable_reason,
+        can_restart=can_restart,
+        restart_unavailable_reason=restart_unavailable_reason,
+        attempts=[
+            workflow_operation_attempt_to_schema(
+                attempt,
+                work_units=work_units,
+                work_unit_attempts=work_unit_attempts,
+            )
+            for attempt in attempts
+        ],
+        events=[workflow_observability_event_to_schema(event) for event in list(events or [])],
+    )
+
+
+def workflow_to_schema(
+    workflow: WorkflowExecution,
+    *,
+    runs: list[RunRead],
+    pending_input_request_id: str | None,
+    latest_checkpoint_kind: str | None,
+    workflow_type: WorkflowTypeRead,
+    current_state: str,
+    waiting_on: str | None,
+    next_step: str | None,
+    state_path: list[WorkflowStatePathEntryRead] | None = None,
+    completed_steps: list[str] | None = None,
+    failed_steps: list[str] | None = None,
+    pending_steps: list[str] | None = None,
+    retrying_steps: list[str] | None = None,
+    conditional_branches_taken: list[str] | None = None,
+    conditional_branches_available: list[str] | None = None,
+    can_resume: bool = False,
+    resume_unavailable_reason: str | None = None,
+    links: list[WorkflowLinkRead] | None = None,
+    operations: list[WorkflowOperationRead] | None = None,
+) -> WorkflowRead:
     return WorkflowRead(
+        execution_id=workflow.execution_id,
         workflow_id=workflow.workflow_id,
         tenant_id=workflow.tenant_id,
         project_id=workflow.project_id,
-        issue_key=workflow.issue_key,
-        issue_summary=workflow.issue_summary,
+        source_system=workflow.source_system,
+        source_ref=workflow.source_ref,
+        display_name=workflow.display_name,
         repo_url=workflow.repo_url,
         branch=workflow.branch,
         pr_url=workflow.pr_url,
+        orchestration_backend=str(workflow.orchestration_backend or "").strip(),
         dedupe_scope=workflow.dedupe_scope,
         status=workflow.status,
+        workflow_type=workflow_type,
+        current_state=current_state,
+        waiting_on=waiting_on,
+        next_step=next_step,
         active_run_id=workflow.active_run_id,
         latest_checkpoint_id=workflow.latest_checkpoint_id,
         source_workflow_id=workflow.source_workflow_id,
         source_run_id=workflow.source_run_id,
-        blocked_reason=workflow.blocked_reason,
+        failure_reason=workflow.last_error,
         pending_input_request_id=pending_input_request_id,
         latest_checkpoint_kind=latest_checkpoint_kind,
+        state_path=list(state_path or []),
+        completed_steps=list(completed_steps or []),
+        failed_steps=list(failed_steps or []),
+        pending_steps=list(pending_steps or []),
+        retrying_steps=list(retrying_steps or []),
+        conditional_branches_taken=list(conditional_branches_taken or []),
+        conditional_branches_available=list(conditional_branches_available or []),
+        can_resume=can_resume,
+        resume_unavailable_reason=resume_unavailable_reason,
+        links=list(links or []),
+        operations=list(operations or []),
         runs=runs,
         created_at=workflow.created_at,
         started_at=workflow.started_at,
@@ -97,6 +311,7 @@ def project_to_schema(project: Project, *, tenant_policy: dict) -> ProjectRead:
         github_repository=project.github_repository,
         jira_project_key=project.jira_project_key,
         policy_overrides=project.policy_overrides,
+        architecture_docs=dict(project.architecture_docs_config or {}) or None,
         effective_policy=resolve_effective_policy(
             tenant_policy=tenant_policy,
             project_overrides=project.policy_overrides,

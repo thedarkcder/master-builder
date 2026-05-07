@@ -5,7 +5,6 @@ from datetime import datetime, timedelta, timezone
 from fastapi import HTTPException, Response, status
 from sqlalchemy import delete, select
 
-from orchestrator.core.decision_types import JiraConfigKey, jira_config_text
 from orchestrator.storage.models import (
     ManagedSecret,
     Project,
@@ -22,40 +21,14 @@ from orchestrator.storage.models import (
 )
 
 
-_CREATE_TENANT_JIRA_CONFIGURATION_ERROR_DETAILS = {
-    "Configured Jira connection was not found",
-    "Jira OAuth connection is not linked for this tenant",
-}
-
-
-def _should_provision_jira_webhook_on_create(*, jira_config: dict) -> bool:
-    connection_id = jira_config_text(jira_config=jira_config, key=JiraConfigKey.CONNECTION_ID)
-    if not connection_id:
-        return False
-    project_keys = [str(value).strip() for value in jira_config.get("project_keys") or [] if str(value).strip()]
-    return len(project_keys) > 0
-
-
-def _raise_create_tenant_jira_webhook_error(*, session, details: str) -> None:  # noqa: ANN001
-    session.rollback()
-    status_code = (
-        status.HTTP_400_BAD_REQUEST
-        if details in _CREATE_TENANT_JIRA_CONFIGURATION_ERROR_DETAILS
-        else status.HTTP_502_BAD_GATEWAY
-    )
-    raise HTTPException(status_code=status_code, detail=details)
-
-
 def create_tenant(
     *,
     session,
     payload,
-    settings,
     allocate_tenant_id_fn,
     with_preserved_jira_system_fields_fn,
     with_managed_github_refs_fn,
     with_preserved_discord_system_fields_fn,
-    provision_jira_webhook_fn,
     reconcile_tenant_projects_fn,
     tenant_to_schema_fn,
 ):  # noqa: ANN001
@@ -91,21 +64,6 @@ def create_tenant(
         )
     )
     reconcile_tenant_projects_fn(session, tenant=tenant)
-    if _should_provision_jira_webhook_on_create(
-        jira_config=dict(tenant.jira_config or {}),
-    ):
-        provision_result = provision_jira_webhook_fn(
-            session=session,
-            tenant=tenant,
-            settings=settings,
-            commit=False,
-            replace_existing=False,
-        )
-        if not provision_result.ok:
-            _raise_create_tenant_jira_webhook_error(
-                session=session,
-                details=str(provision_result.details or "Failed to provision Jira webhook"),
-            )
     session.commit()
     session.refresh(tenant)
     return tenant_to_schema_fn(tenant)
@@ -118,43 +76,85 @@ def get_tenant_or_404(*, session, tenant_id: str) -> Tenant:  # noqa: ANN001
     return tenant
 
 
-def update_tenant(
+def _commit_tenant_update(*, session, tenant, tenant_to_schema_fn):  # noqa: ANN001
+    tenant.updated_at = datetime.now(timezone.utc)
+    session.commit()
+    session.refresh(tenant)
+    return tenant_to_schema_fn(tenant)
+
+
+def update_tenant_configuration(*, session, tenant_id: str, payload, tenant_to_schema_fn):  # noqa: ANN001
+    tenant = get_tenant_or_404(session=session, tenant_id=tenant_id)
+    tenant.name = payload.name
+    return _commit_tenant_update(session=session, tenant=tenant, tenant_to_schema_fn=tenant_to_schema_fn)
+
+
+def update_tenant_jira(
     *,
     session,
     tenant_id: str,
     payload,
     with_preserved_jira_system_fields_fn,
-    with_managed_github_refs_fn,
-    with_preserved_discord_system_fields_fn,
     reconcile_tenant_projects_fn,
     tenant_to_schema_fn,
 ):  # noqa: ANN001
     tenant = get_tenant_or_404(session=session, tenant_id=tenant_id)
-
-    tenant.name = payload.name
-    tenant.is_enabled = payload.is_enabled
-    if payload.is_enabled:
-        tenant.archived_at = None
-        tenant.purge_after_at = None
     tenant.jira_config = with_preserved_jira_system_fields_fn(
-        existing=dict(tenant.jira_config),
+        existing=dict(tenant.jira_config or {}),
         proposed=payload.jira.model_dump(exclude_unset=True),
     )
+    reconcile_tenant_projects_fn(session, tenant=tenant)
+    return _commit_tenant_update(session=session, tenant=tenant, tenant_to_schema_fn=tenant_to_schema_fn)
+
+
+def update_tenant_github(*, session, tenant_id: str, payload, with_managed_github_refs_fn, tenant_to_schema_fn):  # noqa: ANN001
+    tenant = get_tenant_or_404(session=session, tenant_id=tenant_id)
     tenant.github_config = with_managed_github_refs_fn(payload.github.model_dump())
+    return _commit_tenant_update(session=session, tenant=tenant, tenant_to_schema_fn=tenant_to_schema_fn)
+
+
+def update_tenant_repos(*, session, tenant_id: str, payload, reconcile_tenant_projects_fn, tenant_to_schema_fn):  # noqa: ANN001
+    tenant = get_tenant_or_404(session=session, tenant_id=tenant_id)
     tenant.repos_config = payload.repos.model_dump()
+    reconcile_tenant_projects_fn(session, tenant=tenant)
+    return _commit_tenant_update(session=session, tenant=tenant, tenant_to_schema_fn=tenant_to_schema_fn)
+
+
+def update_tenant_policy(*, session, tenant_id: str, payload, tenant_to_schema_fn):  # noqa: ANN001
+    tenant = get_tenant_or_404(session=session, tenant_id=tenant_id)
     tenant.policy_config = payload.policy.model_dump()
+    return _commit_tenant_update(session=session, tenant=tenant, tenant_to_schema_fn=tenant_to_schema_fn)
+
+
+def update_tenant_observability(*, session, tenant_id: str, payload, tenant_to_schema_fn):  # noqa: ANN001
+    tenant = get_tenant_or_404(session=session, tenant_id=tenant_id)
+    policy_config = dict(tenant.policy_config or {})
+    policy_config["observability"] = payload.observability.model_dump()
+    tenant.policy_config = policy_config
+    return _commit_tenant_update(session=session, tenant=tenant, tenant_to_schema_fn=tenant_to_schema_fn)
+
+
+def update_tenant_discord(
+    *,
+    session,
+    tenant_id: str,
+    payload,
+    with_preserved_discord_system_fields_fn,
+    tenant_to_schema_fn,
+):  # noqa: ANN001
+    tenant = get_tenant_or_404(session=session, tenant_id=tenant_id)
     tenant.discord_config = with_preserved_discord_system_fields_fn(
         existing=dict(tenant.discord_config or {}),
         proposed=payload.discord.model_dump(exclude_unset=True) if payload.discord else None,
     )
+    return _commit_tenant_update(session=session, tenant=tenant, tenant_to_schema_fn=tenant_to_schema_fn)
+
+
+def update_tenant_experience(*, session, tenant_id: str, payload, tenant_to_schema_fn):  # noqa: ANN001
+    tenant = get_tenant_or_404(session=session, tenant_id=tenant_id)
     tenant.experience_config = dict(payload.experience)
     tenant.setup_state = dict(payload.setup_state)
-    tenant.updated_at = datetime.now(timezone.utc)
-    reconcile_tenant_projects_fn(session, tenant=tenant)
-
-    session.commit()
-    session.refresh(tenant)
-    return tenant_to_schema_fn(tenant)
+    return _commit_tenant_update(session=session, tenant=tenant, tenant_to_schema_fn=tenant_to_schema_fn)
 
 
 def _delete_tenant_owned_secrets(*, session, tenant_id: str) -> None:  # noqa: ANN001

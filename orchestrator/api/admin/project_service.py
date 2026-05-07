@@ -9,12 +9,11 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from orchestrator.storage.models import Project, Tenant
-from orchestrator.core.secret_manager import normalize_secret_ref
-from orchestrator.core.tenant_secret_service import tenant_secret_service
+from orchestrator.core.platform.secret_manager import normalize_secret_ref
+from orchestrator.core.platform.tenant_secret_service import tenant_secret_service
 from orchestrator.tools.discord_api import DiscordApiError
-from orchestrator.tools.jira_oauth import JiraOAuthError
+from orchestrator.tools.atlassian_oauth import AtlassianOAuthError
 from orchestrator.tools.project_repo_checkout import ProjectRepoCheckoutError
-
 
 class AdminProjectService:
     def __init__(
@@ -24,6 +23,7 @@ class AdminProjectService:
         normalize_project_key: Callable[[str], str],
         normalize_project_policy_overrides: Callable[[dict | None], dict],
         normalize_string_map: Callable[[dict | None], dict],
+        normalize_project_architecture_docs_config: Callable[[dict | None], dict],
         normalize_project_discord_config: Callable[[dict | None], dict],
         with_preserved_discord_system_fields: Callable[[dict, dict], dict],
         resolve_project_discord_channel_binding: Callable[..., dict],
@@ -37,6 +37,7 @@ class AdminProjectService:
         self._normalize_project_key = normalize_project_key
         self._normalize_project_policy_overrides = normalize_project_policy_overrides
         self._normalize_string_map = normalize_string_map
+        self._normalize_project_architecture_docs_config = normalize_project_architecture_docs_config
         self._normalize_project_discord_config = normalize_project_discord_config
         self._with_preserved_discord_system_fields = with_preserved_discord_system_fields
         self._resolve_project_discord_channel_binding = resolve_project_discord_channel_binding
@@ -45,6 +46,20 @@ class AdminProjectService:
         self._resolve_project_run_board_id = resolve_project_run_board_id
         self._project_to_schema = project_to_schema
         self._settings_factory = settings_factory
+
+    def _optional_payload_dict(self, value) -> dict | None:  # noqa: ANN001
+        if value is None:
+            return None
+        model_dump = getattr(value, "model_dump", None)
+        if callable(model_dump):
+            dumped = model_dump(exclude_unset=True)
+            return dumped if isinstance(dumped, dict) else dict(dumped or {})
+        if isinstance(value, dict):
+            return dict(value)
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Structured project configuration payload must be an object",
+        )
 
     def _should_bind_project_discord_channel(
         self,
@@ -119,6 +134,29 @@ class AdminProjectService:
             materialized[variable_name] = managed_ref
         return materialized
 
+    def _project_and_tenant_or_404(self, *, session, tenant_id: str, project_id: str):  # noqa: ANN001
+        project = session.get(Project, project_id)
+        if project is None or project.tenant_id != tenant_id:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+        tenant = session.get(Tenant, tenant_id)
+        if tenant is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+        return project, tenant
+
+    def _commit_project_update(self, *, session, project: Project, tenant: Tenant) -> object:  # noqa: ANN001
+        self._sync_tenant_jira_project_keys(session, tenant=tenant)
+        tenant.updated_at = project.updated_at
+        try:
+            session.commit()
+        except IntegrityError as exc:
+            session.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="A project with the same repository or Jira project key already exists for this tenant",
+            ) from exc
+        session.refresh(project)
+        return self._project_to_schema(project, tenant_policy=tenant.policy_config)
+
     def list_projects(self, *, session, tenant_id: str) -> list[object]:
         tenant = session.get(Tenant, tenant_id)
         if tenant is None:
@@ -154,20 +192,13 @@ class AdminProjectService:
 
         now = datetime.now(timezone.utc)
         normalized_policy_overrides = self._normalize_project_policy_overrides(payload.policy_overrides)
+
         try:
-            run_board_id = self._resolve_project_run_board_id(
-                session=session,
-                tenant=tenant,
-                jira_project_key=normalized_jira_key,
-                settings=self._settings_factory(),
+            normalized_architecture_docs_config = self._normalize_project_architecture_docs_config(
+                self._optional_payload_dict(getattr(payload, "architecture_docs", None))
             )
-        except (ValueError, JiraOAuthError) as exc:
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"Unable to resolve Jira board for project {normalized_jira_key}: {exc}",
-            ) from exc
-        if run_board_id is not None:
-            normalized_policy_overrides["run_board_id"] = run_board_id
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
         settings = self._settings_factory()
         project = Project(
@@ -177,6 +208,7 @@ class AdminProjectService:
             github_repository=normalized_repo,
             jira_project_key=normalized_jira_key,
             policy_overrides=normalized_policy_overrides,
+            architecture_docs_config=normalized_architecture_docs_config,
             environment=self._normalize_string_map(payload.environment),
             secret_refs={},
             discord_config={},
@@ -195,7 +227,7 @@ class AdminProjectService:
         except ValueError as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
         normalized_discord = self._normalize_project_discord_config(
-            payload.discord.model_dump(exclude_unset=True) if payload.discord else None
+            self._optional_payload_dict(getattr(payload, "discord", None))
         )
         if self._should_bind_project_discord_channel(
             tenant=tenant,
@@ -248,14 +280,8 @@ class AdminProjectService:
         session.refresh(project)
         return self._project_to_schema(project, tenant_policy=tenant.policy_config)
 
-    def update_project(self, *, session, tenant_id: str, project_id: str, payload) -> object:  # noqa: ANN001
-        project = session.get(Project, project_id)
-        if project is None or project.tenant_id != tenant_id:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
-        tenant = session.get(Tenant, tenant_id)
-        if tenant is None:
-            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
-
+    def update_project_configuration(self, *, session, tenant_id: str, project_id: str, payload) -> object:  # noqa: ANN001
+        project, tenant = self._project_and_tenant_or_404(session=session, tenant_id=tenant_id, project_id=project_id)
         normalized_name = payload.name.strip()
         normalized_repo = self._normalize_project_repo(payload.github_repository)
         normalized_jira_key = self._normalize_project_key(payload.jira_project_key)
@@ -264,28 +290,40 @@ class AdminProjectService:
                 status_code=status.HTTP_400_BAD_REQUEST,
                 detail="Project name, repository, and Jira key are required",
             )
+        try:
+            normalized_architecture_docs_config = self._normalize_project_architecture_docs_config(
+                self._optional_payload_dict(getattr(payload, "architecture_docs", None))
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
 
+        jira_key_changed = str(project.jira_project_key or "").strip().upper() != normalized_jira_key
         project.name = normalized_name
         project.github_repository = normalized_repo
         project.jira_project_key = normalized_jira_key
-        normalized_policy_overrides = self._normalize_project_policy_overrides(payload.policy_overrides)
-        settings = self._settings_factory()
-        try:
-            run_board_id = self._resolve_project_run_board_id(
-                session=session,
-                tenant=tenant,
-                jira_project_key=normalized_jira_key,
-                settings=settings,
-            )
-        except (ValueError, JiraOAuthError) as exc:
-            raise HTTPException(
-                status_code=status.HTTP_502_BAD_GATEWAY,
-                detail=f"Unable to resolve Jira board for project {normalized_jira_key}: {exc}",
-            ) from exc
-        if run_board_id is not None:
-            normalized_policy_overrides["run_board_id"] = run_board_id
-        project.policy_overrides = normalized_policy_overrides
+        project.architecture_docs_config = normalized_architecture_docs_config
+        if jira_key_changed:
+            policy_overrides = dict(project.policy_overrides or {})
+            policy_overrides.pop("run_board_id", None)
+            project.policy_overrides = policy_overrides
+        project.updated_at = datetime.now(timezone.utc)
+        return self._commit_project_update(session=session, project=project, tenant=tenant)
+
+    def update_project_policy(self, *, session, tenant_id: str, project_id: str, payload) -> object:  # noqa: ANN001
+        project, tenant = self._project_and_tenant_or_404(session=session, tenant_id=tenant_id, project_id=project_id)
+        project.policy_overrides = self._normalize_project_policy_overrides(payload.policy_overrides)
+        project.updated_at = datetime.now(timezone.utc)
+        return self._commit_project_update(session=session, project=project, tenant=tenant)
+
+    def update_project_environment(self, *, session, tenant_id: str, project_id: str, payload) -> object:  # noqa: ANN001
+        project, tenant = self._project_and_tenant_or_404(session=session, tenant_id=tenant_id, project_id=project_id)
         project.environment = self._normalize_string_map(payload.environment)
+        project.updated_at = datetime.now(timezone.utc)
+        return self._commit_project_update(session=session, project=project, tenant=tenant)
+
+    def update_project_secret_refs(self, *, session, tenant_id: str, project_id: str, payload) -> object:  # noqa: ANN001
+        project, tenant = self._project_and_tenant_or_404(session=session, tenant_id=tenant_id, project_id=project_id)
+        settings = self._settings_factory()
         try:
             project.secret_refs = self._materialize_project_secret_refs(
                 session=session,
@@ -296,17 +334,23 @@ class AdminProjectService:
             )
         except ValueError as exc:
             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+        project.updated_at = datetime.now(timezone.utc)
+        return self._commit_project_update(session=session, project=project, tenant=tenant)
+
+    def update_project_discord(self, *, session, tenant_id: str, project_id: str, payload) -> object:  # noqa: ANN001
+        project, tenant = self._project_and_tenant_or_404(session=session, tenant_id=tenant_id, project_id=project_id)
+        settings = self._settings_factory()
         normalized_discord = self._with_preserved_discord_system_fields(
             existing=dict(project.discord_config or {}),
             proposed=self._normalize_project_discord_config(
-                payload.discord.model_dump(exclude_unset=True) if payload.discord else None
+                self._optional_payload_dict(getattr(payload, "discord", None))
             ),
         )
         if self._should_bind_project_discord_channel(
             tenant=tenant,
             discord_config=normalized_discord,
-            is_archived=bool(payload.is_archived),
-            force_bind=payload.discord is not None,
+            is_archived=bool(project.is_archived),
+            force_bind=getattr(payload, "discord", None) is not None,
         ):
             try:
                 normalized_discord = self._resolve_project_discord_channel_binding(
@@ -322,19 +366,37 @@ class AdminProjectService:
                     detail=f"Unable to provision Discord channel: {exc}",
                 ) from exc
         project.discord_config = normalized_discord
-        project.is_archived = payload.is_archived
         project.updated_at = datetime.now(timezone.utc)
+        return self._commit_project_update(session=session, project=project, tenant=tenant)
 
-        self._sync_tenant_jira_project_keys(session, tenant=tenant)
-        tenant.updated_at = project.updated_at
+    def update_project_archive_state(self, *, session, tenant_id: str, project_id: str, payload) -> object:  # noqa: ANN001
+        project, tenant = self._project_and_tenant_or_404(session=session, tenant_id=tenant_id, project_id=project_id)
+        project.is_archived = bool(payload.is_archived)
+        project.updated_at = datetime.now(timezone.utc)
+        return self._commit_project_update(session=session, project=project, tenant=tenant)
 
+    def resolve_project_jira_run_board(self, *, session, tenant_id: str, project_id: str) -> object:  # noqa: ANN001
+        project, tenant = self._project_and_tenant_or_404(session=session, tenant_id=tenant_id, project_id=project_id)
+        normalized_jira_key = self._normalize_project_key(project.jira_project_key)
         try:
-            session.commit()
-        except IntegrityError as exc:
-            session.rollback()
+            run_board_id = self._resolve_project_run_board_id(
+                session=session,
+                tenant=tenant,
+                jira_project_key=normalized_jira_key,
+                settings=self._settings_factory(),
+            )
+        except (ValueError, AtlassianOAuthError) as exc:
             raise HTTPException(
-                status_code=status.HTTP_409_CONFLICT,
-                detail="A project with the same repository or Jira project key already exists for this tenant",
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"Unable to resolve Jira board for project {normalized_jira_key}: {exc}",
             ) from exc
-        session.refresh(project)
-        return self._project_to_schema(project, tenant_policy=tenant.policy_config)
+        if run_board_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_404_NOT_FOUND,
+                detail=f"Unable to find Jira board for project {normalized_jira_key}",
+            )
+        policy_overrides = dict(project.policy_overrides or {})
+        policy_overrides["run_board_id"] = run_board_id
+        project.policy_overrides = policy_overrides
+        project.updated_at = datetime.now(timezone.utc)
+        return self._commit_project_update(session=session, project=project, tenant=tenant)

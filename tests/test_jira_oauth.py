@@ -2,18 +2,20 @@ import unittest
 from urllib.parse import parse_qs, urlparse
 from unittest.mock import patch
 
-from orchestrator.tools.jira_oauth import (
+from orchestrator.tools.atlassian_oauth import (
     JiraIssueCreateInput,
-    JiraOAuthClient,
-    JiraOAuthClientConfig,
+    AtlassianOAuthClient,
+    AtlassianOAuthClientConfig,
+    AtlassianOAuthError,
     _to_adf_description,
 )
+from orchestrator.tools.atlassian_oauth_issue_service import MAX_JIRA_ADF_DOCUMENT_BYTES
 
 
 class JiraOAuthTests(unittest.TestCase):
     def test_authorize_url_includes_offline_access_scope(self) -> None:
-        client = JiraOAuthClient(
-            JiraOAuthClientConfig(
+        client = AtlassianOAuthClient(
+            AtlassianOAuthClientConfig(
                 client_id="client-id",
                 client_secret="client-secret",
                 redirect_uri="https://example.test/callback",
@@ -32,8 +34,8 @@ class JiraOAuthTests(unittest.TestCase):
         self.assertIn("write:attachment:jira", scopes)
 
     def test_search_issues_uses_search_jql_endpoint(self) -> None:
-        client = JiraOAuthClient(
-            JiraOAuthClientConfig(
+        client = AtlassianOAuthClient(
+            AtlassianOAuthClientConfig(
                 client_id="client-id",
                 client_secret="client-secret",
                 redirect_uri="https://example.test/callback",
@@ -55,8 +57,8 @@ class JiraOAuthTests(unittest.TestCase):
         )
 
     def test_upload_issue_attachment_posts_multipart_payload(self) -> None:
-        client = JiraOAuthClient(
-            JiraOAuthClientConfig(
+        client = AtlassianOAuthClient(
+            AtlassianOAuthClientConfig(
                 client_id="client-id",
                 client_secret="client-secret",
                 redirect_uri="https://example.test/callback",
@@ -83,7 +85,7 @@ class JiraOAuthTests(unittest.TestCase):
             captured["payload"] = request.data
             return _FakeResponse()
 
-        with patch("orchestrator.tools.jira_oauth.urlopen", side_effect=_fake_urlopen):
+        with patch("orchestrator.tools.atlassian_oauth.urlopen", side_effect=_fake_urlopen):
             result = client.upload_issue_attachment(
                 access_token="token",
                 cloud_id="cloud-id",
@@ -102,9 +104,9 @@ class JiraOAuthTests(unittest.TestCase):
         self.assertIn(b"binary-data", captured["payload"])
         self.assertEqual(result[0]["id"], "1001")
 
-    def test_create_issues_bulk_uses_valid_project_issue_type_when_requested_type_missing(self) -> None:
-        client = JiraOAuthClient(
-            JiraOAuthClientConfig(
+    def test_create_issues_bulk_requires_requested_project_issue_type(self) -> None:
+        client = AtlassianOAuthClient(
+            AtlassianOAuthClientConfig(
                 client_id="client-id",
                 client_secret="client-secret",
                 redirect_uri="https://example.test/callback",
@@ -122,29 +124,25 @@ class JiraOAuthTests(unittest.TestCase):
             patch.object(client, "_get_json", return_value={"values": [{"name": "Story"}, {"name": "Bug"}]}),
             patch.object(client, "_request_json", side_effect=_fake_request_json),
         ):
-            result = client.create_issues_bulk(
-                access_token="token",
-                cloud_id="cloud-id",
-                project_key="MAB",
-                issues=[
-                    JiraIssueCreateInput(
-                        summary="Seed issue",
-                        description="Description",
-                        labels=["discord-seeded"],
-                        issue_type="Task",
-                    )
-                ],
-            )
-
-        self.assertEqual([created.key for created in result.created], ["MAB-1"])
-        issue_updates = captured_payload.get("issueUpdates")
-        self.assertIsInstance(issue_updates, list)
-        first_issue = issue_updates[0]
-        self.assertEqual(first_issue["fields"]["issuetype"]["name"], "Story")
+            with self.assertRaisesRegex(AtlassianOAuthError, "not available"):
+                client.create_issues_bulk(
+                    access_token="token",
+                    cloud_id="cloud-id",
+                    project_key="MAB",
+                    issues=[
+                        JiraIssueCreateInput(
+                            summary="Seed issue",
+                            description="Description",
+                            labels=["discord-seeded"],
+                            issue_type="Task",
+                        )
+                    ],
+                )
+        self.assertEqual(captured_payload, {})
 
     def test_create_issues_bulk_surfaces_field_level_errors(self) -> None:
-        client = JiraOAuthClient(
-            JiraOAuthClientConfig(
+        client = AtlassianOAuthClient(
+            AtlassianOAuthClientConfig(
                 client_id="client-id",
                 client_secret="client-secret",
                 redirect_uri="https://example.test/callback",
@@ -199,9 +197,32 @@ class JiraOAuthTests(unittest.TestCase):
         }
         self.assertEqual(_to_adf_description(adf_doc), adf_doc)
 
+    def test_to_adf_description_truncates_large_doc_to_fit_jira_limit(self) -> None:
+        adf_doc = {
+            "type": "doc",
+            "version": 1,
+            "content": [
+                {
+                    "type": "paragraph",
+                    "content": [{"type": "text", "text": "A" * 20_000}],
+                },
+                {
+                    "type": "paragraph",
+                    "content": [{"type": "text", "text": "B" * 20_000}],
+                },
+            ],
+        }
+
+        limited = _to_adf_description(adf_doc)
+
+        serialized = __import__("json").dumps(limited, separators=(",", ":"), ensure_ascii=False).encode("utf-8")
+        self.assertLessEqual(len(serialized), MAX_JIRA_ADF_DOCUMENT_BYTES)
+        flattened = __import__("json").dumps(limited)
+        self.assertIn("Content truncated to fit Jira content size limit.", flattened)
+
     def test_client_delegates_to_callback_issue_and_webhook_services(self) -> None:
-        client = JiraOAuthClient(
-            JiraOAuthClientConfig(
+        client = AtlassianOAuthClient(
+            AtlassianOAuthClientConfig(
                 client_id="client-id",
                 client_secret="client-secret",
                 redirect_uri="https://example.test/callback",
@@ -217,6 +238,7 @@ class JiraOAuthTests(unittest.TestCase):
             patch.object(client._issue_service, "list_issue_comments", return_value=["comment"]) as issue_comments_mock,
             patch.object(client._issue_service, "list_issue_attachments", return_value=["attachment"]) as issue_attachments_mock,
             patch.object(client._issue_service, "update_issue_fields") as update_mock,
+            patch.object(client._issue_service, "upsert_remote_issue_link") as upsert_remote_link_mock,
             patch.object(client._issue_service, "add_issue_labels") as add_labels_mock,
             patch.object(client._issue_service, "add_issue_comment", return_value={"id": "c1"}) as comment_mock,
             patch.object(client._webhook_manager, "register_webhook", return_value=[1]) as register_mock,
@@ -244,6 +266,15 @@ class JiraOAuthTests(unittest.TestCase):
                 summary="Summary",
                 description="Desc",
                 labels=["a"],
+            )
+            client.upsert_remote_issue_link(
+                access_token="tok",
+                cloud_id="cloud",
+                issue_id_or_key="MAB-1",
+                global_id="system=mb&issueKey=MAB-1&relation=architecture_document",
+                relationship="architecture_document",
+                title="Architecture: Decision Engine v2",
+                url="https://docs.example.com/decision-engine-v2",
             )
             client.add_issue_labels(
                 access_token="tok",
@@ -277,6 +308,7 @@ class JiraOAuthTests(unittest.TestCase):
         issue_comments_mock.assert_called_once()
         issue_attachments_mock.assert_called_once()
         update_mock.assert_called_once()
+        upsert_remote_link_mock.assert_called_once()
         add_labels_mock.assert_called_once()
         comment_mock.assert_called_once()
         register_mock.assert_called_once()

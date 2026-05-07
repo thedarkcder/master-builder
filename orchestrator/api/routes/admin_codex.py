@@ -5,16 +5,16 @@ from sqlalchemy.orm import Session
 
 from orchestrator.api.dependencies import get_session
 from orchestrator.api.schemas import CodexModelCatalogRead, CodexModelOptionRead, CodexReasoningOptionRead
-from orchestrator.core.agent_execution_profiles import (
+from orchestrator.core.runtime.agent_execution_profiles import (
     build_agent_execution_profile,
     collect_models_for_runtime_kind,
     default_execution_profiles,
     normalize_execution_profiles,
     runtime_kind_supports_reasoning_effort,
 )
-from orchestrator.core.codex_models import parse_supported_reasoning_efforts
+from orchestrator.core.runtime.models import parse_supported_reasoning_efforts
 from orchestrator.core.config import get_settings
-from orchestrator.core.platform_settings_service import (
+from orchestrator.core.platform.settings_service import (
     SETTING_KEY_AGENT_RUNTIME_PROFILES,
     platform_settings_service,
 )

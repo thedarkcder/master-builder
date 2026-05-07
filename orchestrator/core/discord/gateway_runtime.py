@@ -7,7 +7,8 @@ import threading
 from orchestrator.api.discord.ingress.executor import register_discord_command_executor
 from orchestrator.core.config import Settings, get_settings
 from orchestrator.core.discord.gateway_listener import DiscordGatewayListener
-from orchestrator.core.logging import configure_logging
+from orchestrator.core.observability.logging import configure_logging
+from orchestrator.core.observability.otel_telemetry import initialize_telemetry
 from orchestrator.storage.run_queue_events import (
     is_postgres_database_url,
     postgres_dsn_from_database_url,
@@ -48,6 +49,7 @@ def run_discord_gateway() -> None:
         platform_version=settings.sentry_release or "dev-local",
         default_agent_id="discord-gateway",
     )
+    initialize_telemetry(settings=settings, service_name="discord-gateway")
     register_discord_command_executor()
     _run_gateway_leader_loop(settings=settings)
 

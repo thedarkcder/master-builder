@@ -47,10 +47,5 @@ Required process:
 8. If the repo can likely be made ready by another attempt, return `retryable_failure`.
 9. Return `terminal_failure` only when the repo cannot be prepared without operator intervention.
 
-Output contract:
-- outcome: "ready" | "retryable_failure" | "terminal_failure"
-- execution_repo_dir: absolute repo path when outcome="ready", else null
-- execution_branch: execution branch when outcome="ready", else null
-- workspace_key: workspace key when outcome="ready", else null
-- actions_taken: short array of actions attempted
-- failure_reason: required string for non-ready outcomes, otherwise null
+Return JSON matching this domain model:
+{{ domain_model | tojson(indent=2) }}

@@ -1,4 +1,4 @@
-from orchestrator.core.precheck_question_lock import (
+from orchestrator.core.precheck.question_lock import (
     PRECHECK_QUESTIONS_BLOCK_END,
     PRECHECK_QUESTIONS_BLOCK_START,
     parse_locked_precheck_questions,

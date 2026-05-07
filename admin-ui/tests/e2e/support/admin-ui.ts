@@ -10,9 +10,11 @@ import type {
   ProjectAutomationRecord,
   ProjectRecord,
   RunEventRecord,
-  RunLogEventRecord,
+  RuntimeLogEventRecord,
   RunRecord,
   RunStatus,
+  WorkflowOperationRetryResponseRecord,
+  WorkflowOperationAttemptRecord,
   WorkflowRecord,
   WorkflowAttemptCreatePayload,
   AuthenticatedPrincipalRecord,
@@ -206,7 +208,11 @@ export async function mockCredentialSignIn(
   page: Page,
   seed: TenantSessionSeed,
 ): Promise<void> {
-  await page.route(`${APP_BASE_URL}/api/auth/callback/credentials**`, async (route) => {
+  await page.route(`${APP_BASE_URL}/api/auth/csrf**`, async (route) => {
+    await fulfillJson(route, { csrfToken: "playwright-csrf-token" });
+  });
+
+  const handleCredentialSignIn = async (route: Route) => {
     await seedTenantSession(page, seed);
     const principal = seed.principal;
     const redirectUrl =
@@ -224,7 +230,9 @@ export async function mockCredentialSignIn(
         url: redirectUrl,
       }),
     });
-  });
+  };
+  await page.route(`${APP_BASE_URL}/api/auth/callback/credentials**`, handleCredentialSignIn);
+  await page.route(`${APP_BASE_URL}/api/auth/signin/credentials**`, handleCredentialSignIn);
 }
 
 export async function fulfillJson(route: Route, body: unknown, status = 200): Promise<void> {
@@ -278,6 +286,12 @@ export function makeTenant(overrides: Partial<TenantRecord> = {}): TenantRecord 
       knowledge_auto_answer_mode: "safe",
       codex_model: "gpt-5.4",
       codex_reasoning_effort: "medium",
+      observability: {
+        audit_retention_days: 365,
+        audit_export_enabled: true,
+        legal_hold_enabled: false,
+        legal_hold_reason: null,
+      },
     },
     discord: null,
     experience: {
@@ -401,23 +415,111 @@ export function makeRun(overrides: Partial<RunRecord> = {}): RunRecord {
 export function makeWorkflow(overrides: Partial<WorkflowRecord> = {}): WorkflowRecord {
   const baselineRun = makeRun();
   return {
+    execution_id: `exec-${baselineRun.workflow_id}`,
     workflow_id: baselineRun.workflow_id,
     tenant_id: baselineRun.tenant_id,
     project_id: baselineRun.project_id,
-    issue_key: baselineRun.issue_key,
-    issue_summary: baselineRun.issue_summary,
+    source_system: "jira",
+    source_ref: baselineRun.issue_key,
+    display_name: baselineRun.issue_summary,
     repo_url: baselineRun.repo_url,
     branch: baselineRun.branch,
     pr_url: baselineRun.pr_url,
+    orchestration_backend: "legacy",
     dedupe_scope: "issue_execution",
     status: baselineRun.status,
+    workflow_type: {
+      key: "issue_execution",
+      label: "Issue Execution",
+      description: "Central development-team execution workflow.",
+      retry_policy: {
+        manual_retry_enabled: true,
+        max_attempts: 5,
+        initial_interval_seconds: 30,
+        max_interval_seconds: 900,
+        backoff_coefficient: 2,
+      },
+      operations: [
+        {
+          operation_type: "run_attempt_execution",
+          label: "Execute run attempt",
+          description: "Dispatch the current run attempt through the central execution engine.",
+          completion_required: true,
+          kind: "business",
+          after: [],
+          supports: [],
+          required: true,
+          retryable: true,
+          graph_index: 0,
+          status: baselineRun.status,
+        },
+      ],
+      orchestration_backend: "temporal",
+      capabilities: {
+        state_path_kind: "run",
+      },
+      lifecycle: {
+        state_path_kind: "run",
+        execution_modes: ["fresh", "restart", "resume"],
+        conditional_paths: ["Human input resume", "Retry failed operation"],
+        states: [
+          { key: "queued", label: "Queued", terminal: false, waits_for_input: false },
+          { key: "running", label: "Running", terminal: false, waits_for_input: false },
+          { key: "waiting_for_input", label: "Waiting for input", terminal: false, waits_for_input: true },
+          { key: "completed", label: "Completed", terminal: true, waits_for_input: false },
+          { key: "failed", label: "Failed", terminal: true, waits_for_input: false },
+        ],
+        transitions: [
+          { from_state: "queued", to_state: "running", label: "Dispatch execution" },
+          { from_state: "running", to_state: "waiting_for_input", label: "Request human input" },
+          { from_state: "waiting_for_input", to_state: "running", label: "Resume from answer" },
+          { from_state: "running", to_state: "completed", label: "Complete run" },
+          { from_state: "running", to_state: "failed", label: "Fail execution" },
+        ],
+      },
+    },
+    current_state: baselineRun.status,
+    waiting_on: null,
+    next_step: null,
     active_run_id: baselineRun.run_id,
     latest_checkpoint_id: baselineRun.entry_checkpoint_id,
     source_workflow_id: null,
     source_run_id: null,
-    blocked_reason: null,
+    failure_reason: null,
     pending_input_request_id: null,
     latest_checkpoint_kind: "execution",
+    state_path: [],
+    completed_steps: [],
+    failed_steps: [],
+    pending_steps: [],
+    retrying_steps: [],
+    conditional_branches_taken: ["fresh"],
+    conditional_branches_available: ["fresh", "restart", "resume"],
+    can_resume: false,
+    resume_unavailable_reason: "Completed executions cannot be restarted.",
+    links: [],
+    operations: [
+      {
+        operation_id: `${baselineRun.workflow_id}:run_attempt_execution`,
+        run_id: baselineRun.run_id,
+        operation_type: "run_attempt_execution",
+        status: baselineRun.status,
+        label: "Execute run attempt",
+        description: "Dispatch the current run attempt through the central execution engine.",
+        required: true,
+        kind: "business",
+        after: [],
+        supports: [],
+        definition_only: false,
+        target_system: null,
+        target_ref: null,
+        summary: null,
+        can_retry: false,
+        retry_unavailable_reason: "Latest attempt is not in a failed state.",
+        attempts: [],
+        events: [],
+      },
+    ],
     runs: [baselineRun],
     created_at: baselineRun.created_at,
     started_at: baselineRun.started_at,
@@ -600,14 +702,15 @@ export function makeStageInvocationLogs(options: {
   startedAt: string;
   finishedAt?: string;
   codexSessionId?: string;
-}): RunLogEventRecord[] {
+}): RuntimeLogEventRecord[] {
   const runId = options.runId ?? "5de2cedf-b7ae-400c-a53c-3beecf078a51";
   const startedMessage = JSON.stringify({
     event_kind: "stage_invocation_started",
     codex_session_id: options.codexSessionId,
   });
-  const rows: RunLogEventRecord[] = [
+  const rows: RuntimeLogEventRecord[] = [
     {
+      event_id: `${options.invocationId}:started`,
       run_id: runId,
       issue_key: "GP-124",
       project_id: "route25-default",
@@ -625,6 +728,7 @@ export function makeStageInvocationLogs(options: {
   ];
   if (options.finishedAt) {
     rows.push({
+      event_id: `${options.invocationId}:finished`,
       run_id: runId,
       issue_key: "GP-124",
       project_id: "route25-default",
@@ -654,11 +758,13 @@ export async function mockRunDetailApis(
     run: RunRecord;
     workflow?: WorkflowRecord;
     events?: RunEventRecord[];
-    logs?: RunLogEventRecord[];
+    logs?: RuntimeLogEventRecord[];
     tokenTimeline?: TokenTimelineRecord;
     tenant?: TenantRecord;
     projects?: ProjectRecord[];
     nextAttemptResponse?: RunRecord;
+    streamEvents?: Array<RunEventRecord | RuntimeLogEventRecord>;
+    onRunEventStreamRequest?: () => void;
     onCreateAttempt?: (payload: WorkflowAttemptCreatePayload) => void;
     onCancelRun?: () => void;
   },
@@ -685,8 +791,9 @@ export async function mockRunDetailApis(
       workflow_id: options.run.workflow_id,
       tenant_id: options.run.tenant_id,
       project_id: options.run.project_id,
-      issue_key: options.run.issue_key,
-      issue_summary: options.run.issue_summary,
+      source_system: "jira",
+      source_ref: options.run.issue_key,
+      display_name: options.run.issue_summary,
       repo_url: options.run.repo_url,
       branch: options.run.branch,
       pr_url: options.run.pr_url,
@@ -762,6 +869,21 @@ export async function mockRunDetailApis(
     },
     {
       method: "GET",
+      pathname: /^\/api\/bff\/api\/admin\/runs\/[^/]+\/events\/stream$/,
+      handler: (route) => {
+        options.onRunEventStreamRequest?.();
+        const lines = (options.streamEvents ?? [])
+          .map((event) => JSON.stringify(event))
+          .join("\n");
+        return route.fulfill({
+          status: 200,
+          contentType: "application/x-ndjson",
+          body: lines ? `${lines}\n` : "",
+        });
+      },
+    },
+    {
+      method: "GET",
       pathname: new RegExp(`^/api/bff/api/admin/tenants/${encodeURIComponent(options.run.tenant_id)}/runs/[^/]+/token-timeline$`),
       handler: (route, url) => {
         const runId = decodeURIComponent(url.pathname.split("/").at(-2) ?? "");
@@ -797,6 +919,279 @@ export async function mockRunDetailApis(
         options.onCreateAttempt?.(payload);
         await fulfillJson(route, nextRun);
       },
+    },
+  ]);
+}
+
+export async function mockTenantWorkflowApis(
+  page: Page,
+  options: {
+    tenant?: TenantRecord;
+    projects?: ProjectRecord[];
+    workflows: WorkflowRecord[];
+    nextAttemptResponse?: RunRecord;
+    onResumeExecution?: () => void;
+    onRetryOperation?: (payload: { workflowId: string; operationId: string }) => void;
+    retriedWorkflowResponse?: WorkflowRecord;
+    retriedOperationStartedAttempt?: WorkflowOperationAttemptRecord | null;
+    telemetryEventsByOperationId?: Record<string, unknown[]>;
+    onTelemetrySnapshotRequest?: (payload: { operationId: string; attemptId?: string }) => void;
+    auditEventsByOperationId?: Record<string, unknown[]>;
+    telemetryTranscriptByOperationId?: Record<string, unknown>;
+    auditTranscriptByOperationId?: Record<string, unknown>;
+  },
+): Promise<void> {
+  const tenantId = options.workflows[0]?.tenant_id ?? options.tenant?.tenant_id ?? "route25";
+  const tenant = options.tenant ?? makeTenant({ tenant_id: tenantId });
+  const projects =
+    options.projects ??
+    [makeProject({ tenant_id: tenantId, project_id: options.workflows[0]?.project_id ?? "route25-default" })];
+  const primaryWorkflow = options.workflows[0] ?? makeWorkflow({ tenant_id: tenantId });
+  const workflowTypeSummary = {
+    key: primaryWorkflow.workflow_type.key,
+    label: primaryWorkflow.workflow_type.label,
+    description: primaryWorkflow.workflow_type.description,
+    operation_count: primaryWorkflow.workflow_type.operations.length,
+    execution_count: options.workflows.length,
+    latest_execution_at: options.workflows[0]?.created_at ?? primaryWorkflow.created_at,
+  };
+  const workflowTypeDetail = {
+    ...workflowTypeSummary,
+    orchestration_backend: primaryWorkflow.workflow_type.orchestration_backend,
+    retry_policy: primaryWorkflow.workflow_type.retry_policy,
+    capabilities: primaryWorkflow.workflow_type.capabilities,
+    lifecycle: primaryWorkflow.workflow_type.lifecycle,
+    operations: primaryWorkflow.workflow_type.operations,
+    recent_executions: options.workflows.map((workflow) => ({
+      execution_id: workflow.execution_id,
+      workflow_id: workflow.workflow_id,
+      source_system: workflow.source_system,
+      source_ref: workflow.source_ref,
+      display_name: workflow.display_name,
+      status: workflow.status,
+      waiting_on: workflow.waiting_on,
+      next_step: workflow.next_step,
+      failure_reason: workflow.failure_reason,
+      created_at: workflow.created_at,
+      finished_at: workflow.finished_at,
+    })),
+  };
+  const nextRun =
+    options.nextAttemptResponse ??
+    makeRun({
+      run_id: "workflow-retry-run-1",
+      workflow_id: `${primaryWorkflow.workflow_id}-retry`,
+      tenant_id: tenantId,
+      project_id: primaryWorkflow.project_id,
+      issue_key: primaryWorkflow.source_ref,
+      issue_summary: primaryWorkflow.display_name ?? primaryWorkflow.source_ref,
+      created_at: "2026-04-17T12:40:00Z",
+      started_at: null,
+      finished_at: null,
+      status: "queued",
+      pr_url: null,
+      plan: makeExecutionSnapshotPlan({
+        execution_context: { pre_check_outcome: "ready_for_agent" },
+      }),
+    });
+  let currentWorkflow = primaryWorkflow;
+
+  await installBffApiMocks(page, [
+    {
+      method: "GET",
+      pathname: "/api/bff/api/app/auth/me",
+      handler: (route) => fulfillJson(route, makePlatformAdminPrincipal()),
+    },
+    {
+      method: "GET",
+      pathname: `/api/bff/api/admin/tenants/${encodeURIComponent(tenantId)}`,
+      handler: (route) => fulfillJson(route, tenant),
+    },
+    {
+      method: "GET",
+      pathname: `/api/bff/api/admin/tenants/${encodeURIComponent(tenantId)}/projects`,
+      handler: (route) => fulfillJson(route, projects),
+    },
+    {
+      method: "GET",
+      pathname: /^\/api\/bff\/api\/admin\/workflow-types(?:\?.*)?$/,
+      handler: (route) => fulfillJson(route, [workflowTypeSummary]),
+    },
+    {
+      method: "GET",
+      pathname: /^\/api\/bff\/api\/admin\/workflow-types\/[^/]+(?:\?.*)?$/,
+      handler: (route) => fulfillJson(route, workflowTypeDetail),
+    },
+    {
+      method: "GET",
+      pathname: /^\/api\/bff\/api\/admin\/workflows(?:\?.*)?$/,
+      handler: (route) => fulfillJson(route, options.workflows),
+    },
+    {
+      method: "GET",
+      pathname: /^\/api\/bff\/api\/admin\/workflows\/[^/]+$/,
+      handler: (route, url) => {
+        const executionId = decodeURIComponent(url.pathname.split("/").at(-1) ?? "");
+        if (executionId === currentWorkflow.execution_id) {
+          return fulfillJson(route, currentWorkflow);
+        }
+        if (executionId === `exec-${nextRun.workflow_id}`) {
+          return fulfillJson(route, {
+            ...primaryWorkflow,
+            execution_id: `exec-${nextRun.workflow_id}`,
+            workflow_id: nextRun.workflow_id,
+            status: nextRun.status,
+            active_run_id: nextRun.run_id,
+            latest_checkpoint_kind: null,
+            failure_reason: null,
+            operations: [],
+            runs: [nextRun],
+            created_at: nextRun.created_at,
+            started_at: nextRun.started_at,
+            finished_at: nextRun.finished_at,
+          } satisfies WorkflowRecord);
+        }
+        const match = options.workflows.find((workflow) => workflow.execution_id === executionId);
+        if (match) {
+          return fulfillJson(route, match);
+        }
+        return route.fulfill({
+          status: 404,
+          contentType: "application/json",
+          body: JSON.stringify({ detail: `Unknown workflow ${executionId}` }),
+        });
+      },
+    },
+    {
+      method: "POST",
+      pathname: /^\/api\/bff\/api\/admin\/workflows\/[^/]+\/operations\/[^/]+\/retry$/,
+      handler: async (route, url) => {
+        const segments = url.pathname.split("/");
+        const executionId = decodeURIComponent(segments.at(-4) ?? "");
+        const operationId = decodeURIComponent(segments.at(-2) ?? "");
+        options.onRetryOperation?.({ workflowId: executionId, operationId });
+        currentWorkflow = options.retriedWorkflowResponse ?? currentWorkflow;
+        const retriedOperation = currentWorkflow.operations.find((candidate) => candidate.operation_id === operationId);
+        const startedAttempt =
+          options.retriedOperationStartedAttempt !== undefined
+            ? options.retriedOperationStartedAttempt
+            : [...(retriedOperation?.attempts ?? [])].sort((left, right) => right.attempt_number - left.attempt_number)[0] ?? null;
+        await fulfillJson(route, {
+          workflow: currentWorkflow,
+          started_attempt: startedAttempt,
+        } satisfies WorkflowOperationRetryResponseRecord);
+      },
+    },
+    {
+      method: "POST",
+      pathname: /^\/api\/bff\/api\/admin\/workflows\/[^/]+\/resume$/,
+      handler: async (route) => {
+        options.onResumeExecution?.();
+        await fulfillJson(route, nextRun);
+      },
+    },
+    {
+      method: "GET",
+      pathname: /^\/api\/bff\/api\/admin\/workflows\/[^/]+\/operations\/[^/]+\/transcript(?:\?.*)?$/,
+      handler: (route, url) => {
+        const operationId = decodeURIComponent(url.pathname.split("/").at(-2) ?? "");
+        const source = url.searchParams.get("source") ?? "telemetry";
+        const transcript =
+          source === "audit"
+            ? options.auditTranscriptByOperationId?.[operationId]
+            : options.telemetryTranscriptByOperationId?.[operationId];
+        return fulfillJson(route, transcript ?? { operation_id: operationId, current_status: "pending", source, attempts: [] });
+      },
+    },
+    {
+      method: "GET",
+      pathname: /^\/api\/bff\/api\/admin\/workflows\/[^/]+\/operations\/[^/]+\/attempts\/[^/]+\/telemetry(?:\?.*)?$/,
+      handler: (route, url) => {
+        const segments = url.pathname.split("/");
+        const operationId = decodeURIComponent(segments.at(-4) ?? "");
+        const attemptId = decodeURIComponent(segments.at(-2) ?? "");
+        options.onTelemetrySnapshotRequest?.({ operationId, attemptId });
+        return fulfillJson(route, options.telemetryEventsByOperationId?.[operationId] ?? []);
+      },
+    },
+    {
+      method: "GET",
+      pathname: /^\/api\/bff\/api\/admin\/workflows\/[^/]+\/operations\/[^/]+\/telemetry(?:\?.*)?$/,
+      handler: (route, url) => {
+        const operationId = decodeURIComponent(url.pathname.split("/").at(-2) ?? "");
+        options.onTelemetrySnapshotRequest?.({ operationId });
+        return fulfillJson(route, options.telemetryEventsByOperationId?.[operationId] ?? []);
+      },
+    },
+    {
+      method: "GET",
+      pathname: /^\/api\/bff\/api\/admin\/workflows\/[^/]+\/operations\/[^/]+\/telemetry\/stream(?:\?.*)?$/,
+      handler: (route, url) => {
+        const operationId = decodeURIComponent(url.pathname.split("/").at(-3) ?? "");
+        const lines = (options.telemetryEventsByOperationId?.[operationId] ?? [])
+          .map((event) => JSON.stringify(event))
+          .join("\n");
+        return route.fulfill({
+          status: 200,
+          contentType: "application/x-ndjson",
+          body: lines ? `${lines}\n` : "",
+        });
+      },
+    },
+    {
+      method: "GET",
+      pathname: /^\/api\/bff\/api\/admin\/workflows\/[^/]+\/operations\/[^/]+\/attempts\/[^/]+\/audit(?:\?.*)?$/,
+      handler: (route, url) => {
+        const segments = url.pathname.split("/");
+        const operationId = decodeURIComponent(segments.at(-4) ?? "");
+        const attemptId = decodeURIComponent(segments.at(-2) ?? "");
+        const configured = options.auditTranscriptByOperationId?.[operationId];
+        if (configured && typeof configured === "object" && "attempts" in (configured as Record<string, unknown>)) {
+          const transcript = configured as { attempts?: Array<Record<string, unknown>> };
+          const attempt = transcript.attempts?.find((candidate) => candidate.attempt_id === attemptId) ?? null;
+          return fulfillJson(route, attempt ?? { attempt_id: attemptId, attempt_number: 0, status: "pending", sections: [] });
+        }
+        return fulfillJson(route, configured ?? { attempt_id: attemptId, attempt_number: 0, status: "pending", sections: [] });
+      },
+    },
+    {
+      method: "GET",
+      pathname: /^\/api\/bff\/api\/admin\/workflows\/[^/]+\/operations\/[^/]+\/audit(?:\?.*)?$/,
+      handler: (route, url) => {
+        const operationId = decodeURIComponent(url.pathname.split("/").at(-2) ?? "");
+        const operation = currentWorkflow.operations.find((candidate) => candidate.operation_id === operationId);
+        return fulfillJson(route, options.auditEventsByOperationId?.[operationId] ?? operation?.events ?? []);
+      },
+    },
+    {
+      method: "GET",
+      pathname: /^\/api\/bff\/api\/admin\/runs\/[^/]+$/,
+      handler: (route, url) => {
+        const runId = decodeURIComponent(url.pathname.split("/").at(-1) ?? "");
+        if (runId === nextRun.run_id) {
+          return fulfillJson(route, nextRun);
+        }
+        return route.fulfill({
+          status: 404,
+          contentType: "application/json",
+          body: JSON.stringify({ detail: `Unknown run ${runId}` }),
+        });
+      },
+    },
+    {
+      method: "GET",
+      pathname: /^\/api\/bff\/api\/admin\/runs\/[^/]+\/events$/,
+      handler: (route) => fulfillJson(route, []),
+    },
+    {
+      method: "GET",
+      pathname: /^\/api\/bff\/api\/admin\/runs\/[^/]+\/logs$/,
+      handler: (route) => fulfillJson(route, []),
+    },
+    {
+      method: "GET",
+      pathname: new RegExp(`^/api/bff/api/admin/tenants/${encodeURIComponent(tenantId)}/runs/[^/]+/token-timeline$`),
+      handler: (route) => fulfillJson(route, makeTokenTimeline(nextRun)),
     },
   ]);
 }

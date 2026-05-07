@@ -26,8 +26,8 @@ from orchestrator.api.schemas import (
     KnowledgeSyncResultRead,
 )
 from orchestrator.core.config import get_settings
-from orchestrator.core.decision_types import JiraConfigKey, tenant_jira_config_text
-from orchestrator.core.knowledge_base import (
+from orchestrator.core.decision.types import JiraConfigKey, tenant_jira_config_text
+from orchestrator.core.knowledge.base import (
     create_knowledge_asset,
     decode_base64_content,
     delete_knowledge_asset,
@@ -40,7 +40,7 @@ from orchestrator.core.knowledge_base import (
     sync_knowledge_fact_approval_state_for_asset,
     sync_project_knowledge_from_jira,
 )
-from orchestrator.core.knowledge_sources import (
+from orchestrator.core.knowledge.sources import (
     KnowledgeSourceSyncUnsupportedError,
     KnowledgeSourceValidationError,
     build_knowledge_source_summary,
@@ -54,10 +54,10 @@ from orchestrator.core.knowledge_sources import (
     update_project_knowledge_source,
 )
 from orchestrator.core.security import require_admin
-from orchestrator.storage.models import JiraOAuthConnection, KnowledgeAsset, KnowledgeSource, Project, Tenant
+from orchestrator.storage.models import AtlassianOAuthConnection, KnowledgeAsset, KnowledgeSource, Project, Tenant
 from orchestrator.api.admin.route_helpers import (
-    jira_oauth_client,
-    refresh_jira_connection_tokens,
+    atlassian_oauth_client,
+    refresh_atlassian_connection_tokens,
 )
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
@@ -634,17 +634,17 @@ def sync_project_knowledge_from_jira_route(
 
     connection_id = tenant_jira_config_text(tenant=tenant, key=JiraConfigKey.CONNECTION_ID)
     if not connection_id:
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tenant Jira connection is not configured")
-    connection = session.get(JiraOAuthConnection, connection_id)
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Tenant Atlassian connection is not configured")
+    connection = session.get(AtlassianOAuthConnection, connection_id)
     if connection is None:
-        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Jira OAuth connection was not found")
-    access_token = refresh_jira_connection_tokens(
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Atlassian connection was not found")
+    access_token = refresh_atlassian_connection_tokens(
         session,
         connection=connection,
         settings=get_settings(),
         tenant_id=tenant_id,
     )
-    jira_client = jira_oauth_client(session=session, settings=get_settings(), tenant_id=tenant_id, project_id=project_id)
+    jira_client = atlassian_oauth_client(session=session, settings=get_settings(), tenant_id=tenant_id, project_id=project_id)
     sync_result = sync_project_knowledge_from_jira(
         session=session,
         tenant_id=tenant_id,

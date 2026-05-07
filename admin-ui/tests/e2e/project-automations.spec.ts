@@ -143,7 +143,9 @@ test("project automations render default drafts, save edits, and show execution 
 
   await page.getByRole("button", { name: "Save automations" }).click();
 
-  await expect(page.getByText("Saved 2 automation configurations.")).toBeVisible();
+  const notifications = page.getByLabel("Notifications");
+  await expect(notifications.getByText("Automations saved", { exact: true })).toBeVisible();
+  await expect(notifications.getByText("2 configurations.", { exact: true })).toBeVisible();
   expect(savedPayload).toEqual({
     automations: [
       {

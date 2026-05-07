@@ -3,7 +3,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import logging
 
-from orchestrator.core.followup_context_service import upsert_followup_context
+from orchestrator.core.clarification.questions import ClarificationQuestion, ClarificationQuestionSet
+from orchestrator.core.pm.followup_context_service import upsert_followup_context
 from orchestrator.core.discord.thread_context import normalize_issue_key
 from orchestrator.tools.discord_api import DiscordApiError
 
@@ -248,7 +249,7 @@ def send_discord_seed_followup_with_thread(
     user_id: str,
     content: str,
     request_id: str,
-    questions: list[str],
+    questions: tuple[ClarificationQuestion, ...],
     discord_api_client_fn,
     project_seed_followup_thread_channel_ids_for_tenant_fn,
     resolve_project_for_channel_fn,
@@ -258,6 +259,7 @@ def send_discord_seed_followup_with_thread(
         session=session,
         tenant_id=tenant.tenant_id,
     )
+    question_set = ClarificationQuestionSet.from_values(questions)
     if channel_id in seed_thread_channel_ids:
         project = resolve_project_for_channel_fn(session=session, tenant=tenant, channel_id=channel_id)
         upsert_followup_context(
@@ -272,13 +274,12 @@ def send_discord_seed_followup_with_thread(
             request_id=str(request_id or "").strip() or None,
             metadata={
                 "request_id": str(request_id or "").strip() or None,
-                "questions": [value for value in questions if str(value).strip()],
+                "questions": question_set.to_payload(),
                 "channel_ids": [channel_id],
             },
         )
         session.commit()
-        numbered_questions = [f"{idx}. {value}" for idx, value in enumerate(questions, start=1) if value.strip()]
-        question_block = "\n".join(numbered_questions) if numbered_questions else "No additional questions."
+        question_block = "\n".join(question_set.render_lines(numbered=True)) if question_set else "No additional questions."
         client.post_message(
             channel_id=channel_id,
             content=(
@@ -328,15 +329,14 @@ def send_discord_seed_followup_with_thread(
         request_id=str(request_id or "").strip() or None,
         metadata={
             "request_id": str(request_id or "").strip() or None,
-            "questions": [value for value in questions if str(value).strip()],
+            "questions": question_set.to_payload(),
             "channel_ids": [channel_id, thread_channel_id],
         },
     )
     tenant.updated_at = datetime.now(timezone.utc)
     session.commit()
 
-    numbered_questions = [f"{idx}. {value}" for idx, value in enumerate(questions, start=1) if value.strip()]
-    question_block = "\n".join(numbered_questions) if numbered_questions else "No additional questions."
+    question_block = "\n".join(question_set.render_lines(numbered=True)) if question_set else "No additional questions."
     client.post_message(
         channel_id=thread_channel_id,
         content=(

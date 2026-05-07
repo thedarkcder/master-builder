@@ -8,28 +8,33 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBasic, HTTPBasicC
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
-from orchestrator.core.admin_tokens import parse_admin_access_token
-from orchestrator.core.auth_tokens import parse_auth_access_token
+from orchestrator.core.platform.admin_tokens import parse_admin_access_token
+from orchestrator.core.platform.auth_tokens import parse_auth_access_token
 from orchestrator.core.config import get_settings
-from orchestrator.core.passwords import hash_password, verify_password
-from orchestrator.core.platform_secret_service import (
+from orchestrator.core.platform.passwords import hash_password, verify_password
+from orchestrator.core.platform.secret_service import (
     PLATFORM_SECRET_ADMIN_PASSWORD_HASH_REF,
     platform_secret_service,
     resolve_platform_secret_ref,
 )
-from orchestrator.core.tenant_access import (
+from orchestrator.core.platform.access import (
     MODE_TECHNICAL,
     VALID_ROLE_KEYS,
     compute_permission_snapshot,
     normalize_permission_key,
 )
 from orchestrator.api.dependencies import get_session
+from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.models import (
     Tenant,
     TenantMembership,
     TenantTeam,
     TenantTeamMembership,
     TenantUser,
+)
+from orchestrator.storage.tenant_rls import (
+    set_platform_admin_rls_context,
+    set_tenant_user_rls_context,
 )
 
 basic_auth = HTTPBasic(auto_error=False)
@@ -173,6 +178,7 @@ def _load_tenant_memberships(*, session: Session, user_id: str) -> tuple[TenantM
 
 
 def load_tenant_user_principal(*, session: Session, user_id: str) -> AuthenticatedPrincipal:
+    set_tenant_user_rls_context(session=session, user_id=user_id)
     tenant_user = session.get(TenantUser, user_id)
     if tenant_user is None or not tenant_user.is_active:
         raise _admin_unauthorized("Invalid tenant credentials")
@@ -193,6 +199,32 @@ def require_authenticated_principal(
     basic_credentials: HTTPBasicCredentials | None = Depends(basic_auth),
     session: Session = Depends(get_session),
 ) -> AuthenticatedPrincipal:
+    return _authenticate_principal(
+        bearer_credentials=bearer_credentials,
+        basic_credentials=basic_credentials,
+        session=session,
+    )
+
+
+def require_authenticated_stream_principal(
+    bearer_credentials: HTTPAuthorizationCredentials | None = Depends(bearer_auth),
+    basic_credentials: HTTPBasicCredentials | None = Depends(basic_auth),
+) -> AuthenticatedPrincipal:
+    session_factory = create_session_factory()
+    with session_factory() as session:
+        return _authenticate_principal(
+            bearer_credentials=bearer_credentials,
+            basic_credentials=basic_credentials,
+            session=session,
+        )
+
+
+def _authenticate_principal(
+    *,
+    bearer_credentials: HTTPAuthorizationCredentials | None,
+    basic_credentials: HTTPBasicCredentials | None,
+    session: Session,
+) -> AuthenticatedPrincipal:
     settings = get_settings()
 
     if bearer_credentials is not None and bearer_credentials.scheme.lower() == "bearer":
@@ -205,9 +237,11 @@ def require_authenticated_principal(
             except ValueError as exc:
                 raise _admin_unauthorized(str(exc)) from exc
             return load_tenant_user_principal(session=session, user_id=user_id)
+        set_platform_admin_rls_context(session)
         return _build_platform_admin_principal(username)
 
     if basic_credentials is not None:
+        set_platform_admin_rls_context(session)
         if validate_admin_credentials(session=session, username=basic_credentials.username, password=basic_credentials.password):
             return _build_platform_admin_principal(basic_credentials.username)
         raise _admin_unauthorized()

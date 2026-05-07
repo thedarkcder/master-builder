@@ -46,10 +46,7 @@ Required actions:
 8c. If PR creation required by policy is `true` and `pr_url` is currently missing, you must attempt `github.push_branch` then `github.open_pr` in this attempt before returning blocked or failed.
 9. If a one-time transient human input can unblock work, request it with `run.request_human_input` before returning outcome="waiting_for_input".
 10. If PR creation required by policy is `true`, do not treat implementation as complete until a PR exists and `pr_url` is set.
-11. If you return blocked or waiting_for_input, make `blocker_message` operator-friendly: keep the error concise, then add a short `Troubleshooting:` section with 1-3 concrete fix actions supported by the evidence you observed.
+11. If you return blocked or waiting_for_input, make `blocker_message` operator-friendly: keep the error concise, then add a short `Troubleshooting:` section with 1-3 concrete operator actions supported by the evidence you observed.
 
-Output contract:
-- outcome: "continue" | "waiting_for_input" | "blocked" | "failed".
-- change_summary: array of implemented changes (or concrete blocker facts).
-- pr_url: PR URL string or null.
-- blocker_message: null unless outcome is blocked or waiting_for_input. When non-null, include a short `Troubleshooting:` section with concrete operator actions.
+Return JSON matching this domain model:
+{{ domain_model | tojson(indent=2) }}

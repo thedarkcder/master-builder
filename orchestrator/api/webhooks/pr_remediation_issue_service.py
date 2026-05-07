@@ -5,11 +5,11 @@ import re
 
 from sqlalchemy import select
 
-from orchestrator.api.jira_oauth.service import jira_oauth_client, refresh_jira_connection_tokens
-from orchestrator.core.decision_types import JiraConfigKey, tenant_jira_config_text
+from orchestrator.api.atlassian_oauth.service import atlassian_oauth_client, refresh_atlassian_connection_tokens
+from orchestrator.core.decision.types import JiraConfigKey, tenant_jira_config_text
 from orchestrator.core.workflow.execution_snapshot import require_github_pr_remediation_context_from_plan
-from orchestrator.storage.models import JiraOAuthConnection, Run
-from orchestrator.tools.jira_oauth import JiraIssueCreateInput
+from orchestrator.storage.models import AtlassianOAuthConnection, Run
+from orchestrator.tools.atlassian_oauth import JiraIssueCreateInput
 
 _ISSUE_KEY_PATTERN = re.compile(r"\b([A-Z][A-Z0-9]+-\d+)\b")
 _STRICT_ISSUE_KEY_PATTERN = re.compile(r"^[A-Z][A-Z0-9]+-\d+$")
@@ -121,17 +121,17 @@ def create_pr_remediation_bug_issue_key(
     connection_id = tenant_jira_config_text(tenant=tenant, key=JiraConfigKey.CONNECTION_ID)
     if not connection_id:
         raise ValueError("jira_connection_missing")
-    connection = session.get(JiraOAuthConnection, connection_id)
+    connection = session.get(AtlassianOAuthConnection, connection_id)
     if connection is None:
         raise ValueError(f"jira_connection_not_found:{connection_id}")
 
-    access_token = refresh_jira_connection_tokens(
+    access_token = refresh_atlassian_connection_tokens(
         session,
         connection=connection,
         settings=settings,
         tenant_id=tenant.tenant_id,
     )
-    client = jira_oauth_client(
+    client = atlassian_oauth_client(
         session=session,
         settings=settings,
         tenant_id=tenant.tenant_id,

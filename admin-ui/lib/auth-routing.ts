@@ -22,7 +22,7 @@ export function getTenantDashboardRoute(tenantId: string): string {
   return `${getTenantWorkspaceRoute(tenantId)}/dashboard`;
 }
 
-export function getTenantSettingsRoute(tenantId: string, section = "integrations"): string {
+export function getTenantSettingsRoute(tenantId: string, section = "config"): string {
   return `${getTenantWorkspaceRoute(tenantId)}/settings/${section}`;
 }
 

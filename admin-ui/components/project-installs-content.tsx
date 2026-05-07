@@ -5,6 +5,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
+import { useToast } from "@/components/ui/toast-provider";
 import {
   createProjectInstall,
   deleteProjectInstall,
@@ -89,6 +90,7 @@ export function ProjectInstallsContent({
   projectId,
   credentials,
 }: ProjectInstallsContentProps) {
+  const { showToast } = useToast();
   const [installs, setInstalls] = useState<ProjectInstallRecord[]>([]);
   const [requests, setRequests] = useState<ProjectInstallRequestRecord[]>([]);
   const [form, setForm] = useState<InstallFormState>(() => defaultFormState());
@@ -129,15 +131,15 @@ export function ProjectInstallsContent({
       const payload = buildPayload(form);
       if (form.installId) {
         await updateProjectInstall(credentials, tenantId, projectId, form.installId, payload);
-        setStatusLine(`Updated install ${payload.label}.`);
+        showToast({ title: "Install updated", description: payload.label, tone: "success" });
       } else {
         await createProjectInstall(credentials, tenantId, projectId, payload);
-        setStatusLine(`Created install ${payload.label}.`);
+        showToast({ title: "Install created", description: payload.label, tone: "success" });
       }
       setForm(defaultFormState());
       await loadData();
     } catch (error) {
-      setStatusLine((error as Error).message);
+      showToast({ title: "Install save failed", description: (error as Error).message, tone: "error" });
     } finally {
       setBusy(false);
     }
@@ -153,10 +155,10 @@ export function ProjectInstallsContent({
       if (form.installId === installId) {
         setForm(defaultFormState());
       }
-      setStatusLine("Deleted install.");
+      showToast({ title: "Install deleted", tone: "success" });
       await loadData();
     } catch (error) {
-      setStatusLine(`Delete failed: ${(error as Error).message}`);
+      showToast({ title: "Install delete failed", description: (error as Error).message, tone: "error" });
     } finally {
       setBusy(false);
     }
@@ -169,10 +171,10 @@ export function ProjectInstallsContent({
     setBusy(true);
     try {
       await updateProjectInstallRequest(credentials, tenantId, projectId, requestId, { status });
-      setStatusLine(`Request marked ${status}.`);
+      showToast({ title: "Install request updated", description: `Marked ${status}.`, tone: "success" });
       await loadData();
     } catch (error) {
-      setStatusLine(`Request update failed: ${(error as Error).message}`);
+      showToast({ title: "Install request update failed", description: (error as Error).message, tone: "error" });
     } finally {
       setBusy(false);
     }

@@ -4,18 +4,18 @@ from types import SimpleNamespace
 import unittest
 from unittest import mock
 
-from orchestrator.core.decision_engine import (
+from orchestrator.core.decision.engine import (
     DecisionLabelAction,
     evaluate_ingress_precheck,
 )
-from orchestrator.core.decision_precheck_mapping import derive_label_actions
-from orchestrator.core.decision_gate import DecisionGateResult
-from orchestrator.core.decision_state_machine import resolve_execution_gate_state
-from orchestrator.core.decision_types import ExecutionGateResolution, ExecutionGateState
+from orchestrator.core.decision.precheck_mapping import derive_label_actions
+from orchestrator.core.decision.gate import DecisionGateResult
+from orchestrator.core.decision.state_machine import resolve_execution_gate_state
+from orchestrator.core.decision.types import ExecutionGateResolution, ExecutionGateState
 from orchestrator.core.gtd import GoodToDoValidationResult
-from orchestrator.core.label_action_service import apply_issue_label_actions
-from orchestrator.core.pre_run_check import PreRunCheckResult
-from orchestrator.core.runs import resolve_enqueue_precheck_outcome
+from orchestrator.core.projects.label_action_service import apply_issue_label_actions
+from orchestrator.core.precheck.pre_run_check import PreRunCheckResult
+from orchestrator.core.runs.service import resolve_enqueue_precheck_outcome
 from orchestrator.core.worker.readiness import evaluate_worker_decision
 from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 
@@ -325,7 +325,7 @@ class LabelActionServiceTests(unittest.TestCase):
             existing_labels=["worker:linux"],
             actions=actions,
             settings=SimpleNamespace(),
-            tenant_jira_oauth_context_fn=lambda **_: oauth_context,
+            tenant_atlassian_oauth_context_fn=lambda **_: oauth_context,
             logger=SimpleNamespace(warning=lambda *_, **__: None),
         )
         self.assertEqual(result.applied_labels, ("agent:ready",))
@@ -350,7 +350,7 @@ class LabelActionServiceTests(unittest.TestCase):
                 DecisionLabelAction(label="agent:ready", action="add", reason="ready_label_missing"),
             ),
             settings=SimpleNamespace(),
-            tenant_jira_oauth_context_fn=lambda **_: None,
+            tenant_atlassian_oauth_context_fn=lambda **_: None,
             logger=SimpleNamespace(warning=lambda *_, **__: None),
         )
         self.assertEqual(result.applied_labels, ())

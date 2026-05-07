@@ -28,13 +28,13 @@ from orchestrator.api.admin.release_bootstrap_helpers import (
 from orchestrator.api.admin.route_helpers import (
     cleanup_conflicting_jira_webhook_url,
     cleanup_unmanaged_jira_webhooks_for_connection,
-    jira_oauth_client as jira_oauth_client_impl,
-    refresh_jira_connection_tokens as refresh_jira_connection_tokens_impl,
+    atlassian_oauth_client as atlassian_oauth_client_impl,
+    refresh_atlassian_connection_tokens as refresh_atlassian_connection_tokens_impl,
     remove_managed_webhook_id_from_tenants,
 )
 from orchestrator.api.schemas import JiraWebhookActionResult, ReleaseBootstrapReportRead
-from orchestrator.core.platform_secret_service import resolve_platform_secret_ref
-from orchestrator.storage.models import JiraOAuthConnection, Project, Tenant
+from orchestrator.core.platform.secret_service import resolve_platform_secret_ref
+from orchestrator.storage.models import AtlassianOAuthConnection, Project, Tenant
 from orchestrator.tools.discord_api import DiscordApiClient
 from orchestrator.tools import github_app
 
@@ -67,14 +67,14 @@ def notify_discord_allowlist_approved(
     )
 
 
-def jira_oauth_client(
+def atlassian_oauth_client(
     *,
     session: Session,
     settings,
     tenant_id: str | None = None,
     project_id: str | None = None,
 ) -> object:  # noqa: ANN401
-    return jira_oauth_client_impl(
+    return atlassian_oauth_client_impl(
         session=session,
         settings=settings,
         tenant_id=tenant_id,
@@ -82,14 +82,14 @@ def jira_oauth_client(
     )
 
 
-def refresh_jira_connection_tokens(
+def refresh_atlassian_connection_tokens(
     session: Session,
     *,
-    connection: JiraOAuthConnection,
+    connection: AtlassianOAuthConnection,
     settings,
     tenant_id: str | None = None,
 ) -> str:
-    return refresh_jira_connection_tokens_impl(
+    return refresh_atlassian_connection_tokens_impl(
         session,
         connection=connection,
         settings=settings,
@@ -119,8 +119,8 @@ def provision_jira_webhook(
         jira_webhook_events=JIRA_WEBHOOK_EVENTS,
         delete_jira_webhooks_fn=delete_jira_webhooks,
         parse_managed_webhook_ids_fn=parse_managed_webhook_ids,
-        refresh_jira_connection_tokens_fn=refresh_jira_connection_tokens,
-        jira_oauth_client_fn=jira_oauth_client,
+        refresh_atlassian_connection_tokens_fn=refresh_atlassian_connection_tokens,
+        atlassian_oauth_client_fn=atlassian_oauth_client,
         jira_webhook_callback_url_fn=jira_webhook_callback_url,
         jira_webhook_filter_jql_fn=jira_webhook_filter_jql,
         is_jira_webhook_limit_error_fn=is_jira_webhook_limit_error,
@@ -144,8 +144,8 @@ def delete_jira_webhooks(
         tenant=tenant,
         settings=settings,
         parse_managed_webhook_ids_fn=parse_managed_webhook_ids,
-        refresh_jira_connection_tokens_fn=refresh_jira_connection_tokens,
-        jira_oauth_client_fn=jira_oauth_client,
+        refresh_atlassian_connection_tokens_fn=refresh_atlassian_connection_tokens,
+        atlassian_oauth_client_fn=atlassian_oauth_client,
     )
 
 

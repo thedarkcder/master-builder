@@ -5,9 +5,9 @@ from typing import Pattern
 
 from sqlalchemy.orm import Session
 
-from orchestrator.core.decision_types import JiraConfigKey, tenant_jira_config_text
+from orchestrator.core.decision.types import JiraConfigKey, tenant_jira_config_text
 from orchestrator.core.discord.personas import format_voice_room_persona_label
-from orchestrator.storage.models import JiraOAuthConnection, Tenant
+from orchestrator.storage.models import AtlassianOAuthConnection, Tenant
 
 
 def build_ask_confirmation_components(request_id: str) -> list[dict]:
@@ -179,7 +179,7 @@ def resolve_tenant_jira_browse_base_url(*, session: Session, tenant: Tenant) -> 
     connection_id = tenant_jira_config_text(tenant=tenant, key=JiraConfigKey.CONNECTION_ID)
     if not connection_id:
         return None
-    connection = session.get(JiraOAuthConnection, connection_id)
+    connection = session.get(AtlassianOAuthConnection, connection_id)
     if connection is None:
         return None
     normalized_site_url = str(connection.site_url or "").strip().rstrip("/")

@@ -3,22 +3,37 @@ import os
 import unittest
 from collections import Counter
 from datetime import datetime, timezone
+from base64 import urlsafe_b64encode
+import importlib.util
 from tempfile import TemporaryDirectory
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
 from alembic import command
 from alembic.config import Config
+from alembic.migration import MigrationContext
+from alembic.operations import Operations
 from alembic.script import ScriptDirectory
 from sqlalchemy import create_engine, inspect
 from sqlalchemy import text
 
 from orchestrator.core.config import get_settings
-from orchestrator.core.secrets import encrypt_value
+from orchestrator.core.platform.secrets import encrypt_value
+from orchestrator.storage.models import WorkflowExecution
 from orchestrator.storage.migrations import run_migrations
 
 
 class MigrationTests(unittest.TestCase):
+    def _load_migration_module(self, filename: str, module_name: str):
+        root = Path(__file__).resolve().parents[1]
+        path = root / "orchestrator" / "storage" / "migrations" / "versions" / filename
+        spec = importlib.util.spec_from_file_location(module_name, path)
+        self.assertIsNotNone(spec)
+        self.assertIsNotNone(spec.loader)
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
     def _alembic_upgrade(self, database_url: str, revision: str) -> None:
         root = Path(__file__).resolve().parents[1]
         config = Config(str(root / "alembic.ini"))
@@ -50,7 +65,1275 @@ class MigrationTests(unittest.TestCase):
 
         duplicates = {revision_id: count for revision_id, count in Counter(revision_ids).items() if count > 1}
         self.assertEqual(duplicates, {})
-        self.assertEqual(script.get_heads(), ["20260417_0065"])
+        self.assertEqual(script.get_heads(), ["20260505_0106"])
+
+    def test_workflow_execution_source_external_id_index_is_composite_in_metadata(self) -> None:
+        expected_columns = ["tenant_id", "source_system", "source_external_id", "dedupe_scope"]
+        matching_indexes = [
+            index
+            for index in WorkflowExecution.__table__.indexes
+            if index.name == "ix_workflow_executions_source_external_id"
+        ]
+
+        self.assertEqual(len(matching_indexes), 1)
+        self.assertEqual([column.name for column in matching_indexes[0].columns], expected_columns)
+
+    def test_source_external_id_migration_recreates_same_named_single_column_index(self) -> None:
+        migration = self._load_migration_module(
+            "20260505_0106_workflow_execution_source_external_id.py",
+            "migration_20260505_0106",
+        )
+        expected_columns = ["tenant_id", "source_system", "source_external_id", "dedupe_scope"]
+
+        with TemporaryDirectory() as tmpdir:
+            database_url = f"sqlite:///{Path(tmpdir) / 'source-external-id-index.sqlite'}"
+            engine = create_engine(database_url)
+            with engine.begin() as connection:
+                connection.execute(
+                    text(
+                        """
+                        CREATE TABLE workflow_executions (
+                            workflow_id VARCHAR PRIMARY KEY,
+                            tenant_id VARCHAR NOT NULL,
+                            source_system VARCHAR NOT NULL,
+                            source_ref VARCHAR NOT NULL,
+                            source_external_id VARCHAR,
+                            dedupe_scope VARCHAR NOT NULL
+                        )
+                        """
+                    )
+                )
+                connection.execute(
+                    text(
+                        """
+                        CREATE INDEX ix_workflow_executions_source_external_id
+                        ON workflow_executions (source_external_id)
+                        """
+                    )
+                )
+                context = MigrationContext.configure(connection)
+                operations = Operations(context)
+                with patch.object(migration, "op", operations):
+                    migration.upgrade()
+
+                indexes = inspect(connection).get_indexes("workflow_executions")
+
+        index_columns = {
+            index["name"]: list(index.get("column_names") or [])
+            for index in indexes
+            if index["name"] == "ix_workflow_executions_source_external_id"
+        }
+        self.assertEqual(index_columns, {"ix_workflow_executions_source_external_id": expected_columns})
+
+    def test_failed_attempt_retryability_repair_migration(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            database_url = f"sqlite:///{Path(tmpdir) / 'failed-attempt-retryability.sqlite'}"
+            engine = create_engine(database_url)
+            with engine.begin() as connection:
+                connection.execute(text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)"))
+                connection.execute(text("INSERT INTO alembic_version (version_num) VALUES ('20260430_0099')"))
+                connection.execute(
+                    text(
+                        """
+                        CREATE TABLE workflow_operations (
+                            operation_id VARCHAR PRIMARY KEY,
+                            operation_type VARCHAR NOT NULL,
+                            status VARCHAR NOT NULL,
+                            summary TEXT,
+                            finished_at DATETIME,
+                            updated_at DATETIME
+                        )
+                        """
+                    )
+                )
+                connection.execute(
+                    text(
+                        """
+                        CREATE TABLE workflow_operation_attempts (
+                            attempt_id VARCHAR PRIMARY KEY,
+                            operation_id VARCHAR NOT NULL,
+                            attempt_number INTEGER NOT NULL,
+                            status VARCHAR NOT NULL,
+                            error_category VARCHAR,
+                            error_message TEXT,
+                            status_detail TEXT,
+                            retryable BOOLEAN NOT NULL,
+                            next_retry_at DATETIME,
+                            finished_at DATETIME
+                        )
+                        """
+                    )
+                )
+                connection.execute(
+                    text(
+                        """
+                        INSERT INTO workflow_operations (
+                            operation_id, operation_type, status, summary, finished_at, updated_at
+                        )
+                        VALUES (
+                            'operation-fanout', 'jira_child_fanout', 'failed',
+                            '502: Failed to seed Jira issues: Atlassian API request failed (400): {"errors":{"parentId":"Given parent work item does not belong to appropriate hierarchy."}}',
+                            '2026-04-30 10:16:00', '2026-04-30 10:16:00'
+                        )
+                        """
+                    )
+                )
+                connection.execute(
+                    text(
+                        """
+                        INSERT INTO workflow_operation_attempts (
+                            attempt_id, operation_id, attempt_number, status, error_category, error_message,
+                            status_detail, retryable, next_retry_at, finished_at
+                        )
+                        VALUES
+                            (
+                                'attempt-hierarchy', 'operation-fanout', 2, 'failed', 'transient_external_failure',
+                                '502: Failed to seed Jira issues: Atlassian API request failed (400): {"errors":{"parentId":"Given parent work item does not belong to appropriate hierarchy."}}',
+                                'diagnostic only', 0, NULL, '2026-04-30 10:16:00'
+                            ),
+                            (
+                                'attempt-runtime', 'operation-fanout', 1, 'failed', 'external_failure',
+                                'Codex CLI command failed because a refresh token expired.',
+                                NULL, 1, NULL, '2026-04-30 10:00:00'
+                            )
+                        """
+                    )
+                )
+
+            self._alembic_upgrade(database_url, "20260430_0100")
+
+            with engine.connect() as connection:
+                rows = connection.execute(
+                    text(
+                        """
+                        SELECT attempt_id, error_category, retryable, status_detail
+                        FROM workflow_operation_attempts
+                        ORDER BY attempt_id
+                        """
+                    )
+                ).mappings().all()
+
+            attempts = {row["attempt_id"]: row for row in rows}
+            self.assertEqual(attempts["attempt-hierarchy"]["error_category"], "transient_external_failure")
+            self.assertTrue(bool(attempts["attempt-hierarchy"]["retryable"]))
+            self.assertEqual(attempts["attempt-hierarchy"]["status_detail"], "diagnostic only")
+            self.assertEqual(attempts["attempt-runtime"]["error_category"], "external_failure")
+            self.assertTrue(bool(attempts["attempt-runtime"]["retryable"]))
+
+    def test_single_active_operation_attempt_migration_repairs_and_enforces(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            database_url = f"sqlite:///{Path(tmpdir) / 'active-attempts.sqlite'}"
+            engine = create_engine(database_url)
+            with engine.begin() as connection:
+                connection.execute(text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)"))
+                connection.execute(text("INSERT INTO alembic_version (version_num) VALUES ('20260430_0098')"))
+                connection.execute(
+                    text(
+                        """
+                        CREATE TABLE workflow_operation_attempts (
+                            attempt_id VARCHAR PRIMARY KEY,
+                            operation_id VARCHAR NOT NULL,
+                            attempt_number INTEGER NOT NULL,
+                            status VARCHAR NOT NULL,
+                            status_detail TEXT,
+                            retryable BOOLEAN NOT NULL,
+                            next_retry_at DATETIME,
+                            created_at DATETIME NOT NULL,
+                            finished_at DATETIME
+                        )
+                        """
+                    )
+                )
+                connection.execute(
+                    text(
+                        """
+                        INSERT INTO workflow_operation_attempts (
+                            attempt_id, operation_id, attempt_number, status, status_detail, retryable,
+                            next_retry_at, created_at, finished_at
+                        )
+                        VALUES
+                            ('attempt-1', 'operation-1', 1, 'waiting_for_input', NULL, 0, NULL, '2026-04-30 10:00:00', NULL),
+                            ('attempt-2', 'operation-1', 2, 'running', NULL, 0, NULL, '2026-04-30 10:01:00', NULL)
+                        """
+                    )
+                )
+
+            self._alembic_upgrade(database_url, "20260430_0099")
+
+            with engine.begin() as connection:
+                rows = connection.execute(
+                    text(
+                        """
+                        SELECT attempt_id, status
+                        FROM workflow_operation_attempts
+                        WHERE operation_id = 'operation-1'
+                        ORDER BY attempt_number
+                        """
+                    )
+                ).all()
+                self.assertEqual(rows, [("attempt-1", "superseded"), ("attempt-2", "running")])
+                with self.assertRaises(Exception):
+                    connection.execute(
+                        text(
+                            """
+                            INSERT INTO workflow_operation_attempts (
+                                attempt_id, operation_id, attempt_number, status, status_detail, retryable,
+                                next_retry_at, created_at, finished_at
+                            )
+                            VALUES (
+                                'attempt-3', 'operation-1', 3, 'waiting_for_input',
+                                NULL, 0, NULL, '2026-04-30 10:02:00', NULL
+                            )
+                            """
+                        )
+                    )
+
+    def test_stale_active_operation_attempt_migration_repairs_older_active_attempts(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            database_url = f"sqlite:///{Path(tmpdir) / 'stale-active-attempts.sqlite'}"
+            engine = create_engine(database_url)
+            with engine.begin() as connection:
+                connection.execute(text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)"))
+                connection.execute(text("INSERT INTO alembic_version (version_num) VALUES ('20260430_0100')"))
+                connection.execute(
+                    text(
+                        """
+                        CREATE TABLE workflow_operation_attempts (
+                            attempt_id VARCHAR PRIMARY KEY,
+                            operation_id VARCHAR NOT NULL,
+                            attempt_number INTEGER NOT NULL,
+                            status VARCHAR NOT NULL,
+                            status_detail TEXT,
+                            retryable BOOLEAN NOT NULL,
+                            next_retry_at DATETIME,
+                            created_at DATETIME NOT NULL,
+                            finished_at DATETIME
+                        )
+                        """
+                    )
+                )
+                connection.execute(
+                    text(
+                        """
+                        INSERT INTO workflow_operation_attempts (
+                            attempt_id, operation_id, attempt_number, status, status_detail, retryable,
+                            next_retry_at, created_at, finished_at
+                        )
+                        VALUES
+                            ('attempt-1', 'operation-1', 1, 'waiting_for_input', NULL, 0, NULL, '2026-04-30 10:00:00', NULL),
+                            ('attempt-2', 'operation-1', 2, 'completed', NULL, 0, NULL, '2026-04-30 10:01:00', '2026-04-30 10:02:00'),
+                            ('attempt-3', 'operation-2', 1, 'running', NULL, 0, NULL, '2026-04-30 10:03:00', NULL)
+                        """
+                    )
+                )
+
+            self._alembic_upgrade(database_url, "20260430_0101")
+
+            with engine.begin() as connection:
+                rows = connection.execute(
+                    text(
+                        """
+                        SELECT attempt_id, status
+                        FROM workflow_operation_attempts
+                        ORDER BY attempt_id
+                        """
+                    )
+                ).all()
+
+            self.assertEqual(
+                rows,
+                [
+                    ("attempt-1", "superseded"),
+                    ("attempt-2", "completed"),
+                    ("attempt-3", "running"),
+                ],
+            )
+
+    def test_planning_decision_record_identity_is_stage_scoped(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            database_url = f"sqlite:///{Path(tmpdir) / 'planning-decision-identity.sqlite'}"
+            engine = create_engine(database_url)
+            now = "2026-05-04 21:00:00"
+            later = "2026-05-04 21:01:00"
+            with engine.begin() as connection:
+                connection.execute(text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)"))
+                connection.execute(text("INSERT INTO alembic_version (version_num) VALUES ('20260504_0104')"))
+                connection.execute(
+                    text(
+                        """
+                        CREATE TABLE planning_decision_records (
+                            record_id VARCHAR(64) PRIMARY KEY,
+                            tenant_id VARCHAR(128) NOT NULL,
+                            project_id VARCHAR(128),
+                            workflow_id VARCHAR(128) NOT NULL,
+                            source_operation_id VARCHAR(64),
+                            source_attempt_id VARCHAR(64),
+                            parent_issue_key VARCHAR(64) NOT NULL,
+                            lane VARCHAR(32) NOT NULL,
+                            status VARCHAR(32) NOT NULL,
+                            source_stage VARCHAR(64),
+                            external_key VARCHAR(128) NOT NULL,
+                            payload_json JSON NOT NULL,
+                            created_at DATETIME NOT NULL,
+                            updated_at DATETIME NOT NULL
+                        )
+                        """
+                    )
+                )
+                connection.execute(
+                    text(
+                        """
+                        INSERT INTO planning_decision_records (
+                            record_id, tenant_id, workflow_id, parent_issue_key, lane, status,
+                            source_stage, external_key, payload_json, created_at, updated_at
+                        )
+                        VALUES
+                            ('engineering-old', 'route25', 'parent_planning:MAB-243', 'MAB-243', 'technical', 'selected', 'engineering_planning', 'TD-001', '{}', :now, :now),
+                            ('engineering-new', 'route25', 'parent_planning:MAB-243', 'MAB-243', 'technical', 'selected', 'engineering_planning', 'TD-001', '{}', :now, :later),
+                            ('testing', 'route25', 'parent_planning:MAB-243', 'MAB-243', 'technical', 'selected', 'test_planning', 'TD-001', '{}', :now, :now),
+                            ('missing-stage', 'route25', 'parent_planning:MAB-243', 'MAB-243', 'pm', 'requested', NULL, 'PM-001', '{}', :now, :now)
+                        """
+                    ),
+                    {"now": now, "later": later},
+                )
+
+            self._alembic_upgrade(database_url, "20260504_0105")
+
+            with engine.begin() as connection:
+                rows = connection.execute(
+                    text(
+                        """
+                        SELECT record_id, source_stage, external_key
+                        FROM planning_decision_records
+                        ORDER BY record_id
+                        """
+                    )
+                ).all()
+                self.assertEqual(
+                    rows,
+                    [
+                        ("engineering-new", "engineering_planning", "TD-001"),
+                        ("missing-stage", "unknown", "PM-001"),
+                        ("testing", "test_planning", "TD-001"),
+                    ],
+                )
+                with self.assertRaises(Exception):
+                    connection.execute(
+                        text(
+                            """
+                            INSERT INTO planning_decision_records (
+                                record_id, tenant_id, workflow_id, parent_issue_key, lane, status,
+                                source_stage, external_key, payload_json, created_at, updated_at
+                            )
+                            VALUES (
+                                'duplicate', 'route25', 'parent_planning:MAB-243', 'MAB-243',
+                                'technical', 'selected', 'test_planning', 'TD-001', '{}', :now, :now
+                            )
+                            """
+                        ),
+                        {"now": now},
+                    )
+
+    def test_optional_discord_projection_status_repair_migration(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            database_url = f"sqlite:///{Path(tmpdir) / 'discord-projection-repair.sqlite'}"
+            engine = create_engine(database_url)
+            with engine.begin() as connection:
+                connection.execute(text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)"))
+                connection.execute(text("INSERT INTO alembic_version (version_num) VALUES ('20260428_0097')"))
+                connection.execute(
+                    text(
+                        """
+                        CREATE TABLE workflow_operations (
+                            operation_id VARCHAR PRIMARY KEY,
+                            operation_type VARCHAR NOT NULL,
+                            status VARCHAR NOT NULL,
+                            summary TEXT,
+                            finished_at DATETIME,
+                            updated_at DATETIME
+                        )
+                        """
+                    )
+                )
+                connection.execute(
+                    text(
+                        """
+                        CREATE TABLE workflow_operation_attempts (
+                            attempt_id VARCHAR PRIMARY KEY,
+                            operation_id VARCHAR NOT NULL,
+                            attempt_number INTEGER NOT NULL,
+                            status VARCHAR NOT NULL,
+                            error_category VARCHAR,
+                            error_message TEXT,
+                            status_detail TEXT,
+                            retryable BOOLEAN NOT NULL,
+                            next_retry_at DATETIME,
+                            finished_at DATETIME
+                        )
+                        """
+                    )
+                )
+                connection.execute(
+                    text(
+                        """
+                        INSERT INTO workflow_operations (
+                            operation_id, operation_type, status, summary, finished_at, updated_at
+                        )
+                        VALUES (
+                            'operation-discord', 'discord_followup_projection', 'failed',
+                            'Optional Discord clarification projection did not run for MAB-243',
+                            NULL, '2026-04-30 09:29:04'
+                        )
+                        """
+                    )
+                )
+                connection.execute(
+                    text(
+                        """
+                        INSERT INTO workflow_operation_attempts (
+                            attempt_id, operation_id, attempt_number, status, error_category, error_message,
+                            status_detail, retryable, next_retry_at, finished_at
+                        )
+                        VALUES (
+                            'attempt-discord-3', 'operation-discord', 3, 'failed', 'contract_violation',
+                            'Optional Discord clarification projection did not run for MAB-243',
+                            'old failure', 1, NULL, '2026-04-30 09:29:04'
+                        )
+                        """
+                    )
+                )
+
+            self._alembic_upgrade(database_url, "20260430_0098")
+
+            with engine.connect() as connection:
+                operation = connection.execute(
+                    text("SELECT status, summary FROM workflow_operations WHERE operation_id = 'operation-discord'")
+                ).one()
+                attempt = connection.execute(
+                    text(
+                        """
+                        SELECT status, error_category, error_message, status_detail, retryable
+                        FROM workflow_operation_attempts
+                        WHERE attempt_id = 'attempt-discord-3'
+                        """
+                    )
+                ).one()
+
+            self.assertEqual(operation.status, "completed")
+            self.assertEqual(operation.summary, "Optional Discord clarification follow-up was not created.")
+            self.assertEqual(attempt.status, "completed")
+            self.assertIsNone(attempt.error_category)
+            self.assertIsNone(attempt.error_message)
+            self.assertIsNone(attempt.status_detail)
+            self.assertFalse(attempt.retryable)
+
+    def test_code_inferred_workflow_graph_migration_removes_db_authored_definitions(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            database_url = f"sqlite:///{Path(tmpdir) / 'workflow-code-graph.sqlite'}"
+            engine = create_engine(database_url)
+            with engine.begin() as connection:
+                connection.execute(
+                    text(
+                        """
+                        CREATE TABLE workflow_types (
+                            workflow_type_key VARCHAR PRIMARY KEY,
+                            orchestration_backend VARCHAR NOT NULL
+                        )
+                        """
+                    )
+                )
+                connection.execute(
+                    text(
+                        """
+                        CREATE TABLE workflow_type_operations (
+                            workflow_type_key VARCHAR NOT NULL,
+                            operation_type VARCHAR NOT NULL,
+                            label VARCHAR NOT NULL
+                        )
+                        """
+                    )
+                )
+                connection.execute(
+                    text(
+                        """
+                        CREATE TABLE workflow_executions (
+                            workflow_id VARCHAR PRIMARY KEY,
+                            workflow_type_key VARCHAR NOT NULL
+                        )
+                        """
+                    )
+                )
+                connection.execute(
+                    text(
+                        "INSERT INTO workflow_types (workflow_type_key, orchestration_backend) "
+                        "VALUES ('parent_planning', 'temporal')"
+                    )
+                )
+                connection.execute(
+                    text(
+                        "INSERT INTO workflow_type_operations (workflow_type_key, operation_type, label) "
+                        "VALUES ('parent_planning', 'brief_normalization', 'Brief normalization')"
+                    )
+                )
+                connection.execute(
+                    text(
+                        "INSERT INTO workflow_executions (workflow_id, workflow_type_key) "
+                        "VALUES ('parent_planning:MAB-233', 'parent_planning')"
+                    )
+                )
+
+            module = self._load_migration_module(
+                "20260428_0096_code_inferred_workflow_graph.py",
+                "migration_20260428_0096_code_inferred_workflow_graph",
+            )
+
+            def drop_table(table_name: str) -> None:
+                connection.execute(text(f"DROP TABLE {table_name}"))
+
+            with (
+                engine.begin() as connection,
+                patch.object(module.op, "get_bind", return_value=connection),
+                patch.object(module.op, "drop_table", side_effect=drop_table),
+            ):
+                module.upgrade()
+
+            inspector = inspect(engine)
+            self.assertNotIn("workflow_types", inspector.get_table_names())
+            self.assertNotIn("workflow_type_operations", inspector.get_table_names())
+            with engine.connect() as connection:
+                row = connection.execute(
+                    text("SELECT workflow_type_key FROM workflow_executions WHERE workflow_id = 'parent_planning:MAB-233'")
+                ).scalar_one()
+            self.assertEqual(row, "parent_planning")
+
+    def test_projection_attempt_history_cleanup_removes_projection_only_attempt_rows(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            database_url = f"sqlite:///{Path(tmpdir) / 'projection-attempt-cleanup.sqlite'}"
+            engine = create_engine(database_url)
+            with engine.begin() as connection:
+                connection.execute(
+                    text(
+                        """
+                        CREATE TABLE workflow_operations (
+                            operation_id VARCHAR PRIMARY KEY,
+                            operation_type VARCHAR NOT NULL
+                        )
+                        """
+                    )
+                )
+                connection.execute(
+                    text(
+                        """
+                        CREATE TABLE workflow_operation_attempts (
+                            attempt_id VARCHAR PRIMARY KEY,
+                            operation_id VARCHAR NOT NULL,
+                            attempt_number INTEGER NOT NULL
+                        )
+                        """
+                    )
+                )
+                connection.execute(
+                    text(
+                        """
+                        CREATE TABLE audit_events (
+                            event_id VARCHAR PRIMARY KEY,
+                            operation_id VARCHAR NULL
+                        )
+                        """
+                    )
+                )
+                connection.execute(
+                    text(
+                        """
+                        CREATE TABLE observability_stream_events (
+                            event_id VARCHAR PRIMARY KEY,
+                            operation_id VARCHAR NULL
+                        )
+                        """
+                    )
+                )
+                connection.execute(
+                    text(
+                        """
+                        INSERT INTO workflow_operations (operation_id, operation_type) VALUES
+                            ('op-brief', 'brief_normalization'),
+                            ('op-parent', 'jira_parent_update'),
+                            ('op-fanout', 'jira_child_fanout')
+                        """
+                    )
+                )
+                connection.execute(
+                    text(
+                        """
+                        INSERT INTO workflow_operation_attempts (attempt_id, operation_id, attempt_number) VALUES
+                            ('attempt-brief', 'op-brief', 1),
+                            ('attempt-parent', 'op-parent', 1),
+                            ('attempt-fanout', 'op-fanout', 1)
+                        """
+                    )
+                )
+                connection.execute(
+                    text(
+                        """
+                        INSERT INTO audit_events (event_id, operation_id) VALUES
+                            ('audit-brief', 'op-brief'),
+                            ('audit-parent', 'op-parent'),
+                            ('audit-fanout', 'op-fanout')
+                        """
+                    )
+                )
+                connection.execute(
+                    text(
+                        """
+                        INSERT INTO observability_stream_events (event_id, operation_id) VALUES
+                            ('stream-brief', 'op-brief'),
+                            ('stream-parent', 'op-parent'),
+                            ('stream-fanout', 'op-fanout')
+                        """
+                    )
+                )
+                connection.execute(text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)"))
+                connection.execute(text("INSERT INTO alembic_version (version_num) VALUES ('20260422_0089')"))
+
+            self._alembic_upgrade(database_url, "20260422_0090")
+
+            with engine.begin() as connection:
+                attempts = connection.execute(
+                    text("SELECT attempt_id FROM workflow_operation_attempts ORDER BY attempt_id")
+                ).scalars().all()
+                audit_ids = connection.execute(
+                    text("SELECT event_id FROM audit_events ORDER BY event_id")
+                ).scalars().all()
+                stream_ids = connection.execute(
+                    text("SELECT event_id FROM observability_stream_events ORDER BY event_id")
+                ).scalars().all()
+
+            self.assertEqual(attempts, ["attempt-fanout"])
+            self.assertEqual(audit_ids, ["audit-fanout"])
+            self.assertEqual(stream_ids, ["stream-fanout"])
+
+    def test_attempt_scoped_observability_migration_backfills_deletes_and_constrains_rows(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            database_url = f"sqlite:///{Path(tmpdir) / 'attempt-observability.sqlite'}"
+            engine = create_engine(database_url)
+            with engine.begin() as connection:
+                connection.execute(
+                    text(
+                        """
+                        CREATE TABLE workflow_operation_attempts (
+                            attempt_id VARCHAR PRIMARY KEY,
+                            operation_id VARCHAR NOT NULL,
+                            attempt_number INTEGER NOT NULL
+                        )
+                        """
+                    )
+                )
+                connection.execute(
+                    text(
+                        """
+                        CREATE TABLE audit_events (
+                            event_id VARCHAR PRIMARY KEY,
+                            operation_id VARCHAR NULL,
+                            attempt_id VARCHAR NULL,
+                            payload_json JSON NOT NULL
+                        )
+                        """
+                    )
+                )
+                connection.execute(
+                    text(
+                        """
+                        CREATE TABLE observability_stream_events (
+                            stream_offset INTEGER PRIMARY KEY AUTOINCREMENT,
+                            operation_id VARCHAR NULL,
+                            attempt_id VARCHAR NULL,
+                            payload_json JSON NOT NULL,
+                            recorded_at DATETIME NULL
+                        )
+                        """
+                    )
+                )
+                connection.execute(
+                    text(
+                        """
+                        INSERT INTO workflow_operation_attempts (attempt_id, operation_id, attempt_number) VALUES
+                            ('attempt-1', 'op-1', 1)
+                        """
+                    )
+                )
+                connection.execute(
+                    text(
+                        """
+                        INSERT INTO audit_events (event_id, operation_id, attempt_id, payload_json) VALUES
+                            ('audit-backfill', 'op-1', NULL, '{"attempt": 1}'),
+                            ('audit-delete', 'op-2', NULL, '{}'),
+                            ('audit-workflow', NULL, NULL, '{}')
+                        """
+                    )
+                )
+                connection.execute(
+                    text(
+                        """
+                        INSERT INTO observability_stream_events (operation_id, attempt_id, payload_json) VALUES
+                            ('op-1', NULL, '{"attempt": 1}'),
+                            ('op-2', NULL, '{}'),
+                            (NULL, NULL, '{}')
+                        """
+                    )
+                )
+                connection.execute(text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)"))
+                connection.execute(text("INSERT INTO alembic_version (version_num) VALUES ('20260424_0091')"))
+
+            self._alembic_upgrade(database_url, "20260424_0092")
+
+            with engine.begin() as connection:
+                audit_rows = connection.execute(
+                    text("SELECT event_id, attempt_id FROM audit_events ORDER BY event_id")
+                ).all()
+                stream_rows = connection.execute(
+                    text("SELECT operation_id, attempt_id FROM observability_stream_events ORDER BY stream_offset")
+                ).all()
+                self.assertEqual(audit_rows, [("audit-backfill", "attempt-1"), ("audit-workflow", None)])
+                self.assertEqual(stream_rows, [("op-1", "attempt-1"), (None, None)])
+                with self.assertRaises(Exception):
+                    connection.execute(
+                        text(
+                            """
+                            INSERT INTO audit_events (event_id, operation_id, attempt_id, payload_json)
+                            VALUES ('audit-invalid', 'op-1', NULL, '{}')
+                            """
+                        )
+                    )
+
+    def test_rename_jira_oauth_platform_secrets_migration_updates_managed_secret_refs(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            database_url = f"sqlite:///{Path(tmpdir) / 'atlassian-secret-rename.sqlite'}"
+            engine = create_engine(database_url)
+            with engine.begin() as connection:
+                connection.execute(
+                    text(
+                        """
+                        CREATE TABLE managed_secrets (
+                            secret_ref VARCHAR(255) PRIMARY KEY,
+                            value_encrypted TEXT NOT NULL,
+                            created_at DATETIME NOT NULL,
+                            updated_at DATETIME NOT NULL
+                        )
+                        """
+                    )
+                )
+                now = datetime.now(timezone.utc).isoformat()
+                connection.execute(
+                    text(
+                        """
+                        INSERT INTO managed_secrets (secret_ref, value_encrypted, created_at, updated_at)
+                        VALUES
+                            ('platform/JIRA_OAUTH_CLIENT_ID', 'enc-id', :now, :now),
+                            ('platform/JIRA_OAUTH_CLIENT_SECRET', 'enc-secret', :now, :now)
+                        """
+                    ),
+                    {"now": now},
+                )
+                connection.execute(text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)"))
+                connection.execute(text("INSERT INTO alembic_version (version_num) VALUES ('20260422_0088')"))
+
+            self._alembic_upgrade(database_url, "20260422_0089")
+
+            with engine.begin() as connection:
+                refs = connection.execute(
+                    text("SELECT secret_ref FROM managed_secrets ORDER BY secret_ref")
+                ).scalars().all()
+
+            self.assertEqual(
+                refs,
+                [
+                    "platform/ATLASSIAN_OAUTH_CLIENT_ID",
+                    "platform/ATLASSIAN_OAUTH_CLIENT_SECRET",
+                ],
+            )
+
+    def test_audit_events_migration_creates_append_only_table(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            database_url = f"sqlite:///{Path(tmpdir) / 'audit-events.sqlite'}"
+            engine = create_engine(database_url)
+            with engine.begin() as connection:
+                connection.execute(
+                    text(
+                        """
+                        CREATE TABLE tenants (
+                            tenant_id VARCHAR PRIMARY KEY
+                        )
+                        """
+                    )
+                )
+                connection.execute(
+                    text(
+                        """
+                        CREATE TABLE projects (
+                            project_id VARCHAR PRIMARY KEY
+                        )
+                        """
+                    )
+                )
+                connection.execute(
+                    text(
+                        """
+                        CREATE TABLE workflow_executions (
+                            workflow_id VARCHAR PRIMARY KEY
+                        )
+                        """
+                    )
+                )
+                connection.execute(
+                    text(
+                        """
+                        CREATE TABLE runs (
+                            run_id VARCHAR PRIMARY KEY
+                        )
+                        """
+                    )
+                )
+                connection.execute(
+                    text(
+                        """
+                        CREATE TABLE workflow_operations (
+                            operation_id VARCHAR PRIMARY KEY
+                        )
+                        """
+                    )
+                )
+                connection.execute(
+                    text(
+                        """
+                        CREATE TABLE workflow_operation_attempts (
+                            attempt_id VARCHAR PRIMARY KEY
+                        )
+                        """
+                    )
+                )
+                connection.execute(text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)"))
+                connection.execute(text("INSERT INTO alembic_version (version_num) VALUES ('20260420_0083')"))
+
+            self._alembic_upgrade(database_url, "20260420_0084")
+
+            inspector = inspect(engine)
+            columns = {column["name"] for column in inspector.get_columns("audit_events")}
+            self.assertTrue(
+                {
+                    "event_id",
+                    "tenant_id",
+                    "workflow_id",
+                    "operation_id",
+                    "event_kind",
+                    "level",
+                    "message",
+                    "payload_json",
+                    "recorded_at",
+                }.issubset(columns)
+            )
+
+    def test_failed_attempt_retryability_backfill_marks_failed_attempts_retryable(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            database_url = f"sqlite:///{Path(tmpdir) / 'workflow-attempt-retryable.sqlite'}"
+            engine = create_engine(database_url)
+            with engine.begin() as connection:
+                connection.execute(
+                    text(
+                        """
+                        CREATE TABLE workflow_operation_attempts (
+                            attempt_id VARCHAR PRIMARY KEY,
+                            operation_id VARCHAR NOT NULL,
+                            attempt_number INTEGER NOT NULL,
+                            status VARCHAR NOT NULL,
+                            retryable BOOLEAN NOT NULL DEFAULT 0
+                        )
+                        """
+                    )
+                )
+                connection.execute(
+                    text(
+                        """
+                        INSERT INTO workflow_operation_attempts (
+                            attempt_id,
+                            operation_id,
+                            attempt_number,
+                            status,
+                            retryable
+                        ) VALUES
+                            ('attempt-failed', 'operation-1', 1, 'failed', 0),
+                            ('attempt-retrying', 'operation-1', 2, 'retrying', 0),
+                            ('attempt-running', 'operation-1', 3, 'running', 0),
+                            ('attempt-waiting', 'operation-1', 4, 'waiting_for_input', 0)
+                        """
+                    )
+                )
+                connection.execute(text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)"))
+                connection.execute(text("INSERT INTO alembic_version (version_num) VALUES ('20260420_0082')"))
+
+            self._alembic_upgrade(database_url, "20260420_0083")
+
+            with engine.connect() as connection:
+                rows = connection.execute(
+                    text(
+                        """
+                        SELECT attempt_id, retryable
+                        FROM workflow_operation_attempts
+                        ORDER BY attempt_id
+                        """
+                    )
+                ).mappings().all()
+
+            retryable_by_attempt = {row["attempt_id"]: bool(row["retryable"]) for row in rows}
+            self.assertTrue(retryable_by_attempt["attempt-failed"])
+            self.assertTrue(retryable_by_attempt["attempt-retrying"])
+            self.assertFalse(retryable_by_attempt["attempt-running"])
+            self.assertFalse(retryable_by_attempt["attempt-waiting"])
+
+    def test_workflow_execution_public_id_migration_backfills_unique_execution_ids(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            database_url = f"sqlite:///{Path(tmpdir) / 'workflow-execution-id.sqlite'}"
+            engine = create_engine(database_url)
+            with engine.begin() as connection:
+                connection.execute(
+                    text(
+                        """
+                        CREATE TABLE workflow_executions (
+                            workflow_id VARCHAR PRIMARY KEY,
+                            workflow_type_key VARCHAR NOT NULL,
+                            tenant_id VARCHAR NOT NULL,
+                            issue_key VARCHAR NOT NULL,
+                            orchestration_backend VARCHAR NOT NULL,
+                            dedupe_scope VARCHAR NOT NULL,
+                            status VARCHAR NOT NULL
+                        )
+                        """
+                    )
+                )
+                connection.execute(
+                    text(
+                        """
+                        INSERT INTO workflow_executions (
+                            workflow_id,
+                            workflow_type_key,
+                            tenant_id,
+                            issue_key,
+                            orchestration_backend,
+                            dedupe_scope,
+                            status
+                        ) VALUES
+                            ('workflow-1', 'issue_execution', 'tenant-a', 'TP-1', 'temporal', 'issue_execution', 'failed'),
+                            ('workflow-2', 'issue_execution', 'tenant-a', 'TP-2', 'temporal', 'issue_execution', 'queued')
+                        """
+                    )
+                )
+                connection.execute(text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)"))
+                connection.execute(text("INSERT INTO alembic_version (version_num) VALUES ('20260420_0080')"))
+
+            self._alembic_upgrade(database_url, "20260420_0081")
+
+            inspector = inspect(engine)
+            columns = {column["name"]: column for column in inspector.get_columns("workflow_executions")}
+            self.assertIn("execution_id", columns)
+            self.assertFalse(columns["execution_id"]["nullable"])
+
+            indexes = {index["name"]: index for index in inspector.get_indexes("workflow_executions")}
+            self.assertIn("ix_workflow_executions_execution_id", indexes)
+            self.assertTrue(indexes["ix_workflow_executions_execution_id"]["unique"])
+
+            with engine.connect() as connection:
+                rows = connection.execute(
+                    text(
+                        """
+                        SELECT workflow_id, execution_id
+                        FROM workflow_executions
+                        ORDER BY workflow_id
+                        """
+                    )
+                ).mappings().all()
+            execution_ids = [str(row["execution_id"] or "").strip() for row in rows]
+            self.assertEqual(len(execution_ids), 2)
+            self.assertEqual(len(set(execution_ids)), 2)
+            self.assertTrue(all(execution_ids))
+
+    def test_workflow_execution_public_id_migration_replaces_ids_copied_from_workflow_keys(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            database_url = f"sqlite:///{Path(tmpdir) / 'workflow-execution-id-fix.sqlite'}"
+            engine = create_engine(database_url)
+            with engine.begin() as connection:
+                connection.execute(
+                    text(
+                        """
+                        CREATE TABLE workflow_executions (
+                            workflow_id VARCHAR PRIMARY KEY,
+                            execution_id VARCHAR,
+                            workflow_type_key VARCHAR NOT NULL,
+                            tenant_id VARCHAR NOT NULL,
+                            issue_key VARCHAR NOT NULL,
+                            orchestration_backend VARCHAR NOT NULL,
+                            dedupe_scope VARCHAR NOT NULL,
+                            status VARCHAR NOT NULL
+                        )
+                        """
+                    )
+                )
+                connection.execute(
+                    text(
+                        """
+                        INSERT INTO workflow_executions (
+                            workflow_id,
+                            execution_id,
+                            workflow_type_key,
+                            tenant_id,
+                            issue_key,
+                            orchestration_backend,
+                            dedupe_scope,
+                            status
+                        ) VALUES
+                            ('parent_planning:MAB-215', 'parent_planning:MAB-215', 'parent_planning', 'tenant-a', 'MAB-215', 'temporal', 'parent_planning', 'failed'),
+                            ('workflow-2', 'public-2', 'issue_execution', 'tenant-a', 'TP-2', 'temporal', 'issue_execution', 'queued')
+                        """
+                    )
+                )
+                connection.execute(text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)"))
+                connection.execute(text("INSERT INTO alembic_version (version_num) VALUES ('20260420_0080')"))
+
+            self._alembic_upgrade(database_url, "20260420_0081")
+
+            with engine.connect() as connection:
+                rows = connection.execute(
+                    text(
+                        """
+                        SELECT workflow_id, execution_id
+                        FROM workflow_executions
+                        ORDER BY workflow_id
+                        """
+                    )
+                ).mappings().all()
+
+            self.assertEqual(rows[0]["workflow_id"], "parent_planning:MAB-215")
+            self.assertNotEqual(rows[0]["execution_id"], "parent_planning:MAB-215")
+            self.assertEqual(rows[1]["execution_id"], "public-2")
+
+    def test_workflow_execution_backend_backfill_migration_aligns_execution_rows(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            database_url = f"sqlite:///{Path(tmpdir) / 'workflow-backfill.sqlite'}"
+            engine = create_engine(database_url)
+            with engine.begin() as connection:
+                connection.execute(
+                    text(
+                        """
+                        CREATE TABLE workflow_types (
+                            workflow_type_key VARCHAR PRIMARY KEY,
+                            orchestration_backend VARCHAR NOT NULL
+                        )
+                        """
+                    )
+                )
+                connection.execute(
+                    text(
+                        """
+                        CREATE TABLE workflow_executions (
+                            workflow_id VARCHAR PRIMARY KEY,
+                            workflow_type_key VARCHAR NOT NULL,
+                            orchestration_backend VARCHAR NOT NULL
+                        )
+                        """
+                    )
+                )
+                connection.execute(
+                    text(
+                        "INSERT INTO workflow_types (workflow_type_key, orchestration_backend) "
+                        "VALUES ('issue_execution', 'temporal')"
+                    )
+                )
+                connection.execute(
+                    text(
+                        "INSERT INTO workflow_executions (workflow_id, workflow_type_key, orchestration_backend) "
+                        "VALUES ('workflow-1', 'issue_execution', 'legacy')"
+                    )
+                )
+
+            module = self._load_migration_module(
+                "20260420_0078_backfill_workflow_execution_backends.py",
+                "migration_20260420_0078_backfill_workflow_execution_backends",
+            )
+
+            with engine.begin() as connection, patch.object(module.op, "get_bind", return_value=connection):
+                module.upgrade()
+
+            with engine.connect() as connection:
+                row = connection.execute(
+                    text(
+                        "SELECT orchestration_backend FROM workflow_executions WHERE workflow_id = 'workflow-1'"
+                    )
+                ).mappings().one()
+            self.assertEqual(row["orchestration_backend"], "temporal")
+
+    def test_architecture_documents_migration_tolerates_preexisting_project_config_column(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            database_url = f"sqlite:///{Path(tmpdir) / 'architecture-documents.sqlite'}"
+            engine = create_engine(database_url)
+            with engine.begin() as connection:
+                connection.execute(text("CREATE TABLE tenants (tenant_id VARCHAR PRIMARY KEY)"))
+                connection.execute(
+                    text(
+                        """
+                        CREATE TABLE projects (
+                            project_id VARCHAR PRIMARY KEY,
+                            architecture_docs_config JSON NOT NULL DEFAULT '{}'
+                        )
+                        """
+                    )
+                )
+                connection.execute(text("CREATE TABLE knowledge_assets (asset_id VARCHAR PRIMARY KEY)"))
+                connection.execute(text("CREATE TABLE alembic_version (version_num VARCHAR(32) NOT NULL)"))
+                connection.execute(text("INSERT INTO alembic_version (version_num) VALUES ('20260421_0086')"))
+
+            self._alembic_upgrade(database_url, "20260421_0087")
+
+            inspector = inspect(engine)
+            project_columns = {column["name"] for column in inspector.get_columns("projects")}
+            self.assertIn("architecture_docs_config", project_columns)
+            architecture_columns = {column["name"] for column in inspector.get_columns("architecture_documents")}
+            self.assertTrue(
+                {
+                    "document_id",
+                    "tenant_id",
+                    "project_id",
+                    "parent_issue_key",
+                    "provider",
+                    "title",
+                    "status",
+                    "canonical_url",
+                }.issubset(architecture_columns)
+            )
+            indexes = {index["name"] for index in inspector.get_indexes("architecture_documents")}
+            self.assertIn("ix_architecture_documents_scope", indexes)
+            self.assertIn("ix_architecture_documents_project_status", indexes)
+
+    def test_parent_planning_rename_migration_drops_discovered_workflow_foreign_keys(self) -> None:
+        module = self._load_migration_module(
+            "20260417_0071_parent_planning_type_rename_and_promotion.py",
+            "migration_20260417_0071_drop_fks",
+        )
+
+        bind = MagicMock()
+        bind.dialect.name = "postgresql"
+
+        class FakeInspector:
+            def get_table_names(self):
+                return ["runs", "workflow_operations", "workflow_executions", "other_table"]
+
+            def get_foreign_keys(self, table_name):
+                mapping = {
+                    "runs": [
+                        {
+                            "name": "fk_runs_workflow_ref",
+                            "referred_table": "workflow_executions",
+                            "referred_columns": ["workflow_id"],
+                            "constrained_columns": ["workflow_id"],
+                        }
+                    ],
+                    "workflow_operations": [
+                        {
+                            "name": "workflow_operations_workflow_id_fkey",
+                            "referred_table": "workflow_executions",
+                            "referred_columns": ["workflow_id"],
+                            "constrained_columns": ["workflow_id"],
+                        }
+                    ],
+                    "workflow_executions": [
+                        {
+                            "name": "workflow_executions_source_workflow_id_fkey",
+                            "referred_table": "workflow_executions",
+                            "referred_columns": ["workflow_id"],
+                            "constrained_columns": ["source_workflow_id"],
+                        }
+                    ],
+                    "other_table": [
+                        {
+                            "name": "other_table_tenant_id_fkey",
+                            "referred_table": "tenants",
+                            "referred_columns": ["tenant_id"],
+                            "constrained_columns": ["tenant_id"],
+                        }
+                    ],
+                }
+                return mapping.get(table_name, [])
+
+        op_mock = MagicMock()
+        with patch.object(module, "op", op_mock), patch.object(module.sa, "inspect", return_value=FakeInspector()):
+            module._drop_workflow_id_foreign_keys(bind)
+
+        dropped = [call.args[:2] for call in op_mock.drop_constraint.call_args_list]
+        self.assertEqual(
+            dropped,
+            [
+                ("fk_runs_workflow_ref", "runs"),
+                ("workflow_operations_workflow_id_fkey", "workflow_operations"),
+                ("workflow_executions_source_workflow_id_fkey", "workflow_executions"),
+            ],
+        )
+
+    def test_parent_planning_rename_migration_recreates_missing_canonical_workflow_foreign_keys(self) -> None:
+        module = self._load_migration_module(
+            "20260417_0071_parent_planning_type_rename_and_promotion.py",
+            "migration_20260417_0071_create_fks",
+        )
+
+        bind = MagicMock()
+        bind.dialect.name = "postgresql"
+
+        class FakeInspector:
+            def get_table_names(self):
+                return [
+                    "project_install_requests",
+                    "workflow_executions",
+                    "workflow_checkpoints",
+                    "runs",
+                    "run_human_input_requests",
+                    "workflow_operations",
+                ]
+
+            def get_columns(self, table_name):
+                columns = {
+                    "project_install_requests": [{"name": "workflow_id"}],
+                    "workflow_executions": [{"name": "source_workflow_id"}],
+                    "workflow_checkpoints": [{"name": "workflow_id"}],
+                    "runs": [{"name": "workflow_id"}],
+                    "run_human_input_requests": [{"name": "workflow_id"}],
+                    "workflow_operations": [{"name": "workflow_id"}],
+                }
+                return columns[table_name]
+
+            def get_foreign_keys(self, table_name):
+                if table_name == "workflow_operations":
+                    return [
+                        {
+                            "name": "workflow_operations_workflow_id_fkey",
+                            "referred_table": "workflow_executions",
+                            "referred_columns": ["workflow_id"],
+                            "constrained_columns": ["workflow_id"],
+                        }
+                    ]
+                return []
+
+        op_mock = MagicMock()
+        op_mock.get_bind.return_value = bind
+        with patch.object(module, "op", op_mock), patch.object(module.sa, "inspect", return_value=FakeInspector()):
+            module._create_workflow_id_foreign_keys(bind)
+
+        created = [call.args[:3] for call in op_mock.create_foreign_key.call_args_list]
+        self.assertEqual(
+            created,
+            [
+                ("project_install_requests_workflow_id_fkey", "project_install_requests", "workflow_executions"),
+                ("workflow_executions_source_workflow_id_fkey", "workflow_executions", "workflow_executions"),
+                ("workflow_checkpoints_workflow_id_fkey", "workflow_checkpoints", "workflow_executions"),
+                ("runs_workflow_id_fkey", "runs", "workflow_executions"),
+                ("run_human_input_requests_workflow_id_fkey", "run_human_input_requests", "workflow_executions"),
+            ],
+        )
 
     def test_jira_feature_migrations_chain_after_staging_worker_head(self) -> None:
         """Branch-specific migrations chained after staging merge head (20260328_0045)."""
@@ -145,110 +1428,6 @@ class MigrationTests(unittest.TestCase):
             for expected_line in expected_lines:
                 self.assertIn(expected_line, contents)
 
-    def test_run_migrations_repairs_legacy_stream_only_0040_head(self) -> None:
-        with TemporaryDirectory() as tmp_dir:
-            database_url = f"sqlite:///{tmp_dir}/test.db"
-            self._alembic_upgrade(database_url, "20260323_0038")
-
-            engine = create_engine(database_url)
-            with engine.begin() as connection:
-                connection.execute(text("DELETE FROM alembic_version"))
-                connection.execute(text("INSERT INTO alembic_version(version_num) VALUES ('20260327_0040')"))
-                connection.execute(
-                    text(
-                        """
-                        CREATE TABLE run_stream_events (
-                            stream_offset INTEGER PRIMARY KEY,
-                            event_kind VARCHAR(32) NOT NULL,
-                            tenant_id VARCHAR(128) NOT NULL,
-                            project_id VARCHAR(128),
-                            run_id VARCHAR(64),
-                            issue_key VARCHAR(64),
-                            agent_id VARCHAR(128),
-                            event_type VARCHAR(64),
-                            invocation_id VARCHAR(64),
-                            channel VARCHAR(64),
-                            command VARCHAR(128),
-                            working_dir VARCHAR(1024),
-                            stage VARCHAR(64),
-                            attempt INTEGER,
-                            stream VARCHAR(16),
-                            message TEXT,
-                            recorded_at DATETIME NOT NULL
-                        )
-                        """
-                    )
-                )
-                for ddl in (
-                    "CREATE INDEX ix_run_stream_events_event_kind ON run_stream_events (event_kind)",
-                    "CREATE INDEX ix_run_stream_events_tenant_id ON run_stream_events (tenant_id)",
-                    "CREATE INDEX ix_run_stream_events_project_id ON run_stream_events (project_id)",
-                    "CREATE INDEX ix_run_stream_events_run_id ON run_stream_events (run_id)",
-                    "CREATE INDEX ix_run_stream_events_agent_id ON run_stream_events (agent_id)",
-                    "CREATE INDEX ix_run_stream_events_event_type ON run_stream_events (event_type)",
-                    "CREATE INDEX ix_run_stream_events_invocation_id ON run_stream_events (invocation_id)",
-                    "CREATE INDEX ix_run_stream_events_channel ON run_stream_events (channel)",
-                    "CREATE INDEX ix_run_stream_events_command ON run_stream_events (command)",
-                    "CREATE INDEX ix_run_stream_events_stage ON run_stream_events (stage)",
-                    "CREATE INDEX ix_run_stream_events_recorded_at ON run_stream_events (recorded_at)",
-                    "CREATE INDEX ix_run_stream_events_run_id_stream_offset ON run_stream_events (run_id, stream_offset)",
-                    "CREATE INDEX ix_run_stream_events_tenant_id_stream_offset ON run_stream_events (tenant_id, stream_offset)",
-                ):
-                    connection.execute(text(ddl))
-
-            run_migrations(database_url=database_url)
-
-            inspector = inspect(engine)
-            self.assertIn("tenant_users", inspector.get_table_names())
-            self.assertIn("tenant_user_discord_identities", inspector.get_table_names())
-            with engine.begin() as connection:
-                versions = connection.execute(text("SELECT version_num FROM alembic_version")).scalars().all()
-            self.assertEqual(versions, ["20260417_0065"])
-
-    def test_run_migrations_repairs_legacy_stream_only_0039_head(self) -> None:
-        with TemporaryDirectory() as tmp_dir:
-            database_url = f"sqlite:///{tmp_dir}/test.db"
-            self._alembic_upgrade(database_url, "20260323_0038")
-
-            engine = create_engine(database_url)
-            with engine.begin() as connection:
-                connection.execute(text("DELETE FROM alembic_version"))
-                connection.execute(text("INSERT INTO alembic_version(version_num) VALUES ('20260327_0039')"))
-                connection.execute(
-                    text(
-                        """
-                        CREATE TABLE run_stream_events (
-                            stream_offset INTEGER PRIMARY KEY,
-                            event_kind VARCHAR(32) NOT NULL,
-                            tenant_id VARCHAR(128) NOT NULL,
-                            project_id VARCHAR(128),
-                            run_id VARCHAR(64),
-                            issue_key VARCHAR(64),
-                            agent_id VARCHAR(128),
-                            event_type VARCHAR(64),
-                            invocation_id VARCHAR(64),
-                            channel VARCHAR(64),
-                            command VARCHAR(128),
-                            working_dir VARCHAR(1024),
-                            stage VARCHAR(64),
-                            attempt INTEGER,
-                            stream VARCHAR(16),
-                            message TEXT,
-                            recorded_at DATETIME NOT NULL
-                        )
-                        """
-                    )
-                )
-
-            run_migrations(database_url=database_url)
-
-            inspector = inspect(engine)
-            self.assertIn("tenant_users", inspector.get_table_names())
-            self.assertIn("tenant_user_discord_identities", inspector.get_table_names())
-            with engine.begin() as connection:
-                versions = connection.execute(text("SELECT version_num FROM alembic_version")).scalars().all()
-            self.assertEqual(versions, ["20260417_0065"])
-
     def test_run_migrations_repairs_stamp_when_schema_0045_but_version_0044(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             database_url = f"sqlite:///{tmp_dir}/test.db"
@@ -261,7 +1440,7 @@ class MigrationTests(unittest.TestCase):
 
             with engine.begin() as connection:
                 versions = connection.execute(text("SELECT version_num FROM alembic_version")).scalars().all()
-            self.assertEqual(versions, ["20260417_0065"])
+            self.assertEqual(versions, ["20260505_0106"])
 
     def test_run_migrations_disables_alembic_logger_reconfiguration(self) -> None:
         fake_config = MagicMock()
@@ -289,7 +1468,7 @@ class MigrationTests(unittest.TestCase):
             inspector = inspect(engine)
 
             self.assertIn("tenants", inspector.get_table_names())
-            self.assertIn("jira_oauth_connections", inspector.get_table_names())
+            self.assertIn("atlassian_oauth_connections", inspector.get_table_names())
             self.assertIn("runs", inspector.get_table_names())
             self.assertIn("workflow_executions", inspector.get_table_names())
             self.assertIn("workflow_checkpoints", inspector.get_table_names())
@@ -322,6 +1501,7 @@ class MigrationTests(unittest.TestCase):
             self.assertIn("latest_checkpoint_id", workflow_columns)
             self.assertIn("source_workflow_id", workflow_columns)
             self.assertIn("source_run_id", workflow_columns)
+            self.assertIn("source_external_id", workflow_columns)
             self.assertIn("updated_at", workflow_columns)
 
             checkpoint_columns = {column["name"] for column in inspector.get_columns("workflow_checkpoints")}
@@ -562,21 +1742,24 @@ class MigrationTests(unittest.TestCase):
                 },
             )
 
-    def test_run_migrations_accepts_database_stamped_with_merged_20260327_0043(self) -> None:
+    def test_postgres_event_transport_migration_drops_old_tables(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             database_url = f"sqlite:///{tmp_dir}/test.db"
-            run_migrations(database_url=database_url)
-
+            self._alembic_upgrade(database_url, "20260424_0093")
             engine = create_engine(database_url)
-            with engine.begin() as connection:
-                connection.execute(text("UPDATE alembic_version SET version_num = '20260327_0043'"))
+            before = set(inspect(engine).get_table_names())
+            self.assertIn("run_log_events", before)
+            self.assertIn("run_stream_events", before)
+            self.assertIn("audit_events", before)
+            self.assertIn("observability_stream_events", before)
 
-            run_migrations(database_url=database_url)
+            self._alembic_upgrade(database_url, "20260424_0095")
 
-            with engine.begin() as connection:
-                current_revision = connection.execute(text("SELECT version_num FROM alembic_version")).scalar_one()
-
-            self.assertEqual(current_revision, "20260417_0065")
+            inspector = inspect(engine)
+            self.assertNotIn("run_log_events", inspector.get_table_names())
+            self.assertNotIn("run_stream_events", inspector.get_table_names())
+            self.assertNotIn("audit_events", inspector.get_table_names())
+            self.assertNotIn("observability_stream_events", inspector.get_table_names())
 
     def test_run_migrations_rejects_sqlite_without_test_opt_in(self) -> None:
         previous = os.environ.get("ORCHESTRATOR_ALLOW_SQLITE_FOR_TESTS")
@@ -730,7 +1913,7 @@ class MigrationTests(unittest.TestCase):
                         """
                         SELECT workflow_id, status, active_run_id, latest_checkpoint_id
                         FROM workflow_executions
-                        WHERE issue_key = 'GP-184'
+                        WHERE source_ref = 'GP-184'
                         """
                     )
                 ).mappings().one()
@@ -796,7 +1979,7 @@ class MigrationTests(unittest.TestCase):
 
     def test_project_secret_migration_moves_existing_refs_to_project_managed_secrets(self) -> None:
         previous_key = os.environ.get("ORCHESTRATOR_SECRETS_ENCRYPTION_KEY")
-        encryption_key = "MDEyMzQ1Njc4OWFiY2RlZjAxMjM0NTY3ODlhYmNkZWY="
+        encryption_key = urlsafe_b64encode(b"0123456789abcdef0123456789abcdef").decode("ascii")
         try:
             os.environ["ORCHESTRATOR_SECRETS_ENCRYPTION_KEY"] = encryption_key
             get_settings.cache_clear()

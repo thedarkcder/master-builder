@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from orchestrator.core.decision_state_machine import WorkerBlockedOutcome
-from orchestrator.core.decision_state_machine import resolve_worker_blocked_outcome
+from orchestrator.core.decision.state_machine import WorkerBlockedOutcome
+from orchestrator.core.decision.state_machine import resolve_worker_blocked_outcome
 
 
 @dataclass(frozen=True)

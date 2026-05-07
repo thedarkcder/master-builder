@@ -16,7 +16,7 @@ from orchestrator.api.discord.bug.service import (
 )
 from orchestrator.api.discord.ingress import jira_runtime
 from orchestrator.core.config import get_settings
-from orchestrator.core.platform_secret_service import (
+from orchestrator.core.platform.secret_service import (
     PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF,
     resolve_platform_secret_ref,
 )
@@ -117,7 +117,7 @@ def create_discord_bug_issue(
         selected_project_key=selected_project_key,
         tenant_project_keys_fn=tenant_project_keys,
         resolve_discord_channel_name_fn=resolve_discord_channel_name,
-        tenant_jira_oauth_context_fn=jira_runtime.tenant_jira_oauth_context,
+        tenant_atlassian_oauth_context_fn=jira_runtime.tenant_atlassian_oauth_context,
         upload_discord_attachments_to_jira_fn=_upload_attachments,
         settings=settings,
     )

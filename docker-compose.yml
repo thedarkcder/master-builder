@@ -4,6 +4,16 @@ x-extra_hosts_host_gateway: &extra_hosts_host_gateway
   extra_hosts:
     - "host.docker.internal:host-gateway"
 
+x-otel-env: &otel_env
+  ORCHESTRATOR_OTEL_ENABLED: ${ORCHESTRATOR_OTEL_ENABLED:-true}
+  ORCHESTRATOR_OTEL_SERVICE_NAMESPACE: ${ORCHESTRATOR_OTEL_SERVICE_NAMESPACE:-master-builder}
+  ORCHESTRATOR_OTEL_EXPORTER_OTLP_ENDPOINT: ${ORCHESTRATOR_OTEL_EXPORTER_OTLP_ENDPOINT:-http://otel-collector:4318}
+  ORCHESTRATOR_OTEL_TRACES_SAMPLE_RATIO: ${ORCHESTRATOR_OTEL_TRACES_SAMPLE_RATIO:-1.0}
+  ORCHESTRATOR_CLICKHOUSE_HTTP_URL: ${ORCHESTRATOR_CLICKHOUSE_HTTP_URL:-http://clickhouse:8123}
+  ORCHESTRATOR_CLICKHOUSE_DATABASE: ${ORCHESTRATOR_CLICKHOUSE_DATABASE:-master_builder}
+  ORCHESTRATOR_CLICKHOUSE_USERNAME: ${ORCHESTRATOR_CLICKHOUSE_USERNAME:-master_builder}
+  ORCHESTRATOR_CLICKHOUSE_PASSWORD: ${ORCHESTRATOR_CLICKHOUSE_PASSWORD:-master_builder}
+
 services:
   postgres:
     image: pgvector/pgvector:pg16
@@ -34,16 +44,124 @@ services:
       timeout: 5s
       retries: 12
 
-  redis:
-    image: redis:7-alpine
-    container_name: master-builder-redis
+  clickhouse:
+    image: clickhouse/clickhouse-server:24.12
+    container_name: master-builder-clickhouse
+    environment:
+      CLICKHOUSE_DB: ${ORCHESTRATOR_CLICKHOUSE_DATABASE:-master_builder}
+      CLICKHOUSE_USER: ${ORCHESTRATOR_CLICKHOUSE_USERNAME:-master_builder}
+      CLICKHOUSE_PASSWORD: ${ORCHESTRATOR_CLICKHOUSE_PASSWORD:-master_builder}
     ports:
-      - "46379:6379"
+      - "8123:8123"
+      - "9000:9000"
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD-SHELL", "wget --quiet --tries=1 --spider http://127.0.0.1:8123/ping || exit 1"]
       interval: 5s
       timeout: 5s
       retries: 20
+    volumes:
+      - clickhouse-data:/var/lib/clickhouse
+      - ./ops/observability/clickhouse/users.d/master-builder-user.xml:/etc/clickhouse-server/users.d/master-builder-user.xml:ro
+
+  temporal:
+    image: temporalio/auto-setup:1.27.2
+    container_name: master-builder-temporal
+    environment:
+      DB: postgres12
+      DB_PORT: 5432
+      POSTGRES_SEEDS: postgres
+      POSTGRES_USER: ${POSTGRES_USER:-orchestrator}
+      POSTGRES_PWD: ${POSTGRES_PASSWORD:-orchestrator}
+    ports:
+      - "7233:7233"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "IP=$$(hostname -i | awk '{print $$1}'); nc -z \"$$IP\" 7233 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 20
+
+  migrate:
+    <<: *extra_hosts_host_gateway
+    build:
+      context: .
+      dockerfile: orchestrator/Dockerfile
+      target: app-runtime-base
+      args:
+        CODEX_NPM_VERSION: ${CODEX_NPM_VERSION:-latest}
+    container_name: master-builder-migrate
+    restart: "no"
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ORCHESTRATOR_DATABASE_URL: ${ORCHESTRATOR_DATABASE_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
+      POSTGRES_URL: ${POSTGRES_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
+    command:
+      - python
+      - -m
+      - orchestrator
+      - migrate
+
+  otel-collector:
+    image: otel/opentelemetry-collector-contrib:0.122.1
+    container_name: master-builder-otel-collector
+    command: ["--config=/etc/otelcol-contrib/config.yaml"]
+    volumes:
+      - ./ops/observability/otel-collector-config.yaml:/etc/otelcol-contrib/config.yaml:ro
+    ports:
+      - "4317:4317"
+      - "4318:4318"
+      - "9464:9464"
+    depends_on:
+      tempo:
+        condition: service_started
+
+  tempo:
+    image: grafana/tempo:2.8.1
+    container_name: master-builder-tempo
+    command: ["-config.file=/etc/tempo/config.yaml"]
+    volumes:
+      - ./ops/observability/tempo-config.yaml:/etc/tempo/config.yaml:ro
+      - tempo-data:/var/tempo
+    ports:
+      - "3200:3200"
+
+  prometheus:
+    image: prom/prometheus:v3.3.0
+    container_name: master-builder-prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+    volumes:
+      - ./ops/observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus-data:/prometheus
+    ports:
+      - "9090:9090"
+    depends_on:
+      - api
+      - otel-collector
+
+  grafana:
+    image: grafana/grafana:11.6.0
+    container_name: master-builder-grafana
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_ADMIN_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_ADMIN_PASSWORD:-admin}
+      GF_AUTH_ANONYMOUS_ENABLED: ${GRAFANA_ANONYMOUS_ENABLED:-true}
+      GF_AUTH_ANONYMOUS_ORG_ROLE: ${GRAFANA_ANONYMOUS_ORG_ROLE:-Viewer}
+      GF_INSTALL_PLUGINS: grafana-clickhouse-datasource
+    volumes:
+      - ./ops/observability/grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana-data:/var/lib/grafana
+    ports:
+      - "4300:3000"
+    depends_on:
+      - prometheus
+      - tempo
+      - clickhouse
 
   api:
     <<: *extra_hosts_host_gateway
@@ -55,6 +173,7 @@ services:
         CODEX_NPM_VERSION: ${CODEX_NPM_VERSION:-latest}
     container_name: master-builder-api
     environment:
+      <<: *otel_env
       ORCHESTRATOR_ADMIN_USERNAME: ${ORCHESTRATOR_ADMIN_USERNAME:-admin}
       ORCHESTRATOR_ADMIN_PASSWORD: ${ORCHESTRATOR_ADMIN_PASSWORD:?Set ORCHESTRATOR_ADMIN_PASSWORD}
       ORCHESTRATOR_DATABASE_URL: ${ORCHESTRATOR_DATABASE_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
@@ -84,19 +203,27 @@ services:
       ORCHESTRATOR_SENTRY_RELEASE: ${ORCHESTRATOR_SENTRY_RELEASE:-}
       ORCHESTRATOR_SENTRY_TRACES_SAMPLE_RATE: ${ORCHESTRATOR_SENTRY_TRACES_SAMPLE_RATE:-0.0}
       ORCHESTRATOR_PROJECT_REPO_CHECKOUT_BASE_DIR: /tmp/master-builder-project-repos
-      ORCHESTRATOR_REDIS_URL: ${ORCHESTRATOR_REDIS_URL:-redis://redis:6379/0}
-      ORCHESTRATOR_LOG_BUS_ENABLED: ${ORCHESTRATOR_LOG_BUS_ENABLED:-true}
       ORCHESTRATOR_WORKER_CAPABILITIES: ${ORCHESTRATOR_WORKER_CAPABILITIES:-linux}
       ORCHESTRATOR_API_WORKERS: ${ORCHESTRATOR_API_WORKERS:-4}
+      ORCHESTRATOR_ORCHESTRATION_BACKEND: ${ORCHESTRATOR_ORCHESTRATION_BACKEND:-legacy}
+      ORCHESTRATOR_TEMPORAL_TARGET_HOST: ${ORCHESTRATOR_TEMPORAL_TARGET_HOST:-temporal:7233}
+      ORCHESTRATOR_TEMPORAL_NAMESPACE: ${ORCHESTRATOR_TEMPORAL_NAMESPACE:-default}
+      ORCHESTRATOR_TEMPORAL_TASK_QUEUE: ${ORCHESTRATOR_TEMPORAL_TASK_QUEUE:-master-builder}
     ports:
       - "4000:4000"
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       mailpit:
         condition: service_healthy
       postgres:
         condition: service_healthy
-      redis:
+      clickhouse:
         condition: service_healthy
+      temporal:
+        condition: service_started
+      otel-collector:
+        condition: service_started
     healthcheck:
       test:
         - CMD-SHELL
@@ -110,7 +237,6 @@ services:
       - -ceu
       - |
         if [ -f /app/AGENTS.md ]; then cp /app/AGENTS.md /root/AGENTS.md; fi
-        python -m orchestrator migrate
         uvicorn orchestrator.api.main:app --host 0.0.0.0 --port 4000 --workers "${ORCHESTRATOR_API_WORKERS:-4}"
     volumes:
       - codex-home:/root/.codex
@@ -127,13 +253,18 @@ services:
     container_name: master-builder-run-worker
     restart: unless-stopped
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       api:
         condition: service_started
       postgres:
         condition: service_healthy
-      redis:
+      clickhouse:
         condition: service_healthy
+      otel-collector:
+        condition: service_started
     environment:
+      <<: *otel_env
       ORCHESTRATOR_ADMIN_USERNAME: ${ORCHESTRATOR_ADMIN_USERNAME:-admin}
       ORCHESTRATOR_ADMIN_PASSWORD: ${ORCHESTRATOR_ADMIN_PASSWORD:?Set ORCHESTRATOR_ADMIN_PASSWORD}
       ORCHESTRATOR_DATABASE_URL: ${ORCHESTRATOR_DATABASE_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
@@ -149,6 +280,10 @@ services:
       ORCHESTRATOR_SENTRY_RELEASE: ${ORCHESTRATOR_SENTRY_RELEASE:-}
       ORCHESTRATOR_SENTRY_TRACES_SAMPLE_RATE: ${ORCHESTRATOR_SENTRY_TRACES_SAMPLE_RATE:-0.0}
       ORCHESTRATOR_PROJECT_REPO_CHECKOUT_BASE_DIR: /tmp/master-builder-project-repos
+      ORCHESTRATOR_ORCHESTRATION_BACKEND: ${ORCHESTRATOR_ORCHESTRATION_BACKEND:-legacy}
+      ORCHESTRATOR_TEMPORAL_TARGET_HOST: ${ORCHESTRATOR_TEMPORAL_TARGET_HOST:-temporal:7233}
+      ORCHESTRATOR_TEMPORAL_NAMESPACE: ${ORCHESTRATOR_TEMPORAL_NAMESPACE:-default}
+      ORCHESTRATOR_TEMPORAL_TASK_QUEUE: ${ORCHESTRATOR_TEMPORAL_TASK_QUEUE:-master-builder}
       HF_HOME: /root/.cache/huggingface
       HF_HUB_OFFLINE: ${HF_HUB_OFFLINE:-1}
     command:
@@ -156,7 +291,6 @@ services:
       - -ceu
       - |
         if [ -f /app/AGENTS.md ]; then cp /app/AGENTS.md /root/AGENTS.md; fi
-        python -m orchestrator migrate
         HF_HUB_OFFLINE=0 python -m orchestrator knowledge-prewarm
         python -m orchestrator worker-runs
     volumes:
@@ -175,13 +309,18 @@ services:
     container_name: master-builder-webhook-worker
     restart: unless-stopped
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       api:
         condition: service_started
       mailpit:
         condition: service_healthy
       postgres:
         condition: service_healthy
+      otel-collector:
+        condition: service_started
     environment:
+      <<: *otel_env
       ORCHESTRATOR_ADMIN_USERNAME: ${ORCHESTRATOR_ADMIN_USERNAME:-admin}
       ORCHESTRATOR_ADMIN_PASSWORD: ${ORCHESTRATOR_ADMIN_PASSWORD:?Set ORCHESTRATOR_ADMIN_PASSWORD}
       ORCHESTRATOR_DATABASE_URL: ${ORCHESTRATOR_DATABASE_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
@@ -208,6 +347,10 @@ services:
       ORCHESTRATOR_SENTRY_RELEASE: ${ORCHESTRATOR_SENTRY_RELEASE:-}
       ORCHESTRATOR_SENTRY_TRACES_SAMPLE_RATE: ${ORCHESTRATOR_SENTRY_TRACES_SAMPLE_RATE:-0.0}
       ORCHESTRATOR_PROJECT_REPO_CHECKOUT_BASE_DIR: /tmp/master-builder-project-repos
+      ORCHESTRATOR_ORCHESTRATION_BACKEND: ${ORCHESTRATOR_ORCHESTRATION_BACKEND:-legacy}
+      ORCHESTRATOR_TEMPORAL_TARGET_HOST: ${ORCHESTRATOR_TEMPORAL_TARGET_HOST:-temporal:7233}
+      ORCHESTRATOR_TEMPORAL_NAMESPACE: ${ORCHESTRATOR_TEMPORAL_NAMESPACE:-default}
+      ORCHESTRATOR_TEMPORAL_TASK_QUEUE: ${ORCHESTRATOR_TEMPORAL_TASK_QUEUE:-master-builder}
       HF_HOME: /root/.cache/huggingface
       HF_HUB_OFFLINE: ${HF_HUB_OFFLINE:-1}
 
@@ -216,7 +359,6 @@ services:
       - -ceu
       - |
         if [ -f /app/AGENTS.md ]; then cp /app/AGENTS.md /root/AGENTS.md; fi
-        python -m orchestrator migrate
         HF_HUB_OFFLINE=0 python -m orchestrator voice-prewarm
         python -m orchestrator worker-webhooks
     volumes:
@@ -237,13 +379,20 @@ services:
     container_name: master-builder-project-automation
     restart: unless-stopped
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       api:
         condition: service_started
       postgres:
         condition: service_healthy
-      redis:
+      clickhouse:
         condition: service_healthy
+      temporal:
+        condition: service_started
+      otel-collector:
+        condition: service_started
     environment:
+      <<: *otel_env
       ORCHESTRATOR_ADMIN_USERNAME: ${ORCHESTRATOR_ADMIN_USERNAME:-admin}
       ORCHESTRATOR_ADMIN_PASSWORD: ${ORCHESTRATOR_ADMIN_PASSWORD:?Set ORCHESTRATOR_ADMIN_PASSWORD}
       ORCHESTRATOR_DATABASE_URL: ${ORCHESTRATOR_DATABASE_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
@@ -264,7 +413,6 @@ services:
       - -ceu
       - |
         if [ -f /app/AGENTS.md ]; then cp /app/AGENTS.md /root/AGENTS.md; fi
-        python -m orchestrator migrate
         python -m orchestrator project-automation
     volumes:
       - codex-home:/root/.codex
@@ -281,9 +429,16 @@ services:
         LIBDAVE_FORCE_BUILD: ${LIBDAVE_FORCE_BUILD:-0}
     container_name: master-builder-discord-gateway
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+      otel-collector:
+        condition: service_started
     environment:
+      <<: *otel_env
       ORCHESTRATOR_DATABASE_URL: ${ORCHESTRATOR_DATABASE_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
       POSTGRES_URL: ${POSTGRES_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
       ORCHESTRATOR_SECRETS_ENCRYPTION_KEY: ${ORCHESTRATOR_SECRETS_ENCRYPTION_KEY:?Set ORCHESTRATOR_SECRETS_ENCRYPTION_KEY}
@@ -294,12 +449,15 @@ services:
       ORCHESTRATOR_PROJECT_REPO_CHECKOUT_BASE_DIR: /tmp/master-builder-project-repos
       HF_HOME: /root/.cache/huggingface
       HF_HUB_OFFLINE: ${HF_HUB_OFFLINE:-1}
+      ORCHESTRATOR_ORCHESTRATION_BACKEND: ${ORCHESTRATOR_ORCHESTRATION_BACKEND:-legacy}
+      ORCHESTRATOR_TEMPORAL_TARGET_HOST: ${ORCHESTRATOR_TEMPORAL_TARGET_HOST:-temporal:7233}
+      ORCHESTRATOR_TEMPORAL_NAMESPACE: ${ORCHESTRATOR_TEMPORAL_NAMESPACE:-default}
+      ORCHESTRATOR_TEMPORAL_TASK_QUEUE: ${ORCHESTRATOR_TEMPORAL_TASK_QUEUE:-master-builder}
     command:
       - /bin/sh
       - -ceu
       - |
         if [ -f /app/AGENTS.md ]; then cp /app/AGENTS.md /root/AGENTS.md; fi
-        python -m orchestrator migrate
         HF_HUB_OFFLINE=0 python -m orchestrator voice-prewarm
         python -m orchestrator discord-gateway
     volumes:
@@ -307,6 +465,55 @@ services:
       - ./.workdirs:/tmp/master-builder-project-repos
       - huggingface-cache:/root/.cache/huggingface
       - pocket-tts-cache:/root/.cache/pocket_tts
+
+  temporal-worker:
+    <<: *extra_hosts_host_gateway
+    build:
+      context: .
+      dockerfile: orchestrator/Dockerfile
+      target: app-runtime-base
+      args:
+        CODEX_NPM_VERSION: ${CODEX_NPM_VERSION:-latest}
+    container_name: master-builder-temporal-worker
+    restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      api:
+        condition: service_started
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+      temporal:
+        condition: service_started
+      otel-collector:
+        condition: service_started
+    environment:
+      <<: *otel_env
+      ORCHESTRATOR_ADMIN_USERNAME: ${ORCHESTRATOR_ADMIN_USERNAME:-admin}
+      ORCHESTRATOR_ADMIN_PASSWORD: ${ORCHESTRATOR_ADMIN_PASSWORD:?Set ORCHESTRATOR_ADMIN_PASSWORD}
+      ORCHESTRATOR_DATABASE_URL: ${ORCHESTRATOR_DATABASE_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
+      POSTGRES_URL: ${POSTGRES_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
+      ORCHESTRATOR_PUBLIC_API_BASE_URL: ${ORCHESTRATOR_PUBLIC_API_BASE_URL:-http://localhost:4000}
+      ORCHESTRATOR_ADMIN_UI_BASE_URL: ${ORCHESTRATOR_ADMIN_UI_BASE_URL:-http://localhost:4100}
+      ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET: ${ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET:?Set ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET}
+      ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET: ${ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET:?Set ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET}
+      ORCHESTRATOR_SECRETS_ENCRYPTION_KEY: ${ORCHESTRATOR_SECRETS_ENCRYPTION_KEY:?Set ORCHESTRATOR_SECRETS_ENCRYPTION_KEY}
+      ORCHESTRATOR_CODEX_SANDBOX_MODE: ${ORCHESTRATOR_CODEX_SANDBOX_MODE:-danger-full-access}
+      ORCHESTRATOR_ORCHESTRATION_BACKEND: ${ORCHESTRATOR_ORCHESTRATION_BACKEND:-legacy}
+      ORCHESTRATOR_TEMPORAL_TARGET_HOST: ${ORCHESTRATOR_TEMPORAL_TARGET_HOST:-temporal:7233}
+      ORCHESTRATOR_TEMPORAL_NAMESPACE: ${ORCHESTRATOR_TEMPORAL_NAMESPACE:-default}
+      ORCHESTRATOR_TEMPORAL_TASK_QUEUE: ${ORCHESTRATOR_TEMPORAL_TASK_QUEUE:-master-builder}
+    command:
+      - /bin/sh
+      - -ceu
+      - |
+        if [ -f /app/AGENTS.md ]; then cp /app/AGENTS.md /root/AGENTS.md; fi
+        python -m orchestrator temporal-worker
+    volumes:
+      - codex-home:/root/.codex
+      - ./.workdirs:/tmp/master-builder-project-repos
 
   discord-live-voice:
     <<: *extra_hosts_host_gateway
@@ -319,9 +526,16 @@ services:
         LIBDAVE_FORCE_BUILD: ${LIBDAVE_FORCE_BUILD:-0}
     container_name: master-builder-discord-live-voice
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+      otel-collector:
+        condition: service_started
     environment:
+      <<: *otel_env
       ORCHESTRATOR_DATABASE_URL: ${ORCHESTRATOR_DATABASE_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
       POSTGRES_URL: ${POSTGRES_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
       ORCHESTRATOR_SECRETS_ENCRYPTION_KEY: ${ORCHESTRATOR_SECRETS_ENCRYPTION_KEY:?Set ORCHESTRATOR_SECRETS_ENCRYPTION_KEY}
@@ -340,7 +554,6 @@ services:
       - -ceu
       - |
         if [ -f /app/AGENTS.md ]; then cp /app/AGENTS.md /root/AGENTS.md; fi
-        python -m orchestrator migrate
         HF_HUB_OFFLINE=0 python -m orchestrator voice-prewarm
         python -m orchestrator discord-live-voice
     volumes:
@@ -359,9 +572,16 @@ services:
         CODEX_NPM_VERSION: ${CODEX_NPM_VERSION:-latest}
     container_name: master-builder-knowledge-sync
     depends_on:
+      migrate:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+      otel-collector:
+        condition: service_started
     environment:
+      <<: *otel_env
       ORCHESTRATOR_DATABASE_URL: ${ORCHESTRATOR_DATABASE_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
       POSTGRES_URL: ${POSTGRES_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
       ORCHESTRATOR_SECRETS_ENCRYPTION_KEY: ${ORCHESTRATOR_SECRETS_ENCRYPTION_KEY:?Set ORCHESTRATOR_SECRETS_ENCRYPTION_KEY}
@@ -382,7 +602,6 @@ services:
       - -ceu
       - |
         if [ -f /app/AGENTS.md ]; then cp /app/AGENTS.md /root/AGENTS.md; fi
-        python -m orchestrator migrate
         HF_HUB_OFFLINE=0 python -m orchestrator knowledge-prewarm
         python -m orchestrator knowledge-jira-sync
     volumes:
@@ -433,3 +652,7 @@ volumes:
   codex-home:
   huggingface-cache:
   pocket-tts-cache:
+  grafana-data:
+  clickhouse-data:
+  prometheus-data:
+  tempo-data:

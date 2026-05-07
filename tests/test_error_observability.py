@@ -3,8 +3,8 @@ import sys
 import unittest
 from unittest.mock import patch
 
-from orchestrator.core.error_observability import emit_hard_error
-from orchestrator.core.observability import reset_log_context, set_log_context
+from orchestrator.core.observability.error import emit_hard_error
+from orchestrator.core.observability.otel import reset_log_context, set_log_context
 
 
 class ErrorObservabilityTests(unittest.TestCase):

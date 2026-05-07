@@ -2,7 +2,7 @@ import json
 import logging
 import unittest
 
-from orchestrator.core.observability import (
+from orchestrator.core.observability.otel import (
     ObservabilityJsonFormatter,
     REQUIRED_LOG_FIELDS,
     current_log_context,
@@ -37,6 +37,8 @@ class ObservabilityContractTests(unittest.TestCase):
         self.assertEqual(payload["event_type"], "contract_check")
         self.assertEqual(payload["environment"], "test")
         self.assertEqual(payload["platform_version"], "v-test")
+        self.assertIn("trace_id", payload)
+        self.assertIn("span_id", payload)
 
     def test_context_is_applied_and_reset(self) -> None:
         tokens = set_log_context(correlation_id="cid-1", tenant_id="tenant-1", project_id="project-1", agent_id="agent-1")
@@ -86,6 +88,8 @@ class ObservabilityContractTests(unittest.TestCase):
         self.assertEqual(payload["tenant_id"], "")
         self.assertEqual(payload["project_id"], "")
         self.assertEqual(payload["correlation_id"], "")
+        self.assertEqual(payload["trace_id"], "")
+        self.assertEqual(payload["span_id"], "")
         self.assertEqual(payload["agent_id"], "api")
 
     def test_scoped_log_context_applies_and_resets_context(self) -> None:

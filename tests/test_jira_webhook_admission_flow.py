@@ -9,10 +9,10 @@ from orchestrator.api.webhooks.jira_admission_flow import plan_jira_run_flow
 from orchestrator.api.webhooks.jira_webhook_types import jira_webhook_response
 from orchestrator.api.webhooks.jira_webhook_types import JiraWebhookContext
 from orchestrator.core.config import get_settings
-from orchestrator.core.decision_gate import DecisionGateResult
+from orchestrator.core.decision.gate import DecisionGateResult
 from orchestrator.core.gtd import GoodToDoValidationResult
-from orchestrator.core.pre_run_check import PreRunCheckResult
-from orchestrator.core.precheck_question_lock import build_precheck_questions_block
+from orchestrator.core.precheck.pre_run_check import PreRunCheckResult
+from orchestrator.core.precheck.question_lock import build_precheck_questions_block
 from orchestrator.storage.models import Project, Tenant
 from tests.test_support.jira_webhook_harness import JiraWebhookHarness
 from tests.workflow_test_support import add_run_with_workflow, make_run
@@ -178,7 +178,7 @@ class JiraWebhookAdmissionFlowTests(JiraWebhookHarness):
                     return_value=decision_result,
                 ), patch.object(
                     jira_admission_flow,
-                    "tenant_jira_oauth_context",
+                    "tenant_atlassian_oauth_context",
                     return_value=oauth_context,
                 ):
                     result = jira_admission_flow.evaluate_precheck_decision_with_labels(
@@ -253,7 +253,7 @@ class JiraWebhookAdmissionFlowTests(JiraWebhookHarness):
                     return_value=decision_result,
                 ), patch.object(
                     jira_admission_flow,
-                    "tenant_jira_oauth_context",
+                    "tenant_atlassian_oauth_context",
                     return_value=oauth_context,
                 ):
                     result = jira_admission_flow.evaluate_precheck_decision_with_labels(
@@ -303,7 +303,7 @@ class JiraWebhookAdmissionFlowTests(JiraWebhookHarness):
 
         with (
             patch(
-                "orchestrator.api.webhooks.jira_admission_flow.tenant_jira_oauth_context",
+                "orchestrator.api.webhooks.jira_admission_flow.tenant_atlassian_oauth_context",
                 return_value=oauth_context,
             ),
             patch(

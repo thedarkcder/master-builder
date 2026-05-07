@@ -11,7 +11,6 @@ from orchestrator.api.admin.config_helpers import (
 from orchestrator.api.admin.route_helpers import (
     admin_project_service,
     allocate_tenant_id,
-    provision_jira_webhook,
     reconcile_tenant_projects,
     with_managed_github_refs,
     with_preserved_jira_system_fields,
@@ -29,7 +28,6 @@ from orchestrator.api.admin.tenant_crud import (
     delete_tenant as delete_tenant_impl,
     get_tenant_or_404 as get_tenant_or_404_impl,
     set_tenant_archive_state as set_tenant_archive_state_impl,
-    update_tenant as update_tenant_impl,
 )
 from orchestrator.api.admin.tenant_project_routes_service import (
     create_project as create_project_route_impl,
@@ -39,9 +37,14 @@ from orchestrator.api.admin.tenant_project_routes_service import (
     get_tenant as get_tenant_route_impl,
     list_projects as list_projects_route_impl,
     list_tenants as list_tenants_route_impl,
+    resolve_project_jira_run_board as resolve_project_jira_run_board_route_impl,
     set_tenant_archive_state as set_tenant_archive_state_route_impl,
-    update_project as update_project_route_impl,
-    update_tenant as update_tenant_route_impl,
+    update_project_archive_state as update_project_archive_state_route_impl,
+    update_project_configuration as update_project_configuration_route_impl,
+    update_project_discord as update_project_discord_route_impl,
+    update_project_environment as update_project_environment_route_impl,
+    update_project_policy as update_project_policy_route_impl,
+    update_project_secret_refs as update_project_secret_refs_route_impl,
 )
 from orchestrator.api.routes.app_auth import invite_to_schema
 from orchestrator.api.dependencies import get_session
@@ -52,14 +55,19 @@ from orchestrator.api.schemas import (
     ProjectAutomationRead,
     ProjectAutomationsRead,
     ProjectAutomationsWrite,
+    ProjectArchiveUpdate,
+    ProjectConfigurationUpdate,
+    ProjectDiscordUpdate,
+    ProjectEnvironmentUpdate,
     ProjectInstallRead,
     ProjectInstallRequestRead,
     ProjectInstallRequestUpdate,
     ProjectInstallRequestsRead,
     ProjectInstallsRead,
     ProjectInstallWrite,
+    ProjectPolicyUpdate,
     ProjectRead,
-    ProjectUpdate,
+    ProjectSecretRefsUpdate,
     TenantDeliverySummaryRead,
     TenantDiscordIdentityRead,
     TenantDiscordInviteRead,
@@ -75,9 +83,8 @@ from orchestrator.api.schemas import (
     TenantTeamUpdate,
     TenantCreate,
     TenantRead,
-    TenantUpdate,
 )
-from orchestrator.core.install_registry_service import (
+from orchestrator.core.platform.install_registry_service import (
     ProjectInstallWrite as ServiceProjectInstallWrite,
     create_project_install,
     delete_project_install,
@@ -85,7 +92,7 @@ from orchestrator.core.install_registry_service import (
     list_project_installs,
     update_project_install,
 )
-from orchestrator.core.install_request_service import (
+from orchestrator.core.platform.install_request_service import (
     get_project_install_request,
     list_project_install_requests,
     update_install_request_status,
@@ -98,13 +105,13 @@ from orchestrator.core.discord.oauth import (
     issue_discord_oauth_state,
 )
 from orchestrator.core.discord.oauth_config import resolve_discord_oauth_config
-from orchestrator.core.email_delivery import EmailDeliveryError
+from orchestrator.core.platform.email_delivery import EmailDeliveryError
 from orchestrator.core.invites import email_delivery
-from orchestrator.core.platform_secret_service import (
+from orchestrator.core.platform.secret_service import (
     PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF,
     resolve_platform_secret_ref,
 )
-from orchestrator.core.project_automation_service import (
+from orchestrator.core.projects.automation_service import (
     enqueue_project_automation_run_now,
     ProjectAutomationWrite as ServiceProjectAutomationWrite,
     list_execution_history,
@@ -120,14 +127,13 @@ from orchestrator.core.security import (
     require_tenant_membership,
     require_tenant_permission,
 )
-from orchestrator.core.tenant_access import (
+from orchestrator.core.platform.access import (
     KNOWN_PERMISSION_KEYS,
     PERMISSION_PEOPLE_MANAGE,
     PERMISSION_PROJECTS_MANAGE,
-    PERMISSION_WORKSPACE_MANAGE,
     normalize_permission_keys,
 )
-from orchestrator.core.tenant_users import (
+from orchestrator.core.platform.users import (
     create_team,
     create_invite,
     ensure_team_ids_exist,
@@ -300,14 +306,12 @@ def create_tenant(
     return create_tenant_route_impl(
         session=session,
         payload=payload,
-        settings=get_settings(),
         validate_codex_assets_for_tenant_init_fn=_validate_codex_assets_for_tenant_init,
         create_tenant_fn=create_tenant_impl,
         allocate_tenant_id_fn=allocate_tenant_id,
         with_preserved_jira_system_fields_fn=with_preserved_jira_system_fields,
         with_managed_github_refs_fn=with_managed_github_refs,
         with_preserved_discord_system_fields_fn=with_preserved_discord_system_fields,
-        provision_jira_webhook_fn=provision_jira_webhook,
         reconcile_tenant_projects_fn=reconcile_tenant_projects,
         tenant_to_schema_fn=tenant_to_schema,
     )
@@ -324,28 +328,6 @@ def get_tenant(
         session=session,
         tenant_id=tenant_id,
         get_tenant_or_404_fn=get_tenant_or_404_impl,
-        tenant_to_schema_fn=tenant_to_schema,
-    )
-
-
-@router.put("/tenants/{tenant_id}", response_model=TenantRead)
-def update_tenant(
-    tenant_id: str,
-    payload: TenantUpdate,
-    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
-    session: Session = Depends(get_session),
-) -> TenantRead:
-    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_WORKSPACE_MANAGE)
-    return update_tenant_route_impl(
-        session=session,
-        tenant_id=tenant_id,
-        payload=payload,
-        validate_codex_assets_for_tenant_init_fn=_validate_codex_assets_for_tenant_init,
-        update_tenant_fn=update_tenant_impl,
-        with_preserved_jira_system_fields_fn=with_preserved_jira_system_fields,
-        with_managed_github_refs_fn=with_managed_github_refs,
-        with_preserved_discord_system_fields_fn=with_preserved_discord_system_fields,
-        reconcile_tenant_projects_fn=reconcile_tenant_projects,
         tenant_to_schema_fn=tenant_to_schema,
     )
 
@@ -846,20 +828,126 @@ def get_project(
     )  # type: ignore[return-value]
 
 
-@router.put("/tenants/{tenant_id}/projects/{project_id}", response_model=ProjectRead)
-def update_project(
+@router.patch("/tenants/{tenant_id}/projects/{project_id}/configuration", response_model=ProjectRead)
+def update_project_configuration(
     tenant_id: str,
     project_id: str,
-    payload: ProjectUpdate,
+    payload: ProjectConfigurationUpdate,
     principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
     session: Session = Depends(get_session),
 ) -> ProjectRead:
     require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
-    return update_project_route_impl(
+    return update_project_configuration_route_impl(
         session=session,
         tenant_id=tenant_id,
         project_id=project_id,
         payload=payload,
+        admin_project_service_factory=admin_project_service,
+    )  # type: ignore[return-value]
+
+
+@router.patch("/tenants/{tenant_id}/projects/{project_id}/policy", response_model=ProjectRead)
+def update_project_policy(
+    tenant_id: str,
+    project_id: str,
+    payload: ProjectPolicyUpdate,
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
+    session: Session = Depends(get_session),
+) -> ProjectRead:
+    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
+    return update_project_policy_route_impl(
+        session=session,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        payload=payload,
+        admin_project_service_factory=admin_project_service,
+    )  # type: ignore[return-value]
+
+
+@router.patch("/tenants/{tenant_id}/projects/{project_id}/environment", response_model=ProjectRead)
+def update_project_environment(
+    tenant_id: str,
+    project_id: str,
+    payload: ProjectEnvironmentUpdate,
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
+    session: Session = Depends(get_session),
+) -> ProjectRead:
+    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
+    return update_project_environment_route_impl(
+        session=session,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        payload=payload,
+        admin_project_service_factory=admin_project_service,
+    )  # type: ignore[return-value]
+
+
+@router.patch("/tenants/{tenant_id}/projects/{project_id}/secrets", response_model=ProjectRead)
+def update_project_secret_refs(
+    tenant_id: str,
+    project_id: str,
+    payload: ProjectSecretRefsUpdate,
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
+    session: Session = Depends(get_session),
+) -> ProjectRead:
+    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
+    return update_project_secret_refs_route_impl(
+        session=session,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        payload=payload,
+        admin_project_service_factory=admin_project_service,
+    )  # type: ignore[return-value]
+
+
+@router.patch("/tenants/{tenant_id}/projects/{project_id}/discord", response_model=ProjectRead)
+def update_project_discord(
+    tenant_id: str,
+    project_id: str,
+    payload: ProjectDiscordUpdate,
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
+    session: Session = Depends(get_session),
+) -> ProjectRead:
+    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
+    return update_project_discord_route_impl(
+        session=session,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        payload=payload,
+        admin_project_service_factory=admin_project_service,
+    )  # type: ignore[return-value]
+
+
+@router.patch("/tenants/{tenant_id}/projects/{project_id}/archive", response_model=ProjectRead)
+def update_project_archive_state(
+    tenant_id: str,
+    project_id: str,
+    payload: ProjectArchiveUpdate,
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
+    session: Session = Depends(get_session),
+) -> ProjectRead:
+    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
+    return update_project_archive_state_route_impl(
+        session=session,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        payload=payload,
+        admin_project_service_factory=admin_project_service,
+    )  # type: ignore[return-value]
+
+
+@router.post("/tenants/{tenant_id}/projects/{project_id}/jira/resolve-run-board", response_model=ProjectRead)
+def resolve_project_jira_run_board(
+    tenant_id: str,
+    project_id: str,
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
+    session: Session = Depends(get_session),
+) -> ProjectRead:
+    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
+    return resolve_project_jira_run_board_route_impl(
+        session=session,
+        tenant_id=tenant_id,
+        project_id=project_id,
         admin_project_service_factory=admin_project_service,
     )  # type: ignore[return-value]
 

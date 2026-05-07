@@ -3,8 +3,8 @@ from __future__ import annotations
 from datetime import timedelta
 
 from orchestrator.api.schemas import AlertEvaluationRead, AlertRead
-from orchestrator.core.alerting import AlertCandidate, alert_dedup_registry, utcnow
-from orchestrator.core.tenant_operational_health_service import list_enabled_tenant_operational_health
+from orchestrator.core.observability.alerting import AlertCandidate, alert_dedup_registry, utcnow
+from orchestrator.core.platform.operational_health_service import list_enabled_tenant_operational_health
 from orchestrator.storage.models import Run
 
 
@@ -17,7 +17,7 @@ def _tenant_candidates(*, snapshot) -> list[AlertCandidate]:  # noqa: ANN001
                 severity="HIGH",
                 scope_type="tenant",
                 scope_id=snapshot.tenant_id,
-                reason="Jira integration is not connected.",
+                reason="Atlassian integration is not connected.",
             )
         )
     if not snapshot.integrations.github_connected:
