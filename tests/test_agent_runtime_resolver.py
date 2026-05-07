@@ -3,7 +3,7 @@ from __future__ import annotations
 import unittest
 from types import SimpleNamespace
 
-from orchestrator.core.agent_runtime_resolver import _resolve_agent_execution_profiles
+from orchestrator.core.runtime.agent_runtime_resolver import _resolve_agent_execution_profiles
 from orchestrator.core.config import Settings
 
 

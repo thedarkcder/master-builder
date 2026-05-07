@@ -1,8 +1,8 @@
 from __future__ import annotations
 
-from orchestrator.core.platform_secret_service import resolve_platform_secret_ref
-from orchestrator.core.run_human_input_service import answered_human_inputs_for_attempt
-from orchestrator.core.tenant_secret_service import resolve_scoped_secret_ref
+from orchestrator.core.platform.secret_service import resolve_platform_secret_ref
+from orchestrator.core.runs.human_input_service import answered_human_inputs_for_attempt
+from orchestrator.core.platform.tenant_secret_service import resolve_scoped_secret_ref
 from orchestrator.core.worker.repo_setup_service import prepare_execution_repo_for_run
 from orchestrator.core.worker.workflow_request_factory import (
     _entry_checkpoint,

@@ -18,8 +18,8 @@ from orchestrator.core.communications import (
 )
 from orchestrator.core.communications.integration_contracts import TransportActionExecutor
 from orchestrator.core.discord.transport_executor import DiscordTransportExecutor
-from orchestrator.core.observability import current_log_context
-from orchestrator.core.platform_secret_service import (
+from orchestrator.core.observability.otel import current_log_context
+from orchestrator.core.platform.secret_service import (
     PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF,
     resolve_platform_secret_ref,
 )

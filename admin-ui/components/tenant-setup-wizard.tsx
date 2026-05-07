@@ -53,7 +53,7 @@ export function TenantSetupWizard({ stepKey }: { stepKey: WizardStepKey }) {
     selectedProjectKeys,
     nextStep,
     previousStep,
-    startJiraOAuth,
+    startAtlassianOAuth,
     loadJiraProjectsForConnection,
     toggleJiraProject,
     startGitHubInstallFlow,
@@ -123,7 +123,7 @@ export function TenantSetupWizard({ stepKey }: { stepKey: WizardStepKey }) {
                   selectedProjectKeys={selectedProjectKeys}
                   onProjectKeysTextChange={(value) => setTextFields((prev) => ({ ...prev, projectKeysText: value }))}
                   onToggleJiraProject={toggleJiraProject}
-                  onStartJiraConnect={() => void startJiraOAuth()}
+                  onStartJiraConnect={() => void startAtlassianOAuth()}
                   onLoadJiraProjects={() => void loadJiraProjectsForConnection()}
                 />
               ) : null}

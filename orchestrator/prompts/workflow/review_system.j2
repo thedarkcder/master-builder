@@ -12,9 +12,9 @@ If a tool call fails or returns unavailable, treat that as advisory context and 
 Only use outcome="blocked" for a true terminal constraint the runner cannot remediate.
 Before returning outcome="waiting_for_input", request the needed transient input with `run.request_human_input` unless a matching answered transient input is already present in context.
 Failing tests, product bugs, incomplete implementation, and review findings must stay remediable and use outcome="failed".
-Return strict JSON only with keys: outcome, summary, feedback, pr_url, blocker_message.
-`outcome` must be exactly one of: continue, waiting_for_input, blocked, failed.
 When `feedback` or `blocker_message` describes a blocked or failed outcome, include a short `Troubleshooting:` section with 1-3 concrete operator actions grounded in the observed evidence.
+Return JSON matching this domain model:
+{{ domain_model | tojson(indent=2) }}
 Use:
 - continue: releasable now and PR is ready.
 - failed: remediable issues exist and the workflow should return to Dev.

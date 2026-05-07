@@ -15,7 +15,7 @@ from cryptography.fernet import Fernet
 
 from orchestrator.cli import main as cli_main
 from orchestrator.core.config import get_settings
-from orchestrator.core.secrets import encrypt_value
+from orchestrator.core.platform.secrets import encrypt_value
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
 from orchestrator.storage.models import (
@@ -23,7 +23,7 @@ from orchestrator.storage.models import (
     DecisionCase,
     DecisionCycle,
     DecisionEvidence,
-    JiraOAuthConnection,
+    AtlassianOAuthConnection,
     Project,
     Tenant,
 )
@@ -103,7 +103,7 @@ class AgentToolCliRuntimeTests(unittest.TestCase):
                 created_at=now,
                 updated_at=now,
             )
-            connection = JiraOAuthConnection(
+            connection = AtlassianOAuthConnection(
                 connection_id="conn-1",
                 account_id="account-1",
                 account_email="test@example.com",
@@ -253,8 +253,8 @@ class AgentToolCliRuntimeTests(unittest.TestCase):
         )
 
         with (
-            patch("orchestrator.core.agent_tools.jira_oauth_client", return_value=fake_client),
-            patch("orchestrator.core.agent_tools.refresh_jira_connection_tokens", return_value="access-token"),
+            patch("orchestrator.core.runtime.tools.atlassian_oauth_client", return_value=fake_client),
+            patch("orchestrator.core.runtime.tools.refresh_atlassian_connection_tokens", return_value="access-token"),
         ):
             exit_code, payload = self._invoke_agent_tool(
                 tool_name="jira.get_issue",

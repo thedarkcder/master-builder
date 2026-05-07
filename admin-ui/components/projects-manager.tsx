@@ -7,8 +7,9 @@ import type {
   GitHubRepositoryRecord,
   JiraProjectRecord,
   ProjectCreatePayload,
+  ProjectConfigurationUpdatePayload,
   ProjectRecord,
-  ProjectUpdatePayload
+  ProjectArchiveUpdatePayload
 } from "@/lib/api";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -22,7 +23,8 @@ type Props = {
   busy: boolean;
   onRefreshOptions: () => void;
   onCreateProject: (payload: ProjectCreatePayload) => Promise<void>;
-  onUpdateProject: (projectId: string, payload: ProjectUpdatePayload) => Promise<void>;
+  onUpdateProjectConfiguration: (projectId: string, payload: ProjectConfigurationUpdatePayload) => Promise<void>;
+  onUpdateProjectArchiveState: (projectId: string, payload: ProjectArchiveUpdatePayload) => Promise<void>;
 };
 
 type Draft = {
@@ -42,7 +44,8 @@ export function ProjectsManager({
   busy,
   onRefreshOptions,
   onCreateProject,
-  onUpdateProject
+  onUpdateProjectConfiguration,
+  onUpdateProjectArchiveState
 }: Props) {
   const [createDraft, setCreateDraft] = useState<Draft>(emptyDraft);
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -76,23 +79,18 @@ export function ProjectsManager({
     if (!editDraft.name.trim() || !editDraft.github_repository.trim() || !editDraft.jira_project_key.trim()) {
       return;
     }
-    await onUpdateProject(project.project_id, {
+    await onUpdateProjectConfiguration(project.project_id, {
       name: editDraft.name.trim(),
       github_repository: editDraft.github_repository.trim(),
       jira_project_key: editDraft.jira_project_key.trim().toUpperCase(),
-      policy_overrides: project.policy_overrides ?? {},
-      is_archived: project.is_archived
+      architecture_docs: project.architecture_docs ?? null
     });
     setEditingId(null);
     setEditDraft(emptyDraft());
   }
 
   async function toggleArchive(project: ProjectRecord) {
-    await onUpdateProject(project.project_id, {
-      name: project.name,
-      github_repository: project.github_repository,
-      jira_project_key: project.jira_project_key,
-      policy_overrides: project.policy_overrides ?? {},
+    await onUpdateProjectArchiveState(project.project_id, {
       is_archived: !project.is_archived
     });
   }

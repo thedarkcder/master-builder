@@ -14,7 +14,7 @@ from sqlalchemy import select
 
 from orchestrator.api.commands.entrypoint import execute_tenant_discord_command
 from orchestrator.api.discord.shared.room_history import DiscordRoomHistoryService
-from orchestrator.core.codex_working_dir import resolve_codex_working_dir
+from orchestrator.core.runtime.working_dir import resolve_codex_working_dir
 from orchestrator.core.config import get_settings
 from orchestrator.core.discord.voice_entry_routing import route_discord_voice_entry
 from orchestrator.api.transport_runtime import (
@@ -74,23 +74,23 @@ from orchestrator.core.communications import (
     TransportEnvelope,
 )
 from orchestrator.core.config import Settings
-from orchestrator.core.observability import scoped_log_context
+from orchestrator.core.observability.otel import scoped_log_context
 from orchestrator.core.discord.personas import (
     build_voice_room_spoken_reply_text,
     format_voice_room_persona_label,
 )
-from orchestrator.core.error_observability import emit_hard_error
-from orchestrator.core.followup_context_service import (
+from orchestrator.core.observability.error import emit_hard_error
+from orchestrator.core.pm.followup_context_service import (
     resolve_followup_context,
     resolve_followup_context_match,
     resolve_followup_reaction,
 )
-from orchestrator.core.run_human_input_service import (
+from orchestrator.core.runs.human_input_service import (
     answer_human_input_request,
     pending_human_input_for_request_id,
     resume_workflow_from_human_input_answer,
 )
-from orchestrator.core.platform_secret_service import (
+from orchestrator.core.platform.secret_service import (
     PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF,
     resolve_platform_secret_ref,
 )

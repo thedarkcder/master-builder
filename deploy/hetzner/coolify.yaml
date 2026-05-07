@@ -13,4 +13,4 @@ services:
     - discord-gateway
     - discord-live-voice
     - postgres
-    - redis
+    - clickhouse

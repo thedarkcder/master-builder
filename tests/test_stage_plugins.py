@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import unittest
-from orchestrator.core.stage_plugins import evaluate_stage_plugin
+from orchestrator.core.stages.plugins import evaluate_stage_plugin
 
 
 class StagePluginsTests(unittest.TestCase):

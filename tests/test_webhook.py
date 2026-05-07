@@ -12,9 +12,9 @@ from orchestrator.api.routes.webhook import (
     _parse_jira_comment_command,
 )
 from orchestrator.api.schemas import DiscordCommandResponse
-from orchestrator.core.webhook_health import webhook_health_tracker
+from orchestrator.core.webhooks.health import webhook_health_tracker
 from orchestrator.storage.models import FollowupContext, Project, Run, Tenant, WebhookJob
-from orchestrator.tools.jira_oauth import JiraIssuePreview, JiraOAuthError
+from orchestrator.tools.atlassian_oauth import JiraIssuePreview, AtlassianOAuthError
 from tests.test_support.jira_webhook_api_harness import JiraWebhookTestsHarness
 
 pytestmark = pytest.mark.contract
@@ -143,7 +143,7 @@ class JiraWebhookTests(JiraWebhookTestsHarness):
             client=oauth_client,
         )
         with patch(
-            "orchestrator.api.webhooks.jira_admission_flow.tenant_jira_oauth_context",
+            "orchestrator.api.webhooks.jira_admission_flow.tenant_atlassian_oauth_context",
             return_value=oauth_context,
         ), patch(
             "orchestrator.api.webhooks.jira_admission_flow.evaluate_pre_run_check",
@@ -214,13 +214,13 @@ class JiraWebhookTests(JiraWebhookTestsHarness):
         )
         http_client = MagicMock()
         http_client.get_json.side_effect = [
-            JiraOAuthError("backlog endpoint unavailable"),
+            AtlassianOAuthError("backlog endpoint unavailable"),
             {"issues": [{"key": "TP-123"}]},
         ]
 
         with (
-            patch("orchestrator.api.webhooks.jira_board_location.tenant_jira_oauth_context", return_value=oauth_context),
-            patch("orchestrator.api.webhooks.jira_board_location.JiraOAuthHttpClient", return_value=http_client),
+            patch("orchestrator.api.webhooks.jira_board_location.tenant_atlassian_oauth_context", return_value=oauth_context),
+            patch("orchestrator.api.webhooks.jira_board_location.AtlassianOAuthHttpClient", return_value=http_client),
         ):
             location, detail = _fetch_issue_board_location(
                 context=context,
@@ -1000,6 +1000,10 @@ class JiraWebhookTests(JiraWebhookTestsHarness):
         with (
             patch("orchestrator.api.routes.webhook_discord_interactions._resolve_discord_interactions_public_key", return_value=b"\x01" * 32),
             patch("orchestrator.api.routes.webhook_discord_interactions._validate_discord_interaction_signature"),
+            patch(
+                "orchestrator.api.routes.webhook_discord_interactions._resolve_interaction_subject_scope",
+                return_value=("tenant-webhook", None, "discord_channel:tenant-webhook:discord-channel-1"),
+            ),
         ):
             response = self.client.post("/discord/interactions", json=payload)
 
@@ -1012,4 +1016,5 @@ class JiraWebhookTests(JiraWebhookTestsHarness):
                 select(WebhookJob).where(WebhookJob.transport == "discord_interaction")
             ).scalars().all()
         self.assertEqual(len(jobs), 1)
+        self.assertEqual(jobs[0].tenant_id, "tenant-webhook")
         self.assertIsNone(jobs[0].dedupe_key)

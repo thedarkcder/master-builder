@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from orchestrator.core.runs import (
+from orchestrator.core.runs.service import (
     RUN_DEDUPE_SCOPE_PR_REMEDIATION,
     RunBootstrap,
     enqueue_run,

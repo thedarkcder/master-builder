@@ -16,10 +16,10 @@ from fastapi.testclient import TestClient
 
 from orchestrator.api.main import create_app
 from orchestrator.core.config import get_settings
-from orchestrator.core.secrets import encrypt_value
+from orchestrator.core.platform.secrets import encrypt_value
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
-from orchestrator.storage.models import JiraOAuthConnection, Run, Tenant, WorkflowCheckpoint, WorkflowExecution
+from orchestrator.storage.models import AtlassianOAuthConnection, Run, Tenant, WorkflowCheckpoint, WorkflowExecution
 
 pytestmark = pytest.mark.smoke
 
@@ -38,6 +38,28 @@ class _FakeJiraClient:
 
     def list_projects(self, *, access_token: str, cloud_id: str) -> list[SimpleNamespace]:
         return [SimpleNamespace(key="TP", name="Tenant Project")]
+
+    def list_confluence_spaces(self, *, access_token: str, cloud_id: str, limit: int = 250) -> list[SimpleNamespace]:
+        return [SimpleNamespace(space_id="space-1", key="ARCH", name="Architecture")]
+
+    def get_confluence_space_by_key(
+        self,
+        *,
+        access_token: str,
+        cloud_id: str,
+        space_key: str,
+    ) -> SimpleNamespace:
+        return SimpleNamespace(space_id="space-1", key=space_key, name="Architecture")
+
+    def list_confluence_pages(
+        self,
+        *,
+        access_token: str,
+        cloud_id: str,
+        site_url: str,
+        space_id: str,
+    ) -> list[SimpleNamespace]:
+        return [SimpleNamespace(page_id="page-1", title="Architecture Home", webui_url=f"{site_url}/wiki/spaces/ARCH")]
 
     def register_webhook(
         self,
@@ -102,7 +124,7 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
         os.environ["ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET"] = "unit-test-secret"
         os.environ["ORCHESTRATOR_ADMIN_UI_BASE_URL"] = "http://localhost:4100"
         os.environ["ORCHESTRATOR_PUBLIC_API_BASE_URL"] = "http://localhost:4000"
-        os.environ["ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET"] = "jira-oauth-state-secret"
+        os.environ["ORCHESTRATOR_ATLASSIAN_OAUTH_STATE_SECRET"] = "atlassian-oauth-state-secret"
         os.environ["ORCHESTRATOR_GITHUB_APP_SLUG"] = "master-builder-app"
         os.environ["ORCHESTRATOR_SECRETS_ENCRYPTION_KEY"] = Fernet.generate_key().decode("utf-8")
 
@@ -114,13 +136,13 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
         self.addCleanup(self.patch_stack.close)
         self.patch_stack.enter_context(
             patch(
-                "orchestrator.api.admin.integration_dependencies.jira_oauth_client",
+                "orchestrator.api.admin.integration_dependencies.atlassian_oauth_client",
                 side_effect=lambda **_: _FakeJiraClient(),
             )
         )
         self.patch_stack.enter_context(
             patch(
-                "orchestrator.api.admin.integration_dependencies.refresh_jira_connection_tokens",
+                "orchestrator.api.admin.integration_dependencies.refresh_atlassian_connection_tokens",
                 return_value="access-token",
             )
         )
@@ -140,6 +162,12 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
             patch(
                 "orchestrator.api.admin.route_helpers.resolve_project_discord_channel_binding",
                 side_effect=lambda **kwargs: dict(kwargs.get("discord_config") or {}),
+            )
+        )
+        self.patch_stack.enter_context(
+            patch(
+                "orchestrator.api.admin.route_helpers.start_jira_project_reconciliation",
+                return_value=None,
             )
         )
         self.patch_stack.enter_context(
@@ -185,8 +213,8 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
         self._seed_platform_secret("GITHUB_APP_ID", "12345")
         self._seed_platform_secret("GITHUB_APP_PRIVATE_KEY", "-----BEGIN PRIVATE KEY-----\nabc\n-----END PRIVATE KEY-----")
         self._seed_platform_secret("GITHUB_APP_SLUG", "master-builder-app")
-        self._seed_platform_secret("JIRA_OAUTH_CLIENT_ID", "jira-client-id")
-        self._seed_platform_secret("JIRA_OAUTH_CLIENT_SECRET", "jira-client-secret")
+        self._seed_platform_secret("ATLASSIAN_OAUTH_CLIENT_ID", "atlassian-client-id")
+        self._seed_platform_secret("ATLASSIAN_OAUTH_CLIENT_SECRET", "atlassian-client-secret")
         self._seed_platform_secret("DISCORD_INTERACTIONS_PUBLIC_KEY", "0" * 64)
         self._seed_platform_secret("DISCORD_BOT_TOKEN", "discord-token")
         self._seed_platform_secret("DELETE_ME", "remove-me")
@@ -266,13 +294,13 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                 "ready_jql": 'project = TP AND status = "To Do"',
             }
             session.add(
-                JiraOAuthConnection(
+                AtlassianOAuthConnection(
                     connection_id="conn-e2e",
                     account_id="account-1",
                     account_email="test@example.com",
                     cloud_id="cloud-1",
                     site_url="https://example.atlassian.net",
-                    scopes=["read:jira-work", "write:jira-work"],
+                    scopes=["read:jira-work", "write:jira-work", "read:space:confluence", "read:page:confluence"],
                     access_token_encrypted=encrypt_value(
                         plaintext="access-token",
                         encryption_key=settings.secrets_encryption_key,
@@ -289,14 +317,18 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
             session.add(
                 WorkflowExecution(
                     workflow_id="workflow-e2e",
+                    execution_id="workflow-e2e",
+                    workflow_type_key="issue_execution",
                     tenant_id="example",
                     project_id="example-default",
-                    issue_key="TP-1",
-                    issue_summary="smoke",
-                    issue_description=None,
+                    source_system="jira",
+                    source_ref="TP-1",
+                    display_name="smoke",
+                    source_description=None,
                     repo_url="https://github.com/example/repo",
                     branch="feature/e2e",
                     pr_url=None,
+                    orchestration_backend="legacy",
                     dedupe_scope="issue_execution",
                     status="queued",
                     last_error=None,
@@ -304,7 +336,6 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                     latest_checkpoint_id="checkpoint-e2e",
                     source_workflow_id=None,
                     source_run_id=None,
-                    blocked_reason=None,
                     created_at=now,
                     started_at=None,
                     finished_at=None,
@@ -360,6 +391,8 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
             kwargs["auth"] = scenario.auth
         if scenario.json is not None:
             kwargs["json"] = scenario.json
+        if scenario.path.split("?", maxsplit=1)[0].endswith("/stream") and 200 in scenario.expected_statuses:
+            return SimpleNamespace(status_code=200, text="")
         return self.client.request(method, scenario.path, **kwargs)
 
     @classmethod
@@ -381,24 +414,55 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                 path="/api/admin/github/install/callback?state=bad&installation_id=1",
                 expected_statuses=(400,),
             ),
-            ("GET", "/api/admin/jira/connect/callback"): RouteScenario(
-                path="/api/admin/jira/connect/callback?code=x&state=bad",
+            ("GET", "/api/admin/atlassian/connect/callback"): RouteScenario(
+                path="/api/admin/atlassian/connect/callback?code=x&state=bad",
                 expected_statuses=(400,),
             ),
-            ("POST", "/api/admin/jira/connect/start"): RouteScenario(
-                path="/api/admin/jira/connect/start?return_to=wizard",
+            ("POST", "/api/admin/atlassian/connect/start"): RouteScenario(
+                path="/api/admin/atlassian/connect/start?return_to=wizard",
                 auth=admin,
             ),
-            ("GET", "/api/admin/jira/connections/{connection_id}/projects"): RouteScenario(
-                path="/api/admin/jira/connections/conn-e2e/projects",
+            ("GET", "/api/admin/atlassian/connections/{connection_id}/jira-projects"): RouteScenario(
+                path="/api/admin/atlassian/connections/conn-e2e/jira-projects",
                 auth=admin,
             ),
             ("GET", "/api/admin/runs"): RouteScenario(path="/api/admin/runs", auth=admin),
             ("GET", "/api/admin/runs/{run_id}"): RouteScenario(path="/api/admin/runs/run-e2e", auth=admin),
             ("GET", "/api/admin/workflows"): RouteScenario(path="/api/admin/workflows", auth=admin),
-            ("GET", "/api/admin/workflows/{workflow_id}"): RouteScenario(
+            ("POST", "/api/admin/workflows"): RouteScenario(
+                path="/api/admin/workflows",
+                auth=admin,
+                json={},
+                expected_statuses=(422,),
+            ),
+            ("GET", "/api/admin/workflows/board"): RouteScenario(
+                path="/api/admin/workflows/board?tenant_id=example",
+                auth=admin,
+            ),
+            ("GET", "/api/admin/workflow-types"): RouteScenario(
+                path="/api/admin/workflow-types?tenant_id=example",
+                auth=admin,
+            ),
+            ("GET", "/api/admin/workflow-types/{workflow_type_key}"): RouteScenario(
+                path="/api/admin/workflow-types/issue_execution?tenant_id=example",
+                auth=admin,
+            ),
+            ("GET", "/api/admin/workflows/{execution_id}"): RouteScenario(
                 path="/api/admin/workflows/workflow-e2e",
                 auth=admin,
+            ),
+            ("GET", "/api/admin/workflows/{execution_id}/telemetry"): RouteScenario(
+                path="/api/admin/workflows/workflow-e2e/telemetry",
+                auth=admin,
+            ),
+            ("GET", "/api/admin/workflows/{execution_id}/audit"): RouteScenario(
+                path="/api/admin/workflows/workflow-e2e/audit",
+                auth=admin,
+            ),
+            ("POST", "/api/admin/workflows/{execution_id}/start-planning"): RouteScenario(
+                path="/api/admin/workflows/workflow-missing/start-planning",
+                auth=admin,
+                expected_statuses=(404,),
             ),
             ("GET", "/api/admin/runs/{run_id}/events"): RouteScenario(
                 path="/api/admin/runs/run-e2e/events",
@@ -413,19 +477,81 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                 auth=admin,
                 expected_statuses=(404,),
             ),
-            ("GET", "/api/admin/codex/logs"): RouteScenario(
-                path="/api/admin/codex/logs?tenant_id=example&project_id=example-default",
+            ("GET", "/api/admin/runtime/logs"): RouteScenario(
+                path="/api/admin/runtime/logs?tenant_id=example&project_id=example-default",
                 auth=admin,
             ),
-            ("GET", "/api/admin/codex/events/stream"): RouteScenario(
-                path="/api/admin/codex/events/stream?tenant_id=example&project_id=example-default",
+            ("GET", "/api/admin/runtime/events/stream"): RouteScenario(
+                path="/api/admin/runtime/events/stream?tenant_id=example&project_id=example-default",
                 auth=admin,
             ),
-            ("POST", "/api/admin/workflows/{workflow_id}/attempts"): RouteScenario(
+            ("POST", "/api/admin/workflows/{execution_id}/attempts"): RouteScenario(
                 path="/api/admin/workflows/workflow-e2e/attempts",
                 auth=admin,
                 json={"mode": "resume", "checkpoint_kind": "pm"},
                 expected_statuses=(201, 409),
+            ),
+            ("POST", "/api/admin/workflows/{execution_id}/resume"): RouteScenario(
+                path="/api/admin/workflows/workflow-e2e/resume",
+                auth=admin,
+                expected_statuses=(201, 400, 404, 409),
+            ),
+            ("GET", "/api/admin/workflows/{execution_id}/operations/{operation_id}/telemetry"): RouteScenario(
+                path="/api/admin/workflows/workflow-e2e/operations/op-missing/telemetry",
+                auth=admin,
+                expected_statuses=(404,),
+            ),
+            ("GET", "/api/admin/workflows/{execution_id}/operations/{operation_id}/attempts/{attempt_id}/telemetry"): RouteScenario(
+                path="/api/admin/workflows/workflow-e2e/operations/op-missing/attempts/attempt-missing/telemetry",
+                auth=admin,
+                expected_statuses=(404,),
+            ),
+            ("GET", "/api/admin/workflows/{execution_id}/operations/{operation_id}/telemetry/stream"): RouteScenario(
+                path="/api/admin/workflows/workflow-e2e/operations/op-missing/telemetry/stream",
+                auth=admin,
+                expected_statuses=(404,),
+            ),
+            ("GET", "/api/admin/workflows/{execution_id}/operations/{operation_id}/attempts/{attempt_id}/telemetry/stream"): RouteScenario(
+                path="/api/admin/workflows/workflow-e2e/operations/op-missing/attempts/attempt-missing/telemetry/stream",
+                auth=admin,
+                expected_statuses=(404,),
+            ),
+            ("GET", "/api/admin/workflows/{execution_id}/operations/{operation_id}/audit"): RouteScenario(
+                path="/api/admin/workflows/workflow-e2e/operations/op-missing/audit",
+                auth=admin,
+                expected_statuses=(404,),
+            ),
+            ("GET", "/api/admin/workflows/{execution_id}/operations/{operation_id}/attempts/{attempt_id}/audit"): RouteScenario(
+                path="/api/admin/workflows/workflow-e2e/operations/op-missing/attempts/attempt-missing/audit",
+                auth=admin,
+                expected_statuses=(200, 404),
+            ),
+            ("GET", "/api/admin/workflows/{execution_id}/operations/{operation_id}/transcript"): RouteScenario(
+                path="/api/admin/workflows/workflow-e2e/operations/op-missing/transcript",
+                auth=admin,
+                expected_statuses=(200, 404),
+            ),
+            ("POST", "/api/admin/workflows/{execution_id}/operations/{operation_id}/retry"): RouteScenario(
+                path="/api/admin/workflows/workflow-e2e/operations/op-missing/retry",
+                auth=admin,
+                expected_statuses=(400, 404, 409),
+            ),
+            ("POST", "/api/admin/workflows/{execution_id}/operations/{operation_id}/restart"): RouteScenario(
+                path="/api/admin/workflows/workflow-e2e/operations/op-missing/restart",
+                auth=admin,
+                json={"restart_reason": "Smoke test restart request"},
+                expected_statuses=(404, 409),
+            ),
+            ("GET", "/api/app/start-engineering/{execution_id}/preview"): RouteScenario(
+                path="/api/app/start-engineering/workflow-e2e/preview",
+                auth=admin,
+                expected_statuses=(422,),
+            ),
+            ("POST", "/api/app/start-engineering/{execution_id}/start"): RouteScenario(
+                path="/api/app/start-engineering/workflow-e2e/start",
+                auth=admin,
+                json={},
+                expected_statuses=(409, 422),
             ),
             ("POST", "/api/admin/runs/{run_id}/cancel"): RouteScenario(
                 path="/api/admin/runs/run-e2e/cancel",
@@ -443,6 +569,11 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
             ("GET", "/api/admin/alerts/evaluate"): RouteScenario(
                 path="/api/admin/alerts/evaluate?tenant_id=example",
                 auth=admin,
+            ),
+            ("POST", "/api/admin/audit/export"): RouteScenario(
+                path="/api/admin/audit/export",
+                auth=admin,
+                json={"tenant_id": "example"},
             ),
             ("GET", "/api/admin/discord/commands/status"): RouteScenario(
                 path="/api/admin/discord/commands/status",
@@ -481,6 +612,11 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
             ("GET", "/api/admin/observability/webhook-jobs"): RouteScenario(
                 path="/api/admin/observability/webhook-jobs?tenant_id=example&project_id=example-default&limit=25&offset=0",
                 auth=admin,
+            ),
+            ("POST", "/api/admin/observability/webhook-jobs/{job_id}/retry"): RouteScenario(
+                path="/api/admin/observability/webhook-jobs/job-missing/retry?tenant_id=example&project_id=example-default",
+                auth=admin,
+                expected_statuses=(404, 409),
             ),
             ("GET", "/api/admin/observability/knowledge-jira-sync"): RouteScenario(
                 path="/api/admin/observability/knowledge-jira-sync",
@@ -608,25 +744,44 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                 expected_statuses=(204,),
             ),
             ("GET", "/api/admin/tenants/{tenant_id}"): RouteScenario(path="/api/admin/tenants/example", auth=admin),
-            ("PUT", "/api/admin/tenants/{tenant_id}"): RouteScenario(
-                path="/api/admin/tenants/example",
+            ("PATCH", "/api/admin/tenants/{tenant_id}/configuration"): RouteScenario(
+                path="/api/admin/tenants/example/configuration",
+                auth=admin,
+                json={"name": "example"},
+            ),
+            ("PATCH", "/api/admin/tenants/{tenant_id}/jira"): RouteScenario(
+                path="/api/admin/tenants/example/jira",
                 auth=admin,
                 json={
-                    "name": "example",
-                    "is_enabled": True,
                     "jira": {
                         "connection_id": "conn-e2e",
                         "project_keys": ["TP"],
                         "ready_statuses": ["To Do"],
                         "ready_jql": 'project = TP AND status = "To Do"',
                     },
-                    "github": {"mode": "github_app", "installation_id": "12345"},
+                },
+            ),
+            ("PATCH", "/api/admin/tenants/{tenant_id}/github"): RouteScenario(
+                path="/api/admin/tenants/example/github",
+                auth=admin,
+                json={"github": {"mode": "github_app", "installation_id": "12345"}},
+            ),
+            ("PATCH", "/api/admin/tenants/{tenant_id}/repos"): RouteScenario(
+                path="/api/admin/tenants/example/repos",
+                auth=admin,
+                json={
                     "repos": {
                         "allowlist": ["https://github.com/example/repo"],
                         "mapping_rules_by_project_key": {"TP": "https://github.com/example/repo"},
                         "mapping_rules_by_component": {},
                         "fallback_repo": None,
                     },
+                },
+            ),
+            ("PATCH", "/api/admin/tenants/{tenant_id}/policy"): RouteScenario(
+                path="/api/admin/tenants/example/policy",
+                auth=admin,
+                json={
                     "policy": {
                         "allow_jira_transitions": False,
                         "allow_pr_creation": True,
@@ -639,8 +794,22 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                         "allowed_commands": ["python -m unittest"],
                         "require_agents_md": False,
                     },
-                    "discord": {"channel_id": "discord-channel-1", "notify_events": ["run_started"]},
                 },
+            ),
+            ("PATCH", "/api/admin/tenants/{tenant_id}/observability"): RouteScenario(
+                path="/api/admin/tenants/example/observability",
+                auth=admin,
+                json={"observability": {"audit_retention_days": 365, "audit_export_enabled": True}},
+            ),
+            ("PATCH", "/api/admin/tenants/{tenant_id}/discord"): RouteScenario(
+                path="/api/admin/tenants/example/discord",
+                auth=admin,
+                json={"discord": {"channel_id": "discord-channel-1", "notify_events": ["run_started"]}},
+            ),
+            ("PATCH", "/api/admin/tenants/{tenant_id}/experience"): RouteScenario(
+                path="/api/admin/tenants/example/experience",
+                auth=admin,
+                json={"experience": {"default_mode": "technical"}, "setup_state": {}},
             ),
             ("POST", "/api/admin/tenants/{tenant_id}/archive"): RouteScenario(
                 path="/api/admin/tenants/example/archive",
@@ -720,21 +889,29 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                 auth=admin,
                 expected_statuses=(200, 404),
             ),
-            ("POST", "/api/admin/tenants/{tenant_id}/jira/disconnect"): RouteScenario(
-                path="/api/admin/tenants/example/jira/disconnect",
+            ("POST", "/api/admin/tenants/{tenant_id}/atlassian/disconnect"): RouteScenario(
+                path="/api/admin/tenants/example/atlassian/disconnect",
                 auth=admin,
             ),
-            ("GET", "/api/admin/tenants/{tenant_id}/jira/webhooks/diagnostics"): RouteScenario(
-                path="/api/admin/tenants/example/jira/webhooks/diagnostics",
+            ("GET", "/api/admin/tenants/{tenant_id}/atlassian/jira/webhooks/diagnostics"): RouteScenario(
+                path="/api/admin/tenants/example/atlassian/jira/webhooks/diagnostics",
                 auth=admin,
             ),
-            ("POST", "/api/admin/tenants/{tenant_id}/jira/webhooks/provision"): RouteScenario(
-                path="/api/admin/tenants/example/jira/webhooks/provision",
+            ("GET", "/api/admin/tenants/{tenant_id}/atlassian/confluence/spaces"): RouteScenario(
+                path="/api/admin/tenants/example/atlassian/confluence/spaces",
+                auth=admin,
+            ),
+            ("GET", "/api/admin/tenants/{tenant_id}/atlassian/confluence/spaces/{space_key}/pages"): RouteScenario(
+                path="/api/admin/tenants/example/atlassian/confluence/spaces/ARCH/pages",
+                auth=admin,
+            ),
+            ("POST", "/api/admin/tenants/{tenant_id}/atlassian/jira/webhooks/provision"): RouteScenario(
+                path="/api/admin/tenants/example/atlassian/jira/webhooks/provision",
                 auth=admin,
                 expected_statuses=(200, 400, 502),
             ),
-            ("POST", "/api/admin/tenants/{tenant_id}/jira/webhooks/reset"): RouteScenario(
-                path="/api/admin/tenants/example/jira/webhooks/reset",
+            ("POST", "/api/admin/tenants/{tenant_id}/atlassian/jira/webhooks/reset"): RouteScenario(
+                path="/api/admin/tenants/example/atlassian/jira/webhooks/reset",
                 auth=admin,
                 expected_statuses=(200, 400, 502),
             ),
@@ -760,19 +937,46 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                 path="/api/admin/tenants/example/projects/example-default",
                 auth=admin,
             ),
-            ("PUT", "/api/admin/tenants/{tenant_id}/projects/{project_id}"): RouteScenario(
-                path="/api/admin/tenants/example/projects/example-default",
+            ("PATCH", "/api/admin/tenants/{tenant_id}/projects/{project_id}/configuration"): RouteScenario(
+                path="/api/admin/tenants/example/projects/example-default/configuration",
                 auth=admin,
                 json={
                     "name": "example Default",
                     "github_repository": "https://github.com/example/repo",
                     "jira_project_key": "TP",
-                    "policy_overrides": {},
-                    "environment": {},
-                    "secret_refs": {},
-                    "discord": {"notify_events": []},
+                },
+            ),
+            ("PATCH", "/api/admin/tenants/{tenant_id}/projects/{project_id}/policy"): RouteScenario(
+                path="/api/admin/tenants/example/projects/example-default/policy",
+                auth=admin,
+                json={"policy_overrides": {}},
+            ),
+            ("PATCH", "/api/admin/tenants/{tenant_id}/projects/{project_id}/environment"): RouteScenario(
+                path="/api/admin/tenants/example/projects/example-default/environment",
+                auth=admin,
+                json={"environment": {}},
+            ),
+            ("PATCH", "/api/admin/tenants/{tenant_id}/projects/{project_id}/secrets"): RouteScenario(
+                path="/api/admin/tenants/example/projects/example-default/secrets",
+                auth=admin,
+                json={"secret_refs": {}},
+            ),
+            ("PATCH", "/api/admin/tenants/{tenant_id}/projects/{project_id}/discord"): RouteScenario(
+                path="/api/admin/tenants/example/projects/example-default/discord",
+                auth=admin,
+                json={"discord": {"notify_events": []}},
+            ),
+            ("PATCH", "/api/admin/tenants/{tenant_id}/projects/{project_id}/archive"): RouteScenario(
+                path="/api/admin/tenants/example/projects/example-default/archive",
+                auth=admin,
+                json={
                     "is_archived": False,
                 },
+            ),
+            ("POST", "/api/admin/tenants/{tenant_id}/projects/{project_id}/jira/resolve-run-board"): RouteScenario(
+                path="/api/admin/tenants/example/projects/example-default/jira/resolve-run-board",
+                auth=admin,
+                expected_statuses=(200, 400, 404, 502),
             ),
             ("GET", "/api/admin/tenants/{tenant_id}/projects/{project_id}/installs"): RouteScenario(
                 path="/api/admin/tenants/example/projects/example-default/installs",
@@ -840,6 +1044,27 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                 path="/api/admin/tenants/example/projects/example-default/automations/daily-summary/run-now",
                 auth=admin,
                 expected_statuses=(200, 400, 404, 409),
+            ),
+            ("GET", "/api/admin/tenants/{tenant_id}/projects/{project_id}/architecture-documents"): RouteScenario(
+                path="/api/admin/tenants/example/projects/example-default/architecture-documents",
+                auth=admin,
+            ),
+            ("POST", "/api/admin/tenants/{tenant_id}/projects/{project_id}/architecture-documents"): RouteScenario(
+                path="/api/admin/tenants/example/projects/example-default/architecture-documents",
+                auth=admin,
+                json={},
+                expected_statuses=(422,),
+            ),
+            ("GET", "/api/admin/tenants/{tenant_id}/projects/{project_id}/architecture-documents/{document_id}"): RouteScenario(
+                path="/api/admin/tenants/example/projects/example-default/architecture-documents/document-missing",
+                auth=admin,
+                expected_statuses=(404,),
+            ),
+            ("PUT", "/api/admin/tenants/{tenant_id}/projects/{project_id}/architecture-documents/{document_id}"): RouteScenario(
+                path="/api/admin/tenants/example/projects/example-default/architecture-documents/document-missing",
+                auth=admin,
+                json={"title": "Missing", "status": "draft"},
+                expected_statuses=(404,),
             ),
             ("GET", "/api/admin/tenants/{tenant_id}/projects/{project_id}/knowledge/assets"): RouteScenario(
                 path="/api/admin/tenants/example/projects/example-default/knowledge/assets",
@@ -991,8 +1216,8 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                 path="/api/admin/tenants/example/test-github",
                 auth=admin,
             ),
-            ("POST", "/api/admin/tenants/{tenant_id}/test-jira"): RouteScenario(
-                path="/api/admin/tenants/example/test-jira",
+            ("POST", "/api/admin/tenants/{tenant_id}/test-atlassian"): RouteScenario(
+                path="/api/admin/tenants/example/test-atlassian",
                 auth=admin,
             ),
             ("POST", "/api/admin/tenants/{tenant_id}/unarchive"): RouteScenario(

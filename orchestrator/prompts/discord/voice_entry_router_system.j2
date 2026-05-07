@@ -18,9 +18,5 @@ Persona roles for **ask** (single Q&A path; persona is who answers, not a separa
 
 When **lane** is **ask** and intent is unclear, prefer **pm**.
 
-Return strict JSON only with keys: lane, persona, confidence, reason (or, when using the tool bridge, final_response.result with those keys).
-**lane** must be one of: **ask**, **interview**.
-**persona** must be one of: pm, architect, engineer, qa, security.
-**confidence** must be a number from 0 to 1.
-**reason** must be a short explanation.
-Do not include markdown or extra keys.
+Return JSON matching this domain model:
+{{ domain_model | tojson(indent=2) }}

@@ -2,8 +2,8 @@ import os
 from datetime import datetime, timezone
 from unittest.mock import patch
 
-from orchestrator.core.runs import RUN_DEDUPE_SCOPE_ISSUE_EXECUTION, enqueue_run
-from orchestrator.core.worker_capability_normalization import WorkerCapability
+from orchestrator.core.runs.service import RUN_DEDUPE_SCOPE_ISSUE_EXECUTION, enqueue_run
+from orchestrator.core.worker.capability_normalization import WorkerCapability
 from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 from orchestrator.core.worker.run_lifecycle import (
     bind_run_project,
@@ -109,7 +109,8 @@ class WorkerRunLifecycleTests(SqliteTemplateDbTestCase):
     def _get_workflow(self, session, *, issue_key: str, dedupe_scope: str = RUN_DEDUPE_SCOPE_ISSUE_EXECUTION):
         return session.query(WorkflowExecution).filter_by(
             tenant_id="tenant-a",
-            issue_key=issue_key,
+            source_system="jira",
+            source_ref=issue_key,
             dedupe_scope=dedupe_scope,
         ).one_or_none()
 
@@ -145,6 +146,11 @@ class WorkerRunLifecycleTests(SqliteTemplateDbTestCase):
             jira_message=jira_message,
             discord_message=discord_message,
         ).to_payload()
+
+    @staticmethod
+    def _claim_running_run(run, *, owner: str = "node-a:1234", claim_id: str = "claim-1") -> None:  # noqa: ANN001
+        run.worker_service_instance_id = owner
+        run.claim_id = claim_id
 
     def test_resolve_project_for_run_and_bind_run_project(self) -> None:
         now = datetime.now(timezone.utc)
@@ -271,6 +277,7 @@ class WorkerRunLifecycleTests(SqliteTemplateDbTestCase):
             run.plan = self._canonical_plan(
                 trigger_context={"source": "github_pr_review_feedback", "pr_number": 6}
             )
+            self._claim_running_run(run)
             session.commit()
             session.refresh(run)
 
@@ -305,6 +312,8 @@ class WorkerRunLifecycleTests(SqliteTemplateDbTestCase):
                         discord_message="failure details",
                     )
                 ],
+                expected_worker_service_instance_id="node-a:1234",
+                expected_claim_id="claim-1",
             )
             self.assertEqual(finalized.status, "failed")
             self.assertEqual(finalized.last_error, "failure details")
@@ -353,6 +362,9 @@ class WorkerRunLifecycleTests(SqliteTemplateDbTestCase):
             )
             session.commit()
             session.refresh(run)
+            self._claim_running_run(run)
+            session.commit()
+            session.refresh(run)
 
             persist_stage_checkpoint(
                 session,
@@ -369,6 +381,7 @@ class WorkerRunLifecycleTests(SqliteTemplateDbTestCase):
                     "integration_branch": "feature/TA-205",
                 },
                 expected_worker_service_instance_id="node-a:1234",
+                expected_claim_id="claim-1",
             )
 
             self.assertEqual(run.plan["context"]["trigger_context"], {"source": "manual"})
@@ -403,6 +416,7 @@ class WorkerRunLifecycleTests(SqliteTemplateDbTestCase):
                     )
                 ],
                 expected_worker_service_instance_id="node-a:1234",
+                expected_claim_id="claim-1",
             )
 
             self.assertEqual(finalized.status, "succeeded")
@@ -502,6 +516,9 @@ class WorkerRunLifecycleTests(SqliteTemplateDbTestCase):
             )
             session.commit()
             session.refresh(run)
+            self._claim_running_run(run)
+            session.commit()
+            session.refresh(run)
 
             unsupported_result = WorkflowResult(
                 outcome="success",  # typed baseline; overridden below for unsupported-path coverage
@@ -529,6 +546,7 @@ class WorkerRunLifecycleTests(SqliteTemplateDbTestCase):
                     )
                 ],
                 expected_worker_service_instance_id="node-a:1234",
+                expected_claim_id="claim-1",
             )
             self.assertEqual(finalized.status, "failed")
             self.assertIn("Unsupported workflow outcome", finalized.last_error or "")
@@ -554,6 +572,9 @@ class WorkerRunLifecycleTests(SqliteTemplateDbTestCase):
             )
             session.commit()
             session.refresh(run)
+            self._claim_running_run(run, owner="node-b:9999", claim_id="claim-1")
+            session.commit()
+            session.refresh(run)
 
             workflow_result = WorkflowResult(
                 outcome="success",
@@ -567,22 +588,21 @@ class WorkerRunLifecycleTests(SqliteTemplateDbTestCase):
                 test_guidance=[],
                 attempts=1,
             )
-            finalized = finalize_workflow_result(
-                session,
-                run=run,
-                workflow_result=workflow_result,
-                stage_updates=[
-                    self._stage_update_payload(
-                        stage=WorkerStageEvent.PLAN_POSTED,
-                        issue_key="TA-999",
-                        run_id="run-ownership-lost",
-                    )
-                ],
-                expected_worker_service_instance_id="node-a:1234",
-            )
-            self.assertEqual(finalized.status, "running")
-            self.assertIsNone(finalized.finished_at)
-            self.assertEqual(finalized.worker_service_instance_id, "node-b:9999")
+            with self.assertRaises(RuntimeError):
+                finalize_workflow_result(
+                    session,
+                    run=run,
+                    workflow_result=workflow_result,
+                    stage_updates=[
+                        self._stage_update_payload(
+                            stage=WorkerStageEvent.PLAN_POSTED,
+                            issue_key="TA-999",
+                            run_id="run-ownership-lost",
+                        )
+                    ],
+                    expected_worker_service_instance_id="node-a:1234",
+                    expected_claim_id="claim-1",
+                )
 
     def test_requeue_workflow_result_for_capability_notifies_queue_listener(self) -> None:
         now = datetime.now(timezone.utc)
@@ -609,6 +629,9 @@ class WorkerRunLifecycleTests(SqliteTemplateDbTestCase):
             )
             session.commit()
             session.refresh(run)
+            self._claim_running_run(run)
+            session.commit()
+            session.refresh(run)
 
             workflow_result = WorkflowResult(
                 outcome="requeue",
@@ -631,7 +654,7 @@ class WorkerRunLifecycleTests(SqliteTemplateDbTestCase):
                 ),
             )
 
-            with patch("orchestrator.core.worker.run_lifecycle.notify_run_enqueued") as notify_mock:
+            with patch("orchestrator.core.worker.run_transition_service.notify_run_enqueued") as notify_mock:
                 requeued = requeue_workflow_result_for_capability(
                     session,
                     run=run,
@@ -645,6 +668,8 @@ class WorkerRunLifecycleTests(SqliteTemplateDbTestCase):
                     ],
                     required_worker_capability="macos",
                     required_worker_label="macos",
+                    expected_worker_service_instance_id="node-a:1234",
+                    expected_claim_id="claim-1",
                 )
 
             self.assertEqual(requeued.status, "queued")
@@ -665,7 +690,6 @@ class WorkerRunLifecycleTests(SqliteTemplateDbTestCase):
                 tenant_id="tenant-a",
                 project_id="tenant-a-default",
                 run_id="run-capability-requeue",
-                issue_key="TA-202",
             )
             workflow = self._get_workflow(session, issue_key="TA-202")
             assert workflow is not None
@@ -698,6 +722,9 @@ class WorkerRunLifecycleTests(SqliteTemplateDbTestCase):
             )
             session.commit()
             session.refresh(run)
+            self._claim_running_run(run)
+            session.commit()
+            session.refresh(run)
 
             workflow_result = WorkflowResult(
                 outcome="success",
@@ -713,7 +740,7 @@ class WorkerRunLifecycleTests(SqliteTemplateDbTestCase):
                 diagnostics=None,
             )
 
-            with patch("orchestrator.core.worker.run_lifecycle.notify_run_enqueued") as notify_mock:
+            with patch("orchestrator.core.worker.run_transition_service.notify_run_enqueued") as notify_mock:
                 requeued = requeue_workflow_result_for_stale_snapshot(
                     session,
                     run=run,
@@ -726,6 +753,8 @@ class WorkerRunLifecycleTests(SqliteTemplateDbTestCase):
                         )
                     ],
                     error="Branch snapshot stale: origin/main moved from aaa to bbb.",
+                    expected_worker_service_instance_id="node-a:1234",
+                    expected_claim_id="claim-1",
                 )
 
             self.assertEqual(requeued.status, "queued")
@@ -749,7 +778,6 @@ class WorkerRunLifecycleTests(SqliteTemplateDbTestCase):
                 tenant_id="tenant-a",
                 project_id="tenant-a-default",
                 run_id="run-stale-requeue",
-                issue_key="TA-203",
             )
             workflow = self._get_workflow(session, issue_key="TA-203")
             assert workflow is not None

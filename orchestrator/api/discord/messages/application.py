@@ -14,7 +14,7 @@ from orchestrator.core.communications import (
     TransportAction,
 )
 from orchestrator.api.discord.ask.context import tenant_project_keys
-from orchestrator.core.followup_context_service import FollowupReaction
+from orchestrator.core.pm.followup_context_service import FollowupReaction
 
 _ROOM_VOICE_REPLY_COMMANDS = frozenset(
     {
@@ -250,14 +250,14 @@ def build_discord_message_ingress_result(
             project_keys=voice_note_scoped_project_keys,
             room_channel_ids=frozenset(room_channel_ids),
         )
-        lane = str(routed.get("lane") or "ask").strip().lower()
-        persona_rid = str(routed.get("persona") or "pm").strip().lower()
+        lane = routed.lane
+        persona_rid = routed.persona
         deps.logger.info(
             "discord_voice_note_entry_routed lane=%s persona=%s confidence=%s reason=%s",
             lane,
             persona_rid,
-            routed.get("confidence"),
-            routed.get("reason"),
+            routed.confidence,
+            routed.reason,
         )
         voice_note_command_params = {
             "room_mode": "true",

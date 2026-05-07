@@ -9,20 +9,21 @@ from cryptography.fernet import Fernet
 from fastapi import HTTPException
 
 from orchestrator.core.config import get_settings
-from orchestrator.core.decision_gate import DecisionGateResult
-from orchestrator.core.decision_state_machine import resolve_execution_gate_state
-from orchestrator.core.decision_types import (
+from orchestrator.core.decision.gate import DecisionGateResult
+from orchestrator.core.decision.state_machine import resolve_execution_gate_state
+from orchestrator.core.decision.types import (
     DecisionClassification,
     DecisionEngineResult,
     IngressDecision,
     PrecheckOutcome,
 )
 from orchestrator.core.gtd import GoodToDoValidationResult
-from orchestrator.core.pre_run_check import PreRunCheckResult
-from orchestrator.core.webhook_health import reset_webhook_health_tracker_for_tests
+from orchestrator.core.precheck.pre_run_check import PreRunCheckResult
+from orchestrator.core.webhooks.health import reset_webhook_health_tracker_for_tests
 from orchestrator.core.worker.webhook_job_service import process_next_webhook_job
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from tests.test_support.db_harness import SqliteTemplateApiTestCase
+from tests.test_support.workflow_runtime_harness import build_local_workflow_runtime, skip_product_event_notification
 
 
 class JiraWebhookTestsHarness(SqliteTemplateApiTestCase):
@@ -145,6 +146,21 @@ class JiraWebhookTestsHarness(SqliteTemplateApiTestCase):
             side_effect=self._evaluate_precheck_decision_with_labels,
         )
         self._default_precheck_decision_patch.start()
+        self._event_notify_patch = patch(
+            "orchestrator.core.observability.writer.publish_product_event_notification",
+            skip_product_event_notification,
+        )
+        self._event_notify_patch.start()
+        self._workflow_runtime_patch = patch(
+            "orchestrator.api.webhooks.jira_parent_child_sync.build_workflow_runtime",
+            build_local_workflow_runtime,
+        )
+        self._workflow_runtime_patch.start()
+        self._contracts_oauth_patch = patch(
+            "orchestrator.api.webhooks.contracts.tenant_atlassian_oauth_context",
+            side_effect=self._tenant_atlassian_oauth_context,
+        )
+        self._contracts_oauth_patch.start()
 
     def tearDown(self) -> None:
         self._cleanup_test_database()
@@ -157,6 +173,15 @@ class JiraWebhookTestsHarness(SqliteTemplateApiTestCase):
         reset_webhook_health_tracker_for_tests()
         self._default_pre_run_check_patch.stop()
         self._default_precheck_decision_patch.stop()
+        self._event_notify_patch.stop()
+        self._workflow_runtime_patch.stop()
+        self._contracts_oauth_patch.stop()
+
+    @staticmethod
+    def _tenant_atlassian_oauth_context(*args, **kwargs):
+        from orchestrator.core.worker import webhook_job_service
+
+        return webhook_job_service.tenant_atlassian_oauth_context(*args, **kwargs)
 
     def _evaluate_precheck_decision_with_labels(
         self,
@@ -187,7 +212,7 @@ class JiraWebhookTestsHarness(SqliteTemplateApiTestCase):
             labels_to_add.append(pre_check.required_worker_label)
         if labels_to_add:
             try:
-                oauth = jira_admission_flow.tenant_jira_oauth_context(
+                oauth = jira_admission_flow.tenant_atlassian_oauth_context(
                     session=session,
                     tenant=context.tenant,
                     settings=settings,

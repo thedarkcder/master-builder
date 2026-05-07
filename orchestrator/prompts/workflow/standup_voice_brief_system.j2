@@ -13,15 +13,5 @@ Rules:
   2) engineer
   3) qa
   4) reviewer
-- Return strict JSON with keys: summary, persona_segments.
-
-JSON shape:
-{
-  "summary": "single concise standup summary",
-  "persona_segments": [
-    {"persona_id": "pm", "text": "..."},
-    {"persona_id": "engineer", "text": "..."},
-    {"persona_id": "qa", "text": "..."},
-    {"persona_id": "reviewer", "text": "..."}
-  ]
-}
+Return JSON matching this domain model:
+{{ domain_model | tojson(indent=2) }}

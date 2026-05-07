@@ -1,8 +1,8 @@
 import unittest
 from unittest.mock import patch
 
-from orchestrator.tools.jira_oauth import JiraOAuthClient, JiraOAuthClientConfig, JiraOAuthError
-from orchestrator.tools.jira_oauth_webhook_manager import (
+from orchestrator.tools.atlassian_oauth import AtlassianOAuthClient, AtlassianOAuthClientConfig, AtlassianOAuthError
+from orchestrator.tools.atlassian_oauth_webhook_manager import (
     _extract_created_webhook_ids,
     _is_transient_webhook_error,
     _summarize_webhook_registration_failure,
@@ -11,8 +11,8 @@ from orchestrator.tools.jira_oauth_webhook_manager import (
 
 class JiraWebhookRegistrationTests(unittest.TestCase):
     def setUp(self) -> None:
-        self.client = JiraOAuthClient(
-            JiraOAuthClientConfig(
+        self.client = AtlassianOAuthClient(
+            AtlassianOAuthClientConfig(
                 client_id="client-id",
                 client_secret="client-secret",
                 redirect_uri="https://example.test/callback",
@@ -60,7 +60,7 @@ class JiraWebhookRegistrationTests(unittest.TestCase):
 
     def test_register_webhook_raises_when_no_ids_returned(self) -> None:
         with patch.object(self.client, "_request_json", return_value={"failedWebhookRegistration": []}):
-            with self.assertRaisesRegex(JiraOAuthError, "did not return any webhook IDs"):
+            with self.assertRaisesRegex(AtlassianOAuthError, "did not return any webhook IDs"):
                 self.client.register_webhook(
                     access_token="token",
                     cloud_id="cloud",
@@ -104,7 +104,7 @@ class JiraWebhookRegistrationTests(unittest.TestCase):
             self.client,
             "_request_json",
             side_effect=[
-                JiraOAuthError("Jira API request failed (502): Bad Gateway"),
+                AtlassianOAuthError("Jira API request failed (502): Bad Gateway"),
                 {"createdWebhookId": 1003},
             ],
         ) as request_mock:
@@ -124,7 +124,7 @@ class JiraWebhookRegistrationTests(unittest.TestCase):
             self.client,
             "_request_json",
             side_effect=[
-                JiraOAuthError("Unable to provision Jira webhook: 502: Bad Gateway"),
+                AtlassianOAuthError("Unable to provision Jira webhook: 502: Bad Gateway"),
                 {"createdWebhookId": 1004},
             ],
         ) as request_mock:
@@ -143,9 +143,9 @@ class JiraWebhookRegistrationTests(unittest.TestCase):
         with patch.object(
             self.client,
             "_request_json",
-            side_effect=JiraOAuthError("Jira API request failed (400): Invalid payload"),
+            side_effect=AtlassianOAuthError("Jira API request failed (400): Invalid payload"),
         ) as request_mock:
-            with self.assertRaisesRegex(JiraOAuthError, "Invalid payload"):
+            with self.assertRaisesRegex(AtlassianOAuthError, "Invalid payload"):
                 self.client.register_webhook(
                     access_token="token",
                     cloud_id="cloud",
@@ -165,8 +165,8 @@ class JiraWebhookRegistrationTests(unittest.TestCase):
         )
         self.assertEqual(ids, [1001, 1002, 1003])
 
-        self.assertTrue(_is_transient_webhook_error(JiraOAuthError("failed 503 upstream")))
-        self.assertFalse(_is_transient_webhook_error(JiraOAuthError("failed 400 bad request")))
+        self.assertTrue(_is_transient_webhook_error(AtlassianOAuthError("failed 503 upstream")))
+        self.assertFalse(_is_transient_webhook_error(AtlassianOAuthError("failed 400 bad request")))
 
         self.assertIn(
             "errorMessages",

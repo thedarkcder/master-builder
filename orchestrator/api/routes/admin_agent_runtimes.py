@@ -15,8 +15,8 @@ from orchestrator.api.schemas import (
     AgentRuntimeRoutingRead,
     AgentRuntimeRoutingUpdate,
 )
-from orchestrator.core.agent_tools import TOOL_ALLOWLIST, list_implemented_tools
-from orchestrator.core.agent_execution_profiles import (
+from orchestrator.core.runtime.tools import TOOL_ALLOWLIST, list_implemented_tools
+from orchestrator.core.runtime.agent_execution_profiles import (
     AgentExecutionProfile,
     build_agent_execution_profile,
     collect_models_for_runtime_kind,
@@ -35,7 +35,7 @@ from orchestrator.core.agent_execution_profiles import (
     runtime_kind_supports_reasoning_effort,
 )
 from orchestrator.core.config import get_settings
-from orchestrator.core.platform_settings_service import (
+from orchestrator.core.platform.settings_service import (
     SETTING_KEY_AGENT_RUNTIME_PROFILES,
     SETTING_KEY_AGENT_RUNTIME_ROUTING,
     platform_settings_service,

@@ -17,6 +17,7 @@ from sqlalchemy.exc import OperationalError as SQLAlchemyOperationalError
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
 from orchestrator.storage.models import WorkerRuntimeState
+from orchestrator.core.worker import run_dispatch as run_dispatch_module
 from orchestrator.core.worker.queue_selector import QueueClaimabilityProbe, QueueClaimabilityReason
 from tests.workflow_test_support import add_workflow_attempt
 
@@ -249,6 +250,7 @@ class WorkerTests(unittest.TestCase):
 
     def test_process_next_run_once_builds_runner_lazily(self) -> None:
         import orchestrator.worker as worker_module
+        import orchestrator.core.worker.run_dispatch as run_dispatch_module
 
         run_session = MagicMock(name="run-session")
 
@@ -276,8 +278,8 @@ class WorkerTests(unittest.TestCase):
             return object()
 
         with (
-            patch.object(worker_module, "build_workflow_runner_for_session", return_value=runner) as runner_mock,
-            patch.object(worker_module, "_process_claimed_run_with_dependencies", side_effect=_run_next) as run_mock,
+            patch.object(run_dispatch_module, "build_workflow_runner_for_session", return_value=runner) as runner_mock,
+            patch.object(run_dispatch_module, "process_claimed_run_with_dependencies", side_effect=_run_next) as run_mock,
         ):
             worker_module._process_next_run_once(
                 session_factory=_session_factory,
@@ -291,6 +293,7 @@ class WorkerTests(unittest.TestCase):
 
     def test_process_next_run_once_uses_preclaimed_run_id(self) -> None:
         import orchestrator.worker as worker_module
+        import orchestrator.core.worker.run_dispatch as run_dispatch_module
 
         run_session = MagicMock(name="run-session")
 
@@ -307,7 +310,7 @@ class WorkerTests(unittest.TestCase):
         def _session_factory():  # noqa: ANN202
             return _SessionCtx(run_session)
 
-        with patch.object(worker_module, "_process_claimed_run_with_dependencies", return_value=MagicMock()) as claimed_mock:
+        with patch.object(run_dispatch_module, "process_claimed_run_with_dependencies", return_value=MagicMock()) as claimed_mock:
             worker_module._process_next_run_once(
                 session_factory=_session_factory,
                 claimed_run_id="run-123",
@@ -320,6 +323,7 @@ class WorkerTests(unittest.TestCase):
 
     def test_reconcile_claimed_run_after_child_exit_terminalizes_dispatching_run(self) -> None:
         import orchestrator.worker as worker_module
+        import orchestrator.core.worker.run_dispatch as run_dispatch_module
 
         dispatching_run = SimpleNamespace(run_id="run-123", status="dispatching")
         failed_run = SimpleNamespace(run_id="run-123", status="failed")
@@ -336,11 +340,12 @@ class WorkerTests(unittest.TestCase):
         def _session_factory():  # noqa: ANN202
             return _SessionCtx()
 
-        with patch.object(worker_module, "mark_run_terminal", return_value=failed_run) as mark_terminal_mock:
+        with patch.object(run_dispatch_module, "mark_run_terminal", return_value=failed_run) as mark_terminal_mock:
             status = worker_module._reconcile_claimed_run_after_child_exit(
                 session_factory=_session_factory,
                 run_id="run-123",
                 claim_id="claim-123",
+                worker_service_instance_id="node-a:1234",
             )
 
         self.assertEqual(status, "failed")
@@ -348,12 +353,14 @@ class WorkerTests(unittest.TestCase):
             session,
             run_id="run-123",
             terminal_status="failed",
-            last_error=worker_module._CHILD_DISPATCH_STUCK_ERROR,
+            last_error=run_dispatch_module.CHILD_DISPATCH_STUCK_ERROR,
+            expected_worker_service_instance_id="node-a:1234",
             expected_claim_id="claim-123",
         )
 
     def test_reconcile_claimed_run_after_child_exit_returns_ownership_lost_on_claim_mismatch(self) -> None:
         import orchestrator.worker as worker_module
+        import orchestrator.core.worker.run_dispatch as run_dispatch_module
 
         dispatching_run = SimpleNamespace(run_id="run-123", status="dispatching", claim_id="claim-2")
         session = MagicMock()
@@ -369,11 +376,12 @@ class WorkerTests(unittest.TestCase):
         def _session_factory():  # noqa: ANN202
             return _SessionCtx()
 
-        with patch.object(worker_module, "mark_run_terminal") as mark_terminal_mock:
+        with patch.object(run_dispatch_module, "mark_run_terminal") as mark_terminal_mock:
             status = worker_module._reconcile_claimed_run_after_child_exit(
                 session_factory=_session_factory,
                 run_id="run-123",
                 claim_id="claim-123",
+                worker_service_instance_id="node-a:1234",
             )
 
         self.assertEqual(status, "ownership_lost")
@@ -414,6 +422,7 @@ class WorkerTests(unittest.TestCase):
             child_timeout_seconds: int,
             claimed_run_id: str | None = None,
             claim_id: str | None = None,
+            worker_service_instance_id: str | None = None,
         ):
             _ = wake_event
             _ = child_timeout_seconds
@@ -499,6 +508,7 @@ class WorkerTests(unittest.TestCase):
             child_timeout_seconds: int,
             claimed_run_id: str | None = None,
             claim_id: str | None = None,
+            worker_service_instance_id: str | None = None,
         ):
             _ = wake_event
             _ = child_timeout_seconds
@@ -529,6 +539,7 @@ class WorkerTests(unittest.TestCase):
             child_timeout_seconds: int,
             claimed_run_id: str | None = None,
             claim_id: str | None = None,
+            worker_service_instance_id: str | None = None,
         ):
             _ = mode
             _ = wake_event
@@ -560,9 +571,10 @@ class WorkerTests(unittest.TestCase):
                 worker_module,
                 "_claim_next_run_once",
                 side_effect=[
-                    worker_module.ClaimedRunDispatch(
+                    run_dispatch_module.ClaimedRunDispatch(
                         run_id="run-1",
                         claim_id="claim-1",
+                        worker_service_instance_id="node-a:1234",
                         tenant_id="tenant-1",
                         issue_key="GP-1",
                     ),
@@ -633,6 +645,7 @@ class WorkerTests(unittest.TestCase):
             child_timeout_seconds: int,
             claimed_run_id: str | None = None,
             claim_id: str | None = None,
+            worker_service_instance_id: str | None = None,
         ):
             _ = mode
             _ = wake_event
@@ -724,6 +737,7 @@ class WorkerTests(unittest.TestCase):
             child_timeout_seconds: int,
             claimed_run_id: str | None = None,
             claim_id: str | None = None,
+            worker_service_instance_id: str | None = None,
         ):
             _ = mode
             _ = wake_event
@@ -765,9 +779,10 @@ class WorkerTests(unittest.TestCase):
                 worker_module,
                 "_claim_next_run_once",
                 side_effect=[
-                    worker_module.ClaimedRunDispatch(
+                    run_dispatch_module.ClaimedRunDispatch(
                         run_id="run-claimed",
                         claim_id="claim-claimed",
+                        worker_service_instance_id="node-a:1234",
                         tenant_id="tenant-1",
                         issue_key="GP-186",
                     ),
@@ -844,6 +859,7 @@ class WorkerTests(unittest.TestCase):
             child_timeout_seconds: int,
             claimed_run_id: str | None = None,
             claim_id: str | None = None,
+            worker_service_instance_id: str | None = None,
         ):
             _ = mode
             _ = wake_event
@@ -893,9 +909,10 @@ class WorkerTests(unittest.TestCase):
                 "_claim_next_run_once",
                 side_effect=[
                     recovery_error,
-                    worker_module.ClaimedRunDispatch(
+                    run_dispatch_module.ClaimedRunDispatch(
                         run_id="run-claimed",
                         claim_id="claim-claimed",
+                        worker_service_instance_id="node-a:1234",
                         tenant_id="tenant-1",
                         issue_key="GP-186",
                     ),
@@ -1179,6 +1196,7 @@ class WorkerTests(unittest.TestCase):
             child_timeout_seconds: int,
             claimed_run_id: str | None = None,
             claim_id: str | None = None,
+            worker_service_instance_id: str | None = None,
         ):
             _ = wake_event
             _ = child_timeout_seconds
@@ -1216,9 +1234,10 @@ class WorkerTests(unittest.TestCase):
                 worker_module,
                 "_claim_next_run_once",
                 side_effect=[
-                    worker_module.ClaimedRunDispatch(
+                    run_dispatch_module.ClaimedRunDispatch(
                         run_id="run-claimed",
                         claim_id="claim-claimed",
+                        worker_service_instance_id="node-a:1234",
                         tenant_id="tenant-1",
                         issue_key="GP-186",
                     ),
@@ -1272,7 +1291,7 @@ class WorkerTests(unittest.TestCase):
         process = _HungProcess()
 
         async def _run() -> None:
-            with patch("orchestrator.worker.asyncio.create_subprocess_exec", return_value=process):
+            with patch("orchestrator.core.worker.child_process.asyncio.create_subprocess_exec", return_value=process):
                 handle = await worker_module._spawn_worker_child_process(
                     mode="runs",
                     wake_event=asyncio.Event(),
@@ -1302,7 +1321,7 @@ class WorkerTests(unittest.TestCase):
         process = _Process()
 
         async def _run() -> None:
-            with patch("orchestrator.worker.asyncio.create_subprocess_exec", return_value=process) as spawn_mock:
+            with patch("orchestrator.core.worker.child_process.asyncio.create_subprocess_exec", return_value=process) as spawn_mock:
                 handle = await worker_module._spawn_worker_child_process(
                     mode="runs",
                     wake_event=asyncio.Event(),
@@ -1386,6 +1405,7 @@ class WorkerTests(unittest.TestCase):
             child_timeout_seconds: int,
             claimed_run_id: str | None = None,
             claim_id: str | None = None,
+            worker_service_instance_id: str | None = None,
         ):
             _ = mode
             _ = wake_event
@@ -1425,9 +1445,10 @@ class WorkerTests(unittest.TestCase):
                 worker_module,
                 "_claim_next_run_once",
                 side_effect=[
-                    worker_module.ClaimedRunDispatch(
+                    run_dispatch_module.ClaimedRunDispatch(
                         run_id="run-1",
                         claim_id="claim-1",
+                        worker_service_instance_id="node-a:1234",
                         tenant_id="tenant-1",
                         issue_key="GP-1",
                     ),
@@ -1491,6 +1512,7 @@ class WorkerTests(unittest.TestCase):
             child_timeout_seconds: int,
             claimed_run_id: str | None = None,
             claim_id: str | None = None,
+            worker_service_instance_id: str | None = None,
         ):
             _ = mode
             _ = wake_event
@@ -1506,6 +1528,7 @@ class WorkerTests(unittest.TestCase):
                 wait_task=asyncio.create_task(asyncio.sleep(0, result=child_result)),
                 claimed_run_id=claimed_run_id,
                 claim_id=claim_id,
+                worker_service_instance_id=worker_service_instance_id,
             )
 
         with (
@@ -1522,9 +1545,10 @@ class WorkerTests(unittest.TestCase):
                 worker_module,
                 "_claim_next_run_once",
                 side_effect=[
-                    worker_module.ClaimedRunDispatch(
+                    run_dispatch_module.ClaimedRunDispatch(
                         run_id="run-1",
                         claim_id="claim-1",
+                        worker_service_instance_id="node-a:1234",
                         tenant_id="tenant-1",
                         issue_key="GP-1",
                     ),
@@ -1551,6 +1575,7 @@ class WorkerTests(unittest.TestCase):
             session_factory=unittest.mock.ANY,
             run_id="run-1",
             claim_id="claim-1",
+            worker_service_instance_id="node-a:1234",
         )
 
     def test_run_worker_uses_policy_parallel_slots(self) -> None:
@@ -1605,6 +1630,7 @@ class WorkerTests(unittest.TestCase):
             child_timeout_seconds: int,
             claimed_run_id: str | None = None,
             claim_id: str | None = None,
+            worker_service_instance_id: str | None = None,
         ):
             _ = mode
             _ = wake_event
@@ -1640,15 +1666,17 @@ class WorkerTests(unittest.TestCase):
                 worker_module,
                 "_claim_next_run_once",
                 side_effect=[
-                    worker_module.ClaimedRunDispatch(
+                    run_dispatch_module.ClaimedRunDispatch(
                         run_id="run-1",
                         claim_id="claim-1",
+                        worker_service_instance_id="node-a:1234",
                         tenant_id="tenant-1",
                         issue_key="GP-1",
                     ),
-                    worker_module.ClaimedRunDispatch(
+                    run_dispatch_module.ClaimedRunDispatch(
                         run_id="run-2",
                         claim_id="claim-2",
+                        worker_service_instance_id="node-a:1234",
                         tenant_id="tenant-1",
                         issue_key="GP-2",
                     ),
@@ -1714,6 +1742,7 @@ class WorkerTests(unittest.TestCase):
             child_timeout_seconds: int,
             claimed_run_id: str | None = None,
             claim_id: str | None = None,
+            worker_service_instance_id: str | None = None,
         ):
             _ = mode
             _ = wake_event
@@ -1750,15 +1779,17 @@ class WorkerTests(unittest.TestCase):
                 worker_module,
                 "_claim_next_run_once",
                 side_effect=[
-                    worker_module.ClaimedRunDispatch(
+                    run_dispatch_module.ClaimedRunDispatch(
                         run_id="run-1",
                         claim_id="claim-1",
+                        worker_service_instance_id="node-a:1234",
                         tenant_id="tenant-1",
                         issue_key="GP-1",
                     ),
-                    worker_module.ClaimedRunDispatch(
+                    run_dispatch_module.ClaimedRunDispatch(
                         run_id="run-2",
                         claim_id="claim-2",
+                        worker_service_instance_id="node-a:1234",
                         tenant_id="tenant-1",
                         issue_key="GP-2",
                     ),
@@ -1821,6 +1852,7 @@ class WorkerTests(unittest.TestCase):
             child_timeout_seconds: int,
             claimed_run_id: str | None = None,
             claim_id: str | None = None,
+            worker_service_instance_id: str | None = None,
         ):
             _ = mode
             _ = wake_event
@@ -1850,9 +1882,10 @@ class WorkerTests(unittest.TestCase):
             patch.object(
                 worker_module,
                 "_claim_next_run_once",
-                return_value=worker_module.ClaimedRunDispatch(
+                return_value=run_dispatch_module.ClaimedRunDispatch(
                     run_id="run-1",
                     claim_id="claim-1",
+                    worker_service_instance_id="node-a:1234",
                     tenant_id="tenant-1",
                     issue_key="GP-1",
                 ),

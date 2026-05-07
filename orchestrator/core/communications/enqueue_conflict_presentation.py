@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Protocol
 
-from orchestrator.core.run_enqueue_types import EnqueueFailureReason
+from orchestrator.core.runs.enqueue_types import EnqueueFailureReason
 
 
 class _RunLike(Protocol):

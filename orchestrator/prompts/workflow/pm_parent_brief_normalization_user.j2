@@ -19,6 +19,5 @@ Assume the parent may have been written by a non-technical stakeholder.
 Do not ask implementation or architecture questions.
 If the ticket text is too ambiguous, ask only the smallest set of stakeholder-safe product or non-functional questions needed before child-ticket planning can proceed.
 
-Return strict JSON only with keys:
-- brief
-- open_questions
+Return JSON matching this domain model:
+{{ domain_model | tojson(indent=2) }}

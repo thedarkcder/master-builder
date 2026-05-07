@@ -1,12 +1,13 @@
 "use client";
 
-import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { useAuth } from "@/components/auth-provider";
 import { ProjectKnowledgeAddSection } from "@/components/project-knowledge-add-section";
 import { ProjectKnowledgeSourcesSection } from "@/components/project-knowledge-sources-section";
+import { ProjectSectionTabs } from "@/components/project-section-tabs";
 import { Button } from "@/components/ui/button";
+import { useToast } from "@/components/ui/toast-provider";
 
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
@@ -24,6 +25,7 @@ import {
   type ProjectKnowledgeDebugMatchRecord,
   type ProjectKnowledgeStatsRecord
 } from "@/lib/api";
+import { canAccessPlatformAdmin, canManageProjects } from "@/lib/auth-routing";
 import { formatTimestamp } from "@/lib/datetime";
 
 type ProjectKnowledgeBrowserPageProps = {
@@ -54,7 +56,8 @@ export function ProjectKnowledgeBrowserPage({
   projectId,
   initialView = "browse"
 }: ProjectKnowledgeBrowserPageProps) {
-  const { credentials } = useAuth();
+  const { credentials, principal } = useAuth();
+  const { showToast } = useToast();
   const [activeView, setActiveView] = useState<"browse" | "add" | "sources">(initialView);
   const [stats, setStats] = useState<ProjectKnowledgeStatsRecord | null>(null);
   const [assets, setAssets] = useState<ProjectKnowledgeAssetRecord[]>([]);
@@ -84,6 +87,8 @@ export function ProjectKnowledgeBrowserPage({
   }, [stats]);
 
   const actionsDisabled = !credentials || loadingPage;
+  const allowProjectManagement = canManageProjects(principal, tenantId);
+  const isPlatformSuperAdmin = canAccessPlatformAdmin(principal);
 
   const ensureCredentials = useCallback((): boolean => {
     if (credentials) {
@@ -177,6 +182,12 @@ export function ProjectKnowledgeBrowserPage({
     void loadSelectedChunks();
   }, [credentials, loadSelectedChunks, selectedAssetId, chunkOffset]);
 
+  useEffect(() => {
+    if (!allowProjectManagement && activeView !== "browse") {
+      setActiveView("browse");
+    }
+  }, [activeView, allowProjectManagement]);
+
   function openAsset(assetId: string) {
     setSelectedAssetId(assetId);
     setSelectedAsset(null);
@@ -245,9 +256,9 @@ export function ProjectKnowledgeBrowserPage({
         setAssetOffset(Math.max(0, assetOffset - ASSET_PAGE_SIZE));
       }
       await refreshAll();
-      setStatusLine("Knowledge asset deleted.");
+      showToast({ title: "Knowledge asset deleted", tone: "success" });
     } catch (error) {
-      setStatusLine(`Unable to delete knowledge asset: ${(error as Error).message}`);
+      showToast({ title: "Knowledge asset delete failed", description: (error as Error).message, tone: "error" });
     } finally {
       setDeletingAssetId(null);
     }
@@ -270,15 +281,18 @@ export function ProjectKnowledgeBrowserPage({
         setSelectedAsset((current) => (current ? { ...current, status: updatedAsset.status, updated_at: updatedAsset.updated_at } : current));
       }
       await refreshAll();
-      setStatusLine(
-        nextStatus === "ready"
-          ? `Knowledge asset "${updatedAsset.title}" approved.`
-          : nextStatus === "rejected"
-            ? `Knowledge asset "${updatedAsset.title}" rejected.`
-            : `Knowledge asset "${updatedAsset.title}" moved back to review.`
-      );
+      showToast({
+        title:
+          nextStatus === "ready"
+            ? "Knowledge asset approved"
+            : nextStatus === "rejected"
+              ? "Knowledge asset rejected"
+              : "Knowledge asset moved to review",
+        description: updatedAsset.title,
+        tone: "success",
+      });
     } catch (error) {
-      setStatusLine(`Unable to update knowledge asset status: ${(error as Error).message}`);
+      showToast({ title: "Knowledge asset update failed", description: (error as Error).message, tone: "error" });
     } finally {
       setUpdatingAssetId(null);
     }
@@ -289,17 +303,14 @@ export function ProjectKnowledgeBrowserPage({
 
   return (
     <div className="space-y-6">
+      <ProjectSectionTabs
+        tenantId={tenantId}
+        projectId={projectId}
+        activeSection="knowledge"
+        allowProjectManagement={allowProjectManagement}
+        isPlatformSuperAdmin={isPlatformSuperAdmin}
+      />
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <p className="text-sm text-muted-foreground">
-            <Link
-              href={`/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}`}
-              className="hover:underline"
-            >
-              Back to project
-            </Link>
-          </p>
-        </div>
         <div className="flex flex-wrap gap-2">
           <Button
             variant={activeView === "browse" ? "default" : "outline"}
@@ -311,26 +322,30 @@ export function ProjectKnowledgeBrowserPage({
           >
             Browse
           </Button>
-          <Button
-            variant={activeView === "add" ? "default" : "outline"}
-            size="sm"
-            onClick={() => {
-              closeDrawer();
-              setActiveView("add");
-            }}
-          >
-            Add knowledge
-          </Button>
-          <Button
-            variant={activeView === "sources" ? "default" : "outline"}
-            size="sm"
-            onClick={() => {
-              closeDrawer();
-              setActiveView("sources");
-            }}
-          >
-            Sources
-          </Button>
+          {allowProjectManagement ? (
+            <>
+              <Button
+                variant={activeView === "add" ? "default" : "outline"}
+                size="sm"
+                onClick={() => {
+                  closeDrawer();
+                  setActiveView("add");
+                }}
+              >
+                Add knowledge
+              </Button>
+              <Button
+                variant={activeView === "sources" ? "default" : "outline"}
+                size="sm"
+                onClick={() => {
+                  closeDrawer();
+                  setActiveView("sources");
+                }}
+              >
+                Sources
+              </Button>
+            </>
+          ) : null}
           <Button variant="outline" size="sm" onClick={() => void refreshAll()} disabled={actionsDisabled}>
             {loadingPage ? "Refreshing..." : "Refresh"}
           </Button>
@@ -547,7 +562,7 @@ export function ProjectKnowledgeBrowserPage({
                         <Button size="sm" variant="outline" onClick={() => openAsset(asset.asset_id)} disabled={!credentials}>
                           View
                         </Button>
-                        {asset.status === "pending_review" ? (
+                        {allowProjectManagement && asset.status === "pending_review" ? (
                           <>
                             <Button
                               size="sm"
@@ -567,7 +582,7 @@ export function ProjectKnowledgeBrowserPage({
                             </Button>
                           </>
                         ) : null}
-                        {asset.status === "rejected" ? (
+                        {allowProjectManagement && asset.status === "rejected" ? (
                           <Button
                             size="sm"
                             variant="outline"
@@ -577,15 +592,17 @@ export function ProjectKnowledgeBrowserPage({
                             {updatingAssetId === asset.asset_id ? "Saving..." : "Move to review"}
                           </Button>
                         ) : null}
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="text-red-700 hover:text-red-800"
-                          disabled={deletingAssetId === asset.asset_id}
-                          onClick={() => void removeAsset(asset.asset_id)}
-                        >
-                          {deletingAssetId === asset.asset_id ? "Deleting..." : "Delete"}
-                        </Button>
+                        {allowProjectManagement ? (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="text-red-700 hover:text-red-800"
+                            disabled={deletingAssetId === asset.asset_id}
+                            onClick={() => void removeAsset(asset.asset_id)}
+                          >
+                            {deletingAssetId === asset.asset_id ? "Deleting..." : "Delete"}
+                          </Button>
+                        ) : null}
                       </div>
                     </TableCell>
                   </TableRow>

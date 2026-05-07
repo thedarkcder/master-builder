@@ -44,12 +44,22 @@ jobs:
 
           has_file_named() {
             local filename="$1"
-            [ -n "$(first_file_named "$filename")" ]
+            first_file_named "$filename" >/dev/null
           }
 
           first_file_named() {
             local filename="$1"
-            git ls-files | awk -F/ -v filename="$filename" '$NF==filename {print; exit}'
+            local match=""
+            local path
+            while IFS= read -r path; do
+              if [ -z "$match" ]; then
+                match="$path"
+              fi
+            done < <(git ls-files -- "$filename" "*/$filename")
+            if [ -z "$match" ]; then
+              return 1
+            fi
+            printf '%s\n' "$match"
           }
 
           # Java detection

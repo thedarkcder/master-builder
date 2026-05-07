@@ -19,6 +19,6 @@ Efficiency policy for this stage:
 Only report a blocker when there is an objective execution blocker you cannot proceed around.
 Before returning outcome="waiting_for_input", request the needed transient input with `run.request_human_input` unless a matching answered transient input is already present in context.
 Do not use blocked or waiting_for_input for failing tests, crashes, or missing implementation. Those remain remediable feedback and should return outcome="failed" when they are real defects.
-Return strict JSON only with keys: outcome, guidance, feedback, blocker_message.
-outcome must be exactly one of: continue, waiting_for_input, blocked, failed.
 When `feedback` or `blocker_message` describes a blocked or failed validation outcome, include a short `Troubleshooting:` section with 1-3 concrete operator actions grounded in the observed failure.
+Return JSON matching this domain model:
+{{ domain_model | tojson(indent=2) }}

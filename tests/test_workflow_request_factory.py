@@ -7,7 +7,7 @@ from unittest.mock import patch
 import unittest
 
 from orchestrator.core.worker.workflow_request_factory import build_workflow_request
-from orchestrator.core.worker_capability_normalization import WorkerCapability
+from orchestrator.core.worker.capability_normalization import WorkerCapability
 
 
 class WorkflowRequestFactoryTests(unittest.TestCase):

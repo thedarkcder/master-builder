@@ -120,7 +120,6 @@ def _create_workflow_tables() -> None:
             sa.Column("latest_checkpoint_id", sa.String(length=64), nullable=True),
             sa.Column("source_workflow_id", sa.String(length=64), nullable=True),
             sa.Column("source_run_id", sa.String(length=64), nullable=True),
-            sa.Column("blocked_reason", sa.Text(), nullable=True),
             sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
             sa.Column("started_at", sa.DateTime(timezone=True), nullable=True),
             sa.Column("finished_at", sa.DateTime(timezone=True), nullable=True),
@@ -140,9 +139,15 @@ def _create_workflow_tables() -> None:
         ("ix_workflow_executions_issue_key", ["issue_key"]),
         ("ix_workflow_executions_status", ["status"]),
     ):
-        if not _has_index("workflow_executions", index_name):
+        if all(_has_column("workflow_executions", column) for column in columns) and not _has_index(
+            "workflow_executions",
+            index_name,
+        ):
             op.create_index(index_name, "workflow_executions", columns, unique=False)
-    if not _has_index("workflow_executions", "uq_workflow_executions_active_scope"):
+    if _has_column("workflow_executions", "issue_key") and not _has_index(
+        "workflow_executions",
+        "uq_workflow_executions_active_scope",
+    ):
         op.create_index(
             "uq_workflow_executions_active_scope",
             "workflow_executions",
@@ -235,6 +240,8 @@ def _backfill_workflows_and_attempts() -> None:
         finished_at = row["finished_at"]
         updated_at = finished_at or started_at or created_at
         active_run_id = row["run_id"] if str(row["status"]) in _WORKFLOW_ACTIVE_STATUSES else None
+        workflow_status = "failed" if str(row["status"] or "").strip().lower() == "blocked" else row["status"]
+        workflow_last_error = row["last_error"]
 
         workflow_exists = bind.execute(
             text("SELECT 1 FROM workflow_executions WHERE workflow_id = :workflow_id"),
@@ -247,11 +254,11 @@ def _backfill_workflows_and_attempts() -> None:
                     INSERT INTO workflow_executions (
                         workflow_id, tenant_id, project_id, issue_key, issue_summary, issue_description, repo_url,
                         branch, pr_url, dedupe_scope, status, active_run_id, latest_checkpoint_id, source_workflow_id,
-                        source_run_id, blocked_reason, created_at, started_at, finished_at, updated_at, last_error
+                        source_run_id, created_at, started_at, finished_at, updated_at, last_error
                     ) VALUES (
                         :workflow_id, :tenant_id, :project_id, :issue_key, :issue_summary, :issue_description, :repo_url,
                         :branch, :pr_url, :dedupe_scope, :status, :active_run_id, :latest_checkpoint_id, NULL,
-                        NULL, :blocked_reason, :created_at, :started_at, :finished_at, :updated_at, :last_error
+                        NULL, :created_at, :started_at, :finished_at, :updated_at, :last_error
                     )
                     """
                 ),
@@ -266,15 +273,14 @@ def _backfill_workflows_and_attempts() -> None:
                     "branch": row["branch"],
                     "pr_url": row["pr_url"],
                     "dedupe_scope": row["dedupe_scope"],
-                    "status": row["status"],
+                    "status": workflow_status,
                     "active_run_id": active_run_id,
                     "latest_checkpoint_id": checkpoint_id,
-                    "blocked_reason": row["last_error"] if row["status"] == "blocked" else None,
                     "created_at": created_at,
                     "started_at": started_at,
                     "finished_at": finished_at,
                     "updated_at": updated_at,
-                    "last_error": row["last_error"],
+                    "last_error": workflow_last_error,
                 },
             )
         else:
@@ -288,20 +294,18 @@ def _backfill_workflows_and_attempts() -> None:
                         latest_checkpoint_id = :latest_checkpoint_id,
                         branch = :branch,
                         pr_url = :pr_url,
-                        blocked_reason = :blocked_reason,
                         finished_at = :finished_at,
                         updated_at = :updated_at
                     WHERE workflow_id = :workflow_id
                     """
                 ),
                 {
-                    "status": row["status"],
-                    "last_error": row["last_error"],
+                    "status": workflow_status,
+                    "last_error": workflow_last_error,
                     "active_run_id": active_run_id,
                     "latest_checkpoint_id": checkpoint_id,
                     "branch": row["branch"],
                     "pr_url": row["pr_url"],
-                    "blocked_reason": row["last_error"] if row["status"] == "blocked" else None,
                     "finished_at": finished_at,
                     "updated_at": updated_at,
                     "workflow_id": workflow_id,

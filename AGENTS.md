@@ -2,6 +2,12 @@
 
 Repository execution policy for Codex terminal sessions.
 
+## Hard Rules
+
+No fallback paths, no compatibility shims, no silent degradation. If the primary contract cannot be satisfied, fail hard with a clear error.
+
+In this repo, always remove fallback behavior when touching a codepath and do a data migration unless explicitly ask for staged migration or backward compatibility.
+
 ## Required preflight (before coding)
 - Read `.codex/POLICY.md`.
 - Read `.codex/ENGINEERING_STANDARDS.md`.

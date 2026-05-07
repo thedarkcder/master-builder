@@ -4,12 +4,12 @@ from datetime import datetime, timezone
 from unittest.mock import patch
 
 from orchestrator.core.config import get_settings
-from orchestrator.core.decision_planner import DecisionPlannerQuestion, DecisionPlannerResult
-from orchestrator.core.decision_engine import DecisionEventInput, evaluate_decision_event
-from orchestrator.core.decision_state_repository import existing_case_for_issue
-from orchestrator.core.decision_gate import DecisionGateResult
+from orchestrator.core.decision.planner import DecisionPlannerQuestion, DecisionPlannerResult
+from orchestrator.core.decision.engine import DecisionEventInput, evaluate_decision_event
+from orchestrator.core.decision.state_repository import existing_case_for_issue
+from orchestrator.core.decision.gate import DecisionGateResult
 from orchestrator.core.gtd import GoodToDoValidationResult
-from orchestrator.core.pre_run_check import PreRunCheckResult
+from orchestrator.core.precheck.pre_run_check import PreRunCheckResult
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.models import DecisionCase, DecisionCycle, DecisionEffectOutbox, DecisionEvent, Project, Tenant
 from tests.test_support.db_harness import SqliteTemplateDbTestCase
@@ -137,7 +137,7 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
         self.session_factory = create_session_factory(database_url=self.database_url)
         self.settings = get_settings()
         self._codex_resolution_patcher = patch(
-            "orchestrator.core.decision_engine.resolve_slots_with_codex_resolution",
+            "orchestrator.core.decision.engine.resolve_slots_with_runtime_resolution",
             return_value={},
         )
         self._codex_resolution_patcher.start()
@@ -178,7 +178,7 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
             return prechecks.pop(0)
 
         with self.session_factory() as session, patch(
-            "orchestrator.core.decision_engine.plan_decision_questions",
+            "orchestrator.core.decision.engine.plan_decision_questions",
             side_effect=[
                 _planner_result(
                     gate_status="blocked_decision_gate",
@@ -210,7 +210,7 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
                     issue_labels=[],
                 ),
                 settings=self.settings,
-                tenant_jira_oauth_context_fn=lambda **__: None,
+                tenant_atlassian_oauth_context_fn=lambda **__: None,
                 evaluate_pre_run_check_fn=_evaluate_pre_run_check_stub,
             )
             second = evaluate_decision_event(
@@ -227,7 +227,7 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
                     issue_labels=[],
                 ),
                 settings=self.settings,
-                tenant_jira_oauth_context_fn=lambda **__: None,
+                tenant_atlassian_oauth_context_fn=lambda **__: None,
                 evaluate_pre_run_check_fn=_evaluate_pre_run_check_stub,
             )
 
@@ -248,7 +248,7 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
         )
 
         with self.session_factory() as session, patch(
-            "orchestrator.core.decision_engine.plan_decision_questions",
+            "orchestrator.core.decision.engine.plan_decision_questions",
             side_effect=[
                 _planner_result(
                     gate_status="blocked_decision_gate",
@@ -283,7 +283,7 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
                     issue_labels=[],
                 ),
                 settings=self.settings,
-                tenant_jira_oauth_context_fn=lambda **__: None,
+                tenant_atlassian_oauth_context_fn=lambda **__: None,
                 evaluate_pre_run_check_fn=lambda **__: precheck,
             )
             second = evaluate_decision_event(
@@ -300,7 +300,7 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
                     issue_labels=[],
                 ),
                 settings=self.settings,
-                tenant_jira_oauth_context_fn=lambda **__: None,
+                tenant_atlassian_oauth_context_fn=lambda **__: None,
                 evaluate_pre_run_check_fn=lambda **__: precheck,
             )
             cycle = session.get(DecisionCycle, second.cycle_id)
@@ -327,7 +327,7 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
         precheck = _precheck_result(outcome="ready_for_agent")
 
         with self.session_factory() as session, patch(
-            "orchestrator.core.decision_engine.plan_decision_questions",
+            "orchestrator.core.decision.engine.plan_decision_questions",
             return_value=_planner_result(
                 gate_status="blocked_decision_gate",
                 reason="Need config",
@@ -352,7 +352,7 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
                     issue_labels=[],
                 ),
                 settings=self.settings,
-                tenant_jira_oauth_context_fn=lambda **__: None,
+                tenant_atlassian_oauth_context_fn=lambda **__: None,
                 evaluate_pre_run_check_fn=lambda **__: precheck,
             )
             second = evaluate_decision_event(
@@ -369,7 +369,7 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
                     issue_labels=[],
                 ),
                 settings=self.settings,
-                tenant_jira_oauth_context_fn=lambda **__: None,
+                tenant_atlassian_oauth_context_fn=lambda **__: None,
                 evaluate_pre_run_check_fn=lambda **__: precheck,
             )
             event_count = len(session.query(DecisionEvent).all())
@@ -394,7 +394,7 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
             return prechecks.pop(0)
 
         with self.session_factory() as session, patch(
-            "orchestrator.core.decision_engine.plan_decision_questions",
+            "orchestrator.core.decision.engine.plan_decision_questions",
             return_value=_planner_result(
                 gate_status="blocked_decision_gate",
                 reason="Need owner decision",
@@ -419,7 +419,7 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
                     issue_labels=[],
                 ),
                 settings=self.settings,
-                tenant_jira_oauth_context_fn=lambda **__: None,
+                tenant_atlassian_oauth_context_fn=lambda **__: None,
                 evaluate_pre_run_check_fn=_evaluate_pre_run_check_stub,
             )
             case_before = session.query(DecisionCase).filter_by(issue_key="MAB-164").one()
@@ -439,7 +439,7 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
                     issue_labels=["agent:ready"],
                 ),
                 settings=self.settings,
-                tenant_jira_oauth_context_fn=lambda **__: None,
+                tenant_atlassian_oauth_context_fn=lambda **__: None,
                 evaluate_pre_run_check_fn=_evaluate_pre_run_check_stub,
             )
             case_after = session.query(DecisionCase).filter_by(issue_key="MAB-164").one()
@@ -470,7 +470,7 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
             return prechecks.pop(0)
 
         with self.session_factory() as session, patch(
-            "orchestrator.core.decision_engine.plan_decision_questions",
+            "orchestrator.core.decision.engine.plan_decision_questions",
             side_effect=[
                 _planner_result(
                     gate_status="blocked_decision_gate",
@@ -504,7 +504,7 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
                     issue_labels=[],
                 ),
                 settings=self.settings,
-                tenant_jira_oauth_context_fn=lambda **__: None,
+                tenant_atlassian_oauth_context_fn=lambda **__: None,
                 evaluate_pre_run_check_fn=_evaluate_pre_run_check_stub,
             )
             self.assertEqual(first.classification, "decision_gate")
@@ -551,7 +551,7 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
                     issue_labels=[],
                 ),
                 settings=self.settings,
-                tenant_jira_oauth_context_fn=lambda **__: None,
+                tenant_atlassian_oauth_context_fn=lambda **__: None,
                 evaluate_pre_run_check_fn=_evaluate_pre_run_check_stub,
             )
 
@@ -580,7 +580,7 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
             return prechecks.pop(0)
 
         with self.session_factory() as session, patch(
-            "orchestrator.core.decision_engine.plan_decision_questions",
+            "orchestrator.core.decision.engine.plan_decision_questions",
             side_effect=[
                 _planner_result(
                     gate_status="blocked_decision_gate",
@@ -614,7 +614,7 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
                     issue_labels=[],
                 ),
                 settings=self.settings,
-                tenant_jira_oauth_context_fn=lambda **__: None,
+                tenant_atlassian_oauth_context_fn=lambda **__: None,
                 evaluate_pre_run_check_fn=_evaluate_pre_run_check_stub,
             )
             self.assertEqual(first.classification, "decision_gate")
@@ -662,7 +662,7 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
                     issue_labels=[],
                 ),
                 settings=self.settings,
-                tenant_jira_oauth_context_fn=lambda **__: None,
+                tenant_atlassian_oauth_context_fn=lambda **__: None,
                 evaluate_pre_run_check_fn=_evaluate_pre_run_check_stub,
             )
             case = session.query(DecisionCase).filter_by(issue_key="MAB-167").one()
@@ -692,7 +692,7 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
             return prechecks.pop(0)
 
         with self.session_factory() as session, patch(
-            "orchestrator.core.decision_engine.plan_decision_questions",
+            "orchestrator.core.decision.engine.plan_decision_questions",
             side_effect=[
                 _planner_result(
                     gate_status="blocked_decision_gate",
@@ -726,7 +726,7 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
                     issue_labels=[],
                 ),
                 settings=self.settings,
-                tenant_jira_oauth_context_fn=lambda **__: None,
+                tenant_atlassian_oauth_context_fn=lambda **__: None,
                 evaluate_pre_run_check_fn=_evaluate_pre_run_check_stub,
             )
             cycle = session.get(DecisionCycle, str(first.cycle_id))
@@ -773,7 +773,7 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
                     issue_labels=[],
                 ),
                 settings=self.settings,
-                tenant_jira_oauth_context_fn=lambda **__: None,
+                tenant_atlassian_oauth_context_fn=lambda **__: None,
                 evaluate_pre_run_check_fn=_evaluate_pre_run_check_stub,
             )
 
@@ -791,7 +791,7 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
                     issue_labels=[],
                 ),
                 settings=self.settings,
-                tenant_jira_oauth_context_fn=lambda **__: None,
+                tenant_atlassian_oauth_context_fn=lambda **__: None,
                 evaluate_pre_run_check_fn=_evaluate_pre_run_check_stub,
             )
             case = session.query(DecisionCase).filter_by(issue_key="MAB-168").one()
@@ -834,7 +834,7 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
             )
 
         with self.session_factory() as session, patch(
-            "orchestrator.core.decision_engine.plan_decision_questions",
+            "orchestrator.core.decision.engine.plan_decision_questions",
             side_effect=[
                 _planner_result(
                     gate_status="blocked_decision_gate",
@@ -868,7 +868,7 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
                     issue_labels=[],
                 ),
                 settings=self.settings,
-                tenant_jira_oauth_context_fn=lambda **__: None,
+                tenant_atlassian_oauth_context_fn=lambda **__: None,
                 evaluate_pre_run_check_fn=_evaluate_pre_run_check_stub,
             )
             self.assertEqual(first.classification, "decision_gate")
@@ -915,7 +915,7 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
                     issue_labels=[],
                 ),
                 settings=self.settings,
-                tenant_jira_oauth_context_fn=lambda **__: None,
+                tenant_atlassian_oauth_context_fn=lambda **__: None,
                 evaluate_pre_run_check_fn=_evaluate_pre_run_check_stub,
             )
 
@@ -933,7 +933,7 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
                     issue_labels=["agent:ready", "ios", "payments"],
                 ),
                 settings=self.settings,
-                tenant_jira_oauth_context_fn=lambda **__: None,
+                tenant_atlassian_oauth_context_fn=lambda **__: None,
                 evaluate_pre_run_check_fn=_evaluate_pre_run_check_stub,
             )
             case = session.query(DecisionCase).filter_by(issue_key="MAB-170").one()
@@ -965,7 +965,7 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
             return prechecks.pop(0)
 
         with self.session_factory() as session, patch(
-            "orchestrator.core.decision_engine.plan_decision_questions",
+            "orchestrator.core.decision.engine.plan_decision_questions",
             side_effect=[
                 _planner_result(
                     gate_status="blocked_decision_gate",
@@ -1000,7 +1000,7 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
                     issue_labels=["agent:ready"],
                 ),
                 settings=self.settings,
-                tenant_jira_oauth_context_fn=lambda **__: None,
+                tenant_atlassian_oauth_context_fn=lambda **__: None,
                 evaluate_pre_run_check_fn=_evaluate_pre_run_check_stub,
             )
             self.assertEqual(first.classification, "decision_gate")
@@ -1047,7 +1047,7 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
                     issue_labels=["agent:ready"],
                 ),
                 settings=self.settings,
-                tenant_jira_oauth_context_fn=lambda **__: None,
+                tenant_atlassian_oauth_context_fn=lambda **__: None,
                 evaluate_pre_run_check_fn=_evaluate_pre_run_check_stub,
             )
             rerun = evaluate_decision_event(
@@ -1064,7 +1064,7 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
                     issue_labels=["ios", "payments"],
                 ),
                 settings=self.settings,
-                tenant_jira_oauth_context_fn=lambda **__: None,
+                tenant_atlassian_oauth_context_fn=lambda **__: None,
                 evaluate_pre_run_check_fn=_evaluate_pre_run_check_stub,
             )
             case = session.query(DecisionCase).filter_by(issue_key="MAB-171").one()
@@ -1175,7 +1175,7 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
             return True, None
 
         with self.session_factory() as session, patch(
-            "orchestrator.core.decision_engine.plan_decision_questions",
+            "orchestrator.core.decision.engine.plan_decision_questions",
             return_value=_planner_result(
                 gate_status="blocked_decision_gate",
                 reason="Need owner decision",
@@ -1200,7 +1200,7 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
                     issue_labels=[],
                 ),
                 settings=self.settings,
-                tenant_jira_oauth_context_fn=lambda **__: None,
+                tenant_atlassian_oauth_context_fn=lambda **__: None,
                 publish_jira_comment_fn=_publish,
                 evaluate_pre_run_check_fn=lambda **__: precheck,
             )
@@ -1226,14 +1226,14 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
                 decision_gate_missing_sections=("objective",),
             )
 
-        from orchestrator.core.knowledge_base import SlotResolution
+        from orchestrator.core.knowledge.base import SlotResolution
 
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-stateful")
             project = session.get(Project, "project-stateful")
             assert tenant is not None and project is not None
             with patch(
-                "orchestrator.core.decision_engine.resolve_missing_slots_from_knowledge",
+                "orchestrator.core.decision.engine.resolve_missing_slots_from_knowledge",
                 return_value={
                     "objective": SlotResolution(
                         slot_name="objective",
@@ -1259,7 +1259,7 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
                         issue_labels=[],
                     ),
                     settings=self.settings,
-                    tenant_jira_oauth_context_fn=lambda **__: None,
+                    tenant_atlassian_oauth_context_fn=lambda **__: None,
                     evaluate_pre_run_check_fn=_stub_precheck,
                 )
 
@@ -1279,7 +1279,7 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
                 decision_gate_missing_sections=("objective",),
             )
 
-        from orchestrator.core.knowledge_base import SlotResolution
+        from orchestrator.core.knowledge.base import SlotResolution
 
         source_time = datetime(2026, 3, 23, 13, 30, tzinfo=timezone.utc)
 
@@ -1288,7 +1288,7 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
             project = session.get(Project, "project-stateful")
             assert tenant is not None and project is not None
             with patch(
-                "orchestrator.core.decision_engine.resolve_missing_slots_from_knowledge",
+                "orchestrator.core.decision.engine.resolve_missing_slots_from_knowledge",
                 return_value={
                     "objective": SlotResolution(
                         slot_name="objective",
@@ -1314,7 +1314,7 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
                         issue_labels=[],
                     ),
                     settings=self.settings,
-                    tenant_jira_oauth_context_fn=lambda **__: None,
+                    tenant_atlassian_oauth_context_fn=lambda **__: None,
                     evaluate_pre_run_check_fn=_stub_precheck,
                 )
 
@@ -1346,6 +1346,6 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
                         issue_labels=[],
                     ),
                     settings=self.settings,
-                    tenant_jira_oauth_context_fn=lambda **__: None,
+                    tenant_atlassian_oauth_context_fn=lambda **__: None,
                     evaluate_pre_run_check_fn=lambda **__: _precheck_result(outcome="ready_for_agent"),
                 )

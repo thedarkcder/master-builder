@@ -9,7 +9,7 @@ from orchestrator.api.webhooks.contracts import (
     post_jira_comment as _post_jira_comment,
 )
 from orchestrator.api.webhooks.jira_ingress import ingest_jira_webhook_event
-from orchestrator.core.webhook_health import webhook_health_tracker
+from orchestrator.core.webhooks.health import webhook_health_tracker
 from orchestrator.core.config import get_settings
 
 router = APIRouter(tags=["jira-webhook"])

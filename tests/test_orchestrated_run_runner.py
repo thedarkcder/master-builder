@@ -1,8 +1,8 @@
 import unittest
 from dataclasses import replace
 
-from orchestrator.core.codex_runtime import CodexRuntime
-from orchestrator.core.worker_capability_normalization import WorkerCapability
+from orchestrator.core.runtime.runtime import CodexRuntime
+from orchestrator.core.worker.capability_normalization import WorkerCapability
 from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 from orchestrator.core.workflow.orchestrated_run_runner import OrchestratedRunWorkflowExecutor
 from orchestrator.core.workflow.runner import (

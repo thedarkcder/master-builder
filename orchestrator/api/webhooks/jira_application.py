@@ -8,13 +8,13 @@ from fastapi import status
 from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
-from orchestrator.api.jira_oauth.connection_service import tenant_jira_oauth_context
+from orchestrator.api.atlassian_oauth.connection_service import tenant_atlassian_oauth_context
 from orchestrator.api.webhooks.jira_comment_planner import plan_jira_comment_flow
 from orchestrator.api.webhooks.jira_admission_flow import (
     build_jira_enqueue_skipped_notification_action,
     plan_jira_run_flow,
+    resolve_jira_issue_board_location,
 )
-from orchestrator.api.webhooks.jira_board_location import resolve_project_issue_board_location
 from orchestrator.api.webhooks.jira_event_classifier import evaluate_jira_trigger_state
 from orchestrator.api.webhooks.jira_parent_child_sync import handle_parent_feature_sync
 from orchestrator.api.webhooks.jira_webhook_types import (
@@ -24,22 +24,22 @@ from orchestrator.api.webhooks.jira_webhook_types import (
     jira_webhook_response,
     snapshot_jira_webhook_context,
 )
-from orchestrator.core.agent_runtime_resolver import build_runtime_for_selector
-from orchestrator.core.webhook_job_queue import (
+from orchestrator.core.runtime.agent_runtime_resolver import build_runtime_for_selector
+from orchestrator.core.webhooks.job_queue import (
     WEBHOOK_TRANSPORT_JIRA,
     WebhookJobEnqueueRequest,
     enqueue_webhook_job,
 )
 from orchestrator.core.communications import HttpJsonResponseAction, IngressResult, TransportAction, TransportEnvelope
 from orchestrator.core.communications.execution_admission_format import present_jira_admission
-from orchestrator.core.decision_state_machine import (
+from orchestrator.core.decision.state_machine import (
     ExecutionAdmissionReason,
     build_execution_admission_block,
 )
-from orchestrator.core.jira_issue_intake_routing import classify_jira_issue_intake_with_runtime
-from orchestrator.core.observability import reset_log_context, set_log_context
-from orchestrator.core.runtime_invocation import AgentInvocationContext
-from orchestrator.core.webhook_job_errors import RetryableWebhookJobError
+from orchestrator.core.integrations.atlassian.issue_intake_routing import classify_jira_issue_intake_with_runtime
+from orchestrator.core.observability.otel import reset_log_context, set_log_context
+from orchestrator.core.runtime.invocation import AgentInvocationContext
+from orchestrator.core.webhooks.job_errors import RetryableWebhookJobError
 from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.models import Tenant
 from orchestrator.storage.run_queue_events import notify_webhook_job_enqueued
@@ -78,7 +78,7 @@ def _maybe_apply_runtime_issue_intake_routing(
         return None
     if _PM_PARENT_LABEL in normalized_labels or _ENGINEERING_CHILD_LABEL in normalized_labels:
         return None
-    board_location, _detail = resolve_project_issue_board_location(
+    board_location, _detail = resolve_jira_issue_board_location(
         context=context,
         session=session,
         settings=settings,
@@ -127,11 +127,11 @@ def _maybe_apply_runtime_issue_intake_routing(
             "Jira issue intake routing classification failed",
             retry_after_seconds=45,
         ) from exc
-    target_label = _route_label_for_issue_intake(routing["route"])
+    target_label = _route_label_for_issue_intake(routing.route)
     if not target_label or target_label in normalized_labels:
         return None
     try:
-        oauth = tenant_jira_oauth_context(
+        oauth = tenant_atlassian_oauth_context(
             session=session,
             tenant=context.tenant,
             settings=settings,
@@ -163,9 +163,9 @@ def _maybe_apply_runtime_issue_intake_routing(
         context.request_id,
         context.tenant_id,
         context.issue_key,
-        routing["route"],
-        routing["confidence"],
-        routing["reason"],
+        routing.route,
+        routing.confidence,
+        routing.reason,
     )
     return target_label
 
@@ -299,6 +299,19 @@ def _process_jira_webhook_context(
     )
     if comment_plan.content is not None:
         return JiraWebhookPlan(content=comment_plan.content)
+
+    if context.comment_command is not None:
+        run_plan = plan_jira_run_flow(
+            context=context,
+            session=session,
+            settings=settings,
+            evaluate_jira_trigger_state_fn=evaluate_jira_trigger_state,
+            jira_webhook_response_fn=jira_webhook_response,
+        )
+        return JiraWebhookPlan(
+            content=run_plan.content,
+            actions=run_plan.actions,
+        )
 
     if context.project is None:
         logger.info(

@@ -5,7 +5,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import patch
 
-from orchestrator.core.project_automation_briefing_service import (
+from orchestrator.core.projects.automation_briefing_service import (
     _build_transcript_from_segments,
     _collect_github_facts,
     _normalize_persona_segments,
@@ -108,7 +108,7 @@ class ProjectAutomationBriefingServiceTests(unittest.TestCase):
         )
 
         with patch(
-            "orchestrator.core.project_automation_briefing_service.github_client_from_tenant_config",
+            "orchestrator.core.projects.automation_briefing_service.github_client_from_tenant_config",
             return_value=client,
         ):
             facts = _collect_github_facts(
@@ -178,7 +178,7 @@ class ProjectAutomationBriefingServiceTests(unittest.TestCase):
         )
 
         with patch(
-            "orchestrator.core.project_automation_briefing_service.github_client_from_tenant_config",
+            "orchestrator.core.projects.automation_briefing_service.github_client_from_tenant_config",
             return_value=client,
         ):
             facts = _collect_github_facts(

@@ -14,9 +14,9 @@ export const STEP_ORDER = [
   },
   {
     key: "jira",
-    label: "Jira",
-    title: "Connect Jira",
-    description: "Connect Jira and choose the projects for this workspace.",
+    label: "Atlassian",
+    title: "Connect Atlassian",
+    description: "Connect Atlassian and choose the Jira projects for this workspace.",
   },
   {
     key: "github",

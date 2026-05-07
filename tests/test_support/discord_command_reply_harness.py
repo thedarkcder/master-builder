@@ -4,12 +4,12 @@ from datetime import datetime, timezone
 from cryptography.fernet import Fernet
 
 from orchestrator.core.config import get_settings
-from orchestrator.core.decision_gate import DecisionGateResult
-from orchestrator.core.decision_state_machine import resolve_execution_gate_state
-from orchestrator.core.decision_types import DecisionClassification, IngressDecision
-from orchestrator.core.decision_engine import DecisionEngineResult
+from orchestrator.core.decision.gate import DecisionGateResult
+from orchestrator.core.decision.state_machine import resolve_execution_gate_state
+from orchestrator.core.decision.types import DecisionClassification, IngressDecision
+from orchestrator.core.decision.engine import DecisionEngineResult
 from orchestrator.core.gtd import GoodToDoValidationResult
-from orchestrator.core.pre_run_check import PreRunCheckResult
+from orchestrator.core.precheck.pre_run_check import PreRunCheckResult
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.models import Project, Run, WorkflowExecution
 from tests.test_support.db_harness import SqliteTemplateApiTestCase
@@ -126,14 +126,17 @@ class DiscordCommandReplyHarness(SqliteTemplateApiTestCase):
             session.add(
                 WorkflowExecution(
                     workflow_id=workflow_id,
+                    workflow_type_key="issue_execution",
                     tenant_id=self.tenant_id,
                     project_id=project_id,
-                    issue_key=issue_key,
-                    issue_summary=f"Issue {issue_key}",
-                    issue_description="desc",
+                    source_system="jira",
+                    source_ref=issue_key,
+                    display_name=f"Issue {issue_key}",
+                    source_description="desc",
                     repo_url="https://github.com/example/repo",
                     branch=None,
                     pr_url=None,
+                    orchestration_backend="legacy",
                     dedupe_scope="issue_execution",
                     status=status,
                     last_error=None,
@@ -141,7 +144,6 @@ class DiscordCommandReplyHarness(SqliteTemplateApiTestCase):
                     latest_checkpoint_id=None,
                     source_workflow_id=None,
                     source_run_id=None,
-                    blocked_reason=None,
                     created_at=now,
                     started_at=now if status == "running" else None,
                     finished_at=None if status in {"queued", "running"} else now,
