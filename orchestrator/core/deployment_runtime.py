@@ -428,6 +428,8 @@ def _select_release_for_event(
     deployment_uuid: str | None,
     application_uuid: str | None,
 ) -> ProjectDeploymentRelease | None:
+    if deployment_uuid is None and application_uuid is None:
+        return None
     releases = session.execute(
         select(ProjectDeploymentRelease)
         .where(
@@ -448,7 +450,7 @@ def _select_release_for_event(
             return release
         if application_uuid is not None and release_application_uuid == application_uuid:
             return release
-    return releases[0]
+    return None
 
 
 def ingest_coolify_deployment_event(

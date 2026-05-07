@@ -37,6 +37,15 @@ from orchestrator.core.communications import (
 )
 from orchestrator.core.deployment_runtime import ingest_coolify_deployment_event
 from orchestrator.core.github.transport_executor import GitHubTransportExecutor
+from orchestrator.core.project_app_analysis_runtime import run_project_app_analysis
+from orchestrator.core.project_app_artifact_pr_runtime import create_project_app_artifact_pr
+from orchestrator.core.project_app_planner import (
+    get_project_app_analysis_run,
+    mark_project_app_analysis_run_completed,
+    mark_project_app_analysis_run_failed,
+    mark_project_app_analysis_run_running,
+    persist_project_app_analysis_result,
+)
 from orchestrator.core.projects.automation_execution_service import (
     mark_project_automation_execution_failure,
     mark_project_automation_execution_success,
@@ -50,6 +59,7 @@ from orchestrator.core.webhooks.job_queue import (
     WEBHOOK_TRANSPORT_GITHUB,
     WEBHOOK_TRANSPORT_JIRA,
     WEBHOOK_TRANSPORT_PROJECT_AUTOMATION,
+    WEBHOOK_TRANSPORT_PROJECT_APP_ANALYSIS,
     WebhookJob,
     claim_next_webhook_subject_batch,
     mark_webhook_job_ids_failed,
@@ -104,6 +114,124 @@ def _process_coolify_deployment_job(
         webhook_token=str(context_json.get("webhook_token") or "").strip(),
         payload=dict(claimed_job.payload_json or {}),
     )
+    return mark_webhook_jobs_done(session, jobs=(claimed_job,), owner_id=owner_id)
+
+
+def _process_project_app_analysis_job(
+    *,
+    session: Session,
+    settings: Settings,
+    owner_id: str,
+    claimed_job: WebhookJob,
+) -> tuple[WebhookJob, ...]:
+    if not claimed_job.tenant_id:
+        return mark_webhook_jobs_failed(
+            session,
+            jobs=(claimed_job,),
+            owner_id=owner_id,
+            error="Project app analysis webhook job is missing tenant_id",
+        )
+    if not claimed_job.project_id:
+        return mark_webhook_jobs_failed(
+            session,
+            jobs=(claimed_job,),
+            owner_id=owner_id,
+            error="Project app analysis webhook job is missing project_id",
+        )
+
+    tenant = session.get(Tenant, claimed_job.tenant_id)
+    project = session.get(Project, claimed_job.project_id)
+    if tenant is None or not tenant.is_enabled:
+        return mark_webhook_jobs_done(session, jobs=(claimed_job,), owner_id=owner_id)
+    if project is None or project.tenant_id != tenant.tenant_id or bool(getattr(project, "is_archived", False)):
+        return mark_webhook_jobs_done(session, jobs=(claimed_job,), owner_id=owner_id)
+
+    payload_json = dict(claimed_job.payload_json or {})
+    context_json = dict(claimed_job.context_json or {})
+    analysis_run_id = str(
+        payload_json.get("analysis_run_id")
+        or context_json.get("analysis_run_id")
+        or claimed_job.request_id
+        or ""
+    ).strip()
+    if not analysis_run_id:
+        return mark_webhook_jobs_failed(
+            session,
+            jobs=(claimed_job,),
+            owner_id=owner_id,
+            error="Project app analysis webhook job is missing analysis_run_id",
+        )
+
+    run = get_project_app_analysis_run(session=session, analysis_run_id=analysis_run_id)
+    if run is None or run.tenant_id != tenant.tenant_id or run.project_id != project.project_id:
+        return mark_webhook_jobs_failed(
+            session,
+            jobs=(claimed_job,),
+            owner_id=owner_id,
+            error=f"Project app analysis run '{analysis_run_id}' was not found",
+        )
+
+    checkout_path = str(payload_json.get("checkout_path") or context_json.get("checkout_path") or "").strip()
+    if not checkout_path:
+        return mark_webhook_jobs_failed(
+            session,
+            jobs=(claimed_job,),
+            owner_id=owner_id,
+            error="Project app analysis webhook job is missing checkout_path",
+        )
+
+    analysis_source = str(payload_json.get("analysis_source") or context_json.get("analysis_source") or "worker").strip()
+    planner_version = str(payload_json.get("planner_version") or run.planner_version or "").strip() or None
+    try:
+        mark_project_app_analysis_run_running(session=session, analysis_run_id=analysis_run_id)
+        result = run_project_app_analysis(
+            tenant=tenant,
+            project=project,
+            checkout_path=checkout_path,
+            analysis_source=analysis_source,
+            planner_version=planner_version,
+            session=session,
+            settings=settings,
+        )
+        persisted_run = persist_project_app_analysis_result(
+            session=session,
+            tenant_id=tenant.tenant_id,
+            project_id=project.project_id,
+            analysis_run_id=analysis_run_id,
+            apps=result.apps,
+            raw_planner_result_json=result.metadata.raw_planner_result_json,
+            analysis_source=result.metadata.analysis_source,
+            planner_version=result.metadata.planner_version,
+        )
+        artifact_pr = create_project_app_artifact_pr(
+            session=session,
+            settings=settings,
+            tenant=tenant,
+            project=project,
+            checkout_path=checkout_path,
+            analysis_run_id=analysis_run_id,
+            analysis_result=result,
+        )
+        result_payload = dict(persisted_run.result_payload or {})
+        if artifact_pr is not None:
+            result_payload["artifact_pr"] = artifact_pr.to_result_json()
+        mark_project_app_analysis_run_completed(
+            session=session,
+            analysis_run_id=analysis_run_id,
+            result_payload=result_payload,
+        )
+    except Exception as exc:  # noqa: BLE001
+        mark_project_app_analysis_run_failed(
+            session=session,
+            analysis_run_id=analysis_run_id,
+            error=str(exc),
+        )
+        return mark_webhook_jobs_failed(
+            session,
+            jobs=(claimed_job,),
+            owner_id=owner_id,
+            error=str(exc),
+        )
     return mark_webhook_jobs_done(session, jobs=(claimed_job,), owner_id=owner_id)
 
 
@@ -550,6 +678,13 @@ def process_next_webhook_job(
             )
         elif job.transport == WEBHOOK_TRANSPORT_PROJECT_AUTOMATION:
             processed = _process_project_automation_job(
+                session=session,
+                settings=settings,
+                owner_id=owner_id,
+                claimed_job=job,
+            )
+        elif job.transport == WEBHOOK_TRANSPORT_PROJECT_APP_ANALYSIS:
+            processed = _process_project_app_analysis_job(
                 session=session,
                 settings=settings,
                 owner_id=owner_id,

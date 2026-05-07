@@ -151,8 +151,11 @@ def register_deployment_host(
     ).scalar_one_or_none()
     if host is None:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Invalid deployment host bootstrap token")
+    if host.registered_at is not None or host.access_token_hash is not None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Deployment host bootstrap token has already been used")
     access_token = generate_deployment_host_token()
     now = _now()
+    host.bootstrap_token_hash = None
     host.access_token_hash = hash_deployment_host_token(access_token)
     host.agent_version = _normalize_optional_string(agent_version)
     host.capability_keys_json = list(advertised_capabilities)

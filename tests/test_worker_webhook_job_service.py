@@ -14,14 +14,20 @@ from orchestrator.core.webhooks.job_queue import (
     WEBHOOK_TRANSPORT_GITHUB,
     WEBHOOK_TRANSPORT_JIRA,
     WEBHOOK_TRANSPORT_PROJECT_AUTOMATION,
+    WEBHOOK_TRANSPORT_PROJECT_APP_ANALYSIS,
     WebhookJobEnqueueRequest,
     enqueue_webhook_job,
+)
+from orchestrator.core.project_app_planner import (
+    ProjectAppAnalysisResult,
+    ProjectAppAnalysisRunMetadata,
+    ProjectAppNormalizedCandidate,
 )
 from orchestrator.core.worker.webhook_job_service import process_next_webhook_job
 from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
-from orchestrator.storage.models import Project, Run, Tenant, WebhookJob
+from orchestrator.storage.models import Project, ProjectApp, ProjectAppAnalysisRun, Run, Tenant, WebhookJob
 from orchestrator.core.communications import DiscordChannelMessageWithAttachmentAction
 from orchestrator.core.communications import IngressResult
 from tests.workflow_test_support import add_run_with_workflow, make_run
@@ -178,6 +184,25 @@ class WorkerWebhookJobServiceTests(unittest.TestCase):
             },
         )
 
+    @staticmethod
+    def _project_app_analysis_request(*, run_id: str, checkout_path: str) -> WebhookJobEnqueueRequest:
+        return WebhookJobEnqueueRequest(
+            transport=WEBHOOK_TRANSPORT_PROJECT_APP_ANALYSIS,
+            request_id=run_id,
+            tenant_id="tenant-1",
+            project_id="project-1",
+            subject_key=f"project_app_analysis:tenant-1:project-1:{run_id}",
+            dedupe_key=run_id,
+            event_type="project_app_analysis",
+            payload_json={
+                "analysis_run_id": run_id,
+                "checkout_path": checkout_path,
+                "analysis_source": "manual_analyze",
+                "planner_version": "v-test",
+            },
+            context_json={},
+        )
+
     def test_blocking_reconciliation_does_not_cancel_existing_run(self) -> None:
         with self.session_factory() as session:
             enqueue_webhook_job(session, request=self._request())
@@ -313,6 +338,93 @@ class WorkerWebhookJobServiceTests(unittest.TestCase):
             self.assertIsNotNone(processed)
             mark_failed.assert_called_once()
             self.assertEqual(session.get(WebhookJob, processed.job_id).status, "failed")
+
+    def test_project_app_analysis_jobs_dispatch_and_persist_apps(self) -> None:
+        checkout_path = os.path.join(self.temp_dir.name, "repo")
+        os.makedirs(checkout_path, exist_ok=True)
+        now = datetime.now(timezone.utc)
+        run_id = "analysis-run-1"
+        with self.session_factory() as session:
+            session.add(
+                ProjectAppAnalysisRun(
+                    run_id=run_id,
+                    tenant_id="tenant-1",
+                    project_id="project-1",
+                    status="queued",
+                    planner_version="v-test",
+                    request_payload={"checkout_path": checkout_path},
+                    result_payload={},
+                    error=None,
+                    created_at=now,
+                    started_at=None,
+                    completed_at=None,
+                    updated_at=now,
+                )
+            )
+            enqueue_webhook_job(session, request=self._project_app_analysis_request(run_id=run_id, checkout_path=checkout_path))
+            session.commit()
+
+        analysis_result = ProjectAppAnalysisResult(
+            apps=(
+                ProjectAppNormalizedCandidate(
+                    name="Web",
+                    slug="web",
+                    source_path=".",
+                    build_strategy="dockerfile",
+                    detected_runtime="python",
+                    detected_language="python",
+                    detection_confidence=0.91,
+                    exposed_port=8000,
+                    healthcheck="/health",
+                    start_command="uvicorn app:app",
+                    env_schema_json={},
+                    secret_schema_json={},
+                    deployment_config={"enabled": True},
+                    analysis_source="manual_analyze",
+                    needs_generated_files=False,
+                ),
+            ),
+            metadata=ProjectAppAnalysisRunMetadata(
+                tenant_id="tenant-1",
+                project_id="project-1",
+                checkout_path=checkout_path,
+                analysis_source="manual_analyze",
+                planner_version="v-test",
+                pre_scan_count=1,
+                runtime_count=1,
+                normalized_count=1,
+                raw_planner_result_json={"apps": []},
+            ),
+        )
+        with self.session_factory() as session:
+            with (
+                patch(
+                    "orchestrator.core.worker.webhook_job_service.run_project_app_analysis",
+                    return_value=analysis_result,
+                ) as run_analysis,
+                patch(
+                    "orchestrator.core.worker.webhook_job_service.create_project_app_artifact_pr",
+                    return_value=None,
+                ) as create_artifact_pr,
+            ):
+                processed = process_next_webhook_job(session=session, settings=self._settings(), owner_id="worker-1")
+
+            self.assertIsNotNone(processed)
+            run_analysis.assert_called_once()
+            create_artifact_pr.assert_called_once()
+            job = session.get(WebhookJob, processed.job_id)
+            run = session.get(ProjectAppAnalysisRun, run_id)
+            app = session.get(ProjectApp, ProjectAppNormalizedCandidate._app_id(
+                tenant_id="tenant-1",
+                project_id="project-1",
+                source_path=".",
+            ))
+            self.assertEqual(job.status, "done")
+            self.assertEqual(run.status, "completed")
+            self.assertIsNotNone(run.completed_at)
+            self.assertIsNotNone(app)
+            assert app is not None
+            self.assertEqual(app.slug, "web")
 
     def test_github_subject_jobs_are_coalesced_and_marked_done_together(self) -> None:
         with self.session_factory() as session:

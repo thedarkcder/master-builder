@@ -469,6 +469,7 @@ def _mark_restore_run_succeeded(
 
 def _execution_context_for_run(
     *,
+    session,
     resource: ProjectDeploymentResourceWrite,
     run: ProjectDeploymentRestoreRun,
 ) -> DeploymentRestoreExecutionContext:
@@ -486,12 +487,7 @@ def _execution_context_for_run(
         or _normalize_optional_string(config.get("mariadb_user"))
         or _normalize_optional_string(config.get("user"))
     )
-    password = (
-        _normalize_optional_string(config.get("postgres_password"))
-        or _normalize_optional_string(config.get("mysql_password"))
-        or _normalize_optional_string(config.get("mariadb_password"))
-        or _normalize_optional_string(config.get("password"))
-    )
+    password = _resolve_resource_password(session=session, run=run, config=config)
     database_name = (
         _normalize_optional_string(config.get("postgres_db"))
         or _normalize_optional_string(config.get("mysql_database"))
@@ -517,6 +513,36 @@ def _execution_context_for_run(
         port=int(port),
         artifact_path=artifact_path,
     )
+
+
+def _resolve_resource_password(
+    *,
+    session,
+    run: ProjectDeploymentRestoreRun,
+    config: dict[str, object],
+) -> str | None:  # noqa: ANN001
+    settings = get_settings()
+    encryption_key = str(getattr(settings, "secrets_encryption_key", "") or "").strip()
+    for key in (
+        "postgres_password",
+        "mysql_password",
+        "mariadb_password",
+        "password",
+    ):
+        secret_ref = _normalize_optional_string(config.get(f"{key}_secret_ref"))
+        if secret_ref is None:
+            continue
+        resolved = _resolve_secret_value(
+            session=session,
+            secret_ref=secret_ref,
+            tenant_id=run.tenant_id,
+            project_id=run.project_id,
+            encryption_key=encryption_key,
+        )
+        if resolved is None:
+            raise RuntimeError(f"Resource '{run.resource_key}' references missing secret for {key}")
+        return resolved
+    return None
 
 
 def _container_candidates_for_restore(
@@ -555,7 +581,7 @@ def build_restore_host_command_payload(
     resource = _selected_resource(deployment_config, run.resource_key)
     if resource.key != backup_policy.resource_key:
         raise RuntimeError(f"Backup policy '{backup_policy.key}' no longer targets resource '{resource.key}'")
-    execution_context = _execution_context_for_run(resource=resource, run=run)
+    execution_context = _execution_context_for_run(session=session, resource=resource, run=run)
     return {
         "restore_run_id": run.restore_run_id,
         "database_type": run.database_type,

@@ -1,8 +1,5 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
-from uuid import uuid4
-
 from sqlalchemy import select
 
 from orchestrator.api.schemas import (
@@ -47,49 +44,6 @@ def get_project_default_app(*, session, tenant_id: str, project_id: str) -> Proj
         )
         .order_by(ProjectApp.created_at.asc())
     ).scalars().first()
-
-
-def ensure_project_default_app(
-    *,
-    session,
-    tenant_id: str,
-    project: Project,
-) -> ProjectApp:  # noqa: ANN001
-    for pending in getattr(session, "new", ()):
-        if not isinstance(pending, ProjectApp):
-            continue
-        if pending.tenant_id == tenant_id and pending.project_id == project.project_id and pending.source_path == ".":
-            return pending
-
-    default_app = get_project_default_app(session=session, tenant_id=tenant_id, project_id=project.project_id)
-    if default_app is not None:
-        return default_app
-
-    now = datetime.now(timezone.utc)
-    default_app = ProjectApp(
-        app_id=str(uuid4()),
-        tenant_id=tenant_id,
-        project_id=project.project_id,
-        name=project.name,
-        slug="default",
-        source_path=".",
-        detection_confidence=None,
-        detected_runtime=None,
-        detected_language=None,
-        analysis_source="compatibility_default",
-        build_strategy=None,
-        exposed_port=None,
-        healthcheck=None,
-        start_command=None,
-        env_schema_json={},
-        secret_schema_json={},
-        deployment_config=_coerce_dict(project.deployment_config),
-        status="draft",
-        created_at=now,
-        updated_at=now,
-    )
-    session.add(default_app)
-    return default_app
 
 
 def get_project_app(*, session, tenant_id: str, project_id: str, app_id: str) -> ProjectApp | None:  # noqa: ANN001

@@ -9,7 +9,7 @@ from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 
 from orchestrator.api.admin.deployment_config_service import (
-    ensure_project_default_app,
+    get_project_default_app,
     get_project_app,
     normalize_project_deployment_config,
     project_deployment_config_to_schema,
@@ -473,7 +473,6 @@ class AdminProjectService:
         project = session.get(Project, project_id)
         if project is None or project.tenant_id != tenant_id:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
-        ensure_project_default_app(session=session, tenant_id=tenant_id, project=project)
         apps = session.execute(
             select(ProjectApp)
             .where(ProjectApp.tenant_id == tenant_id, ProjectApp.project_id == project_id)
@@ -635,7 +634,6 @@ class AdminProjectService:
         project = session.get(Project, project_id)
         if project is None or project.tenant_id != tenant_id:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
-        ensure_project_default_app(session=session, tenant_id=tenant_id, project=project)
         try:
             self._ensure_project_repository_checkout(
                 session=session,
@@ -1260,7 +1258,7 @@ def _deployment_context(
     selected_app = (
         get_project_app(session=session, tenant_id=tenant_id, project_id=project_id, app_id=app_id)
         if _normalize_optional_string(app_id) is not None
-        else ensure_project_default_app(session=session, tenant_id=tenant_id, project=project)
+        else get_project_default_app(session=session, tenant_id=tenant_id, project_id=project_id)
     )
     if selected_app is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project app not found")
@@ -1307,6 +1305,7 @@ def _resource_database_type(resource: ProjectDeploymentResourceWrite) -> str | N
 
 def _build_database_payload(
     *,
+    session,
     tenant_id: str,
     project_id: str,
     tenant_plane: TenantDeploymentPlaneRead,
@@ -1364,8 +1363,24 @@ def _build_database_payload(
         "mysql_database",
         "mysql_conf",
     }
+    settings = get_settings()
+    encryption_key = str(getattr(settings, "secrets_encryption_key", "") or "").strip()
     for key in common_keys:
         value = config.get(key)
+        secret_ref = _normalize_optional_string(config.get(f"{key}_secret_ref"))
+        if value is None and secret_ref is not None:
+            value = _resolve_secret_value(
+                session=session,
+                secret_ref=secret_ref,
+                tenant_id=tenant_id,
+                project_id=project_id,
+                encryption_key=encryption_key,
+            )
+            if value is None:
+                raise HTTPException(
+                    status_code=status.HTTP_409_CONFLICT,
+                    detail=f"Resource '{resource.key}' references missing secret for {key}",
+                )
         if value is not None:
             payload[key] = value
     return _compact_payload(payload)
@@ -1539,6 +1554,7 @@ def apply_project_deployment_resources(
                 continue
             try:
                 payload_data = _build_database_payload(
+                    session=session,
                     tenant_id=tenant_id,
                     project_id=project_id,
                     tenant_plane=tenant_plane,
