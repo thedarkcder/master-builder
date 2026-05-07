@@ -66,6 +66,7 @@ test("shows artifact PR metadata for selected apps waiting on merge", async ({ p
   });
 
   await page.goto("/example/projects/example-default/apps");
+  await page.getByRole("button", { name: "Advanced tools" }).click();
 
   await expect(page.getByText("Generated deployment files must be merged before this app can be deployed.")).toBeVisible();
   await expect(page.getByText("Artifact PR metadata")).toBeVisible();
