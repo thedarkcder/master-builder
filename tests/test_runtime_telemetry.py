@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import builtins
+import inspect
 import unittest
 from unittest.mock import patch
 
 import pytest
 
 from orchestrator.core.observability.telemetry import build_runtime_log_sink
-from orchestrator.core.observability.otel_telemetry import telemetry_span
+from orchestrator.core.observability.otel_telemetry import initialize_telemetry, telemetry_span
 
 
 class RuntimeTelemetryTests(unittest.TestCase):
@@ -59,6 +60,19 @@ def test_telemetry_span_without_opentelemetry_preserves_body_exception(monkeypat
 
     assert str(exc_info.value) == "real workflow failure"
     assert not isinstance(exc_info.value.__context__, ImportError)
+
+
+def test_api_telemetry_does_not_import_fastapi_auto_instrumentation_at_startup() -> None:
+    source = inspect.getsource(initialize_telemetry)
+
+    assert "opentelemetry.instrumentation.fastapi" not in source
+
+
+def test_api_telemetry_does_not_export_logs_to_trace_collector() -> None:
+    source = inspect.getsource(initialize_telemetry)
+
+    assert "OTLPLogExporter" not in source
+    assert "LoggingHandler" not in source
 
 
 if __name__ == "__main__":
