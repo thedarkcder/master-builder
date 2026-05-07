@@ -176,6 +176,12 @@ class DeploymentHostApiTests(SqliteTemplateApiTestCase):
         )
         self.assertEqual(create_app.status_code, 201, create_app.text)
         app_id = create_app.json()["app_id"]
+        password_secret_response = self.client.put(
+            "/api/admin/tenants/tenant-a/secrets/RESTORE_DB_PASSWORD",
+            json={"value": "secret"},
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(password_secret_response.status_code, 200, password_secret_response.text)
         deployment_config_response = self.client.put(
             f"/api/admin/tenants/tenant-a/projects/{project_id}/apps/{app_id}/deployment-config",
             json={
@@ -191,7 +197,7 @@ class DeploymentHostApiTests(SqliteTemplateApiTestCase):
                             "coolify_uuid": "db-uuid-1",
                             "coolify_container_name": "coolify-db-container",
                             "postgres_user": "app",
-                            "postgres_password": "secret",
+                            "postgres_password_secret_ref": "RESTORE_DB_PASSWORD",
                             "postgres_db": "app",
                         },
                     }
@@ -208,6 +214,9 @@ class DeploymentHostApiTests(SqliteTemplateApiTestCase):
             auth=("admin", "secret"),
         )
         self.assertEqual(deployment_config_response.status_code, 200, deployment_config_response.text)
+        resource_config = deployment_config_response.json()["resources"][0]["config"]
+        self.assertNotIn("postgres_password", resource_config)
+        self.assertEqual(resource_config["postgres_password_secret_ref"], "RESTORE_DB_PASSWORD")
         return project_id, app_id
 
     def test_restore_run_dispatches_to_managed_host_command(self) -> None:
@@ -452,7 +461,7 @@ class DeploymentHostApiTests(SqliteTemplateApiTestCase):
         self.assertEqual(restore_detail.json()["status"], "succeeded")
         self.assertEqual(restore_detail.json()["command_id"], command_id)
 
-    def test_host_can_reregister_with_same_bootstrap_token_after_access_token_drift(self) -> None:
+    def test_host_bootstrap_token_cannot_be_replayed_after_registration(self) -> None:
         self._insert_jira_connection()
         create_tenant = self.client.post("/api/admin/tenants", json=self._tenant_payload(), auth=("admin", "secret"))
         self.assertEqual(create_tenant.status_code, 201, create_tenant.text)
@@ -470,7 +479,6 @@ class DeploymentHostApiTests(SqliteTemplateApiTestCase):
         )
         self.assertEqual(create_host_response.status_code, 201, create_host_response.text)
         bootstrap_token = create_host_response.json()["bootstrap_token"]
-        host_id = create_host_response.json()["host"]["host_id"]
 
         first_register = self.client.post(
             "/api/internal/deployment-hosts/register",
@@ -491,20 +499,7 @@ class DeploymentHostApiTests(SqliteTemplateApiTestCase):
                 "advertised_capabilities": ["restore_database", "postgres"],
             },
         )
-        self.assertEqual(second_register.status_code, 200, second_register.text)
-        self.assertEqual(second_register.json()["host"]["host_id"], host_id)
-        second_access_token = second_register.json()["access_token"]
-        self.assertNotEqual(first_access_token, second_access_token)
-
-        stale_heartbeat = self.client.post(
-            "/api/internal/deployment-hosts/heartbeat",
-            json={
-                "agent_version": "1.0.0",
-                "advertised_capabilities": ["restore_database", "postgres"],
-            },
-            headers={"Authorization": f"Bearer {first_access_token}"},
-        )
-        self.assertEqual(stale_heartbeat.status_code, 401, stale_heartbeat.text)
+        self.assertEqual(second_register.status_code, 401, second_register.text)
 
         fresh_heartbeat = self.client.post(
             "/api/internal/deployment-hosts/heartbeat",
@@ -512,7 +507,7 @@ class DeploymentHostApiTests(SqliteTemplateApiTestCase):
                 "agent_version": "1.0.1",
                 "advertised_capabilities": ["restore_database", "postgres"],
             },
-            headers={"Authorization": f"Bearer {second_access_token}"},
+            headers={"Authorization": f"Bearer {first_access_token}"},
         )
         self.assertEqual(fresh_heartbeat.status_code, 200, fresh_heartbeat.text)
 

@@ -11,7 +11,7 @@ from orchestrator.core.config import get_settings
 from orchestrator.core.platform.secret_service import resolve_platform_secret_ref
 from orchestrator.core.platform.secret_manager import normalize_secret_ref, resolve_scoped_secret_ref
 from orchestrator.api.admin.deployment_config_service import (
-    ensure_project_default_app,
+    get_project_default_app,
     get_project_app,
     project_deployment_config_to_schema,
     tenant_deployment_plane_to_schema,
@@ -23,6 +23,7 @@ from orchestrator.api.schemas import (
     ProjectDeploymentReleaseStatusUpdate,
     TenantDeploymentPlaneRead,
 )
+from orchestrator.api.deployment_schemas import redact_deployment_config_secrets
 from orchestrator.storage.models import Project, ProjectApp, ProjectDeploymentRelease, Tenant
 from orchestrator.tools.coolify_api import CoolifyApiClient, CoolifyApiConfig, CoolifyApiError
 
@@ -76,7 +77,10 @@ def _resolve_project_app_scope(
         if app is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project app not found")
         return app
-    return ensure_project_default_app(session=session, tenant_id=tenant_id, project=project)
+    app = get_project_default_app(session=session, tenant_id=tenant_id, project_id=project.project_id)
+    if app is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project app not found")
+    return app
 
 
 def _release_scope_filter(
@@ -101,7 +105,7 @@ def project_deployment_release_to_schema(release: ProjectDeploymentRelease) -> P
         git_ref=release.git_ref,
         commit_sha=release.commit_sha,
         requested_by_user_id=release.requested_by_user_id,
-        deployment_snapshot=_coerce_dict(release.deployment_snapshot),
+        deployment_snapshot=redact_deployment_config_secrets(_coerce_dict(release.deployment_snapshot)),
         provider_context=_coerce_dict(release.provider_context),
         last_error=release.last_error,
         requested_at=release.requested_at,
@@ -221,16 +225,6 @@ def create_project_deployment_release(
     if latest_release is not None:
         existing_application_uuid = str(_coerce_dict(latest_release.provider_context).get("application_uuid") or "").strip() or None
 
-    provider_submission = submit_internal_coolify_release(
-        session=session,
-        tenant=tenant,
-        project=project,
-        tenant_plane=tenant_plane,
-        project_deployment=project_deployment,
-        payload=payload,
-        existing_application_uuid=existing_application_uuid,
-    )
-
     now = datetime.now(timezone.utc)
     release = ProjectDeploymentRelease(
         release_id=str(uuid4()),
@@ -245,17 +239,55 @@ def create_project_deployment_release(
         commit_sha=_normalize_optional_string(payload.commit_sha),
         requested_by_user_id=_normalize_optional_string(requested_by_user_id),
         deployment_snapshot=prepared_release.deployment_snapshot,
-        provider_context={**prepared_release.provider_context, **provider_submission},
+        provider_context=prepared_release.provider_context,
         last_error=None,
         requested_at=now,
-        started_at=now,
+        started_at=None,
         completed_at=None,
         created_at=now,
         updated_at=now,
     )
-    project_app.status = "deploying"
-    project_app.updated_at = now
     session.add(release)
+    session.commit()
+
+    try:
+        provider_submission = submit_internal_coolify_release(
+            session=session,
+            tenant=tenant,
+            project=project,
+            tenant_plane=tenant_plane,
+            project_deployment=project_deployment,
+            payload=payload,
+            existing_application_uuid=existing_application_uuid,
+        )
+    except HTTPException as exc:
+        failure_time = datetime.now(timezone.utc)
+        release.status = "failed"
+        release.last_error = str(exc.detail)
+        release.completed_at = failure_time
+        release.updated_at = failure_time
+        project_app.status = "failed"
+        project_app.updated_at = failure_time
+        session.commit()
+        raise
+    except Exception as exc:
+        failure_time = datetime.now(timezone.utc)
+        release.status = "failed"
+        release.last_error = str(exc)
+        release.completed_at = failure_time
+        release.updated_at = failure_time
+        project_app.status = "failed"
+        project_app.updated_at = failure_time
+        session.commit()
+        raise
+
+    submitted_at = datetime.now(timezone.utc)
+    release.status = "provisioning"
+    release.started_at = submitted_at
+    release.updated_at = submitted_at
+    release.provider_context = {**prepared_release.provider_context, **provider_submission}
+    project_app.status = "deploying"
+    project_app.updated_at = submitted_at
     session.commit()
     session.refresh(release)
     return project_deployment_release_to_schema(release)

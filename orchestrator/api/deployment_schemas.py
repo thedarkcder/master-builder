@@ -70,6 +70,56 @@ def _normalize_repo_relative_path(value: object) -> str:
 
 
 _SLUG_NORMALIZATION_PATTERN = re.compile(r"[^a-z0-9]+")
+_RAW_SECRET_CONFIG_KEY_PARTS = {
+    "password",
+    "secret",
+    "token",
+    "private_key",
+    "access_key",
+}
+
+
+def _is_raw_secret_config_key(key: object) -> bool:
+    normalized = str(key or "").strip().lower()
+    if not normalized or normalized.endswith("_secret_ref") or normalized.endswith("_secret_refs"):
+        return False
+    if normalized == "secret_refs":
+        return False
+    parts = {part for part in re.split(r"[^a-z0-9]+", normalized) if part}
+    if "secret" in parts and "ref" in parts:
+        return False
+    return bool(parts & _RAW_SECRET_CONFIG_KEY_PARTS)
+
+
+def _assert_no_raw_secret_config(value: object, *, path: str = "config") -> None:
+    if isinstance(value, dict):
+        for key, child in value.items():
+            if _is_raw_secret_config_key(key):
+                raise ValueError(f"{path}.{key} must be stored as a *_secret_ref, not raw secret material")
+            _assert_no_raw_secret_config(child, path=f"{path}.{key}")
+        return
+    if isinstance(value, list):
+        for index, child in enumerate(value):
+            _assert_no_raw_secret_config(child, path=f"{path}[{index}]")
+
+
+def _redact_secret_config(value: object) -> object:
+    if isinstance(value, dict):
+        return {
+            str(key): _redact_secret_config(child)
+            for key, child in value.items()
+            if not _is_raw_secret_config_key(key)
+        }
+    if isinstance(value, list):
+        return [_redact_secret_config(child) for child in value]
+    return value
+
+
+def redact_deployment_config_secrets(value: object) -> dict[str, object]:
+    redacted = _redact_secret_config(value)
+    if isinstance(redacted, dict):
+        return dict(redacted)
+    return {}
 
 
 def _normalize_app_slug(value: object) -> str:
@@ -523,6 +573,13 @@ class ProjectDeploymentResourceWrite(BaseModel):
     def normalize_name(cls, value: object) -> str | None:
         return _normalize_optional_string(value)
 
+    @field_validator("config")
+    @classmethod
+    def validate_config_has_no_raw_secrets(cls, value: object) -> dict[str, object]:
+        config = dict(value) if isinstance(value, dict) else {}
+        _assert_no_raw_secret_config(config)
+        return config
+
     @model_serializer(mode="plain")
     def serialize_sparse(self) -> dict[str, object]:
         serialized = {
@@ -555,6 +612,13 @@ class ProjectDeploymentBackupPolicyWrite(BaseModel):
     @classmethod
     def normalize_schedule(cls, value: object) -> str | None:
         return _normalize_optional_string(value)
+
+    @field_validator("config")
+    @classmethod
+    def validate_config_has_no_raw_secrets(cls, value: object) -> dict[str, object]:
+        config = dict(value) if isinstance(value, dict) else {}
+        _assert_no_raw_secret_config(config)
+        return config
 
     @model_serializer(mode="plain")
     def serialize_sparse(self) -> dict[str, object]:
@@ -630,8 +694,20 @@ class ProjectDeploymentConfigWrite(BaseModel):
         return self
 
 
-class ProjectDeploymentConfigRead(ProjectDeploymentConfigWrite):
-    pass
+class ProjectDeploymentConfigRead(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = True
+    environment_name: str | None = None
+    source_strategy: Literal["dockerfile", "docker_compose"] | None = None
+    domains: list[ProjectDeploymentDomainWrite] = Field(default_factory=list)
+    resources: list[ProjectDeploymentResourceWrite] = Field(default_factory=list)
+    backup_policies: list[ProjectDeploymentBackupPolicyWrite] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def redact_raw_secret_config(cls, value: object) -> dict[str, object]:
+        return redact_deployment_config_secrets(value)
 
 
 class ProjectDeploymentReleaseCreate(BaseModel):

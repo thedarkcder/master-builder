@@ -65,7 +65,7 @@ class MigrationTests(unittest.TestCase):
 
         duplicates = {revision_id: count for revision_id, count in Counter(revision_ids).items() if count > 1}
         self.assertEqual(duplicates, {})
-        self.assertEqual(script.get_heads(), ["20260507_0112"])
+        self.assertEqual(script.get_heads(), ["20260507_0113"])
 
     def test_workflow_execution_source_external_id_index_is_composite_in_metadata(self) -> None:
         expected_columns = ["tenant_id", "source_system", "source_external_id", "dedupe_scope"]
@@ -124,6 +124,105 @@ class MigrationTests(unittest.TestCase):
             if index["name"] == "ix_workflow_executions_source_external_id"
         }
         self.assertEqual(index_columns, {"ix_workflow_executions_source_external_id": expected_columns})
+
+    def test_deployment_config_secret_redaction_migration(self) -> None:
+        migration = self._load_migration_module(
+            "20260507_0113_redact_deployment_config_secret_material.py",
+            "migration_20260507_0113",
+        )
+
+        with TemporaryDirectory() as tmpdir:
+            database_url = f"sqlite:///{Path(tmpdir) / 'deployment-secret-redaction.sqlite'}"
+            engine = create_engine(database_url)
+            with engine.begin() as connection:
+                connection.execute(
+                    text(
+                        """
+                        CREATE TABLE project_apps (
+                            app_id VARCHAR PRIMARY KEY,
+                            deployment_config JSON NOT NULL
+                        )
+                        """
+                    )
+                )
+                connection.execute(
+                    text(
+                        """
+                        CREATE TABLE project_deployment_releases (
+                            release_id VARCHAR PRIMARY KEY,
+                            deployment_snapshot JSON NOT NULL
+                        )
+                        """
+                    )
+                )
+                connection.execute(
+                    text(
+                        """
+                        INSERT INTO project_apps (app_id, deployment_config)
+                        VALUES ('app-1', :deployment_config)
+                        """
+                    ),
+                    {
+                        "deployment_config": json.dumps(
+                            {
+                                "resources": [
+                                    {
+                                        "key": "db",
+                                        "kind": "postgres",
+                                        "config": {
+                                            "postgres_user": "app",
+                                            "postgres_password": "raw-secret",
+                                            "postgres_password_secret_ref": "RESTORE_DB_PASSWORD",
+                                        },
+                                    }
+                                ]
+                            },
+                            sort_keys=True,
+                        )
+                    },
+                )
+                connection.execute(
+                    text(
+                        """
+                        INSERT INTO project_deployment_releases (release_id, deployment_snapshot)
+                        VALUES ('release-1', :deployment_snapshot)
+                        """
+                    ),
+                    {
+                        "deployment_snapshot": json.dumps(
+                            {
+                                "resources": [
+                                    {
+                                        "key": "db",
+                                        "config": {
+                                            "mysql_password": "raw-secret",
+                                            "mysql_password_secret_ref": "RESTORE_DB_PASSWORD",
+                                        },
+                                    }
+                                ]
+                            },
+                            sort_keys=True,
+                        )
+                    },
+                )
+                context = MigrationContext.configure(connection)
+                operations = Operations(context)
+                with patch.object(migration, "op", operations):
+                    migration.upgrade()
+
+                app_config = connection.execute(
+                    text("SELECT deployment_config FROM project_apps WHERE app_id = 'app-1'")
+                ).scalar_one()
+                release_snapshot = connection.execute(
+                    text("SELECT deployment_snapshot FROM project_deployment_releases WHERE release_id = 'release-1'")
+                ).scalar_one()
+
+        app_payload = json.loads(app_config)
+        release_payload = json.loads(release_snapshot)
+        self.assertNotIn("postgres_password", app_payload["resources"][0]["config"])
+        self.assertEqual(app_payload["resources"][0]["config"]["postgres_password_secret_ref"], "RESTORE_DB_PASSWORD")
+        self.assertNotIn("mysql_password", release_payload["resources"][0]["config"])
+        self.assertEqual(release_payload["resources"][0]["config"]["mysql_password_secret_ref"], "RESTORE_DB_PASSWORD")
 
     def test_failed_attempt_retryability_repair_migration(self) -> None:
         with TemporaryDirectory() as tmpdir:
@@ -1440,7 +1539,7 @@ class MigrationTests(unittest.TestCase):
 
             with engine.begin() as connection:
                 versions = connection.execute(text("SELECT version_num FROM alembic_version")).scalars().all()
-            self.assertEqual(versions, ["20260507_0112"])
+            self.assertEqual(versions, ["20260507_0113"])
 
     def test_run_migrations_disables_alembic_logger_reconfiguration(self) -> None:
         fake_config = MagicMock()
