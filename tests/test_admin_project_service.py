@@ -31,6 +31,7 @@ class _Session:
 
     def execute(self, _query):  # noqa: ANN001
         return SimpleNamespace(
+            all=lambda: self._projects,
             scalars=lambda: SimpleNamespace(
                 all=lambda: self._projects,
                 first=lambda: self._projects[0] if self._projects else None,
@@ -119,6 +120,34 @@ def test_list_projects_raises_when_tenant_missing() -> None:
         assert False, "expected HTTPException"
     except HTTPException as exc:
         assert exc.status_code == 404
+
+
+def test_list_project_navigation_returns_lightweight_project_rows() -> None:
+    from orchestrator.storage.models import Tenant
+
+    session = _Session()
+    session.set(Tenant, "t1", SimpleNamespace(tenant_id="t1", policy_config={}))
+    session._projects = [
+        SimpleNamespace(
+            project_id="p1",
+            tenant_id="t1",
+            name="Alpha",
+            jira_project_key="ALPHA",
+            is_archived=False,
+        )
+    ]
+
+    items = _service().list_project_navigation(session=session, tenant_id="t1")
+
+    assert [item.model_dump() for item in items] == [
+        {
+            "project_id": "p1",
+            "tenant_id": "t1",
+            "name": "Alpha",
+            "jira_project_key": "ALPHA",
+            "is_archived": False,
+        }
+    ]
 
 
 def test_get_project_raises_when_project_missing() -> None:

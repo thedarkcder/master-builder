@@ -65,6 +65,11 @@ def list_projects(*, session, tenant_id: str, admin_project_service_factory):  #
     return service.list_projects(session=session, tenant_id=tenant_id)
 
 
+def list_project_navigation(*, session, tenant_id: str, admin_project_service_factory):  # noqa: ANN001
+    service = admin_project_service_factory()
+    return service.list_project_navigation(session=session, tenant_id=tenant_id)
+
+
 def create_project(*, session, tenant_id: str, payload, admin_project_service_factory):  # noqa: ANN001
     service = admin_project_service_factory()
     return service.create_project(session=session, tenant_id=tenant_id, payload=payload)
