@@ -40,7 +40,7 @@ class AdminApiTestHarness(SqliteTemplateApiTestCase):
             "ORCHESTRATOR_ATLASSIAN_OAUTH_STATE_SECRET": "atlassian-oauth-state-secret",
             "ORCHESTRATOR_GITHUB_APP_SLUG": "master-builder-app",
             "ORCHESTRATOR_SECRETS_ENCRYPTION_KEY": cls._secrets_encryption_key,
-            "ORCHESTRATOR_CODEX_SUPPORTED_MODELS": "gpt-5.4,gpt-5.4-mini,gpt-5.3-codex",
+            "ORCHESTRATOR_CODEX_SUPPORTED_MODELS": "gpt-5.4,gpt-5.5,gpt-5.4-mini,gpt-5.3-codex",
         }
 
     @classmethod
