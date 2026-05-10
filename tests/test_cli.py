@@ -3,9 +3,12 @@ from __future__ import annotations
 import io
 import json
 import os
+import subprocess
+import sys
 import unittest
 from contextlib import redirect_stdout
 from datetime import datetime, timezone
+from pathlib import Path
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
@@ -111,11 +114,48 @@ class CliEntrypointTests(unittest.TestCase):
         self.assertEqual(len(payload["tenants"]), 1)
         self.assertEqual(payload["tenants"][0]["tenant_id"], "tenant-cli")
 
+    def test_run_command_rejects_sqlite_without_test_opt_in(self) -> None:
+        previous = os.environ.get("ORCHESTRATOR_ALLOW_SQLITE_FOR_TESTS")
+        try:
+            os.environ["ORCHESTRATOR_ALLOW_SQLITE_FOR_TESTS"] = "false"
+            get_settings.cache_clear()
+            with self.assertRaisesRegex(RuntimeError, "requires PostgreSQL"):
+                cli_main(["run", "--tenant", "tenant-cli", "--issue", "TP-502"])
+        finally:
+            if previous is None:
+                os.environ.pop("ORCHESTRATOR_ALLOW_SQLITE_FOR_TESTS", None)
+            else:
+                os.environ["ORCHESTRATOR_ALLOW_SQLITE_FOR_TESTS"] = previous
+            get_settings.cache_clear()
+
     def test_discord_gateway_command_invokes_runtime(self) -> None:
         with patch("orchestrator.cli.run_discord_gateway") as gateway_mock:
             exit_code = cli_main(["discord-gateway"])
         self.assertEqual(exit_code, 0)
         gateway_mock.assert_called_once_with()
+
+    def test_worker_child_commands_invoke_child_runtime(self) -> None:
+        with patch("orchestrator.cli.run_worker_child_once", return_value=0) as child_mock:
+            exit_code_runs = cli_main(["worker-child-runs"])
+            exit_code_webhooks = cli_main(["worker-child-webhooks"])
+        self.assertEqual(exit_code_runs, 0)
+        self.assertEqual(exit_code_webhooks, 0)
+        self.assertEqual(child_mock.call_count, 2)
+        self.assertEqual(child_mock.call_args_list[0].kwargs, {"mode": "runs"})
+        self.assertEqual(child_mock.call_args_list[1].kwargs, {"mode": "webhooks"})
+
+    def test_python_m_orchestrator_cli_executes_module_entrypoint(self) -> None:
+        repo_root = Path(__file__).resolve().parents[1]
+        result = subprocess.run(
+            [sys.executable, "-m", "orchestrator.cli", "--help"],
+            cwd=repo_root,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+
+        self.assertEqual(result.returncode, 0)
+        self.assertIn("master-builder orchestrator", result.stdout)
 
     def test_discord_live_voice_command_invokes_runtime(self) -> None:
         with patch("orchestrator.cli.run_discord_live_voice") as voice_mock:
@@ -150,17 +190,17 @@ class CliEntrypointTests(unittest.TestCase):
             redirect_stdout(output),
             patch("orchestrator.cli.prewarm_voice_dependencies") as prewarm_mock,
         ):
-            prewarm_mock.return_value.transcription_provider = "whisper"
+            prewarm_mock.return_value.voice_stt_provider = "openai"
+            prewarm_mock.return_value.voice_tts_provider = "pocket_tts"
             prewarm_mock.return_value.transcription_ready = True
-            prewarm_mock.return_value.voice_reply_provider = "pocket_tts"
             prewarm_mock.return_value.prewarmed_voice_ids = ("alba", "jean")
             exit_code = cli_main(["voice-prewarm"])
 
         payload = json.loads(output.getvalue())
         self.assertEqual(exit_code, 0)
         self.assertTrue(payload["ok"])
-        self.assertEqual(payload["transcription_provider"], "whisper")
+        self.assertEqual(payload["voice_stt_provider"], "openai")
+        self.assertEqual(payload["voice_tts_provider"], "pocket_tts")
         self.assertTrue(payload["transcription_ready"])
-        self.assertEqual(payload["voice_reply_provider"], "pocket_tts")
         self.assertEqual(payload["prewarmed_voice_ids"], ["alba", "jean"])
         prewarm_mock.assert_called_once()

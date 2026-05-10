@@ -1,98 +1,54 @@
 import json
 import os
-import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from orchestrator.core.decision_gate import DecisionGateResult
 from orchestrator.core.config import get_settings
-from orchestrator.core.agent_observability import (
+from orchestrator.core.observability.agent_observability import (
     agent_observability_tracker,
     reset_agent_observability_for_tests,
 )
-from orchestrator.core.runs import RUN_DEDUPE_SCOPE_ISSUE_EXECUTION, enqueue_run
-from orchestrator.core.gtd import GoodToDoValidationResult
-from orchestrator.core.pre_run_check import PreRunCheckResult
+from orchestrator.core.runs.service import enqueue_run
+from orchestrator.core.worker.execution_service import process_next_queued_run
+from orchestrator.core.worker.capability_normalization import WorkerCapability
 from orchestrator.core.workflow.runner import (
     PmPlan,
+    WorkflowStageCheckpoint,
     WorkflowDiagnostics,
     WorkflowResult,
 )
-from orchestrator.core.discord.notifications import DiscordSendResult
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
-from orchestrator.storage.migrations import run_migrations
-from orchestrator.storage.models import JiraOAuthConnection, Project, Run, RunLock, Tenant
-from orchestrator.worker import process_next_queued_run
-from orchestrator.tools.project_repo_checkout import ProjectRepoCheckoutError
-
-
-def _evaluate_pre_run_check_test_stub(
-    *,
-    issue_summary: str | None = None,
-    issue_description: str | None = None,
-    **_: object,
-) -> PreRunCheckResult:
-    summary = (issue_summary or "").lower()
-    description = (issue_description or "").lower()
-    if "unclear requirements" in summary or "tbd:" in description:
-        return PreRunCheckResult(
-            outcome="decision_gate_required",
-            ready_label="agent:ready",
-            ready_label_present=True,
-            required_worker_capability="linux",
-            required_worker_label="worker:linux",
-            required_worker_label_present=True,
-            decision_gate=DecisionGateResult(
-                triggered=True,
-                reason="Decision Gate required.",
-                missing_sections=("Objective", "Scope"),
-                questions=(
-                    "What is the objective?",
-                    "What is in scope?",
-                ),
-                recommendation="Decision required before build",
-                tags=("[NEEDS-PM]",),
-            ),
-            gtd=GoodToDoValidationResult(
-                valid=True,
-                missing_criteria=(),
-                clarification_questions=(),
-            ),
-        )
-    return PreRunCheckResult(
-        outcome="ready_for_agent",
-        ready_label="agent:ready",
-        ready_label_present=True,
-        required_worker_capability="linux",
-        required_worker_label="worker:linux",
-        required_worker_label_present=True,
-        decision_gate=DecisionGateResult(
-            triggered=False,
-            reason="Decision Gate not required",
-            missing_sections=(),
-            questions=(),
-            recommendation="Proceed",
-            tags=(),
-        ),
-        gtd=GoodToDoValidationResult(
-            valid=True,
-            missing_criteria=(),
-            clarification_questions=(),
-        ),
-    )
+from orchestrator.storage.models import AtlassianOAuthConnection, Project, Tenant, WorkflowExecution
+from orchestrator.core.worker.repo_setup_service import RetryableRepoSetupError
+from orchestrator.core.worker.repo_setup_service import TerminalRepoSetupError
+from tests.test_support.db_harness import SqliteTemplateDbTestCase
 
 
 class _SuccessRunner:
     def __init__(self) -> None:
         self.last_request = None
 
-    def run(self, request, *, test_feedback_hook=None):  # noqa: ANN001,ARG002
+    def run(self, request, *, test_feedback_hook=None, stage_checkpoint_hook=None):  # noqa: ANN001,ARG002
         self.last_request = request
+        if stage_checkpoint_hook is not None:
+            stage_checkpoint_hook(
+                WorkflowStageCheckpoint(
+                    stage="pm",
+                    attempt=1,
+                    status="completed",
+                    summary="PM completed",
+                    plan=PmPlan(
+                        plan_steps=["plan", "build", "validate"],
+                        acceptance_criteria=["has PR link"],
+                        risks=[],
+                    ),
+                )
+            )
         return WorkflowResult(
-            succeeded=True,
+            outcome="success",
             plan=PmPlan(
                 plan_steps=["plan", "build", "validate"],
                 acceptance_criteria=["has PR link"],
@@ -107,9 +63,10 @@ class _SuccessRunner:
 
 
 class _FailureRunner:
-    def run(self, request, *, test_feedback_hook=None):  # noqa: ANN001,ARG002
+    def run(self, request, *, test_feedback_hook=None, stage_checkpoint_hook=None):  # noqa: ANN001,ARG002
+        _ = stage_checkpoint_hook
         return WorkflowResult(
-            succeeded=False,
+            outcome="failed",
             plan=PmPlan(
                 plan_steps=["plan", "build", "validate"],
                 acceptance_criteria=["has PR link"],
@@ -129,9 +86,10 @@ class _FailureRunner:
 
 
 class _CapabilityMismatchRunner:
-    def run(self, request, *, test_feedback_hook=None):  # noqa: ANN001,ARG002
+    def run(self, request, *, test_feedback_hook=None, stage_checkpoint_hook=None):  # noqa: ANN001,ARG002
+        _ = stage_checkpoint_hook
         return WorkflowResult(
-            succeeded=False,
+            outcome="requeue",
             plan=PmPlan(
                 plan_steps=["Plan implementation"],
                 acceptance_criteria=["Feature implemented"],
@@ -142,6 +100,11 @@ class _CapabilityMismatchRunner:
             summary=[],
             test_guidance=[],
             attempts=1,
+            requeue_target=WorkerCapability.MACOS,
+            requeue_reason=(
+                "Execution capability mismatch: PM selected macos but current worker is linux. "
+                "Requeue on worker:macos before dev/test/review."
+            ),
             diagnostics=WorkflowDiagnostics(
                 stage="pm",
                 message=(
@@ -160,63 +123,12 @@ class _CapabilityMismatchRunner:
         )
 
 
-class WorkerWorkflowTests(unittest.TestCase):
-    def setUp(self) -> None:
-        self.temp_dir = TemporaryDirectory()
-        self.database_url = f"sqlite:///{self.temp_dir.name}/worker_test.db"
-        self.repo_checkout_base_dir = f"{self.temp_dir.name}/project-repos"
-
-        os.environ["ORCHESTRATOR_DATABASE_URL"] = self.database_url
-        os.environ["ORCHESTRATOR_PROJECT_REPO_CHECKOUT_BASE_DIR"] = self.repo_checkout_base_dir
-        os.environ["ORCHESTRATOR_WORKER_WORKSPACE_KEY"] = "worker-a"
-        get_settings.cache_clear()
-        reset_db_engine_cache()
-        reset_agent_observability_for_tests()
-        run_migrations(database_url=self.database_url)
-        self.session_factory = create_session_factory(database_url=self.database_url)
-        self.checkout_patcher = patch(
-            "orchestrator.core.worker.execution_service.ensure_project_repository_checkout"
-        )
-        self.checkout_mock = self.checkout_patcher.start()
-        self.worktree_patcher = patch(
-            "orchestrator.core.worker.workflow_request_service.ensure_run_worktree",
-            side_effect=self._ensure_run_worktree_stub,
-        )
-        self.worktree_patcher.start()
-        self.worktree_validate_patcher = patch(
-            "orchestrator.core.worker.workflow_request_service.validate_run_worktree",
-            return_value=None,
-        )
-        self.worktree_validate_patcher.start()
-        self.freshness_patcher = patch(
-            "orchestrator.core.worker.execution_service.check_run_snapshot_freshness",
-            return_value=SimpleNamespace(stale=False, message=None),
-        )
-        self.freshness_patcher.start()
-        self.decision_gate_patcher = patch(
-            "orchestrator.core.worker.execution_service.evaluate_pre_run_check",
-            new=_evaluate_pre_run_check_test_stub,
-        )
-        self.decision_gate_patcher.start()
-        self._create_tenant()
-        self._seed_checked_out_repo()
-
-    def tearDown(self) -> None:
-        self.checkout_patcher.stop()
-        self.worktree_patcher.stop()
-        self.worktree_validate_patcher.stop()
-        self.freshness_patcher.stop()
-        self.temp_dir.cleanup()
-        os.environ.pop("ORCHESTRATOR_PROJECT_REPO_CHECKOUT_BASE_DIR", None)
-        os.environ.pop("ORCHESTRATOR_WORKER_WORKSPACE_KEY", None)
-        self.decision_gate_patcher.stop()
-        get_settings.cache_clear()
-        reset_db_engine_cache()
-        reset_agent_observability_for_tests()
-
-    def _create_tenant(self) -> None:
+class WorkerWorkflowTests(SqliteTemplateDbTestCase):
+    @classmethod
+    def bootstrap_template_database(cls) -> None:
         now = datetime.now(timezone.utc)
-        with self.session_factory() as session:
+        session_factory = create_session_factory(database_url=cls._template_database_url)
+        with session_factory() as session:
             session.add(
                 Tenant(
                     tenant_id="tenant-worker",
@@ -270,6 +182,49 @@ class WorkerWorkflowTests(unittest.TestCase):
             )
             session.commit()
 
+    def setUp(self) -> None:
+        self.temp_dir = TemporaryDirectory()
+        self._original_database_url = os.environ.get("ORCHESTRATOR_DATABASE_URL")
+        self.database_url = self._prepare_test_database(name_prefix="worker-workflow")
+        self.repo_checkout_base_dir = f"{self.temp_dir.name}/project-repos"
+
+        os.environ["ORCHESTRATOR_DATABASE_URL"] = self.database_url
+        os.environ["ORCHESTRATOR_PROJECT_REPO_CHECKOUT_BASE_DIR"] = self.repo_checkout_base_dir
+        os.environ["ORCHESTRATOR_WORKER_WORKSPACE_KEY"] = "worker-a"
+        os.environ["ORCHESTRATOR_WORKER_CAPABILITIES"] = "linux"
+        get_settings.cache_clear()
+        reset_db_engine_cache()
+        reset_agent_observability_for_tests()
+        self.session_factory = create_session_factory(database_url=self.database_url)
+        self._jira_issue_details: dict[str, dict[str, object]] = {}
+        self.repo_setup_patcher = patch(
+            "orchestrator.core.worker.workflow_request_service.prepare_execution_repo_for_run",
+            side_effect=self._prepare_execution_repo_stub,
+        )
+        self.repo_setup_mock = self.repo_setup_patcher.start()
+        self.freshness_patcher = patch(
+            "orchestrator.core.worker.execution_service.check_run_snapshot_freshness",
+            return_value=SimpleNamespace(stale=False, message=None),
+        )
+        self.freshness_patcher.start()
+        self._seed_checked_out_repo()
+
+    def tearDown(self) -> None:
+        self.repo_setup_patcher.stop()
+        self.freshness_patcher.stop()
+        self.temp_dir.cleanup()
+        self._cleanup_test_database()
+        if self._original_database_url is None:
+            os.environ.pop("ORCHESTRATOR_DATABASE_URL", None)
+        else:
+            os.environ["ORCHESTRATOR_DATABASE_URL"] = self._original_database_url
+        os.environ.pop("ORCHESTRATOR_PROJECT_REPO_CHECKOUT_BASE_DIR", None)
+        os.environ.pop("ORCHESTRATOR_WORKER_WORKSPACE_KEY", None)
+        os.environ.pop("ORCHESTRATOR_WORKER_CAPABILITIES", None)
+        get_settings.cache_clear()
+        reset_db_engine_cache()
+        reset_agent_observability_for_tests()
+
     def _queue_run(
         self,
         issue_key: str,
@@ -277,8 +232,6 @@ class WorkerWorkflowTests(unittest.TestCase):
         issue_summary: str | None = None,
         issue_description: str | None = None,
     ) -> str:
-        now = datetime.now(timezone.utc)
-        run_id = f"run-{issue_key}"
         effective_summary = issue_summary or f"Implement {issue_key}"
         effective_description = issue_description or (
             "Objective: Deliver requested behavior. "
@@ -288,26 +241,23 @@ class WorkerWorkflowTests(unittest.TestCase):
             "NFR intent: MVP."
         )
         with self.session_factory() as session:
-            session.add(
-                Run(
-                    run_id=run_id,
-                    tenant_id="tenant-worker",
-                    issue_key=issue_key,
-                    issue_summary=effective_summary,
-                    issue_description=effective_description,
-                    repo_url="https://github.com/example/repo",
-                    branch=None,
-                    pr_url=None,
-                    status="queued",
-                    last_error=None,
-                    plan=None,
-                    created_at=now,
-                    started_at=None,
-                    finished_at=None,
-                )
+            result = enqueue_run(
+                session,
+                tenant_id="tenant-worker",
+                project_id="tenant-worker-default",
+                issue_key=issue_key,
+                issue_summary=effective_summary,
+                issue_description=effective_description,
+                repo_url="https://github.com/example/repo",
+                precheck_outcome="ready_for_agent",
             )
-            session.commit()
-        return run_id
+            self.assertTrue(result.enqueued)
+        self._jira_issue_details[issue_key] = {
+            "summary": effective_summary,
+            "description": effective_description,
+            "labels": ["agent:ready"],
+        }
+        return result.run.run_id
 
     def _seed_checked_out_repo(self) -> None:
         repo_git_dir = (
@@ -325,57 +275,56 @@ class WorkerWorkflowTests(unittest.TestCase):
             / "workspaces"
         )
 
-    def _get_lock(self, session, *, issue_key: str, dedupe_scope: str = RUN_DEDUPE_SCOPE_ISSUE_EXECUTION):
-        return session.get(
-            RunLock,
-            {
-                "tenant_id": "tenant-worker",
-                "issue_key": issue_key,
-                "dedupe_scope": dedupe_scope,
-            },
-        )
-
-    def _ensure_run_worktree_stub(
+    def _prepare_execution_repo_stub(
         self,
         *,
-        base_dir: str,
-        tenant_id: str,
-        project,
-        run_id: str,
-        issue_key: str,
+        session,  # noqa: ANN001
+        settings,  # noqa: ANN001
+        tenant,  # noqa: ANN001
+        run,  # noqa: ANN001
+        project,  # noqa: ANN001
         base_branch: str,
         integration_branch: str,
         workspace_key: str,
-    ) -> tuple[str, str]:
-        _ = (issue_key, base_branch, integration_branch)
+    ) -> SimpleNamespace:
+        _ = (session, settings, base_branch, integration_branch)
         worktree_dir = (
-            Path(base_dir)
-            / tenant_id
+            Path(self.repo_checkout_base_dir)
+            / tenant.tenant_id
             / project.project_id
             / "runs"
-            / run_id
+            / run.run_id
             / "workspaces"
             / workspace_key
             / "repo"
         )
         (worktree_dir / ".git").mkdir(parents=True, exist_ok=True)
-        (worktree_dir / ".master-builder-run.json").write_text(
+        (worktree_dir / ".master-builder-execution-repo.json").write_text(
             json.dumps(
                 {
-                    "run_id": run_id,
-                    "issue_key": issue_key,
-                    "execution_branch": f"run/{issue_key}/{run_id}",
-                    "base_branch": base_branch,
-                    "integration_branch": integration_branch,
+                    "run_id": run.run_id,
+                    "issue_key": run.issue_key,
+                    "execution_branch": f"run/{run.issue_key}/{run.run_id}",
                     "workspace_key": workspace_key,
                     "start_point_ref": "origin/main",
                     "start_point_sha": "startsha123",
+                    "repo_kind": "run_worktree",
                 }
             )
             + "\n",
             encoding="utf-8",
         )
-        return str(worktree_dir), f"run/{issue_key}/{run_id}"
+        return SimpleNamespace(
+            prepared_repo=SimpleNamespace(
+                repo_dir=worktree_dir,
+                execution_branch=f"run/{run.issue_key}/{run.run_id}",
+                start_point_ref="origin/main",
+                start_point_sha="startsha123",
+                workspace_key=workspace_key,
+                repo_kind="run_worktree",
+            ),
+            actions_taken=("created_run_worktree",),
+        )
 
     def test_process_next_queued_run_marks_success_and_persists_plan(self) -> None:
         run_id = self._queue_run("TP-300")
@@ -390,19 +339,21 @@ class WorkerWorkflowTests(unittest.TestCase):
             self.assertIsNotNone(processed.started_at)
             self.assertIsNotNone(processed.finished_at)
             self.assertIsInstance(processed.plan, dict)
-            self.assertTrue(processed.plan["succeeded"])
-            self.assertEqual(processed.plan["attempts"], 1)
-            stage_updates = processed.plan["stage_updates"]
+            self.assertEqual(processed.plan["workflow"]["outcome"], "success")
+            self.assertEqual(processed.plan["workflow"]["attempts"], 1)
+            self.assertEqual(processed.plan["stages"]["pm"]["artifact"]["plan_steps"], ["plan", "build", "validate"])
+            self.assertEqual(processed.plan["stages"]["pm"]["status"], "completed")
+            stage_updates = processed.plan["events"]["stage_updates"]
             self.assertEqual(
                 [entry["stage"] for entry in stage_updates],
-                ["lock_acquired", "plan_posted", "pr_opened"],
+                ["repo_setup_ready", "lock_acquired", "plan_posted", "pr_opened"],
             )
             self.assertIn("TP-300", stage_updates[0]["discord_message"])
-            self.assertIn("run-TP-300", stage_updates[0]["discord_message"])
+            self.assertIn(processed.run_id, stage_updates[0]["discord_message"])
             self.assertIsNotNone(runner.last_request)
             self.assertTrue(
                 str(runner.last_request.execution_repo_dir).endswith(
-                    "/tenant-worker/tenant-worker-default/runs/run-TP-300/workspaces/worker-a/repo"
+                    f"/tenant-worker/tenant-worker-default/runs/{processed.run_id}/workspaces/worker-a/repo"
                 )
             )
             self.assertFalse(self._run_workspaces_dir(run_id).exists())
@@ -435,17 +386,19 @@ class WorkerWorkflowTests(unittest.TestCase):
             self.assertIsNone(processed.started_at)
             self.assertIsNone(processed.finished_at)
             self.assertIsNone(processed.pr_url)
-            self.assertTrue(processed.plan["requeued"])
-            self.assertTrue(processed.plan["stale_branch_snapshot"])
-            self.assertIn("Branch snapshot stale", processed.plan["requeue_reason"])
-            stage_updates = processed.plan["stage_updates"]
+            self.assertTrue(processed.plan["context"]["execution_context"]["stale_branch_snapshot"])
+            self.assertIn("Branch snapshot stale", processed.plan["workflow"]["requeue_reason"])
+            stage_updates = processed.plan["events"]["stage_updates"]
             self.assertEqual(
                 [entry["stage"] for entry in stage_updates],
-                ["lock_acquired", "plan_posted", "run_requeued_stale_snapshot"],
+                ["repo_setup_ready", "lock_acquired", "plan_posted", "run_requeued_stale_snapshot"],
             )
             self.assertFalse(self._run_workspaces_dir(run_id).exists())
-            lock = self._get_lock(session, issue_key="TP-3001")
-            self.assertIsNone(lock)
+            workflow = session.get(WorkflowExecution, processed.workflow_id)
+            self.assertIsNotNone(workflow)
+            assert workflow is not None
+            self.assertEqual(workflow.status, "queued")
+            self.assertEqual(workflow.active_run_id, run_id)
 
     def test_process_next_queued_run_marks_failure_with_diagnostics(self) -> None:
         run_id = self._queue_run("TP-301")
@@ -461,12 +414,11 @@ class WorkerWorkflowTests(unittest.TestCase):
             )
             self.assertIsNone(processed.pr_url)
             self.assertIsInstance(processed.plan, dict)
-            self.assertFalse(processed.plan["succeeded"])
-            self.assertEqual(processed.plan["diagnostics"]["stage"], "test")
-            stage_updates = processed.plan["stage_updates"]
+            self.assertEqual(processed.plan["workflow"]["outcome"], "failed")
+            stage_updates = processed.plan["events"]["stage_updates"]
             self.assertEqual(
                 [entry["stage"] for entry in stage_updates],
-                ["lock_acquired", "plan_posted", "run_failed"],
+                ["repo_setup_ready", "lock_acquired", "plan_posted", "run_failed"],
             )
             self.assertIn(
                 "Max workflow attempts reached after test failures",
@@ -490,120 +442,24 @@ class WorkerWorkflowTests(unittest.TestCase):
             self.assertIsNone(processed.started_at)
             self.assertIsNone(processed.finished_at)
             self.assertIsInstance(processed.plan, dict)
-            self.assertEqual(processed.plan["required_worker_capability"], "macos")
-            self.assertEqual(processed.plan["required_worker_label"], "worker:macos")
-            self.assertTrue(processed.plan["requeued"])
-            stage_updates = processed.plan["stage_updates"]
+            self.assertEqual(processed.plan["workflow"]["requeue_target"], "macos")
+            self.assertEqual(processed.plan["context"]["execution_context"]["required_worker_label"], "worker:macos")
+            stage_updates = processed.plan["events"]["stage_updates"]
             self.assertEqual(
                 [entry["stage"] for entry in stage_updates],
-                ["lock_acquired", "plan_posted", "run_requeued_capability_mismatch"],
+                ["repo_setup_ready", "lock_acquired", "plan_posted", "run_requeued_capability_mismatch"],
             )
             self.assertFalse(self._run_workspaces_dir(run_id).exists())
-            lock = self._get_lock(session, issue_key="TP-3020")
-            self.assertIsNone(lock)
+            workflow = session.get(WorkflowExecution, processed.workflow_id)
+            self.assertIsNotNone(workflow)
+            assert workflow is not None
+            self.assertEqual(workflow.status, "queued")
+            self.assertEqual(workflow.active_run_id, run_id)
 
         events, _ = agent_observability_tracker.snapshot()
         event_types = [event.event_type for event in events]
         self.assertIn("TASK_STARTED", event_types)
         self.assertNotIn("TASK_FAILED", event_types)
-
-    def test_process_next_queued_run_blocks_when_decision_gate_is_required(self) -> None:
-        run_id = self._queue_run(
-            "TP-302",
-            issue_summary="Unclear requirements",
-            issue_description="TBD: need to decide later?",
-        )
-
-        with (
-            patch(
-                "orchestrator.core.worker.execution_service.evaluate_pre_run_check",
-                return_value=PreRunCheckResult(
-                    outcome="decision_gate_required",
-                    ready_label="agent:ready",
-                    ready_label_present=True,
-                    required_worker_capability="linux",
-                    required_worker_label="worker:linux",
-                    required_worker_label_present=True,
-                    decision_gate=DecisionGateResult(
-                        triggered=True,
-                        reason="Ambiguous requirements and unclear dependencies",
-                        missing_sections=(),
-                        questions=("What is the acceptance criteria?",),
-                        recommendation="Add clarification questions in Jira and clarify scope.",
-                        tags=("gtd",),
-                    ),
-                    gtd=GoodToDoValidationResult(
-                        valid=True,
-                        missing_criteria=(),
-                        clarification_questions=(),
-                    ),
-                ),
-            ),
-            self.session_factory() as session,
-        ):
-            processed = process_next_queued_run(session, _SuccessRunner())
-            self.assertIsNotNone(processed)
-            self.assertEqual(processed.run_id, run_id)
-            self.assertEqual(processed.status, "blocked")
-            self.assertIn("Decision Gate required", processed.last_error or "")
-            self.assertIsInstance(processed.plan, dict)
-            self.assertIn("decision_gate", processed.plan)
-            self.assertTrue(processed.plan["decision_gate"]["triggered"])
-            stage_updates = processed.plan["stage_updates"]
-            self.assertEqual([entry["stage"] for entry in stage_updates], ["decision_gate_required"])
-            retry_enqueue = enqueue_run(
-                session,
-                tenant_id="tenant-worker",
-                project_id=None,
-                issue_key="TP-302",
-                issue_summary="Clarified requirements",
-                issue_description=(
-                    "Objective: deliver requested behavior. "
-                    "Scope: explicit in/out scope. "
-                    "Acceptance Criteria: measurable checks. "
-                    "How to test: exact commands and expected outcomes. "
-                    "NFR intent: MVP."
-                ),
-                repo_url="https://github.com/example/repo",
-            )
-            self.assertTrue(retry_enqueue.enqueued)
-
-    def test_process_next_queued_run_fails_and_releases_lock_on_decision_gate_exception(self) -> None:
-        run_id = self._queue_run("TP-3021")
-
-        with self.session_factory() as session, patch(
-            "orchestrator.core.worker.execution_service.apply_decision_gate",
-            side_effect=RuntimeError("decision gate parse failed"),
-        ):
-            processed = process_next_queued_run(session, _SuccessRunner())
-            self.assertIsNotNone(processed)
-            self.assertEqual(processed.run_id, run_id)
-            self.assertEqual(processed.status, "failed")
-            self.assertIn("Decision Gate evaluation failed: decision gate parse failed", processed.last_error or "")
-            lock = self._get_lock(session, issue_key="TP-3021")
-            self.assertIsNone(lock)
-
-    def test_decision_gate_notification_includes_reply_components(self) -> None:
-        run_id = self._queue_run(
-            "TP-399",
-            issue_summary="Unclear requirements",
-            issue_description="TBD: need to decide later?",
-        )
-
-        with self.session_factory() as session, patch(
-            "orchestrator.worker.send_tenant_discord_message",
-            return_value=DiscordSendResult(sent=True, reason="sent"),
-        ) as send_mock:
-            processed = process_next_queued_run(session, _SuccessRunner())
-            self.assertIsNotNone(processed)
-            self.assertEqual(processed.run_id, run_id)
-            self.assertEqual(processed.status, "blocked")
-
-        send_mock.assert_called_once()
-        kwargs = send_mock.call_args.kwargs
-        self.assertTrue(kwargs["open_thread"])
-        self.assertIsInstance(kwargs["thread_intro_components"], list)
-        self.assertEqual(kwargs["thread_intro_components"][0]["components"][0]["custom_id"], "ask.reply.open")
 
     def test_process_next_queued_run_missing_project_mapping_releases_run_lock(self) -> None:
         with self.session_factory() as session:
@@ -621,6 +477,7 @@ class WorkerWorkflowTests(unittest.TestCase):
                     "NFR intent: MVP."
                 ),
                 repo_url="https://github.com/example/repo",
+                precheck_outcome="ready_for_agent",
             )
             self.assertTrue(enqueue_result.enqueued)
             run_id = enqueue_result.run.run_id
@@ -634,8 +491,10 @@ class WorkerWorkflowTests(unittest.TestCase):
                 processed.last_error,
                 "No active project mapping found for issue ZZ-101",
             )
-            lock = self._get_lock(session, issue_key="ZZ-101")
-            self.assertIsNone(lock)
+            workflow = session.get(WorkflowExecution, processed.workflow_id)
+            self.assertIsNotNone(workflow)
+            assert workflow is not None
+            self.assertEqual(workflow.status, "failed")
 
     def test_process_next_queued_run_uses_tenant_jira_site_url_for_stage_links(self) -> None:
         run_id = self._queue_run("TP-555")
@@ -643,7 +502,7 @@ class WorkerWorkflowTests(unittest.TestCase):
 
         with self.session_factory() as session:
             session.add(
-                JiraOAuthConnection(
+                AtlassianOAuthConnection(
                     connection_id="jira-tenant-worker",
                     account_id="acct-1",
                     account_email="agent@example.com",
@@ -670,13 +529,13 @@ class WorkerWorkflowTests(unittest.TestCase):
             processed = process_next_queued_run(session, runner)
             self.assertIsNotNone(processed)
             self.assertEqual(processed.run_id, run_id)
-            stage_updates = processed.plan["stage_updates"]
+            stage_updates = processed.plan["events"]["stage_updates"]
             self.assertIn(
                 "https://jira.example.test/browse/TP-555",
                 stage_updates[0]["discord_message"],
             )
 
-    def test_process_next_queued_run_ensures_project_repository_checkout(self) -> None:
+    def test_process_next_queued_run_prepares_execution_repo_before_workflow(self) -> None:
         run_id = self._queue_run("TP-556")
         runner = _SuccessRunner()
 
@@ -686,15 +545,34 @@ class WorkerWorkflowTests(unittest.TestCase):
             self.assertEqual(processed.run_id, run_id)
             self.assertEqual(processed.status, "succeeded")
 
-        self.checkout_mock.assert_called()
-        checkout_kwargs = self.checkout_mock.call_args.kwargs
-        self.assertEqual(checkout_kwargs["tenant"].tenant_id, "tenant-worker")
-        self.assertEqual(checkout_kwargs["project"].project_id, "tenant-worker-default")
+        self.repo_setup_mock.assert_called()
+        repo_setup_kwargs = self.repo_setup_mock.call_args.kwargs
+        self.assertEqual(repo_setup_kwargs["tenant"].tenant_id, "tenant-worker")
+        self.assertEqual(repo_setup_kwargs["project"].project_id, "tenant-worker-default")
+        self.assertEqual(repo_setup_kwargs["workspace_key"], "worker-a")
 
-    def test_process_next_queued_run_fails_when_project_checkout_fails(self) -> None:
+    def test_process_next_queued_run_requeues_when_repo_setup_is_retryable(self) -> None:
         run_id = self._queue_run("TP-557")
         runner = _SuccessRunner()
-        self.checkout_mock.side_effect = ProjectRepoCheckoutError("clone failed")
+        self.repo_setup_mock.side_effect = RetryableRepoSetupError("fetch race")
+
+        with self.session_factory() as session:
+            processed = process_next_queued_run(session, runner)
+            self.assertIsNotNone(processed)
+            self.assertEqual(processed.run_id, run_id)
+            self.assertEqual(processed.status, "queued")
+            self.assertIsNone(processed.last_error)
+            self.assertEqual(processed.plan["context"]["execution_context"]["repo_setup_attempts"], 1)
+            self.assertEqual(processed.plan["context"]["execution_context"]["repo_setup_last_error"], "fetch race")
+            stage_updates = processed.plan["events"]["stage_updates"]
+            self.assertEqual([entry["stage"] for entry in stage_updates], ["run_requeued_repo_setup"])
+
+        self.assertIsNone(runner.last_request)
+
+    def test_process_next_queued_run_fails_when_repo_setup_is_terminal(self) -> None:
+        run_id = self._queue_run("TP-558")
+        runner = _SuccessRunner()
+        self.repo_setup_mock.side_effect = TerminalRepoSetupError("manifest missing")
 
         with self.session_factory() as session:
             processed = process_next_queued_run(session, runner)
@@ -703,7 +581,7 @@ class WorkerWorkflowTests(unittest.TestCase):
             self.assertEqual(processed.status, "failed")
             self.assertEqual(
                 processed.last_error,
-                "Project repository checkout failed: clone failed",
+                "Project repository setup failed: manifest missing",
             )
 
         self.assertIsNone(runner.last_request)

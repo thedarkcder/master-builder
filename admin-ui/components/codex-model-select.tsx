@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import type { CodexModelOptionRecord } from "@/lib/api";
 import { Input } from "@/components/ui/input";
@@ -11,9 +11,12 @@ type Props = {
   value: string | null | undefined;
   models: CodexModelOptionRecord[];
   inheritLabel: string;
+  ariaLabel?: string;
   helperText?: string;
   effectiveLabel?: string;
   disabled?: boolean;
+  /** When this changes (e.g. profile/tenant being edited), exit explicit custom mode. */
+  editorSurfaceKey?: string | null;
   onChange: (value: string | null) => void;
 };
 
@@ -21,42 +24,91 @@ export function CodexModelSelect({
   value,
   models,
   inheritLabel,
+  ariaLabel,
   helperText,
   effectiveLabel,
   disabled = false,
+  editorSurfaceKey,
   onChange,
 }: Props) {
   const normalizedValue = String(value || "").trim();
+  const optionById = useMemo(
+    () =>
+      new Map(
+        models
+          .map((option) => [String(option.id || "").trim(), option] as const)
+          .filter(([id]) => id.length > 0),
+      ),
+    [models],
+  );
   const optionIds = useMemo(
     () => new Set(models.map((option) => String(option.id || "").trim()).filter(Boolean)),
     [models],
   );
-  const valueIsPreset = normalizedValue.length > 0 && optionIds.has(normalizedValue);
+  const selectedOption = optionById.get(normalizedValue);
+  const selectedOptionLooksCustom =
+    normalizedValue.length > 0 &&
+    selectedOption !== undefined &&
+    !String(selectedOption.description || "").trim() &&
+    String(selectedOption.label || "").trim() === normalizedValue;
+  const valueIsPreset = normalizedValue.length > 0 && optionIds.has(normalizedValue) && !selectedOptionLooksCustom;
+  /** User chose "Custom model…"; stay in custom UI even if the id matches a catalog preset. */
+  const customExplicitRef = useRef(false);
   const [customMode, setCustomMode] = useState<boolean>(normalizedValue.length > 0 && !valueIsPreset);
   const [customValue, setCustomValue] = useState<string>(valueIsPreset ? "" : normalizedValue);
 
   useEffect(() => {
-    const nextNormalized = String(value || "").trim();
-    const nextPreset = nextNormalized.length > 0 && optionIds.has(nextNormalized);
-    setCustomMode(nextNormalized.length > 0 && !nextPreset);
-    setCustomValue(nextPreset ? "" : nextNormalized);
-  }, [optionIds, value]);
+    customExplicitRef.current = false;
+  }, [editorSurfaceKey]);
+
+  useEffect(() => {
+    const nextNormalized = String(value ?? "").trim();
+    const nextOption = optionById.get(nextNormalized);
+    const nextOptionLooksCustom =
+      nextNormalized.length > 0 &&
+      nextOption !== undefined &&
+      !String(nextOption.description || "").trim() &&
+      String(nextOption.label || "").trim() === nextNormalized;
+    const nextPreset = nextNormalized.length > 0 && optionIds.has(nextNormalized) && !nextOptionLooksCustom;
+
+    if (customExplicitRef.current) {
+      setCustomMode(true);
+      setCustomValue(nextNormalized);
+      return;
+    }
+
+    if (nextPreset) {
+      setCustomMode(false);
+      setCustomValue("");
+      return;
+    }
+    if (nextNormalized.length > 0) {
+      setCustomMode(true);
+      setCustomValue(nextNormalized);
+      return;
+    }
+    setCustomMode(false);
+    setCustomValue("");
+  }, [optionById, optionIds, value, editorSurfaceKey]);
 
   const selectValue = customMode ? CUSTOM_MODEL_VALUE : normalizedValue;
 
   return (
     <div className="space-y-2">
       <select
+        aria-label={ariaLabel}
         className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
         value={selectValue}
         onChange={(event) => {
           const next = event.target.value;
           if (next === CUSTOM_MODEL_VALUE) {
+            customExplicitRef.current = true;
             setCustomMode(true);
             setCustomValue("");
             onChange(null);
             return;
           }
+          customExplicitRef.current = false;
           setCustomMode(false);
           setCustomValue("");
           onChange(next.trim() || null);
@@ -73,13 +125,14 @@ export function CodexModelSelect({
       </select>
       {customMode ? (
         <Input
+          aria-label={ariaLabel ? `${ariaLabel} custom value` : undefined}
           value={customValue}
           onChange={(event) => {
             const next = event.target.value;
             setCustomValue(next);
             onChange(next.trim() || null);
           }}
-          placeholder="Enter Codex model id"
+          placeholder="Enter model id"
           disabled={disabled}
         />
       ) : null}

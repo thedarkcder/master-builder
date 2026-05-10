@@ -3,8 +3,8 @@ from __future__ import annotations
 from sqlalchemy import select
 
 from orchestrator.core.config import get_settings
-from orchestrator.core.platform_secret_service import resolve_platform_secret_ref
-from orchestrator.core.tenant_secret_service import resolve_scoped_secret_ref
+from orchestrator.core.platform.secret_service import resolve_platform_secret_ref
+from orchestrator.core.platform.tenant_secret_service import resolve_scoped_secret_ref
 from orchestrator.storage.models import Project, Tenant
 from orchestrator.tools.github_app import GitHubApiError, github_client_from_tenant_config
 from orchestrator.tools.project_repo_checkout import collect_local_repo_context

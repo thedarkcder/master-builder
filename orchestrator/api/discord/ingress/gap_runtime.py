@@ -9,7 +9,7 @@ from orchestrator.api.discord.bug.gap_analysis import gap_confidence as _gap_con
 from orchestrator.api.discord.bug.gap_analysis import run_gap_analysis as _run_gap_analysis_impl
 from orchestrator.api.discord.bug.gap_analysis import tenant_repo_url as _tenant_repo_url_impl
 from orchestrator.api.discord.ingress.github_context import collect_project_repo_context_for_issue
-from orchestrator.core.project_routing import find_active_project_for_issue_key
+from orchestrator.core.projects.routing import find_active_project_for_issue_key
 
 ISSUE_KEY_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]+-\d+$")
 

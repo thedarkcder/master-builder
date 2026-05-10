@@ -9,7 +9,7 @@ from orchestrator.storage.models import Project, Tenant
 from orchestrator.tools.discord_api import DiscordApiError
 
 
-def disconnect_tenant_jira(
+def disconnect_tenant_atlassian(
     *,
     session,
     tenant: Tenant | None,
@@ -25,6 +25,11 @@ def disconnect_tenant_jira(
         tenant=tenant,
         settings=settings,
     )
+    if not webhook_delete_ok:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Atlassian disconnect failed because managed Jira webhook deletion failed: {delete_details}",
+        )
     session.refresh(tenant)
     jira_config = dict(tenant.jira_config)
     jira_config["connection_id"] = None
@@ -33,16 +38,10 @@ def disconnect_tenant_jira(
     tenant.updated_at = datetime.now(timezone.utc)
     session.commit()
 
-    details = "Jira connection disconnected and webhook metadata cleared."
-    if not webhook_delete_ok:
-        details = (
-            "Jira connection disconnected, but webhook deletion failed. "
-            f"{delete_details}"
-        )
     return JiraWebhookActionResult(
         ok=True,
         action="disconnect",
-        details=details,
+        details="Atlassian connection disconnected and webhook metadata cleared.",
         webhook_ids=[],
     )
 

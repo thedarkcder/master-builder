@@ -1,102 +1,71 @@
 from __future__ import annotations
 
-from datetime import datetime, timedelta
-
-from sqlalchemy import select
+from datetime import timedelta
 
 from orchestrator.api.schemas import AlertEvaluationRead, AlertRead
-from orchestrator.core.alerting import (
-    AlertCandidate,
-    alert_dedup_registry,
-    utcnow,
-)
-from orchestrator.storage.models import Run, Tenant
+from orchestrator.core.observability.alerting import AlertCandidate, alert_dedup_registry, utcnow
+from orchestrator.core.platform.operational_health_service import list_enabled_tenant_operational_health
+from orchestrator.storage.models import Run
 
 
-def _coerce_aware(value: datetime) -> datetime:
-    if value.tzinfo is None:
-        return value.replace(tzinfo=utcnow().tzinfo)
-    return value
-
-
-def _tenant_candidates(*, tenant: Tenant, runs: list[Run], now: datetime) -> list[AlertCandidate]:
+def _tenant_candidates(*, snapshot) -> list[AlertCandidate]:  # noqa: ANN001
     candidates: list[AlertCandidate] = []
-    jira_config = dict(tenant.jira_config or {})
-    github_config = dict(tenant.github_config or {})
-
-    if not str(jira_config.get("connection_id") or "").strip():
+    if not snapshot.integrations.jira_connected:
         candidates.append(
             AlertCandidate(
-                alert_key=f"tenant:{tenant.tenant_id}:jira_disconnected",
+                alert_key=f"tenant:{snapshot.tenant_id}:jira_disconnected",
                 severity="HIGH",
                 scope_type="tenant",
-                scope_id=tenant.tenant_id,
-                reason="Jira integration is not connected.",
+                scope_id=snapshot.tenant_id,
+                reason="Atlassian integration is not connected.",
             )
         )
-    if not str(github_config.get("installation_id") or "").strip():
+    if not snapshot.integrations.github_connected:
         candidates.append(
             AlertCandidate(
-                alert_key=f"tenant:{tenant.tenant_id}:github_disconnected",
+                alert_key=f"tenant:{snapshot.tenant_id}:github_disconnected",
                 severity="HIGH",
                 scope_type="tenant",
-                scope_id=tenant.tenant_id,
+                scope_id=snapshot.tenant_id,
                 reason="GitHub App installation is not connected.",
             )
         )
-
-    webhook_error = str(jira_config.get("webhook_last_error") or "").strip()
-    if webhook_error:
+    if snapshot.integrations.jira_webhook_last_error:
         candidates.append(
             AlertCandidate(
-                alert_key=f"tenant:{tenant.tenant_id}:jira_webhook_error",
+                alert_key=f"tenant:{snapshot.tenant_id}:jira_webhook_error",
                 severity="HIGH",
                 scope_type="tenant",
-                scope_id=tenant.tenant_id,
+                scope_id=snapshot.tenant_id,
                 reason="Jira webhook has a recorded provisioning/runtime error.",
             )
         )
-
-    received_at_raw = str(jira_config.get("webhook_last_received_at") or "").strip()
-    if str(jira_config.get("connection_id") or "").strip() and not webhook_error:
-        stale = True
-        if received_at_raw:
-            try:
-                parsed = datetime.fromisoformat(received_at_raw.replace("Z", "+00:00"))
-                stale = _coerce_aware(parsed) < (now - timedelta(hours=24))
-            except ValueError:
-                stale = True
-        if stale:
-            candidates.append(
-                AlertCandidate(
-                    alert_key=f"tenant:{tenant.tenant_id}:jira_webhook_stale",
-                    severity="MEDIUM",
-                    scope_type="tenant",
-                    scope_id=tenant.tenant_id,
-                    reason="Jira webhook has not been received in the last 24 hours.",
-                )
+    if snapshot.integrations.jira_connected and not snapshot.integrations.jira_webhook_last_error and not snapshot.integrations.jira_webhook_healthy:
+        candidates.append(
+            AlertCandidate(
+                alert_key=f"tenant:{snapshot.tenant_id}:jira_webhook_stale",
+                severity="MEDIUM",
+                scope_type="tenant",
+                scope_id=snapshot.tenant_id,
+                reason="Jira webhook has not been received in the last 24 hours.",
             )
-
-    if runs:
-        failed = sum(1 for run in runs if run.status == "failed")
-        failure_rate = failed / len(runs)
-        if len(runs) >= 4 and failure_rate >= 0.5:
-            candidates.append(
-                AlertCandidate(
-                    alert_key=f"tenant:{tenant.tenant_id}:run_failure_rate_high",
-                    severity="MEDIUM",
-                    scope_type="tenant",
-                    scope_id=tenant.tenant_id,
-                    reason="Tenant run failure rate exceeded threshold (>= 50% over latest sample).",
-                )
+        )
+    if snapshot.total_runs >= 4 and snapshot.run_failure_rate_ratio >= 0.5:
+        candidates.append(
+            AlertCandidate(
+                alert_key=f"tenant:{snapshot.tenant_id}:run_failure_rate_high",
+                severity="MEDIUM",
+                scope_type="tenant",
+                scope_id=snapshot.tenant_id,
+                reason="Tenant run failure rate exceeded threshold (>= 50% over latest sample).",
             )
-
+        )
     return candidates
 
 
-def _platform_candidates(*, runs: list[Run], now: datetime) -> list[AlertCandidate]:
+def _platform_candidates(*, session, now) -> list[AlertCandidate]:  # noqa: ANN001
+    window = session.query(Run).filter(Run.created_at >= (now - timedelta(hours=1))).all()
     candidates: list[AlertCandidate] = []
-    window = [run for run in runs if _coerce_aware(run.created_at) >= (now - timedelta(hours=1))]
     if window:
         failed = sum(1 for run in window if run.status == "failed")
         failure_rate = failed / len(window)
@@ -121,20 +90,10 @@ def evaluate_alerts(
     now_fn=utcnow,
 ) -> AlertEvaluationRead:  # noqa: ANN001
     now = now_fn()
-    tenants_query = select(Tenant).where(Tenant.is_enabled.is_(True))
-    if tenant_id:
-        tenants_query = tenants_query.where(Tenant.tenant_id == tenant_id)
-    tenants = session.execute(tenants_query).scalars().all()
-
-    runs = session.execute(select(Run)).scalars().all()
-    tenant_runs: dict[str, list[Run]] = {}
-    for run in runs:
-        tenant_runs.setdefault(run.tenant_id, []).append(run)
-
-    candidates = _platform_candidates(runs=runs, now=now)
-    for tenant in tenants:
-        candidates.extend(_tenant_candidates(tenant=tenant, runs=tenant_runs.get(tenant.tenant_id, []), now=now))
-
+    snapshots = list_enabled_tenant_operational_health(session=session, tenant_id=tenant_id)
+    candidates = _platform_candidates(session=session, now=now)
+    for snapshot in snapshots:
+        candidates.extend(_tenant_candidates(snapshot=snapshot))
     emitted = alert_dedup_registry.filter_candidates(
         candidates=candidates,
         now=now,

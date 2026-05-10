@@ -4,6 +4,8 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
+from orchestrator.core.prompt_domain_models import prompt_domain_model_for_template
+
 
 def _prompts_dir() -> Path:
     return Path(__file__).resolve().parents[1] / "prompts"
@@ -27,4 +29,8 @@ def _jinja_environment() -> Any:
 def render_prompt(template_name: str, **context: Any) -> str:
     env = _jinja_environment()
     template = env.get_template(template_name)
-    return str(template.render(**context)).strip()
+    render_context = dict(context)
+    domain_model = prompt_domain_model_for_template(template_name)
+    if domain_model is not None:
+        render_context.setdefault("domain_model", domain_model)
+    return str(template.render(**render_context)).strip()

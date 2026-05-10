@@ -1,10 +1,15 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 
-from pydantic import BaseModel, Field, field_validator, model_serializer
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_serializer, model_validator
 
-from orchestrator.core.codex_models import normalize_codex_model, normalize_codex_reasoning_effort
+from orchestrator.core.runtime.agent_execution_profiles import (
+    normalize_execution_profile_routing,
+    normalize_execution_profiles,
+)
+from orchestrator.core.runtime.models import normalize_codex_model, normalize_codex_reasoning_effort
 from orchestrator.core.guardrails import enforce_safe_command
 
 
@@ -40,6 +45,26 @@ class ReposConfig(BaseModel):
     mapping_rules_by_component: dict[str, str] = Field(default_factory=dict)
 
 
+class ObservabilityPolicyConfig(BaseModel):
+    audit_retention_days: int = Field(default=365, ge=1, le=3650)
+    audit_export_enabled: bool = True
+    legal_hold_enabled: bool = False
+    legal_hold_reason: str | None = Field(default=None, max_length=500)
+
+    @field_validator("legal_hold_reason")
+    @classmethod
+    def normalize_legal_hold_reason(cls, value: str | None) -> str | None:
+        return str(value or "").strip() or None
+
+    @model_validator(mode="after")
+    def validate_legal_hold(self) -> "ObservabilityPolicyConfig":
+        if self.legal_hold_enabled and not self.legal_hold_reason:
+            raise ValueError("legal_hold_reason is required when legal_hold_enabled is true")
+        if not self.legal_hold_enabled:
+            self.legal_hold_reason = None
+        return self
+
+
 class PolicyConfig(BaseModel):
     allow_jira_transitions: bool = False
     allow_pr_creation: bool = True
@@ -57,6 +82,9 @@ class PolicyConfig(BaseModel):
     knowledge_auto_answer_mode: str = Field(default="aggressive", pattern="^(safe|balanced|aggressive)$")
     codex_model: str | None = None
     codex_reasoning_effort: str | None = Field(default=None, pattern="^(low|medium|high)$")
+    execution_profiles: dict[str, dict[str, object]] = Field(default_factory=dict)
+    execution_profile_routing: dict[str, str] = Field(default_factory=dict)
+    observability: ObservabilityPolicyConfig = Field(default_factory=ObservabilityPolicyConfig)
 
     @field_validator("allowed_commands")
     @classmethod
@@ -78,9 +106,21 @@ class PolicyConfig(BaseModel):
     def normalize_codex_reasoning_effort(cls, value: str | None) -> str | None:
         return normalize_codex_reasoning_effort(value)
 
+    @field_validator("execution_profiles")
+    @classmethod
+    def normalize_execution_profiles(cls, value: dict[str, dict[str, object]] | None) -> dict[str, dict[str, object]]:
+        return normalize_execution_profiles(value)
+
+    @field_validator("execution_profile_routing")
+    @classmethod
+    def normalize_execution_profile_routing(cls, value: dict[str, str] | None) -> dict[str, str]:
+        return normalize_execution_profile_routing(value)
+
 
 class DiscordConfig(BaseModel):
     guild_id: str | None = None
+    installed_at: str | None = None
+    installer_user_id: str | None = None
     channel_id: str | None = None
     channel_name_template: str = "proj-{tenant_id}"
     notify_events: list[str] = Field(default_factory=list)
@@ -118,6 +158,9 @@ class DiscordConfig(BaseModel):
     room_persona_voices: dict[str, str] = Field(default_factory=dict)
     pm_room_persona_names: dict[str, str] = Field(default_factory=dict)
     pm_room_persona_voices: dict[str, str] = Field(default_factory=dict)
+    onboarding_channel_id: str | None = None
+    onboarding_invite_expires_in_seconds: int | None = None
+    onboarding_invite_max_uses: int | None = None
 
     @model_serializer(mode="plain")
     def serialize_sparse(self) -> dict[str, object]:
@@ -187,6 +230,35 @@ class ProjectDiscordConfig(BaseModel):
         return serialized
 
 
+class ProjectArchitectureDocsConfig(BaseModel):
+    provider: Literal["internal", "confluence"]
+    space_key: str | None = None
+    parent_page_id: str | None = None
+
+    @field_validator("space_key", "parent_page_id")
+    @classmethod
+    def normalize_optional_text(cls, value: str | None) -> str | None:
+        normalized = str(value or "").strip()
+        return normalized or None
+
+
+class ConfluenceSpaceRead(BaseModel):
+    space_id: str
+    key: str
+    name: str
+
+
+class ConfluenceSpaceCatalogRead(BaseModel):
+    items: list[ConfluenceSpaceRead]
+    create_space_url: str
+
+
+class ConfluencePageRead(BaseModel):
+    page_id: str
+    title: str
+    webui_url: str
+
+
 class TenantCreate(BaseModel):
     name: str = Field(min_length=1)
     is_enabled: bool = True
@@ -195,29 +267,238 @@ class TenantCreate(BaseModel):
     repos: ReposConfig
     policy: PolicyConfig
     discord: DiscordConfig | None = None
+    experience: dict = Field(default_factory=lambda: {"default_mode": "technical"})
+    setup_state: dict = Field(default_factory=dict)
 
 
-class TenantUpdate(BaseModel):
+class TenantConfigurationUpdate(BaseModel):
     name: str = Field(min_length=1)
-    is_enabled: bool
+
+
+class TenantJiraUpdate(BaseModel):
     jira: JiraConfig
+
+
+class TenantGithubUpdate(BaseModel):
     github: GithubConfig
+
+
+class TenantReposUpdate(BaseModel):
     repos: ReposConfig
+
+
+class TenantPolicyUpdate(BaseModel):
     policy: PolicyConfig
+
+
+class TenantObservabilityUpdate(BaseModel):
+    observability: ObservabilityPolicyConfig
+
+
+class TenantDiscordUpdate(BaseModel):
     discord: DiscordConfig | None = None
+
+
+class TenantExperienceUpdate(BaseModel):
+    experience: dict = Field(default_factory=lambda: {"default_mode": "technical"})
+    setup_state: dict = Field(default_factory=dict)
 
 
 class TenantRead(BaseModel):
     tenant_id: str
     name: str
     is_enabled: bool
+    archived_at: datetime | None = None
+    purge_after_at: datetime | None = None
     jira: JiraConfig
     github: GithubConfig
     repos: ReposConfig
     policy: PolicyConfig
     discord: DiscordConfig | None
+    experience: dict = Field(default_factory=dict)
+    setup_state: dict = Field(default_factory=dict)
     created_at: datetime
     updated_at: datetime
+
+
+class TenantMembershipIdentityRead(BaseModel):
+    membership_id: str
+    tenant_id: str
+    role: str
+    permission_keys: list[str] = Field(default_factory=list)
+    effective_mode: str
+    mode_override: str | None = None
+    onboarding_kind: str
+    first_signed_in_at: datetime | None = None
+    onboarding_completed_at: datetime | None = None
+    onboarding_version: str | None = None
+    team_ids: list[str] = Field(default_factory=list)
+    discord_state: dict = Field(default_factory=dict)
+
+
+class AuthenticatedPrincipalRead(BaseModel):
+    principal_type: str
+    username: str | None = None
+    user_id: str | None = None
+    email: str | None = None
+    full_name: str | None = None
+    memberships: list[TenantMembershipIdentityRead] = Field(default_factory=list)
+
+
+class TenantUserLoginRequest(BaseModel):
+    email: str = Field(min_length=1)
+    password: str = Field(min_length=1)
+
+
+class TenantUserLoginResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    expires_in: int
+    principal: AuthenticatedPrincipalRead
+
+
+class PublicRegistrationRequest(BaseModel):
+    full_name: str = Field(min_length=1, max_length=255)
+    email: str = Field(min_length=1, max_length=320)
+    password: str = Field(min_length=8)
+    tenant_name: str = Field(min_length=1, max_length=255)
+
+
+class PublicRegistrationResponse(BaseModel):
+    access_token: str
+    token_type: str = "bearer"
+    expires_in: int
+    principal: AuthenticatedPrincipalRead
+    tenant: TenantRead
+
+
+class TenantInviteCreate(BaseModel):
+    email: str = Field(min_length=1, max_length=320)
+    full_name: str | None = Field(default=None, max_length=255)
+    role: str = Field(pattern="^(tenant_admin|technical_member|business_member)$")
+    team_ids: list[str] = Field(default_factory=list)
+    mode_override: str | None = Field(default=None, pattern="^(technical|non_technical)$")
+
+
+class TenantInviteRead(BaseModel):
+    invite_id: str
+    tenant_id: str
+    email: str
+    full_name: str | None = None
+    role: str
+    team_ids: list[str] = Field(default_factory=list)
+    mode_override: str | None = None
+    status: str
+    invite_url: str | None = None
+    expires_at: datetime
+    accepted_at: datetime | None = None
+    revoked_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class TenantInviteActionResult(BaseModel):
+    invite: TenantInviteRead
+
+
+class TenantInviteListRead(BaseModel):
+    items: list[TenantInviteRead] = Field(default_factory=list)
+
+
+class TenantTeamCreate(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    description: str | None = None
+    permission_keys: list[str] = Field(default_factory=list)
+
+
+class TenantTeamUpdate(BaseModel):
+    name: str = Field(min_length=1, max_length=255)
+    description: str | None = None
+    permission_keys: list[str] = Field(default_factory=list)
+
+
+class TenantTeamRead(BaseModel):
+    team_id: str
+    tenant_id: str
+    name: str
+    description: str | None = None
+    permission_keys: list[str] = Field(default_factory=list)
+    created_at: datetime
+    updated_at: datetime
+
+
+class TenantMemberRead(BaseModel):
+    membership_id: str
+    tenant_id: str
+    user_id: str
+    email: str
+    full_name: str | None = None
+    is_active: bool
+    role: str
+    permission_keys: list[str] = Field(default_factory=list)
+    effective_mode: str
+    mode_override: str | None = None
+    onboarding_kind: str
+    first_signed_in_at: datetime | None = None
+    onboarding_completed_at: datetime | None = None
+    onboarding_version: str | None = None
+    team_ids: list[str] = Field(default_factory=list)
+    discord_state: dict = Field(default_factory=dict)
+    created_at: datetime
+    updated_at: datetime
+
+
+class TenantMemberUpdate(BaseModel):
+    role: str = Field(pattern="^(tenant_admin|technical_member|business_member)$")
+    team_ids: list[str] = Field(default_factory=list)
+    mode_override: str | None = Field(default=None, pattern="^(technical|non_technical)$")
+    is_active: bool = True
+
+
+class TenantDiscordLinkStartRead(BaseModel):
+    authorize_url: str
+
+
+class TenantDiscordIdentityRead(BaseModel):
+    oauth_configured: bool = False
+    linked: bool
+    discord_user_id: str | None = None
+    discord_username: str | None = None
+    discord_global_name: str | None = None
+    discord_avatar_hash: str | None = None
+    linked_at: datetime | None = None
+
+
+class TenantDiscordInviteRead(BaseModel):
+    invite_url: str
+    expires_at: datetime | None = None
+    max_uses: int | None = None
+
+
+class DeliverySummaryAggregateRead(BaseModel):
+    completed_count: int
+    in_review_count: int
+    blocked_count: int
+    failed_count: int
+    queued_count: int
+    median_cycle_time_hours: float | None = None
+    average_cycle_time_hours: float | None = None
+
+
+class DeliveryTimelineItemRead(BaseModel):
+    run_id: str
+    project_id: str | None = None
+    issue_key: str
+    issue_summary: str | None = None
+    status: str
+    completed_at: datetime | None = None
+    started_at: datetime | None = None
+    pr_url: str | None = None
+
+
+class TenantDeliverySummaryRead(BaseModel):
+    summary: DeliverySummaryAggregateRead
+    timeline: list[DeliveryTimelineItemRead] = Field(default_factory=list)
 
 
 class ProjectCreate(BaseModel):
@@ -225,20 +506,37 @@ class ProjectCreate(BaseModel):
     github_repository: str = Field(min_length=1)
     jira_project_key: str = Field(min_length=1)
     policy_overrides: dict = Field(default_factory=dict)
+    architecture_docs: ProjectArchitectureDocsConfig | None = None
     environment: dict[str, str] = Field(default_factory=dict)
     secret_refs: dict[str, str] = Field(default_factory=dict)
     discord: ProjectDiscordConfig | None = None
 
 
-class ProjectUpdate(BaseModel):
+class ProjectConfigurationUpdate(BaseModel):
     name: str = Field(min_length=1)
     github_repository: str = Field(min_length=1)
     jira_project_key: str = Field(min_length=1)
+    architecture_docs: ProjectArchitectureDocsConfig | None = None
+
+
+class ProjectPolicyUpdate(BaseModel):
     policy_overrides: dict = Field(default_factory=dict)
+
+
+class ProjectEnvironmentUpdate(BaseModel):
     environment: dict[str, str] = Field(default_factory=dict)
+
+
+class ProjectSecretRefsUpdate(BaseModel):
     secret_refs: dict[str, str] = Field(default_factory=dict)
+
+
+class ProjectDiscordUpdate(BaseModel):
     discord: ProjectDiscordConfig | None = None
-    is_archived: bool = False
+
+
+class ProjectArchiveUpdate(BaseModel):
+    is_archived: bool
 
 
 class ProjectRead(BaseModel):
@@ -248,6 +546,7 @@ class ProjectRead(BaseModel):
     github_repository: str
     jira_project_key: str
     policy_overrides: dict = Field(default_factory=dict)
+    architecture_docs: ProjectArchitectureDocsConfig | None = None
     environment: dict[str, str] = Field(default_factory=dict)
     secret_refs: dict[str, str] = Field(default_factory=dict)
     discord: ProjectDiscordConfig | None = None
@@ -255,6 +554,205 @@ class ProjectRead(BaseModel):
     is_archived: bool
     created_at: datetime
     updated_at: datetime
+
+
+class ArchitectureDocumentCreate(BaseModel):
+    parent_issue_key: str = Field(min_length=1)
+    issue_summary: str | None = None
+    title: str | None = None
+    canonical_url: str | None = None
+    provider_ref: str | None = None
+
+
+class ArchitectureDocumentUpdate(BaseModel):
+    title: str = Field(min_length=1)
+    status: Literal["draft", "ready", "superseded"]
+    content_markdown: str | None = None
+    canonical_url: str | None = None
+    provider_ref: str | None = None
+
+
+class ArchitectureDocumentRead(BaseModel):
+    document_id: str
+    tenant_id: str
+    project_id: str
+    parent_issue_key: str
+    provider: Literal["internal", "confluence"]
+    title: str
+    status: Literal["draft", "ready", "superseded"]
+    is_active: bool
+    canonical_url: str
+    provider_ref: str | None = None
+    knowledge_asset_id: str | None = None
+    content_markdown: str | None = None
+    metadata: dict = Field(default_factory=dict)
+    created_by: str | None = None
+    updated_by: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class ArchitectureDocumentPageRead(BaseModel):
+    items: list[ArchitectureDocumentRead] = Field(default_factory=list)
+    total: int
+
+
+class ProjectInstallWrite(BaseModel):
+    kind: str = Field(min_length=1)
+    label: str = Field(min_length=1)
+    enabled: bool = True
+    config: dict = Field(default_factory=dict)
+    binding_names: list[str] = Field(default_factory=list)
+
+
+class ProjectInstallRead(BaseModel):
+    install_id: str
+    tenant_id: str
+    project_id: str
+    kind: str
+    label: str
+    enabled: bool
+    config: dict = Field(default_factory=dict)
+    binding_names: list[str] = Field(default_factory=list)
+    created_at: datetime
+    updated_at: datetime
+
+
+class ProjectInstallsRead(BaseModel):
+    installs: list[ProjectInstallRead] = Field(default_factory=list)
+
+
+class ProjectInstallRequestRead(BaseModel):
+    request_id: str
+    tenant_id: str
+    project_id: str
+    workflow_id: str | None = None
+    run_id: str | None = None
+    issue_key: str
+    kind: str
+    label: str
+    reason: str
+    suggested_config: dict = Field(default_factory=dict)
+    required_bindings: list[str] = Field(default_factory=list)
+    status: str
+    request_kind: str
+    created_at: datetime
+    updated_at: datetime
+
+
+class ProjectInstallRequestsRead(BaseModel):
+    requests: list[ProjectInstallRequestRead] = Field(default_factory=list)
+
+
+class ProjectInstallRequestUpdate(BaseModel):
+    status: str = Field(min_length=1)
+
+
+class ProjectAutomationWrite(BaseModel):
+    kind: str = Field(min_length=1)
+    enabled: bool = True
+    timezone: str = Field(min_length=1)
+    days_of_week: list[int | str] = Field(default_factory=list)
+    local_time: str = Field(min_length=1)
+    fallback_lookback_hours: int = Field(default=24, ge=1)
+
+    @field_validator("timezone")
+    @classmethod
+    def validate_timezone(cls, value: str) -> str:
+        normalized = str(value or "").strip()
+        if not normalized:
+            raise ValueError("timezone is required")
+        return normalized
+
+    @field_validator("days_of_week")
+    @classmethod
+    def validate_days_of_week(cls, value: list[int | str]) -> list[int]:
+        normalized: list[int] = []
+        seen: set[int] = set()
+        weekday_aliases = {
+            "mon": 0,
+            "monday": 0,
+            "tue": 1,
+            "tues": 1,
+            "tuesday": 1,
+            "wed": 2,
+            "wednesday": 2,
+            "thu": 3,
+            "thur": 3,
+            "thurs": 3,
+            "thursday": 3,
+            "fri": 4,
+            "friday": 4,
+            "sat": 5,
+            "saturday": 5,
+            "sun": 6,
+            "sunday": 6,
+        }
+        for raw_value in value:
+            if isinstance(raw_value, bool):
+                raise ValueError("days_of_week must contain integers 0-6 or weekday names")
+            if isinstance(raw_value, int):
+                day = raw_value
+            else:
+                normalized_value = str(raw_value or "").strip().lower()
+                if not normalized_value:
+                    continue
+                if normalized_value.isdigit():
+                    day = int(normalized_value)
+                elif normalized_value in weekday_aliases:
+                    day = weekday_aliases[normalized_value]
+                else:
+                    raise ValueError(f"Invalid day of week: {raw_value}")
+            if day < 0 or day > 6:
+                raise ValueError(f"Invalid day of week: {raw_value}")
+            if day in seen:
+                continue
+            seen.add(day)
+            normalized.append(day)
+        if not normalized:
+            raise ValueError("days_of_week is required")
+        return normalized
+
+
+class ProjectAutomationExecutionRead(BaseModel):
+    execution_id: str
+    automation_id: str
+    scheduled_for: datetime
+    window_start_at: datetime
+    window_end_at: datetime
+    status: str
+    dedupe_key: str
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    discord_message_id: str | None = None
+    last_error: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class ProjectAutomationRead(BaseModel):
+    automation_id: str
+    tenant_id: str
+    project_id: str
+    kind: str
+    enabled: bool
+    timezone: str
+    days_of_week: list[int] = Field(default_factory=list)
+    local_time: str
+    fallback_lookback_hours: int
+    last_successful_window_end_at: datetime | None = None
+    next_run_at: datetime
+    executions: list[ProjectAutomationExecutionRead] = Field(default_factory=list)
+    created_at: datetime
+    updated_at: datetime
+
+
+class ProjectAutomationsWrite(BaseModel):
+    automations: list[ProjectAutomationWrite] = Field(default_factory=list)
+
+
+class ProjectAutomationsRead(BaseModel):
+    automations: list[ProjectAutomationRead] = Field(default_factory=list)
 
 
 class KnowledgeAssetCreate(BaseModel):
@@ -441,6 +939,8 @@ class CodexReasoningOptionRead(BaseModel):
 class CodexModelCatalogRead(BaseModel):
     default_model: str
     default_reasoning_effort: str
+    runtime_kind: str = "codex_cli"
+    profile_name: str | None = None
     models: list[CodexModelOptionRead] = Field(default_factory=list)
     reasoning_efforts: list[CodexReasoningOptionRead] = Field(default_factory=list)
 
@@ -450,7 +950,12 @@ class GitHubInstallStart(BaseModel):
     expires_at: datetime
 
 
-class JiraConnectStart(BaseModel):
+class DiscordInstallStart(BaseModel):
+    install_url: str
+    expires_at: datetime
+
+
+class AtlassianConnectStart(BaseModel):
     authorize_url: str
     expires_at: datetime
 
@@ -538,8 +1043,85 @@ class ManagedSecretResolveResult(BaseModel):
     resolved: bool
 
 
+class AgentRuntimeRoutingUpdate(BaseModel):
+    role_routing: dict[str, str] = Field(default_factory=dict)
+    name_routing: dict[str, str] = Field(default_factory=dict)
+    selector_routing: dict[str, str] = Field(default_factory=dict)
+
+
+class AgentExecutionProfileRead(BaseModel):
+    profile_name: str
+    runtime_kind: str
+    cli_command: str
+    model: str
+    reasoning_effort: str | None = None
+    tool_bridge_allowed: bool
+    fallback_profile: str | None = None
+    base_url: str | None = None
+    api_key_secret_ref: str | None = None
+    is_builtin: bool = False
+    is_overridden: bool = False
+    can_delete: bool = False
+    can_reset: bool = False
+    usage_references: list[str] = Field(default_factory=list)
+
+
+class AgentExecutionProfileWrite(BaseModel):
+    runtime_kind: str
+    cli_command: str = ""
+    model: str = Field(min_length=1)
+    reasoning_effort: str | None = Field(default=None, pattern="^(low|medium|high)$")
+    tool_bridge_allowed: bool = False
+    fallback_profile: str | None = None
+    base_url: str | None = None
+    api_key_secret_ref: str | None = None
+
+
+class AgentExecutionProfileCreate(AgentExecutionProfileWrite):
+    profile_name: str = Field(min_length=1)
+
+
+class AgentExecutionProfilesRead(BaseModel):
+    profiles: dict[str, AgentExecutionProfileRead] = Field(default_factory=dict)
+
+
+class AgentRuntimeRoutingDefaultsRead(BaseModel):
+    role_routing: dict[str, str] = Field(default_factory=dict)
+    name_routing: dict[str, str] = Field(default_factory=dict)
+    selector_routing: dict[str, str] = Field(default_factory=dict)
+
+
+class AgentRuntimeRoutingRead(BaseModel):
+    role_routing: dict[str, str] = Field(default_factory=dict)
+    name_routing: dict[str, str] = Field(default_factory=dict)
+    selector_routing: dict[str, str] = Field(default_factory=dict)
+    available_roles: list[str] = Field(default_factory=list)
+    available_named_agents: list[str] = Field(default_factory=list)
+    available_selectors: list[str] = Field(default_factory=list)
+    available_profiles: dict[str, AgentExecutionProfileRead] = Field(default_factory=dict)
+    effective_defaults: AgentRuntimeRoutingDefaultsRead = Field(default_factory=AgentRuntimeRoutingDefaultsRead)
+
+
+class AgentRuntimeToolRead(BaseModel):
+    tool_name: str
+    category: str
+    description: str
+    stages: list[str] = Field(default_factory=list)
+
+
+class AgentRuntimeToolsRead(BaseModel):
+    available_stages: list[str] = Field(default_factory=list)
+    tools: list[AgentRuntimeToolRead] = Field(default_factory=list)
+
+
 class RunRead(BaseModel):
     run_id: str
+    workflow_id: str
+    attempt_number: int
+    parent_run_id: str | None = None
+    entry_mode: str
+    entry_stage: str | None = None
+    entry_checkpoint_id: str | None = None
     tenant_id: str
     project_id: str | None
     issue_key: str
@@ -548,10 +1130,9 @@ class RunRead(BaseModel):
     repo_url: str | None
     branch: str | None
     pr_url: str | None
-    dev_session_id: str | None = None
-    pm_session_id: str | None = None
-    orchestrated_session_id: str | None = None
     status: str
+    waiting_for_input: bool = False
+    pending_input_request_id: str | None = None
     last_error: str | None
     plan: dict | None
     created_at: datetime
@@ -559,19 +1140,393 @@ class RunRead(BaseModel):
     finished_at: datetime | None
 
 
-class RunRerunRequest(BaseModel):
-    mode: str = Field(default="fresh", pattern="^(fresh|resume)$")
-    resume_stage: str | None = Field(default=None, pattern="^(orchestrated|pm|dev)$")
+class WorkflowOperationAttemptRead(BaseModel):
+    attempt_id: str
+    attempt_number: int
+    status: str
+    error_category: str | None = None
+    error_message: str | None = None
+    status_detail: str | None = None
+    retryable: bool = False
+    next_retry_at: datetime | None = None
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    work_units: list["WorkflowOperationWorkUnitRead"] = Field(default_factory=list)
 
-    @field_validator("resume_stage")
-    @classmethod
-    def validate_resume_stage(cls, value: str | None, info):  # type: ignore[override]
-        mode = info.data.get("mode")
-        if mode == "resume" and not value:
-            raise ValueError("resume_stage is required when mode=resume")
-        if mode != "resume" and value is not None:
-            raise ValueError("resume_stage is only allowed when mode=resume")
-        return value
+
+class WorkflowOperationWorkUnitAttemptRead(BaseModel):
+    work_unit_attempt_id: str
+    attempt_number: int
+    operation_attempt_id: str
+    status: str
+    error_category: str | None = None
+    error_message: str | None = None
+    next_retry_at: datetime | None = None
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+
+
+class WorkflowOperationWorkUnitRead(BaseModel):
+    work_unit_id: str
+    unit_key: str
+    unit_kind: str
+    idempotency_key: str
+    input_fingerprint: str
+    status: str
+    error_category: str | None = None
+    error_message: str | None = None
+    completed_at: datetime | None = None
+    attempts: list[WorkflowOperationWorkUnitAttemptRead] = Field(default_factory=list)
+
+
+class WorkflowObservabilityEventRead(BaseModel):
+    event_id: str
+    event_sequence: int | None = None
+    source: Literal["audit", "telemetry"]
+    level: str
+    event_kind: str
+    message: str
+    source_component: str | None = None
+    run_id: str | None = None
+    operation_id: str | None = None
+    attempt_id: str | None = None
+    agent_id: str | None = None
+    invocation_id: str | None = None
+    stage: str | None = None
+    attempt: int | None = None
+    stream: str | None = None
+    payload: dict[str, object] = Field(default_factory=dict)
+    recorded_at: datetime
+
+
+class WorkflowTranscriptEntryRead(BaseModel):
+    entry_id: str
+    recorded_at: datetime
+    level: str
+    title: str
+    message: str
+    source_component: str | None = None
+    payload: dict[str, object] = Field(default_factory=dict)
+
+
+class WorkflowTranscriptSectionRead(BaseModel):
+    kind: Literal["summary", "runtime", "prompts", "tool_calls", "external_requests", "external_responses", "outcome"]
+    label: str
+    entries: list[WorkflowTranscriptEntryRead] = Field(default_factory=list)
+
+
+class WorkflowStepAttemptTranscriptRead(BaseModel):
+    attempt_id: str
+    attempt_number: int
+    status: str
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    duration_ms: int | None = None
+    error_category: str | None = None
+    failure_message: str | None = None
+    status_detail: str | None = None
+    recommended_next_action: str | None = None
+    sections: list[WorkflowTranscriptSectionRead] = Field(default_factory=list)
+
+
+class WorkflowStepTranscriptRead(BaseModel):
+    execution_id: str
+    operation_id: str
+    operation_label: str
+    current_status: str
+    source: Literal["audit", "telemetry"]
+    attempts: list[WorkflowStepAttemptTranscriptRead] = Field(default_factory=list)
+
+
+class AuditEventExportRequest(BaseModel):
+    tenant_id: str
+    project_id: str | None = None
+    execution_id: str | None = None
+    operation_id: str | None = None
+    run_id: str | None = None
+    issue_key: str | None = None
+    recorded_after: datetime | None = None
+    recorded_before: datetime | None = None
+
+
+class WorkflowOperationRead(BaseModel):
+    operation_id: str
+    run_id: str | None = None
+    operation_type: str
+    status: str
+    label: str | None = None
+    description: str | None = None
+    required: bool = True
+    kind: str = "business"
+    after: list[str] = Field(default_factory=list)
+    supports: list[str] = Field(default_factory=list)
+    definition_only: bool = False
+    target_system: str | None = None
+    target_ref: str | None = None
+    summary: str | None = None
+    can_retry: bool = False
+    retry_unavailable_reason: str | None = None
+    can_restart: bool = False
+    restart_unavailable_reason: str | None = None
+    attempts: list[WorkflowOperationAttemptRead] = Field(default_factory=list)
+    events: list[WorkflowObservabilityEventRead] = Field(default_factory=list)
+
+
+class WorkflowRetryPolicyRead(BaseModel):
+    manual_retry_enabled: bool = True
+    max_attempts: int = Field(default=1, ge=1)
+    initial_interval_seconds: int = Field(default=0, ge=0)
+    max_interval_seconds: int = Field(default=0, ge=0)
+    backoff_coefficient: float = Field(default=1.0, ge=1.0)
+
+
+class WorkflowTypeOperationRead(BaseModel):
+    operation_type: str
+    label: str
+    description: str | None = None
+    completion_required: bool = True
+    kind: str = "business"
+    after: list[str] = Field(default_factory=list)
+    supports: list[str] = Field(default_factory=list)
+    required: bool = True
+    retryable: bool = False
+    graph_index: int = 0
+    status: str | None = None
+
+
+class WorkflowTypeLifecycleStateRead(BaseModel):
+    key: str
+    label: str
+    terminal: bool = False
+    waits_for_input: bool = False
+
+
+class WorkflowTypeLifecycleTransitionRead(BaseModel):
+    from_state: str = Field(alias="from")
+    to_state: str
+    label: str
+
+    model_config = ConfigDict(populate_by_name=True)
+
+
+class WorkflowTypeLifecycleRead(BaseModel):
+    state_path_kind: str = "operation"
+    execution_modes: list[str] = Field(default_factory=list)
+    conditional_paths: list[str] = Field(default_factory=list)
+    states: list[WorkflowTypeLifecycleStateRead] = Field(default_factory=list)
+    transitions: list[WorkflowTypeLifecycleTransitionRead] = Field(default_factory=list)
+
+
+class WorkflowTypeRead(BaseModel):
+    key: str
+    label: str
+    description: str | None = None
+    orchestration_backend: Literal["legacy", "temporal", "database"]
+    retry_policy: WorkflowRetryPolicyRead = Field(default_factory=WorkflowRetryPolicyRead)
+    capabilities: dict[str, object] = Field(default_factory=dict)
+    lifecycle: WorkflowTypeLifecycleRead = Field(default_factory=WorkflowTypeLifecycleRead)
+    operations: list[WorkflowTypeOperationRead] = Field(default_factory=list)
+
+
+class WorkflowExecutionPreviewRead(BaseModel):
+    execution_id: str
+    workflow_id: str
+    source_system: str
+    source_ref: str
+    display_name: str | None = None
+    status: str
+    waiting_on: str | None = None
+    next_step: str | None = None
+    failure_reason: str | None = None
+    created_at: datetime
+    finished_at: datetime | None = None
+
+
+class WorkflowBoardRunSummaryRead(BaseModel):
+    run_id: str
+    workflow_id: str
+    issue_key: str
+    issue_summary: str | None = None
+    status: str
+    created_at: datetime
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+
+
+class WorkflowBoardItemRead(BaseModel):
+    execution_id: str
+    workflow_id: str
+    workflow_type_key: str
+    tenant_id: str
+    project_id: str | None
+    source_system: str
+    source_ref: str
+    display_name: str | None = None
+    dedupe_scope: str
+    status: str
+    failure_reason: str | None = None
+    pending_input_request_id: str | None = None
+    run_count: int = 0
+    active_run_count: int = 0
+    failed_run_count: int = 0
+    latest_run: WorkflowBoardRunSummaryRead | None = None
+    runs: list[WorkflowBoardRunSummaryRead] = Field(default_factory=list)
+    links: list[WorkflowLinkRead] = Field(default_factory=list)
+    latest_activity_at: datetime
+    created_at: datetime
+    started_at: datetime | None = None
+    finished_at: datetime | None = None
+    updated_at: datetime
+
+
+class WorkflowTypeSummaryRead(BaseModel):
+    key: str
+    label: str
+    description: str | None = None
+    operation_count: int = 0
+    execution_count: int = 0
+    latest_execution_at: datetime | None = None
+
+
+class WorkflowTypeDetailRead(BaseModel):
+    key: str
+    label: str
+    description: str | None = None
+    orchestration_backend: Literal["legacy", "temporal", "database"]
+    retry_policy: WorkflowRetryPolicyRead = Field(default_factory=WorkflowRetryPolicyRead)
+    capabilities: dict[str, object] = Field(default_factory=dict)
+    lifecycle: WorkflowTypeLifecycleRead = Field(default_factory=WorkflowTypeLifecycleRead)
+    operations: list[WorkflowTypeOperationRead] = Field(default_factory=list)
+    execution_count: int = 0
+    latest_execution_at: datetime | None = None
+    recent_executions: list[WorkflowExecutionPreviewRead] = Field(default_factory=list)
+
+
+class WorkflowStatePathEntryRead(BaseModel):
+    key: str
+    label: str
+    status: str
+    recorded_at: datetime | None = None
+    detail: str | None = None
+
+
+class WorkflowLinkRead(BaseModel):
+    kind: str
+    label: str
+    ref: str | None = None
+    url: str | None = None
+    status: str | None = None
+
+
+class WorkflowRead(BaseModel):
+    execution_id: str
+    workflow_id: str
+    tenant_id: str
+    project_id: str | None
+    source_system: str
+    source_ref: str
+    display_name: str | None = None
+    repo_url: str | None = None
+    branch: str | None = None
+    pr_url: str | None = None
+    orchestration_backend: Literal["legacy", "temporal", "database"]
+    dedupe_scope: str
+    status: str
+    workflow_type: WorkflowTypeRead
+    current_state: str
+    waiting_on: str | None = None
+    next_step: str | None = None
+    active_run_id: str | None = None
+    latest_checkpoint_id: str | None = None
+    source_workflow_id: str | None = None
+    source_run_id: str | None = None
+    failure_reason: str | None = None
+    pending_input_request_id: str | None = None
+    latest_checkpoint_kind: str | None = None
+    state_path: list[WorkflowStatePathEntryRead] = Field(default_factory=list)
+    completed_steps: list[str] = Field(default_factory=list)
+    failed_steps: list[str] = Field(default_factory=list)
+    pending_steps: list[str] = Field(default_factory=list)
+    retrying_steps: list[str] = Field(default_factory=list)
+    conditional_branches_taken: list[str] = Field(default_factory=list)
+    conditional_branches_available: list[str] = Field(default_factory=list)
+    can_resume: bool = False
+    resume_unavailable_reason: str | None = None
+    links: list[WorkflowLinkRead] = Field(default_factory=list)
+    operations: list[WorkflowOperationRead] = Field(default_factory=list)
+    runs: list[RunRead] = Field(default_factory=list)
+    created_at: datetime
+    started_at: datetime | None
+    finished_at: datetime | None
+
+
+class WorkflowOperationRetryRead(BaseModel):
+    workflow: WorkflowRead
+    started_attempt: WorkflowOperationAttemptRead | None = None
+
+
+class WorkflowExecutionStartRequest(BaseModel):
+    workflow_type_key: str
+    tenant_id: str
+    project_id: str | None = None
+    input: dict[str, object] = Field(default_factory=dict)
+
+
+class WorkflowExecutionStartRead(BaseModel):
+    execution_id: str
+    workflow_id: str
+    workflow_type_key: str
+    status: str
+    started_attempt_id: str | None = None
+
+
+class StartWorkIssueRead(BaseModel):
+    issue_key: str
+    run_id: str | None = None
+    status: str
+    reason: str | None = None
+
+
+class WorkflowStartWorkRead(BaseModel):
+    workflow: WorkflowRead
+    queued: list[StartWorkIssueRead] = Field(default_factory=list)
+    skipped: list[StartWorkIssueRead] = Field(default_factory=list)
+    promoted_issue_keys: list[str] = Field(default_factory=list)
+    started_attempt: WorkflowOperationAttemptRead | None = None
+
+
+class WorkflowStartWorkRequest(BaseModel):
+    action_token: str | None = None
+
+
+class StartEngineeringPreviewRead(BaseModel):
+    tenant_id: str
+    project_id: str
+    execution_id: str
+    issue_key: str
+    display_name: str | None = None
+    workflow_status: str
+    can_start: bool
+    unavailable_reason: str | None = None
+
+
+class WorkflowOperationRestartRequest(BaseModel):
+    restart_reason: str = Field(default="Restarted stale running workflow operation attempt.")
+
+
+class WorkflowAttemptCreateRequest(BaseModel):
+    mode: str = Field(pattern="^(fresh|restart|resume)$")
+    checkpoint_kind: str | None = Field(default=None, pattern="^(pm|execution)$")
+
+    @model_validator(mode="after")
+    def validate_checkpoint_contract(self) -> WorkflowAttemptCreateRequest:
+        if self.mode == "fresh":
+            if self.checkpoint_kind is not None:
+                raise ValueError("checkpoint_kind must be omitted for fresh attempts")
+            return self
+        if self.checkpoint_kind is None:
+            raise ValueError("checkpoint_kind is required for restart and resume attempts")
+        return self
 
 
 class RunEventRead(BaseModel):
@@ -583,7 +1538,9 @@ class RunEventRead(BaseModel):
     recorded_at: datetime
 
 
-class RunLogEventRead(BaseModel):
+class LoggingPaneEventRead(BaseModel):
+    event_id: str
+    event_sequence: int | None = None
     run_id: str | None = None
     issue_key: str | None = None
     project_id: str | None = None
@@ -645,6 +1602,32 @@ class AlertEvaluationRead(BaseModel):
     evaluated_at: datetime
     cooldown_seconds: int
     alerts: list[AlertRead] = Field(default_factory=list)
+
+
+class AdminNotificationRead(BaseModel):
+    notification_id: str
+    tenant_id: str | None = None
+    project_id: str | None = None
+    scope_type: str
+    scope_id: str | None = None
+    source: str
+    kind: str
+    severity: str
+    title: str
+    detail: str
+    action_label: str | None = None
+    action_path: str | None = None
+    fingerprint: str
+    status: str
+    context: dict[str, object] = Field(default_factory=dict)
+    first_emitted_at: datetime
+    last_emitted_at: datetime
+    acknowledged_at: datetime | None = None
+    resolved_at: datetime | None = None
+
+
+class AdminNotificationListRead(BaseModel):
+    notifications: list[AdminNotificationRead] = Field(default_factory=list)
 
 
 class TenantIntegrationHealthRead(BaseModel):
@@ -710,6 +1693,81 @@ class PlatformObservabilityRead(BaseModel):
     active_runs: int
     failed_runs_last_24h: int
     run_duration: ObservabilityDurationStatsRead
+
+
+class PlatformServiceInstanceRead(BaseModel):
+    instance_id: str
+    label: str
+    status: str
+    summary: str
+    updated_at: datetime | None = None
+    capabilities: list[str] = Field(default_factory=list)
+    active_run_count: int = 0
+    runtime_dependencies: dict[str, dict[str, object]] = Field(default_factory=dict)
+
+
+class WorkerRuntimeAuthRequestRead(BaseModel):
+    request_id: str
+    service_instance_id: str
+    runtime_kind: str
+    status: str
+    remediation_text: str | None = None
+    requested_at: datetime
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    expires_at: datetime | None = None
+    last_error: str | None = None
+
+
+class PlatformServiceStatusRead(BaseModel):
+    service_id: str
+    label: str
+    status: str
+    summary: str
+    updated_at: datetime | None = None
+    capabilities: list[str] = Field(default_factory=list)
+    runtime_dependencies: dict[str, dict[str, object]] = Field(default_factory=dict)
+    instances: list[PlatformServiceInstanceRead] = Field(default_factory=list)
+
+
+class PlatformStatusRead(BaseModel):
+    services: list[PlatformServiceStatusRead] = Field(default_factory=list)
+
+
+class WebhookQueueJobRead(BaseModel):
+    job_id: str
+    transport: str
+    tenant_id: str | None = None
+    project_id: str | None = None
+    subject_key: str
+    related_run_id: str | None = None
+    dedupe_key: str | None = None
+    request_id: str
+    event_type: str | None = None
+    status: str
+    lease_expires_at: datetime | None = None
+    available_at: datetime
+    attempt_count: int
+    last_error: str | None = None
+    created_at: datetime
+    updated_at: datetime
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+
+
+class WebhookQueueSummaryRead(BaseModel):
+    pending_count: int
+    processing_count: int
+    failed_count: int
+    done_count: int
+
+
+class WebhookQueueJobPageRead(BaseModel):
+    items: list[WebhookQueueJobRead] = Field(default_factory=list)
+    total: int
+    limit: int
+    offset: int
+    summary: WebhookQueueSummaryRead
 
 
 class TenantObservabilityRead(BaseModel):

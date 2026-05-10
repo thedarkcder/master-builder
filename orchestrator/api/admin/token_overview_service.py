@@ -14,7 +14,6 @@ from orchestrator.api.schemas import (
     TokenOverviewSeriesByDayRead,
     TokenOverviewTopRunRead,
 )
-from orchestrator.api.admin.token_usage_backfill import materialize_token_usage_for_scope
 from orchestrator.storage.models import Run, RunTokenUsage
 
 _RETRY_GROWTH_RATIO = 0.30
@@ -259,30 +258,6 @@ def get_token_overview(
         only_retried=only_retried,
         only_with_test_stage=only_with_test_stage,
     )
-    if not rows:
-        materialize_token_usage_for_scope(
-            session=session,
-            tenant_id=tenant_id,
-            project_id=project_id,
-            issue_key=issue_key,
-            start_date=start,
-            end_date=end,
-        )
-        rows = _build_runs_query(
-            session=session,
-            tenant_id=tenant_id,
-            project_id=project_id,
-            issue_key=issue_key,
-            run_status=run_status,
-            stage=stage,
-            attempt=attempt,
-            model=model,
-            start_date=start,
-            end_date=end,
-            only_retried=only_retried,
-            only_with_test_stage=only_with_test_stage,
-        )
-
     run_ids = {str(row.run_id) for row in rows if row.run_id}
     run_records: dict[str, Run] = {}
     if run_ids:

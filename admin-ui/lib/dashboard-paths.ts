@@ -1,4 +1,13 @@
-export type ProjectSection = "overview" | "settings" | "runs" | "notifications" | "secrets";
+export type ProjectSection =
+  | "overview"
+  | "knowledge"
+  | "settings"
+  | "runs"
+  | "webhooks"
+  | "notifications"
+  | "automations"
+  | "secrets"
+  | "danger";
 export type RunPanel = "overview" | "agents" | "diagnostics" | "cost";
 
 function encodeSegment(value: string): string {
@@ -21,7 +30,7 @@ export function buildProjectSectionPath(
   projectId: string,
   section: ProjectSection = "overview",
 ): string {
-  const base = `/tenants/${encodeSegment(tenantId)}/projects/${encodeSegment(projectId)}`;
+  const base = `/${encodeSegment(tenantId)}/projects/${encodeSegment(projectId)}`;
   if (section === "overview") {
     return base;
   }
@@ -42,9 +51,9 @@ export function buildRunDetailPath({
   const encodedRunId = encodeSegment(runId);
   let base = `/runs/${encodedRunId}`;
   if (tenantId && projectId) {
-    base = `/tenants/${encodeSegment(tenantId)}/projects/${encodeSegment(projectId)}/runs/${encodedRunId}`;
+    base = `/${encodeSegment(tenantId)}/projects/${encodeSegment(projectId)}/runs/${encodedRunId}`;
   } else if (tenantId) {
-    base = `/tenants/${encodeSegment(tenantId)}/runs/${encodedRunId}`;
+    base = `/${encodeSegment(tenantId)}/runs/${encodedRunId}`;
   }
   if (panel === "overview") {
     return base;
@@ -53,12 +62,21 @@ export function buildRunDetailPath({
 }
 
 export function resolveProjectSection(pathname: string): ProjectSection | null {
-  const match = pathname.match(/^\/tenants\/[^/]+\/projects\/[^/]+(?:\/([^/]+))?(?:\/|$)/);
+  const match = pathname.match(/^\/(?!tenants(?:\/|$)|runs(?:\/|$)|platform(?:\/|$)|login(?:\/|$)|register(?:\/|$)|invite(?:\/|$)|get-started(?:\/|$)|forgot-password(?:\/|$)|reset-password(?:\/|$)|api(?:\/|$))[^/]+\/projects\/[^/]+(?:\/([^/]+))?(?:\/|$)/);
   const rawSection = match?.[1] ?? "";
   if (!rawSection) {
     return "overview";
   }
-  if (rawSection === "settings" || rawSection === "runs" || rawSection === "notifications" || rawSection === "secrets") {
+  if (
+    rawSection === "settings" ||
+    rawSection === "knowledge" ||
+    rawSection === "runs" ||
+    rawSection === "webhooks" ||
+    rawSection === "notifications" ||
+    rawSection === "automations" ||
+    rawSection === "secrets" ||
+    rawSection === "danger"
+  ) {
     return rawSection;
   }
   if (rawSection === "discord") {
@@ -74,7 +92,7 @@ export function resolveRunRouteContext(pathname: string): {
   panel: RunPanel;
 } {
   const projectMatch = pathname.match(
-    /^\/tenants\/([^/]+)\/projects\/([^/]+)\/runs\/([^/]+)(?:\/(agents|diagnostics|cost))?(?:\/|$)/,
+    /^\/(?!tenants(?:\/|$)|runs(?:\/|$)|platform(?:\/|$)|login(?:\/|$)|register(?:\/|$)|invite(?:\/|$)|get-started(?:\/|$)|forgot-password(?:\/|$)|reset-password(?:\/|$)|api(?:\/|$))([^/]+)\/projects\/([^/]+)\/runs\/([^/]+)(?:\/(agents|diagnostics|cost))?(?:\/|$)/,
   );
   if (projectMatch) {
     return {
@@ -84,7 +102,7 @@ export function resolveRunRouteContext(pathname: string): {
       panel: (projectMatch[4] as RunPanel | undefined) ?? "overview",
     };
   }
-  const tenantMatch = pathname.match(/^\/tenants\/([^/]+)\/runs\/([^/]+)(?:\/(agents|diagnostics|cost))?(?:\/|$)/);
+  const tenantMatch = pathname.match(/^\/(?!tenants(?:\/|$)|runs(?:\/|$)|platform(?:\/|$)|login(?:\/|$)|register(?:\/|$)|invite(?:\/|$)|get-started(?:\/|$)|forgot-password(?:\/|$)|reset-password(?:\/|$)|api(?:\/|$))([^/]+)\/runs\/([^/]+)(?:\/(agents|diagnostics|cost))?(?:\/|$)/);
   if (tenantMatch) {
     return {
       tenantId: decodeSegment(tenantMatch[1]),

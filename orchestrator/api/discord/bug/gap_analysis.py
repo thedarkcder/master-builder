@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 from orchestrator.api.discord.ask.context import fetch_jira_issue_detail_for_tenant
 from orchestrator.api.discord.shared.followup_format import resolve_tenant_jira_browse_base_url
 from orchestrator.api.discord.shared.response_format import format_issue_markdown_link
-from orchestrator.core.runs import RUN_STATUS_SUCCEEDED
+from orchestrator.core.runs.service import RUN_STATUS_SUCCEEDED
 from orchestrator.storage.models import Run, Tenant
 
 GAP_HEADING_STOP_WORDS = {

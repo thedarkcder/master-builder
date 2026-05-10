@@ -1,5 +1,4 @@
 Stage: discord-pm-answer
-Action: {{ action }}
 Question: {{ question }}
 Projects: {{ project_keys_json }}
 Status counts: {{ status_counts_json }}
@@ -7,11 +6,5 @@ GitHub context: {{ github_context_json }}
 Recent conversation context: {{ history_json }}
 Issues (sample): {{ issues_json }}
 
-Output contract:
-- Keep the response product-first, conversational, and decision-oriented.
-- If the request is incomplete, ask the single highest-signal clarifying question.
-- brief.objective should be one sentence.
-- brief.scope_in and brief.scope_out should be concrete and non-overlapping.
-- brief.risks should call out evidence gaps explicitly when relevant.
-- brief.open_questions should list the shortest path to a GTD brief.
-- brief.next_steps should be executable by PM/engineering leads.
+Return JSON matching this domain model:
+{{ domain_model | tojson(indent=2) }}

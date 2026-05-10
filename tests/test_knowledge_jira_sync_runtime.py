@@ -6,15 +6,17 @@ from types import SimpleNamespace
 from unittest.mock import patch
 
 from orchestrator.core.config import Settings
-from orchestrator.core.knowledge_jira_sync_runtime import (
+from orchestrator.core.knowledge.jira_sync_runtime import (
+    KnowledgeJiraSyncDependencyFailure,
     KnowledgeJiraSyncRuntime,
     _classify_project_failure,
     get_knowledge_jira_sync_runtime_status,
 )
+from orchestrator.api.atlassian_oauth.service import execute_atlassian_operation_with_refresh_retry
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
-from orchestrator.storage.models import JiraOAuthConnection, Project, Tenant
-from orchestrator.tools.jira_oauth_models import JiraOAuthError
+from orchestrator.storage.models import AtlassianOAuthConnection, Project, Tenant
+from orchestrator.tools.atlassian_oauth_models import AtlassianOAuthAuthRequiredError, AtlassianOAuthError, AtlassianOAuthHttpError
 
 
 def _settings(database_url: str) -> Settings:
@@ -25,7 +27,6 @@ def _settings(database_url: str) -> Settings:
         knowledge_jira_sync_poll_seconds=30,
         knowledge_jira_sync_max_issues=200,
         knowledge_jira_sync_invalid_token_backoff_seconds=21600,
-        codex_model="gpt-5.4",
         codex_reasoning_effort="medium",
     )
 
@@ -65,7 +66,7 @@ def _seed_sync_project(database_url: str) -> None:
             )
         )
         session.add(
-            JiraOAuthConnection(
+            AtlassianOAuthConnection(
                 connection_id="conn-1",
                 account_id="acct",
                 account_email="user@example.com",
@@ -174,6 +175,17 @@ def test_list_sync_projects_filters_to_enabled_kb_projects() -> None:
         ]
 
 
+def test_run_forever_requires_postgres() -> None:
+    runtime = KnowledgeJiraSyncRuntime(settings=_settings("sqlite:///tmp/test.db"))
+    with patch.object(runtime, "_write_runtime_status"):
+        try:
+            runtime.run_forever()
+        except KnowledgeJiraSyncDependencyFailure as exc:
+            assert "requires PostgreSQL" in str(exc)
+        else:  # pragma: no cover - defensive assertion
+            raise AssertionError("Expected non-Postgres runtime to be rejected")
+
+
 def test_run_sync_pass_persists_runtime_and_project_status() -> None:
     with TemporaryDirectory() as temp_dir:
         database_url = f"sqlite:///{temp_dir}/runtime_sync.db"
@@ -191,14 +203,13 @@ def test_run_sync_pass_persists_runtime_and_project_status() -> None:
         )
 
         with (
-            patch("orchestrator.core.knowledge_jira_sync_runtime.refresh_jira_connection_tokens", return_value="access-token") as refresh_mock,
-            patch("orchestrator.core.knowledge_jira_sync_runtime.jira_oauth_client", return_value=SimpleNamespace()) as client_mock,
-            patch("orchestrator.core.knowledge_jira_sync_runtime.sync_project_knowledge_from_jira", return_value=fake_result) as sync_mock,
+            patch("orchestrator.api.atlassian_oauth.service.refresh_atlassian_connection_tokens", return_value="access-token") as refresh_mock,
+            patch("orchestrator.api.atlassian_oauth.service.atlassian_oauth_client", return_value=SimpleNamespace()),
+            patch("orchestrator.core.knowledge.jira_sync_runtime.sync_project_knowledge_from_jira", return_value=fake_result) as sync_mock,
         ):
             runtime._run_sync_pass()
 
         refresh_mock.assert_called_once()
-        client_mock.assert_called_once()
         sync_mock.assert_called_once()
         session_factory = create_session_factory(database_url)
         with session_factory() as session:
@@ -213,6 +224,99 @@ def test_run_sync_pass_persists_runtime_and_project_status() -> None:
         assert snapshot.projects[0].failure_category is None
 
 
+def test_execute_atlassian_operation_with_refresh_retry_retries_once_on_auth_failure() -> None:
+    with TemporaryDirectory() as temp_dir:
+        database_url = f"sqlite:///{temp_dir}/runtime_retry.db"
+        reset_db_engine_cache()
+        run_migrations(database_url=database_url)
+        _seed_sync_project(database_url)
+        session_factory = create_session_factory(database_url)
+        settings = _settings(database_url)
+        fake_result = SimpleNamespace(
+            created_assets=1,
+            updated_assets=0,
+            unchanged_assets=0,
+            deleted_assets=0,
+            skipped_assets=0,
+            failed_assets=0,
+        )
+
+        operation_calls: list[str] = []
+
+        def _operation(session, client, access_token: str):  # noqa: ANN001
+            del session, client
+            operation_calls.append(access_token)
+            if len(operation_calls) == 1:
+                raise AtlassianOAuthHttpError(
+                    "Jira API request failed (401): unauthorized",
+                    status_code=401,
+                    error_prefix="Jira API request failed",
+                    error_body="unauthorized",
+                )
+            return fake_result
+
+        with (
+            patch("orchestrator.api.atlassian_oauth.service.refresh_atlassian_connection_tokens", side_effect=["token-1", "token-2"]) as refresh_mock,
+            patch("orchestrator.api.atlassian_oauth.service.atlassian_oauth_client", return_value=SimpleNamespace()),
+        ):
+            result = execute_atlassian_operation_with_refresh_retry(
+                session_factory=session_factory,
+                settings=settings,
+                connection_id="conn-1",
+                tenant_id="tenant-1",
+                project_id="project-1",
+                operation=_operation,
+            )
+
+        assert result == fake_result
+        assert operation_calls == ["token-1", "token-2"]
+        assert refresh_mock.call_count == 2
+        assert refresh_mock.call_args_list[1].kwargs["force_refresh"] is True
+
+
+def test_run_sync_pass_marks_auth_required_as_degraded_with_backoff() -> None:
+    with TemporaryDirectory() as temp_dir:
+        database_url = f"sqlite:///{temp_dir}/runtime_auth_required.db"
+        reset_db_engine_cache()
+        run_migrations(database_url=database_url)
+        _seed_sync_project(database_url)
+        runtime = KnowledgeJiraSyncRuntime(settings=_settings(database_url))
+
+        with (
+            patch("orchestrator.api.atlassian_oauth.service.refresh_atlassian_connection_tokens", side_effect=["access-token-1", "access-token-2"]),
+            patch("orchestrator.api.atlassian_oauth.service.atlassian_oauth_client", return_value=SimpleNamespace()),
+            patch(
+                "orchestrator.core.knowledge.jira_sync_runtime.sync_project_knowledge_from_jira",
+                side_effect=[
+                    AtlassianOAuthHttpError(
+                        "Jira API request failed (401): unauthorized",
+                        status_code=401,
+                        error_prefix="Jira API request failed",
+                        error_body="unauthorized",
+                    ),
+                    AtlassianOAuthHttpError(
+                        "Jira API request failed (403): forbidden",
+                        status_code=403,
+                        error_prefix="Jira API request failed",
+                        error_body="forbidden",
+                    ),
+                ],
+            ),
+        ):
+            runtime._run_sync_pass()
+
+        session_factory = create_session_factory(database_url)
+        with session_factory() as session:
+            snapshot = get_knowledge_jira_sync_runtime_status(session=session, settings=_settings(database_url))
+        assert snapshot.state == "degraded"
+        assert len(snapshot.projects) == 1
+        status = snapshot.projects[0]
+        assert status.state == "degraded"
+        assert status.failure_category == "auth_required"
+        assert status.next_retry_at is not None
+        assert status.consecutive_failures == 1
+
+
 def test_run_sync_pass_marks_invalid_refresh_token_as_degraded_with_backoff() -> None:
     with TemporaryDirectory() as temp_dir:
         database_url = f"sqlite:///{temp_dir}/runtime_invalid_token.db"
@@ -221,9 +325,12 @@ def test_run_sync_pass_marks_invalid_refresh_token_as_degraded_with_backoff() ->
         _seed_sync_project(database_url)
         runtime = KnowledgeJiraSyncRuntime(settings=_settings(database_url))
 
-        with patch(
-            "orchestrator.core.knowledge_jira_sync_runtime.refresh_jira_connection_tokens",
-            side_effect=JiraOAuthError('Jira OAuth request failed (403): {"error":"unauthorized_client","error_description":"refresh_token is invalid"}'),
+        with (
+            patch("orchestrator.api.atlassian_oauth.service.atlassian_oauth_client", return_value=SimpleNamespace()),
+            patch(
+                "orchestrator.api.atlassian_oauth.service.refresh_atlassian_connection_tokens",
+                side_effect=AtlassianOAuthError('Atlassian request failed (403): {"error":"unauthorized_client","error_description":"refresh_token is invalid"}'),
+            ),
         ):
             runtime._run_sync_pass()
 
@@ -247,15 +354,21 @@ def test_run_sync_pass_skips_invalid_refresh_token_project_during_backoff() -> N
         _seed_sync_project(database_url)
         runtime = KnowledgeJiraSyncRuntime(settings=_settings(database_url))
 
-        with patch(
-            "orchestrator.core.knowledge_jira_sync_runtime.refresh_jira_connection_tokens",
-            side_effect=JiraOAuthError('Jira OAuth request failed (403): {"error":"unauthorized_client","error_description":"refresh_token is invalid"}'),
+        with (
+            patch("orchestrator.api.atlassian_oauth.service.atlassian_oauth_client", return_value=SimpleNamespace()),
+            patch(
+                "orchestrator.api.atlassian_oauth.service.refresh_atlassian_connection_tokens",
+                side_effect=AtlassianOAuthError('Atlassian request failed (403): {"error":"unauthorized_client","error_description":"refresh_token is invalid"}'),
+            ),
         ):
             runtime._run_sync_pass()
 
-        with patch(
-            "orchestrator.core.knowledge_jira_sync_runtime.refresh_jira_connection_tokens",
-            side_effect=AssertionError("refresh should be skipped during backoff"),
+        with (
+            patch("orchestrator.api.atlassian_oauth.service.atlassian_oauth_client", return_value=SimpleNamespace()),
+            patch(
+                "orchestrator.api.atlassian_oauth.service.refresh_atlassian_connection_tokens",
+                side_effect=AssertionError("refresh should be skipped during backoff"),
+            ),
         ):
             runtime._run_sync_pass()
 
@@ -263,6 +376,54 @@ def test_run_sync_pass_skips_invalid_refresh_token_project_during_backoff() -> N
         with session_factory() as session:
             snapshot = get_knowledge_jira_sync_runtime_status(session=session, settings=_settings(database_url))
         assert len(snapshot.projects) == 1
+        assert snapshot.projects[0].consecutive_failures == 1
+
+
+def test_run_sync_pass_skips_auth_required_project_during_backoff() -> None:
+    with TemporaryDirectory() as temp_dir:
+        database_url = f"sqlite:///{temp_dir}/runtime_auth_skip.db"
+        reset_db_engine_cache()
+        run_migrations(database_url=database_url)
+        _seed_sync_project(database_url)
+        runtime = KnowledgeJiraSyncRuntime(settings=_settings(database_url))
+
+        with (
+            patch("orchestrator.api.atlassian_oauth.service.refresh_atlassian_connection_tokens", side_effect=["access-token-1", "access-token-2"]),
+            patch("orchestrator.api.atlassian_oauth.service.atlassian_oauth_client", return_value=SimpleNamespace()),
+            patch(
+                "orchestrator.core.knowledge.jira_sync_runtime.sync_project_knowledge_from_jira",
+                side_effect=[
+                    AtlassianOAuthHttpError(
+                        "Jira API request failed (401): unauthorized",
+                        status_code=401,
+                        error_prefix="Jira API request failed",
+                        error_body="unauthorized",
+                    ),
+                    AtlassianOAuthHttpError(
+                        "Jira API request failed (403): forbidden",
+                        status_code=403,
+                        error_prefix="Jira API request failed",
+                        error_body="forbidden",
+                    ),
+                ],
+            ),
+        ):
+            runtime._run_sync_pass()
+
+        with (
+            patch("orchestrator.api.atlassian_oauth.service.atlassian_oauth_client", return_value=SimpleNamespace()),
+            patch(
+                "orchestrator.api.atlassian_oauth.service.refresh_atlassian_connection_tokens",
+                side_effect=AssertionError("refresh should be skipped during auth_required backoff"),
+            ),
+        ):
+            runtime._run_sync_pass()
+
+        session_factory = create_session_factory(database_url)
+        with session_factory() as session:
+            snapshot = get_knowledge_jira_sync_runtime_status(session=session, settings=_settings(database_url))
+        assert len(snapshot.projects) == 1
+        assert snapshot.projects[0].failure_category == "auth_required"
         assert snapshot.projects[0].consecutive_failures == 1
 
 
@@ -274,7 +435,7 @@ def test_get_runtime_status_marks_stale_runtime() -> None:
         settings = _settings(database_url)
         session_factory = create_session_factory(database_url)
         with session_factory() as session:
-            from orchestrator.core.knowledge_jira_sync_status import upsert_runtime_status
+            from orchestrator.core.knowledge.jira_sync_status import upsert_runtime_status
 
             upsert_runtime_status(
                 session=session,
@@ -295,6 +456,11 @@ def test_get_runtime_status_marks_stale_runtime() -> None:
 
 def test_classify_invalid_refresh_token_failure() -> None:
     category = _classify_project_failure(
-        JiraOAuthError('Jira OAuth request failed (403): {"error":"unauthorized_client","error_description":"refresh_token is invalid"}')
+        AtlassianOAuthError('Atlassian request failed (403): {"error":"unauthorized_client","error_description":"refresh_token is invalid"}')
     )
     assert category == "invalid_refresh_token"
+
+
+def test_classify_auth_required_failure_from_typed_error() -> None:
+    category = _classify_project_failure(AtlassianOAuthAuthRequiredError("Atlassian authorization is required"))
+    assert category == "auth_required"

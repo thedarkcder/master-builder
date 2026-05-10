@@ -15,8 +15,8 @@ from orchestrator.api.schemas import (
 )
 from orchestrator.storage.models import Project, Run, Tenant
 
-ACTIVE_RUN_STATUSES = {"queued", "running"}
-STALE_STATUSES = {"queued", "running"}
+ACTIVE_RUN_STATUSES = {"queued", "dispatching", "running"}
+STALE_STATUSES = {"queued", "dispatching", "running"}
 
 
 def _utcnow() -> datetime:

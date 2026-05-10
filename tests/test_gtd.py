@@ -9,7 +9,7 @@ from orchestrator.core.gtd import GoodToDoValidationResult, validate_good_to_do
 class GoodToDoValidationTests(unittest.TestCase):
     def test_valid_gtd_payload_passes(self) -> None:
         with patch(
-            "orchestrator.core.gtd._validate_good_to_do_with_codex",
+            "orchestrator.core.gtd._validate_good_to_do_with_runtime",
             return_value=GoodToDoValidationResult(valid=True, missing_criteria=(), clarification_questions=()),
         ):
             result = validate_good_to_do(
@@ -23,7 +23,7 @@ class GoodToDoValidationTests(unittest.TestCase):
 
     def test_missing_gtd_signals_return_questions(self) -> None:
         with patch(
-            "orchestrator.core.gtd._validate_good_to_do_with_codex",
+            "orchestrator.core.gtd._validate_good_to_do_with_runtime",
             return_value=GoodToDoValidationResult(
                 valid=False,
                 missing_criteria=("objective", "scope"),

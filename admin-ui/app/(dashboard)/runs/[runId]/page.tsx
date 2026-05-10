@@ -6,26 +6,31 @@ import { useParams, usePathname, useRouter } from "next/navigation";
 import { ArrowLeft } from "lucide-react";
 
 import { useAuth } from "@/components/auth-provider";
+import { ActivityTimelinePanel, type ChatTimelineEntry } from "@/components/runs/activity-timeline-panel";
+import { RawAgentLogsPanel } from "@/components/runs/raw-agent-logs-panel";
 import { StatusBadge } from "@/components/ui/status-badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
+import { useToast } from "@/components/ui/toast-provider";
 import { TokenStackedBarChart } from "@/components/charts";
 import {
   cancelRun,
+  createWorkflowAttempt,
   getRun,
+  getWorkflow,
   getTokenTimeline,
   listRunEvents,
   listRunLogs,
-  rerunRun,
-  streamRunEvents,
   type RunEventRecord,
-  type RunLogEventRecord,
+  type RuntimeLogEventRecord,
   type RunRecord,
-  type RunRerunPayload,
+  type WorkflowRecord,
+  type WorkflowAttemptCreatePayload,
   type TokenTimelineRecord
 } from "@/lib/api";
+import { formatTimeAgo, formatTimestamp } from "@/lib/datetime";
 import { buildRunDetailPath, resolveRunRouteContext } from "@/lib/dashboard-paths";
+import { useRunEventStream } from "@/hooks/use-run-event-stream";
 
 type InvocationTelemetry = {
   event_kind: string;
@@ -49,6 +54,21 @@ type InvocationSessionRow = {
   durationMs: number | null;
   resumedSession: boolean | null;
   codexSessionId: string | null;
+};
+
+type StageCheckpointEntry = {
+  status: string;
+  completedAt: string | null;
+  summary: string;
+};
+
+type StageProgressStatus = "not_started" | "running" | "completed" | "interrupted";
+
+type StageProgressEntry = {
+  status: StageProgressStatus;
+  tileDetail: string;
+  detail: string;
+  sortKey: number;
 };
 
 type TimelineSegment = {
@@ -89,25 +109,15 @@ type WorkflowDiagnosticsHistoryEntry = {
   event: string;
 };
 
-type ChatTimelineEntry = {
-  key: string;
-  recordedAt: string;
-  stage: string;
-  attempt: number | null;
-  speaker: string;
-  text: string;
-  kind: "message" | "reasoning" | "status" | "error";
-};
 type RunPanelTab = "overview" | "agents" | "diagnostics" | "cost";
 type AgentStage = "pm" | "dev" | "test" | "review";
 const CHAT_PAGE_SIZE = 40;
 
-type RerunSessionOption = {
+type RerunAttemptOption = {
   key: string;
   label: string;
-  payload: RunRerunPayload;
-  sessionId: string | null;
-  isLastSession: boolean;
+  payload: WorkflowAttemptCreatePayload;
+  detail: string;
 };
 
 const PANEL_TABS: { id: RunPanelTab; label: string }[] = [
@@ -128,26 +138,6 @@ function toStringList(value: unknown): string[] {
   return value.map((item) => String(item ?? "").trim()).filter((item) => item.length > 0);
 }
 
-function isAbortLikeError(error: unknown): boolean {
-  const message = (error as Error)?.message?.toLowerCase() ?? "";
-  return message.includes("aborted");
-}
-
-function statusFromLifecycleEvent(eventType: string): RunRecord["status"] | null {
-  if (eventType === "TASK_COMPLETED") {
-    return "succeeded";
-  }
-  if (eventType === "RUN_FAILED" || eventType === "TASK_FAILED") {
-    return "failed";
-  }
-  return null;
-}
-
-// statusBadge is superseded by StatusBadge component; kept to avoid cascade changes in unchanged code paths.
-function statusBadge(_status: string) {
-  return null;
-}
-
 function parseTelemetryPayload(message: string): InvocationTelemetry | null {
   try {
     const payload = JSON.parse(message) as InvocationTelemetry;
@@ -162,6 +152,76 @@ function parseTelemetryPayload(message: string): InvocationTelemetry | null {
   } catch {
     return null;
   }
+}
+
+function parseStageCheckpoints(plan: Record<string, unknown> | null | undefined): Partial<Record<AgentStage, StageCheckpointEntry>> {
+  if (!isRecord(plan)) {
+    return {};
+  }
+  const stagesRaw = isRecord(plan["stages"]) ? plan["stages"] : null;
+  if (!stagesRaw) {
+    return {};
+  }
+  const parsed: Partial<Record<AgentStage, StageCheckpointEntry>> = {};
+  for (const stage of ["pm", "dev", "test", "review"] as AgentStage[]) {
+    const item = stagesRaw[stage];
+    if (!isRecord(item)) {
+      continue;
+    }
+    parsed[stage] = {
+      status: String(item["status"] ?? "").trim().toLowerCase() || "completed",
+      completedAt: String(item["completed_at"] ?? "").trim() || null,
+      summary: String(item["summary"] ?? "").trim(),
+    };
+  }
+  return parsed;
+}
+
+function parseExecutionContext(plan: Record<string, unknown> | null | undefined): Record<string, string> {
+  if (!isRecord(plan)) {
+    return {};
+  }
+  const raw =
+    (isRecord(plan["context"]) && isRecord(plan["context"]["execution_context"]))
+      ? plan["context"]["execution_context"]
+      : null;
+  if (!isRecord(raw)) {
+    return {};
+  }
+  const parsed: Record<string, string> = {};
+  for (const key of [
+    "execution_repo_dir",
+    "workspace_key",
+    "execution_branch",
+    "integration_branch",
+    "base_branch",
+    "start_point_ref",
+    "start_point_sha",
+  ]) {
+    const value = String(raw[key] ?? "").trim();
+    if (value) {
+      parsed[key] = value;
+    }
+  }
+  return parsed;
+}
+
+function parseStageArtifact(
+  plan: Record<string, unknown> | null | undefined,
+  stage: AgentStage,
+): Record<string, unknown> | null {
+  if (!isRecord(plan)) {
+    return null;
+  }
+  const stagesRaw = isRecord(plan["stages"]) ? plan["stages"] : null;
+  if (!stagesRaw) {
+    return null;
+  }
+  const stageRaw = stagesRaw[stage];
+  if (!isRecord(stageRaw)) {
+    return null;
+  }
+  return isRecord(stageRaw["artifact"]) ? stageRaw["artifact"] : null;
 }
 
 function stageFromCommand(command: string | null | undefined): string {
@@ -235,7 +295,10 @@ function normalizeInlineText(value: string): string {
   return value.replace(/\s+/g, " ").trim();
 }
 
-function logEntryIdentity(entry: RunLogEventRecord): string {
+function logEntryIdentity(entry: RuntimeLogEventRecord): string {
+  if (entry.event_id) {
+    return entry.event_id;
+  }
   return [
     entry.recorded_at,
     entry.stage,
@@ -246,9 +309,9 @@ function logEntryIdentity(entry: RunLogEventRecord): string {
   ].join("::");
 }
 
-function dedupeRunLogs(entries: RunLogEventRecord[]): RunLogEventRecord[] {
+function dedupeRunLogs(entries: RuntimeLogEventRecord[]): RuntimeLogEventRecord[] {
   const seen = new Set<string>();
-  const ordered: RunLogEventRecord[] = [];
+  const ordered: RuntimeLogEventRecord[] = [];
   for (const entry of entries) {
     const key = logEntryIdentity(entry);
     if (seen.has(key)) {
@@ -260,7 +323,28 @@ function dedupeRunLogs(entries: RunLogEventRecord[]): RunLogEventRecord[] {
   return ordered;
 }
 
-function parseRunLogChatText(entry: RunLogEventRecord): Pick<ChatTimelineEntry, "speaker" | "text" | "kind"> | null {
+type ParsedChatEntry = Pick<ChatTimelineEntry, "speaker" | "text" | "kind"> & { meta?: ChatTimelineEntry["meta"] };
+
+function tryParseToolRequest(text: string): ParsedChatEntry | null {
+  if (!text.startsWith("{")) return null;
+  let inner: unknown = null;
+  try { inner = JSON.parse(text); } catch { return null; }
+  if (!isRecord(inner)) return null;
+  const t = String(inner.type ?? "").trim().toLowerCase();
+  if (t === "tool_request" || t === "tool_call" || t === "function_call") {
+    const toolName = String(inner.tool_name ?? inner.name ?? inner.function_name ?? "tool").trim();
+    const reason = String(inner.reason ?? "").trim();
+    return {
+      speaker: "codex",
+      text: toolName,
+      kind: "tool_call",
+      meta: { output: reason || undefined }
+    };
+  }
+  return null;
+}
+
+function parseRunLogChatText(entry: RuntimeLogEventRecord): ParsedChatEntry | null {
   const raw = String(entry.message ?? "");
   const trimmed = raw.trim();
   if (!trimmed) {
@@ -300,27 +384,87 @@ function parseRunLogChatText(entry: RunLogEventRecord): Pick<ChatTimelineEntry, 
     return { speaker: "codex", text: `Turn completed${usageSuffix}`, kind: "status" };
   }
 
+  if (eventType === "tool_request" || eventType === "tool_call" || eventType === "function_call") {
+    const toolName = String(parsed.tool_name ?? parsed.name ?? parsed.function_name ?? "tool").trim();
+    const reason = String(parsed.reason ?? "").trim();
+    return {
+      speaker: "codex",
+      text: toolName,
+      kind: "tool_call",
+      meta: { output: reason || undefined }
+    };
+  }
+
   const item = isRecord(parsed.item) ? parsed.item : null;
   if (eventType === "item.completed" && item) {
     const itemType = String(item.type ?? "").trim().toLowerCase();
+
     if (itemType === "agent_message") {
-      return { speaker: "codex", text: String(item.text ?? "").trim(), kind: "message" };
+      const msgText = String(item.text ?? "").trim();
+      const innerObj = tryParseToolRequest(msgText);
+      if (innerObj) return innerObj;
+      return { speaker: "codex", text: msgText, kind: "message" };
     }
+
     if (itemType === "reasoning") {
       return { speaker: "codex", text: String(item.text ?? "").trim(), kind: "reasoning" };
     }
+
     if (itemType === "command_execution") {
       const status = String(item.status ?? "").trim().toLowerCase();
-      const exitCode = item.exit_code;
-      if (status === "failed" || (typeof exitCode === "number" && exitCode !== 0)) {
-        const command = normalizeInlineText(String(item.command ?? ""));
-        const output = normalizeInlineText(String(item.aggregated_output ?? ""));
+      const exitCode = typeof item.exit_code === "number" ? item.exit_code : null;
+      const command = normalizeInlineText(String(item.command ?? ""));
+      const output = String(item.aggregated_output ?? "").trim();
+      const isFailed = status === "failed" || (exitCode !== null && exitCode !== 0);
+
+      if (isFailed) {
         return {
-          speaker: "command",
-          text: `Command failed${typeof exitCode === "number" ? ` (exit ${exitCode})` : ""}: ${command}${output ? ` | ${output}` : ""}`,
-          kind: "error"
+          speaker: "terminal",
+          text: `Command failed${exitCode !== null ? ` (exit ${exitCode})` : ""}: ${command}`,
+          kind: "error",
+          meta: { command, exitCode: exitCode ?? undefined, output: output || undefined }
         };
       }
+      return {
+        speaker: "terminal",
+        text: command,
+        kind: "command",
+        meta: { command, exitCode: exitCode ?? 0, output: output || undefined }
+      };
+    }
+
+    if (itemType === "file_edit" || itemType === "file_create" || itemType === "file_write") {
+      const filePath = String(item.file_path ?? item.path ?? "").trim();
+      const language = filePath.split(".").pop() ?? "";
+      const content = String(item.content ?? item.diff ?? item.text ?? "").trim();
+      return {
+        speaker: "codex",
+        text: `${itemType === "file_create" || itemType === "file_write" ? "Created" : "Edited"} ${filePath || "file"}`,
+        kind: "file_edit",
+        meta: { filePath, language, output: content || undefined }
+      };
+    }
+
+    if (itemType === "tool_call" || itemType === "function_call" || itemType === "mcp_call") {
+      const toolName = String(item.name ?? item.tool_name ?? item.function_name ?? "tool").trim();
+      const result = String(item.output ?? item.result ?? "").trim();
+      return {
+        speaker: "codex",
+        text: toolName,
+        kind: "tool_call",
+        meta: { output: result || undefined }
+      };
+    }
+
+    if (itemType) {
+      const fallbackText = String(item.text ?? "").trim();
+      const innerObj = tryParseToolRequest(fallbackText);
+      if (innerObj) return innerObj;
+      return {
+        speaker: "codex",
+        text: `${itemType}${fallbackText ? `: ${normalizeInlineText(fallbackText).slice(0, 200)}` : ""}`,
+        kind: "status"
+      };
     }
   }
 
@@ -332,10 +476,12 @@ export default function RunDetailPage() {
   const pathname = usePathname();
   const router = useRouter();
   const { credentials, ready } = useAuth();
+  const { showToast } = useToast();
   const routeContext = useMemo(() => resolveRunRouteContext(pathname), [pathname]);
   const [run, setRun] = useState<RunRecord | null>(null);
+  const [workflow, setWorkflow] = useState<WorkflowRecord | null>(null);
   const [events, setEvents] = useState<RunEventRecord[]>([]);
-  const [logs, setLogs] = useState<RunLogEventRecord[]>([]);
+  const [logs, setLogs] = useState<RuntimeLogEventRecord[]>([]);
   const [busy, setBusy] = useState(false);
   const [rerunBusy, setRerunBusy] = useState(false);
   const [forceRerunBusy, setForceRerunBusy] = useState(false);
@@ -378,15 +524,24 @@ export default function RunDetailPage() {
         listRunLogs(credentials, params.runId, { limit: 200 })
       ]);
       let timeline: TokenTimelineRecord | null = null;
-      try {
-        timeline = await getTokenTimeline(credentials, params.runId, {
+      let workflowPayload: WorkflowRecord | null = null;
+      const [timelineResult, workflowResult] = await Promise.allSettled([
+        getTokenTimeline(credentials, params.runId, {
           tenantId: runPayload.tenant_id,
           include_retries: true
-        });
-      } catch (error) {
-        setTokenTimelineError(`Failed to load token timeline: ${(error as Error).message}`);
+        }),
+        getWorkflow(credentials, runPayload.workflow_id),
+      ]);
+      if (timelineResult.status === "fulfilled") {
+        timeline = timelineResult.value;
+      } else {
+        setTokenTimelineError(`Failed to load token timeline: ${(timelineResult.reason as Error).message}`);
+      }
+      if (workflowResult.status === "fulfilled") {
+        workflowPayload = workflowResult.value;
       }
       setRun(runPayload);
+      setWorkflow(workflowPayload);
       setEvents(runEvents);
       setLogs(dedupeRunLogs(runLogs));
       setTokenTimeline(timeline);
@@ -395,6 +550,7 @@ export default function RunDetailPage() {
     } catch (error) {
       setStatusLine(`Failed to load run: ${(error as Error).message}`);
       setTokenTimelineError(`Failed to load token timeline: ${(error as Error).message}`);
+      setWorkflow(null);
     } finally {
       setBusy(false);
       setTokenTimelineBusy(false);
@@ -407,61 +563,54 @@ export default function RunDetailPage() {
     }
   }, [ready, credentials, loadRun]);
 
-  useEffect(() => {
-    if (!run || !credentials) {
-      return;
-    }
-    if (run.status !== "queued" && run.status !== "running") {
-      return;
-    }
-    const controller = new AbortController();
-    void streamRunEvents(
-      credentials,
-      params.runId,
-      (event) => {
-        if ((event as { event_kind?: string }).event_kind === "run_log" || "message" in event) {
-          const logEvent = event as RunLogEventRecord;
-          setLogs((prev) => {
-            const nextKey = logEntryIdentity(logEvent);
-            if (prev.some((entry) => logEntryIdentity(entry) === nextKey)) {
-              return prev;
-            }
-            const next = [...prev, logEvent];
-            return dedupeRunLogs(next).slice(-800);
-          });
-        } else {
-          const lifecycleEvent = event as RunEventRecord;
-          setEvents((prev) => {
-            if (
-              prev.some(
-                (entry) =>
-                  entry.event_type === lifecycleEvent.event_type &&
-                  entry.recorded_at === lifecycleEvent.recorded_at &&
-                  entry.agent_id === lifecycleEvent.agent_id
-              )
-            ) {
-              return prev;
-            }
-            const next = [...prev, lifecycleEvent];
-            return next.slice(-200);
-          });
-          const nextStatus = statusFromLifecycleEvent(lifecycleEvent.event_type);
-          if (nextStatus) {
-            setRun((prev) => (prev ? { ...prev, status: nextStatus } : prev));
-          }
-        }
-      },
-      controller.signal
-    ).catch((error) => {
-      if (controller.signal.aborted || isAbortLikeError(error)) {
-        return;
+  const runStatus = run?.status ?? null;
+  const runId = run?.run_id ?? null;
+
+  const handleStreamLogEvent = useCallback((logEvent: RuntimeLogEventRecord) => {
+    setLogs((prev) => {
+      const nextKey = logEntryIdentity(logEvent);
+      if (prev.some((entry) => logEntryIdentity(entry) === nextKey)) {
+        return prev;
       }
-      setStatusLine(`Run event stream closed: ${(error as Error).message}`);
+      const next = [...prev, logEvent];
+      return dedupeRunLogs(next).slice(-800);
     });
-    return () => {
-      controller.abort();
-    };
-  }, [run, credentials, params.runId, loadRun]);
+  }, []);
+
+  const handleStreamLifecycleEvent = useCallback((lifecycleEvent: RunEventRecord) => {
+    setEvents((prev) => {
+      if (
+        prev.some(
+          (entry) =>
+            entry.event_type === lifecycleEvent.event_type &&
+            entry.recorded_at === lifecycleEvent.recorded_at &&
+            entry.agent_id === lifecycleEvent.agent_id,
+        )
+      ) {
+        return prev;
+      }
+      const next = [...prev, lifecycleEvent];
+      return next.slice(-200);
+    });
+  }, []);
+
+  const handleStreamStatusChange = useCallback((nextStatus: RunRecord["status"]) => {
+    setRun((prev) => (prev && prev.status !== nextStatus ? { ...prev, status: nextStatus } : prev));
+  }, []);
+
+  const handleStreamError = useCallback((message: string) => {
+    setStatusLine(`Run event stream closed: ${message}`);
+  }, []);
+
+  useRunEventStream({
+    credentials,
+    runId,
+    runStatus,
+    onLogEvent: handleStreamLogEvent,
+    onLifecycleEvent: handleStreamLifecycleEvent,
+    onStatusChange: handleStreamStatusChange,
+    onError: handleStreamError,
+  });
 
   async function handleForceRerun() {
     if (!credentials || !run) {
@@ -470,8 +619,10 @@ export default function RunDetailPage() {
     setForceRerunBusy(true);
     try {
       const cancelled = await cancelRun(credentials, run.run_id);
-      const nextRun = await rerunRun(credentials, cancelled.run_id, { mode: "fresh" });
-      setStatusLine(`Force-cancelled ${cancelled.run_id} and queued rerun ${nextRun.run_id}.`);
+      const nextRun = await createWorkflowAttempt(credentials, cancelled.workflow_id, {
+        mode: "fresh"
+      });
+      showToast({ title: "Fresh run queued", description: `Cancelled ${cancelled.run_id}; queued ${nextRun.run_id}.`, tone: "success" });
       router.push(
         buildRunDetailPath({
           tenantId: run.tenant_id,
@@ -480,7 +631,7 @@ export default function RunDetailPage() {
         })
       );
     } catch (error) {
-      setStatusLine(`Failed to force rerun: ${(error as Error).message}`);
+      showToast({ title: "Force rerun failed", description: (error as Error).message, tone: "error" });
     } finally {
       setForceRerunBusy(false);
     }
@@ -495,7 +646,8 @@ export default function RunDetailPage() {
     try {
       const olderLogs = await listRunLogs(credentials, params.runId, {
         limit: 200,
-        beforeRecordedAt: oldest.recorded_at
+        beforeRecordedAt: oldest.recorded_at,
+        beforeEventId: oldest.event_id
       });
       setLogs((prev) => {
         return dedupeRunLogs([...prev, ...olderLogs]);
@@ -510,9 +662,15 @@ export default function RunDetailPage() {
 
   const isRerunnable = Boolean(run);
   const isActiveRun = run?.status === "queued" || run?.status === "running";
-  const liveStageUpdates = Array.isArray(run?.plan?.["live_stage_updates"])
-    ? (run?.plan?.["live_stage_updates"] as Array<Record<string, unknown>>)
-    : [];
+  const liveStageUpdates = useMemo(() => {
+    if (!isRecord(run?.plan)) {
+      return [] as Array<Record<string, unknown>>;
+    }
+    const eventsRoot = isRecord(run.plan["events"]) ? run.plan["events"] : null;
+    return Array.isArray(eventsRoot?.["live_stage_updates"])
+      ? (eventsRoot["live_stage_updates"] as Array<Record<string, unknown>>)
+      : [];
+  }, [run?.plan]);
   function selectedAgentStage(filter: string): string {
     if (filter === "tester") {
       return "test";
@@ -580,20 +738,13 @@ export default function RunDetailPage() {
         workstreamEvents: [] as OrchestrationWorkstreamTraceEntry[],
       };
     }
-    const planRoot = run.plan;
-    const orchestrationRoot = isRecord(planRoot["orchestration_trace"])
-      ? (planRoot["orchestration_trace"] as Record<string, unknown>)
-      : null;
-    const stageRaw = Array.isArray(planRoot["orchestration_stage_trace"])
-      ? planRoot["orchestration_stage_trace"]
-      : Array.isArray(orchestrationRoot?.["stage_events"])
-        ? (orchestrationRoot?.["stage_events"] as unknown[])
-        : [];
-    const workstreamRaw = Array.isArray(planRoot["orchestration_workstream_trace"])
-      ? planRoot["orchestration_workstream_trace"]
-      : Array.isArray(orchestrationRoot?.["workstream_events"])
-        ? (orchestrationRoot?.["workstream_events"] as unknown[])
-        : [];
+    const eventsRoot = isRecord(run.plan["events"]) ? run.plan["events"] : null;
+    const stageRaw = Array.isArray(eventsRoot?.["stage_trace"])
+      ? (eventsRoot["stage_trace"] as unknown[])
+      : [];
+    const workstreamRaw = Array.isArray(eventsRoot?.["workstream_trace"])
+      ? (eventsRoot["workstream_trace"] as unknown[])
+      : [];
     const stageEvents: OrchestrationStageTraceEntry[] = stageRaw
       .map((item, index) => {
         if (!isRecord(item)) {
@@ -639,6 +790,34 @@ export default function RunDetailPage() {
       .sort((a, b) => a.order - b.order);
     return { stageEvents, workstreamEvents };
   }, [run?.plan]);
+  const stageCheckpoints = useMemo(() => parseStageCheckpoints(run?.plan ?? null), [run?.plan]);
+  const executionContext = useMemo(() => parseExecutionContext(run?.plan ?? null), [run?.plan]);
+  const workflowCheckpointAvailability = useMemo(() => {
+    const availability = { pm: false, execution: false };
+    if (!workflow) {
+      return availability;
+    }
+    for (const workflowRun of workflow.runs ?? []) {
+      const checkpoints = parseStageCheckpoints(workflowRun.plan ?? null);
+      if (checkpoints.pm) {
+        availability.pm = true;
+      }
+      if (checkpoints.dev || checkpoints.test || checkpoints.review) {
+        availability.execution = true;
+      }
+      if (availability.pm && availability.execution) {
+        break;
+      }
+    }
+    return availability;
+  }, [workflow]);
+  const hasExecutionCheckpoint = Boolean(
+    stageCheckpoints.dev ||
+    stageCheckpoints.test ||
+    stageCheckpoints.review ||
+    workflowCheckpointAvailability.execution,
+  );
+  const hasPmCheckpoint = Boolean(stageCheckpoints.pm || workflowCheckpointAvailability.pm);
   const invocationSessionRows = useMemo(() => {
     const telemetryRows = logs
       .filter((entry) => entry.stage === "telemetry" && entry.stream === "system")
@@ -720,69 +899,59 @@ export default function RunDetailPage() {
   }, [logs, orchestrationTrace.stageEvents, run?.created_at, run?.started_at]);
   const latestCodexSessionId = useMemo(() => {
     const fromTimeline = invocationSessionRows.find((row) => row.codexSessionId)?.codexSessionId;
-    if (fromTimeline) {
-      return fromTimeline;
-    }
-    return run?.dev_session_id ?? null;
-  }, [invocationSessionRows, run?.dev_session_id]);
-  const rerunSessionOptions = useMemo(() => {
+    return fromTimeline ?? null;
+  }, [invocationSessionRows]);
+  const rerunOptions = useMemo(() => {
     if (!run) {
-      return [] as RerunSessionOption[];
+      return [] as RerunAttemptOption[];
     }
-    const recencyBySession = new Map<string, number>();
-    for (const row of invocationSessionRows) {
-      const sessionId = String(row.codexSessionId ?? "").trim();
-      if (!sessionId) {
-        continue;
-      }
-      const rowTime = new Date(row.startedAt ?? row.finishedAt ?? 0).getTime();
-      const current = recencyBySession.get(sessionId) ?? Number.NEGATIVE_INFINITY;
-      if (rowTime > current) {
-        recencyBySession.set(sessionId, rowTime);
-      }
-    }
-    const candidates: Array<Omit<RerunSessionOption, "isLastSession">> = [
-      {
-        key: "orchestrated",
-        label: "Orchestrated",
-        payload: { mode: "resume" as const, resume_stage: "orchestrated" as const },
-        sessionId: run.orchestrated_session_id,
-      },
-      {
-        key: "pm",
-        label: "PM",
-        payload: { mode: "resume" as const, resume_stage: "pm" as const },
-        sessionId: run.pm_session_id,
-      },
-      {
-        key: "dev",
-        label: "Dev",
-        payload: { mode: "resume" as const, resume_stage: "dev" as const },
-        sessionId: run.dev_session_id,
-      },
-    ].filter((option) => Boolean(option.sessionId));
-    const sorted = candidates.sort((a, b) => {
-      const aRank = recencyBySession.get(String(a.sessionId)) ?? Number.NEGATIVE_INFINITY;
-      const bRank = recencyBySession.get(String(b.sessionId)) ?? Number.NEGATIVE_INFINITY;
-      if (aRank !== bRank) {
-        return bRank - aRank;
-      }
-      return a.label.localeCompare(b.label);
+    const options: RerunAttemptOption[] = [];
+    options.push({
+      key: "fresh",
+      label: "Start from the start",
+      payload: { mode: "fresh" },
+      detail: "Create a brand-new run with no checkpoint or prior thread reuse."
     });
-    return sorted.map((option) => ({
-      ...option,
-      isLastSession: Boolean(latestCodexSessionId) && option.sessionId === latestCodexSessionId,
-    }));
-  }, [invocationSessionRows, latestCodexSessionId, run]);
+    if (hasExecutionCheckpoint) {
+      options.push({
+        key: "execution",
+        label: "Resume execution",
+        payload: { mode: "resume", checkpoint_kind: "execution" },
+        detail: "Continue from the latest dev/test/review checkpoint."
+      });
+    }
+    if (hasPmCheckpoint) {
+      options.push({
+        key: "pm",
+        label: "Resume PM",
+        payload: { mode: "resume", checkpoint_kind: "pm" },
+        detail: "Continue from the latest PM checkpoint."
+      });
+      options.push({
+        key: "restart-pm",
+        label: "Restart from PM",
+        payload: { mode: "restart", checkpoint_kind: "pm" },
+        detail: "Create a new attempt from the PM checkpoint."
+      });
+    } else if (hasExecutionCheckpoint) {
+      options.push({
+        key: "restart-execution",
+        label: "Restart from execution",
+        payload: { mode: "restart", checkpoint_kind: "execution" },
+        detail: "Create a new attempt from the latest execution checkpoint."
+      });
+    }
+    return options;
+  }, [run, hasExecutionCheckpoint, hasPmCheckpoint]);
 
-  async function handleRerunSelection(payload: RunRerunPayload, label: string) {
+  async function handleRerunSelection(payload: WorkflowAttemptCreatePayload, label: string) {
     if (!credentials || !run) {
       return;
     }
     setRerunBusy(true);
     try {
-      const nextRun = await rerunRun(credentials, run.run_id, payload);
-      setStatusLine(`Queued ${label.toLowerCase()} as run ${nextRun.run_id} for ${nextRun.issue_key}.`);
+      const nextRun = await createWorkflowAttempt(credentials, run.workflow_id, payload);
+      showToast({ title: `${label} queued`, description: `Run ${nextRun.run_id} for ${nextRun.issue_key}.`, tone: "success" });
       router.push(
         buildRunDetailPath({
           tenantId: run.tenant_id,
@@ -791,7 +960,7 @@ export default function RunDetailPage() {
         })
       );
     } catch (error) {
-      setStatusLine(`Failed to rerun: ${(error as Error).message}`);
+      showToast({ title: "Rerun failed", description: (error as Error).message, tone: "error" });
     } finally {
       setRerunBusy(false);
     }
@@ -854,15 +1023,25 @@ export default function RunDetailPage() {
     return items.slice(0, 6);
   }, [workflowDiagnostics?.history]);
   const agentOutcomes = useMemo(() => {
-    const planRoot = isRecord(run?.plan) ? run.plan : {};
-    const workflowPlan = isRecord(planRoot["plan"]) ? planRoot["plan"] : null;
+    const pmArtifact = parseStageArtifact(run?.plan ?? null, "pm");
+    const devArtifact = parseStageArtifact(run?.plan ?? null, "dev");
+    const testArtifact = parseStageArtifact(run?.plan ?? null, "test");
+    const reviewArtifact = parseStageArtifact(run?.plan ?? null, "review");
+    const checkpointSummaryForStage = (stage: AgentStage): string[] => {
+      const checkpoint = stageCheckpoints[stage];
+      if (!checkpoint || !checkpoint.summary) {
+        return [];
+      }
+      return [checkpoint.summary];
+    };
     const pmItems = [
-      ...toStringList(workflowPlan?.["plan_steps"]),
-      ...toStringList(workflowPlan?.["acceptance_criteria"]).map((item) => `AC: ${item}`),
-      ...toStringList(workflowPlan?.["risks"]).map((item) => `Risk: ${item}`)
+      ...checkpointSummaryForStage("pm"),
+      ...toStringList(pmArtifact?.["plan_steps"]),
+      ...toStringList(pmArtifact?.["acceptance_criteria"]).map((item) => `AC: ${item}`),
+      ...toStringList(pmArtifact?.["risks"]).map((item) => `Risk: ${item}`)
     ];
-    const nextStage = workflowPlan ? String(workflowPlan["next_stage"] ?? "").trim() : "";
-    const executionWorker = workflowPlan ? String(workflowPlan["execution_worker_capability"] ?? "").trim() : "";
+    const nextStage = pmArtifact ? String(pmArtifact["next_stage"] ?? "").trim() : "";
+    const executionWorker = pmArtifact ? String(pmArtifact["execution_worker_capability"] ?? "").trim() : "";
     if (nextStage) {
       pmItems.push(`Next stage: ${nextStage}`);
     }
@@ -890,26 +1069,26 @@ export default function RunDetailPage() {
       {
         stage: "dev",
         label: "Dev",
-        items: [...toStringList(planRoot["dev_rationale"]), ...workstreamSummaries],
+        items: [...checkpointSummaryForStage("dev"), ...toStringList(devArtifact?.["change_summary"]), ...workstreamSummaries],
         feedback: null as string | null,
         emptyText: "No Dev rationale captured."
       },
       {
         stage: "test",
         label: "Test",
-        items: toStringList(planRoot["test_guidance"]),
+        items: [...checkpointSummaryForStage("test"), ...toStringList(testArtifact?.["guidance"])],
         feedback: null as string | null,
         emptyText: "No test guidance captured."
       },
       {
         stage: "review",
         label: "Review",
-        items: [...toStringList(planRoot["review_summary"]), ...reviewHistory],
-        feedback: String(planRoot["review_feedback"] ?? "").trim() || null,
+        items: [...checkpointSummaryForStage("review"), ...toStringList(reviewArtifact?.["summary"]), ...reviewHistory],
+        feedback: String(reviewArtifact?.["feedback"] ?? "").trim() || null,
         emptyText: "No review summary captured."
       }
     ];
-  }, [orchestrationTrace.workstreamEvents, run?.plan, workflowDiagnostics?.history]);
+  }, [orchestrationTrace.workstreamEvents, run?.plan, stageCheckpoints, workflowDiagnostics?.history]);
   const stageLiveSnapshots = useMemo(() => {
     const snapshots = new Map<AgentStage, { recordedAt: string; text: string }>();
     const validStages = new Set<AgentStage>(["pm", "dev", "test", "review"]);
@@ -936,40 +1115,89 @@ export default function RunDetailPage() {
     return snapshots;
   }, [logs]);
   const stageProgress = useMemo(() => {
-    const stages: Record<AgentStage, { status: "not_started" | "running" | "completed"; detail: string }> = {
-      pm: { status: "not_started", detail: "not started" },
-      dev: { status: "not_started", detail: "not started" },
-      test: { status: "not_started", detail: "not started" },
-      review: { status: "not_started", detail: "not started" }
+    const stages: Record<AgentStage, StageProgressEntry> = {
+      pm: { status: "not_started", tileDetail: "not started", detail: "not started", sortKey: 0 },
+      dev: { status: "not_started", tileDetail: "not started", detail: "not started", sortKey: 0 },
+      test: { status: "not_started", tileDetail: "not started", detail: "not started", sortKey: 0 },
+      review: { status: "not_started", tileDetail: "not started", detail: "not started", sortKey: 0 }
     };
     const timeOf = (value: string | null): number => (value ? new Date(value).getTime() : 0);
+    for (const stage of ["pm", "dev", "test", "review"] as AgentStage[]) {
+      const checkpoint = stageCheckpoints[stage];
+      if (!checkpoint) {
+        continue;
+      }
+      const completedLabel = checkpoint.completedAt
+        ? `completed · ${new Date(checkpoint.completedAt).toLocaleTimeString()}`
+        : "completed";
+      const checkpointStatus = checkpoint.status === "completed" ? "completed" : "interrupted";
+      stages[stage] = {
+        status: checkpointStatus,
+        tileDetail: checkpointStatus === "completed" ? "completed" : "interrupted",
+        detail: checkpoint.summary ? `${completedLabel} · ${checkpoint.summary}` : completedLabel,
+        sortKey: timeOf(checkpoint.completedAt),
+      };
+    }
     for (const row of invocationSessionRows) {
       const stage = String(row.stage ?? "").trim().toLowerCase() as AgentStage;
       if (!(stage in stages)) {
         continue;
       }
+      if (stageCheckpoints[stage]?.status === "completed") {
+        if (row.finishedAt && row.durationMs !== null) {
+          stages[stage] = {
+            ...stages[stage],
+            tileDetail: `${formatDuration(row.durationMs)}`,
+            sortKey: Math.max(stages[stage].sortKey, timeOf(row.finishedAt)),
+          };
+        }
+        continue;
+      }
       const current = stages[stage];
       const rowRank = Math.max(timeOf(row.finishedAt), timeOf(row.startedAt));
-      const currentRank = current.detail === "not started" ? 0 : Number(current.detail.split("::")[0] || 0);
-      if (rowRank < currentRank) {
+      if (rowRank < current.sortKey) {
         continue;
       }
       if (row.finishedAt) {
-        const duration = row.durationMs !== null ? `${formatDuration(row.durationMs)}` : "completed";
-        stages[stage] = { status: "completed", detail: `${rowRank}::completed · ${duration}` };
+        if (isActiveRun) {
+          const duration = row.durationMs !== null ? `${formatDuration(row.durationMs)}` : "completed";
+          stages[stage] = {
+            status: "completed",
+            tileDetail: duration,
+            detail: `completed · ${duration}`,
+            sortKey: rowRank,
+          };
+          continue;
+        }
+        stages[stage] = {
+          status: "interrupted",
+          tileDetail: "interrupted",
+          detail: "agent finished, checkpoint missing",
+          sortKey: rowRank,
+        };
       } else if (row.startedAt) {
+        if (!isActiveRun) {
+          stages[stage] = {
+            status: "interrupted",
+            tileDetail: "interrupted",
+            detail: "interrupted before completion",
+            sortKey: rowRank,
+          };
+          continue;
+        }
         const startMs = new Date(row.startedAt).getTime();
         const runningMs = Number.isFinite(startMs) ? Math.max(0, Date.now() - startMs) : 0;
-        stages[stage] = { status: "running", detail: `${rowRank}::running · ${formatDuration(runningMs)}` };
+        const runtimeLabel = `${formatDuration(runningMs)}`;
+        stages[stage] = {
+          status: "running",
+          tileDetail: runtimeLabel,
+          detail: `running · ${runtimeLabel}`,
+          sortKey: rowRank,
+        };
       }
     }
-    for (const key of Object.keys(stages) as AgentStage[]) {
-      const rawDetail = stages[key].detail;
-      const trimmed = rawDetail.includes("::") ? rawDetail.split("::")[1] : rawDetail;
-      stages[key] = { ...stages[key], detail: trimmed };
-    }
     return stages;
-  }, [invocationSessionRows]);
+  }, [invocationSessionRows, isActiveRun, stageCheckpoints]);
   const runTimeline = useMemo(() => {
     if (!run) {
       return null;
@@ -1038,7 +1266,7 @@ export default function RunDetailPage() {
     const maxEndMs = Math.max(
       ...segments.map((segment) => segment.endMs),
       Number.isFinite(finishedMs) ? finishedMs : 0,
-      nowMs
+      isActiveRun ? nowMs : 0
     );
     const totalMs = Math.max(1, maxEndMs - minStartMs);
     const resumedCount = invocationSessionRows.filter((row) => row.resumedSession === true).length;
@@ -1095,7 +1323,8 @@ export default function RunDetailPage() {
           attempt: entry.attempt,
           speaker: parsed.speaker,
           text: parsed.text,
-          kind: parsed.kind
+          kind: parsed.kind,
+          ...(parsed.meta ? { meta: parsed.meta } : {})
         } satisfies ChatTimelineEntry;
       })
       .filter((entry): entry is ChatTimelineEntry => entry !== null);
@@ -1172,9 +1401,9 @@ export default function RunDetailPage() {
   }, [activePanel, chatAutoScroll, visibleChatTimelineEntries.length]);
 
   return (
-    <div className="space-y-0">
+    <div className="space-y-6">
       {/* Page header — metadata strip */}
-      <div className="mb-6 space-y-3">
+      <div className="space-y-3">
         {/* Row 1: status + id + chips; actions wrap on narrow screens */}
         <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
           <div className="flex min-w-0 flex-wrap items-center gap-2">
@@ -1210,40 +1439,24 @@ export default function RunDetailPage() {
               {busy ? "Refreshing..." : "Refresh"}
             </Button>
             {isRerunnable ? (
-              <details className="relative">
-                <summary className="flex h-9 min-h-9 cursor-pointer list-none items-center rounded-md border border-input bg-background px-3 text-xs text-foreground sm:h-7 sm:min-h-0">
+              <details className="relative" data-testid="run-rerun-menu">
+                <summary data-testid="run-rerun-trigger" className="flex h-9 min-h-9 cursor-pointer list-none items-center rounded-md border border-input bg-background px-3 text-xs text-foreground sm:h-7 sm:min-h-0">
                   {rerunBusy ? "Requeueing..." : "Rerun"}
                 </summary>
                 <div className="absolute right-0 z-20 mt-2 min-w-64 rounded-md border border-border bg-background p-1 shadow-lg">
-                  {rerunSessionOptions.map((option) => (
+                  {rerunOptions.map((option) => (
                     <button
                       key={option.key}
+                      data-testid={`rerun-option-${option.key}`}
                       type="button"
                       className="flex w-full items-center justify-between rounded px-3 py-2 text-left text-xs hover:bg-muted"
-                      onClick={() => void handleRerunSelection(option.payload, `resume from ${option.label}`)}
+                      onClick={() => void handleRerunSelection(option.payload, option.label)}
                       disabled={rerunBusy}
                     >
                       <span>{option.label}</span>
-                      <span className="flex items-center gap-2">
-                        {option.isLastSession ? (
-                          <span className="rounded bg-muted px-2 py-0.5 text-[10px] font-medium uppercase tracking-wide">
-                            Last session
-                          </span>
-                        ) : null}
-                        {option.sessionId ? (
-                          <code className="max-w-28 truncate rounded bg-muted px-1">{option.sessionId}</code>
-                        ) : null}
-                      </span>
+                      <span className="max-w-40 text-right text-[10px] text-muted-foreground">{option.detail}</span>
                     </button>
                   ))}
-                  <button
-                    type="button"
-                    className="flex w-full items-center justify-between rounded px-3 py-2 text-left text-xs hover:bg-muted"
-                    onClick={() => void handleRerunSelection({ mode: "fresh" }, "fresh rerun")}
-                    disabled={rerunBusy}
-                  >
-                    <span>Rerun from start</span>
-                  </button>
                 </div>
               </details>
             ) : null}
@@ -1258,10 +1471,10 @@ export default function RunDetailPage() {
                   run
                     ? (
                         projectContextId
-                          ? `/tenants/${encodeURIComponent(run.tenant_id)}/projects/${encodeURIComponent(projectContextId)}/runs`
-                          : `/tenants/${encodeURIComponent(run.tenant_id)}/runs`
+                          ? `/${encodeURIComponent(run.tenant_id)}/projects/${encodeURIComponent(projectContextId)}/runs`
+                          : `/${encodeURIComponent(run.tenant_id)}/runs`
                       )
-                    : "/tenants/select"
+                    : "/platform/dashboard"
                 }
               >
                 <ArrowLeft className="mr-1.5 h-3.5 w-3.5" />
@@ -1276,12 +1489,28 @@ export default function RunDetailPage() {
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
             <span><span className="font-medium text-foreground">Tenant</span> {run.tenant_id}</span>
             {run.project_id ? <span><span className="font-medium text-foreground">Project</span> {run.project_id}</span> : null}
-            {run.branch ? <span><span className="font-medium text-foreground">Branch</span> <code className="rounded bg-muted px-1">{run.branch}</code></span> : null}
-            <span><span className="font-medium text-foreground">Created</span> {new Date(run.created_at).toLocaleString()}</span>
-            {run.started_at ? <span><span className="font-medium text-foreground">Started</span> {new Date(run.started_at).toLocaleString()}</span> : null}
-            {run.finished_at ? <span><span className="font-medium text-foreground">Finished</span> {new Date(run.finished_at).toLocaleString()}</span> : null}
+            {run.branch ? (
+              <span data-testid="run-branch">
+                <span className="font-medium text-foreground">Branch</span> <code className="rounded bg-muted px-1">{run.branch}</code>
+              </span>
+            ) : null}
+            {executionContext.integration_branch && executionContext.integration_branch !== run.branch ? (
+              <span data-testid="run-integration-branch">
+                <span className="font-medium text-foreground">Integration branch</span>{" "}
+                <code className="rounded bg-muted px-1">{executionContext.integration_branch}</code>
+              </span>
+            ) : null}
+            {executionContext.execution_branch ? (
+              <span data-testid="run-execution-branch">
+                <span className="font-medium text-foreground">Execution branch</span>{" "}
+                <code className="rounded bg-muted px-1">{executionContext.execution_branch}</code>
+              </span>
+            ) : null}
+            <span><span className="font-medium text-foreground">Created</span> {formatTimestamp(run.created_at)}</span>
+            {run.started_at ? <span><span className="font-medium text-foreground">Started</span> {formatTimestamp(run.started_at)}</span> : null}
+            {run.finished_at ? <span><span className="font-medium text-foreground">Finished</span> {formatTimestamp(run.finished_at)}</span> : null}
             {run.status !== "queued" && run.status !== "running" ? (
-              <span className="rounded border border-border bg-muted px-1.5 py-0.5 text-[11px]">
+              <span data-testid="run-not-active" className="rounded border border-border bg-muted px-1.5 py-0.5 text-[11px]">
                 Not active
               </span>
             ) : null}
@@ -1293,18 +1522,18 @@ export default function RunDetailPage() {
       </div>
 
       {statusLine || (run && (run.status === "failed" || run.status === "blocked") && terminalFailureMessage) ? (
-        <div className="mb-8 space-y-4">
+        <div className="space-y-4">
           {statusLine ? (
             <div className="rounded-lg border border-destructive/30 bg-destructive/10 px-5 py-4 text-sm leading-relaxed text-destructive">
               {statusLine}
             </div>
           ) : null}
           {run && (run.status === "failed" || run.status === "blocked") && terminalFailureMessage ? (
-            <Card className="border-destructive/40 bg-destructive/5 shadow-sm">
-              <CardHeader className="space-y-1 px-5 pb-3 pt-5 sm:px-6 sm:pt-6">
-                <CardTitle className="text-base font-semibold text-destructive">Failure Reason</CardTitle>
-              </CardHeader>
-              <CardContent className="space-y-3 px-5 pb-5 text-xs sm:px-6 sm:pb-6">
+            <div className="overflow-hidden rounded-2xl border border-destructive/30 bg-destructive/5">
+              <div className="px-5 pt-5 sm:px-6 sm:pt-6">
+                <h2 className="text-base font-semibold text-destructive">Failure Reason</h2>
+              </div>
+              <div className="space-y-3 px-5 pb-5 text-xs sm:px-6 sm:pb-6">
                 <p className="break-words whitespace-pre-wrap text-destructive">{terminalFailureMessage}</p>
                 {secondaryFailureDetail ? (
                   <div className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-destructive sm:p-4">
@@ -1321,8 +1550,8 @@ export default function RunDetailPage() {
                     ))}
                   </ul>
                 ) : null}
-              </CardContent>
-            </Card>
+              </div>
+            </div>
           ) : null}
         </div>
       ) : null}
@@ -1330,29 +1559,40 @@ export default function RunDetailPage() {
       {run ? (
         <>
           {/* Pipeline stage bar */}
-          <div className="mb-6 mt-1 flex items-center gap-2 overflow-x-auto">
+          <div className="flex items-center gap-2 overflow-x-auto">
             {(["pm", "dev", "test", "review"] as AgentStage[]).map((stage, idx) => {
               const progress = stageProgress[stage];
               const isRunning = progress.status === "running";
               const isDone = progress.status === "completed";
+              const isInterrupted = progress.status === "interrupted";
               const statusDot = isRunning
                 ? <span className="inline-block h-2 w-2 animate-pulse rounded-full bg-warning" />
                 : isDone
                   ? <span className="inline-block h-2 w-2 rounded-full bg-success" />
-                  : <span className="inline-block h-2 w-2 rounded-full border border-muted-foreground/40 bg-muted" />;
+                  : isInterrupted
+                    ? <span className="inline-block h-2 w-2 rounded-full bg-destructive" />
+                    : <span className="inline-block h-2 w-2 rounded-full border border-muted-foreground/40 bg-muted" />;
               return (
                 <div key={stage} className="flex items-center gap-2">
                   <div
+                    data-testid={`run-stage-${stage}`}
+                    data-stage-status={progress.status}
                     className="flex flex-col items-center gap-1 rounded-lg border px-3 py-2 text-xs"
-                    style={{ borderColor: isDone || isRunning ? stageColor(stage) + "60" : undefined, backgroundColor: isDone || isRunning ? stageColor(stage) + "10" : undefined }}
+                    style={{
+                      borderColor: isInterrupted ? "rgb(239 68 68 / 0.35)" : isDone || isRunning ? stageColor(stage) + "60" : undefined,
+                      backgroundColor: isInterrupted ? "rgb(239 68 68 / 0.08)" : isDone || isRunning ? stageColor(stage) + "10" : undefined,
+                    }}
                   >
                     <div className="flex items-center gap-1.5">
                       {statusDot}
-                      <span className="font-semibold uppercase tracking-wide" style={{ color: isDone || isRunning ? stageColor(stage) : undefined }}>
+                      <span
+                        className="font-semibold uppercase tracking-wide"
+                        style={{ color: isInterrupted ? "rgb(220 38 38)" : isDone || isRunning ? stageColor(stage) : undefined }}
+                      >
                         {stage}
                       </span>
                     </div>
-                    <span className="text-[10px] text-muted-foreground">{progress.detail}</span>
+                    <span data-testid={`run-stage-${stage}-detail`} className="text-[10px] text-muted-foreground">{progress.tileDetail}</span>
                   </div>
                   {idx < 3 ? <span className="text-muted-foreground/40">→</span> : null}
                 </div>
@@ -1361,7 +1601,7 @@ export default function RunDetailPage() {
           </div>
 
           {/* Tab bar — underline style */}
-          <div className="mb-6 border-b overflow-x-auto">
+          <div className="border-b overflow-x-auto">
             <nav className="-mb-px flex min-w-max gap-0" aria-label="Run detail panels">
               {PANEL_TABS.map((tab) => (
                 <button
@@ -1383,24 +1623,22 @@ export default function RunDetailPage() {
 
           {/* Agents panel */}
           {activePanel === "agents" ? (
-            <div className="space-y-3">
+            <div className="overflow-hidden rounded-2xl border bg-background divide-y">
               {agentOutcomes.map((outcome) => (
-                <Card key={outcome.stage}>
-                  <CardHeader className="pb-2 pt-4">
-                    <div className="flex items-center gap-2">
-                      <div
-                        className="h-2.5 w-2.5 rounded-full"
-                        style={{ backgroundColor: stageColor(outcome.stage) }}
-                      />
-                      <CardTitle className="text-sm font-semibold uppercase tracking-wide">
-                        {outcome.label}
-                      </CardTitle>
-                      <span className="ml-auto text-xs text-muted-foreground">
-                        {stageProgress[outcome.stage as AgentStage]?.detail ?? "not started"}
-                      </span>
-                    </div>
-                  </CardHeader>
-                  <CardContent className="text-xs">
+                <div key={outcome.stage} className="px-5 py-4">
+                  <div className="flex items-center gap-2">
+                    <div
+                      className="h-2.5 w-2.5 rounded-full"
+                      style={{ backgroundColor: stageColor(outcome.stage) }}
+                    />
+                    <h2 className="text-sm font-semibold uppercase tracking-wide">
+                      {outcome.label}
+                    </h2>
+                    <span className="ml-auto text-xs text-muted-foreground">
+                      {stageProgress[outcome.stage as AgentStage]?.detail ?? "not started"}
+                    </span>
+                  </div>
+                  <div className="mt-2 text-xs">
                     {outcome.items.length === 0 && !stageLiveSnapshots.get(outcome.stage as AgentStage) ? (
                       <p className="text-muted-foreground">{outcome.emptyText}</p>
                     ) : (
@@ -1422,8 +1660,8 @@ export default function RunDetailPage() {
                         Feedback: {outcome.feedback}
                       </p>
                     ) : null}
-                  </CardContent>
-                </Card>
+                  </div>
+                </div>
               ))}
             </div>
           ) : null}
@@ -1451,15 +1689,13 @@ export default function RunDetailPage() {
                         { label: "P95 Runtime", value: formatDuration(tokenTimeline.totals.p95_runtime_ms) },
                         { label: "Turns", value: String(tokenTimeline.turns.length) }
                       ].map((kpi) => (
-                        <Card key={kpi.label}>
-                          <CardContent className="p-4">
-                            <p className="text-xs text-muted-foreground uppercase tracking-wide">{kpi.label}</p>
-                            <p className="mt-1 text-2xl font-bold">{kpi.value}</p>
-                          </CardContent>
-                        </Card>
+                        <div key={kpi.label} className="rounded-xl border bg-background p-4">
+                          <p className="text-xs text-muted-foreground uppercase tracking-wide">{kpi.label}</p>
+                          <p className="mt-1 text-2xl font-bold">{kpi.value}</p>
+                        </div>
                       ))}
                     </div>
-                    <div className="min-w-0 overflow-x-auto rounded-md border bg-muted/20 p-3">
+                    <div className="min-w-0 overflow-x-auto rounded-2xl border bg-background p-5">
                       <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">Token lane by turn</p>
                       <TokenStackedBarChart
                         data={tokenTimelineChartData}
@@ -1486,7 +1722,7 @@ export default function RunDetailPage() {
                         ]}
                       />
                     </div>
-                    <div className="rounded-md border bg-muted/20 p-3">
+                    <div className="rounded-2xl border bg-background p-5">
                       <p className="mb-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
                         Per-turn token breakdown
                       </p>
@@ -1575,11 +1811,11 @@ export default function RunDetailPage() {
             <div className="space-y-4">
               {/* Gantt timeline */}
               {runTimeline ? (
-                <Card>
-                  <CardHeader className="pb-3">
-                    <CardTitle className="text-sm">Run Timeline</CardTitle>
-                  </CardHeader>
-                  <CardContent className="space-y-3">
+                <div className="overflow-hidden rounded-2xl border bg-background">
+                  <div className="px-5 pt-5">
+                    <h2 className="text-sm font-semibold">Run Timeline</h2>
+                  </div>
+                  <div className="space-y-3 p-5">
                     <div className="grid gap-3 sm:grid-cols-4">
                       {[
                         { label: "Total", value: formatDuration(runTimeline.totalMs) },
@@ -1587,7 +1823,7 @@ export default function RunDetailPage() {
                         { label: "Stage runtime", value: formatDuration(runTimeline.stageMs) },
                         { label: "Resumed", value: String(runTimeline.resumedCount) }
                       ].map((item) => (
-                        <div key={item.label} className="rounded-lg border p-3 text-xs">
+                        <div key={item.label} className="rounded-xl border bg-background p-3 text-xs">
                           <p className="text-muted-foreground">{item.label}</p>
                           <p className="mt-0.5 font-semibold">{item.value}</p>
                         </div>
@@ -1609,88 +1845,26 @@ export default function RunDetailPage() {
                         );
                       })}
                     </div>
-                  </CardContent>
-                </Card>
+                  </div>
+                </div>
               ) : null}
 
-              {/* Chat timeline */}
-              <Card>
-                <CardHeader className="pb-3">
-                  <div className="flex items-center justify-between">
-                    <CardTitle className="text-sm">Activity Timeline</CardTitle>
-                    <div className="flex gap-1.5">
-                      {hasOlderChatMessages ? (
-                        <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => { setChatVisibleCount((c) => Math.min(c + CHAT_PAGE_SIZE, chatTimelineEntries.length)); setChatAutoScroll(false); }}>
-                          Load older
-                        </Button>
-                      ) : null}
-                      {!chatAutoScroll ? (
-                        <Button variant="outline" size="sm" className="h-7 text-xs" onClick={() => { setChatVisibleCount(CHAT_PAGE_SIZE); setChatAutoScroll(true); }}>
-                          Latest
-                        </Button>
-                      ) : null}
-                    </div>
-                  </div>
-                </CardHeader>
-                <CardContent>
-                  {chatTimelineEntries.length === 0 ? (
-                    <p className="text-sm text-muted-foreground">No messages captured yet.</p>
-                  ) : (
-                    <ul ref={chatListRef} className="max-h-[480px] space-y-1.5 overflow-y-auto pr-1 text-xs">
-                      {visibleChatTimelineEntries.map((entry) => {
-                        if (entry.kind === "status") {
-                          return (
-                            <li key={entry.key} className="flex items-center gap-2 py-1">
-                              <div className="h-px flex-1 bg-border" />
-                              <span className="max-w-[min(100%,56rem)] whitespace-normal break-words rounded-xl border px-2 py-1 text-center text-[10px] text-muted-foreground">
-                                {stageDisplayLabel(entry.stage)}{entry.attempt !== null ? ` #${entry.attempt}` : ""} — {entry.text}
-                              </span>
-                              <div className="h-px flex-1 bg-border" />
-                            </li>
-                          );
-                        }
-                        if (entry.kind === "error") {
-                          return (
-                            <li
-                              key={entry.key}
-                              className="rounded-lg border-l-2 border-destructive bg-destructive/5 p-3 sm:p-4"
-                            >
-                              <p className="mb-2 text-[10px] text-muted-foreground">
-                                {new Date(entry.recordedAt).toLocaleString()} · {stageDisplayLabel(entry.stage)} · {entry.speaker}
-                              </p>
-                              <p className="break-words whitespace-pre-wrap text-destructive">{entry.text}</p>
-                            </li>
-                          );
-                        }
-                        if (entry.kind === "reasoning") {
-                          return (
-                            <li key={entry.key}>
-                              <details className="rounded-lg border bg-muted/30 p-2 text-[10px] text-muted-foreground">
-                                <summary className="cursor-pointer font-medium">
-                                  {stageDisplayLabel(entry.stage)} reasoning · {new Date(entry.recordedAt).toLocaleTimeString()}
-                                </summary>
-                                <p className="mt-1.5 whitespace-pre-wrap italic">{entry.text}</p>
-                              </details>
-                            </li>
-                          );
-                        }
-                        return (
-                          <li
-                            key={entry.key}
-                            className="rounded-lg bg-primary/5 p-2.5"
-                            style={{ borderLeft: `2px solid ${stageColor(entry.stage)}` }}
-                          >
-                            <p className="mb-1 text-[10px] text-muted-foreground">
-                              {new Date(entry.recordedAt).toLocaleString()} · {stageDisplayLabel(entry.stage)}{entry.attempt !== null ? ` #${entry.attempt}` : ""} · {entry.speaker}
-                            </p>
-                            <p className="whitespace-pre-wrap">{entry.text}</p>
-                          </li>
-                        );
-                      })}
-                    </ul>
-                  )}
-                </CardContent>
-              </Card>
+              <ActivityTimelinePanel
+                entries={chatTimelineEntries}
+                visibleEntries={visibleChatTimelineEntries}
+                hasOlderMessages={hasOlderChatMessages}
+                autoScroll={chatAutoScroll}
+                listRef={chatListRef}
+                stageDisplayLabel={stageDisplayLabel}
+                onLoadOlder={() => {
+                  setChatVisibleCount((count) => Math.min(count + CHAT_PAGE_SIZE, chatTimelineEntries.length));
+                  setChatAutoScroll(false);
+                }}
+                onShowLatest={() => {
+                  setChatVisibleCount(CHAT_PAGE_SIZE);
+                  setChatAutoScroll(true);
+                }}
+              />
             </div>
           ) : null}
 
@@ -1699,118 +1873,88 @@ export default function RunDetailPage() {
             <div className="space-y-4">
               {/* Terminal diagnostics */}
               {workflowDiagnostics || terminalFailureMessage ? (
-                <Card>
-                  <CardHeader className="pb-2">
-                    <CardTitle className="text-sm">Terminal Diagnostics</CardTitle>
-                  </CardHeader>
-                  <CardContent className="text-xs space-y-1">
+                <div className="overflow-hidden rounded-2xl border border-destructive/30 bg-destructive/5">
+                  <div className="px-5 pt-5">
+                    <h2 className="text-sm font-semibold text-destructive">Terminal Diagnostics</h2>
+                  </div>
+                  <div className="space-y-1 px-5 pb-5 text-xs">
                     <p><span className="font-medium">Stage:</span> {workflowDiagnostics?.stage || "unknown"}</p>
                     <p><span className="font-medium">Message:</span> {terminalFailureMessage || "No diagnostics message."}</p>
-                  </CardContent>
-                </Card>
+                  </div>
+                </div>
               ) : null}
 
-              {/* Session timeline */}
-              <Card>
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-sm">Codex Session Timeline</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  {invocationSessionRows.length === 0 ? (
-                    <p className="text-xs text-muted-foreground">No stage invocation telemetry captured yet.</p>
-                  ) : (
-                    <ul className="max-h-[280px] space-y-2 overflow-y-auto pr-1 text-xs">
-                      {invocationSessionRows.map((row) => (
-                        <li key={row.key} className="rounded-lg border p-2.5">
-                          <div className="flex items-center gap-2 mb-1">
-                            <span className="font-semibold uppercase" style={{ color: stageColor(row.stage) }}>{row.stage}</span>
-                            {row.attempt !== null ? <span className="text-muted-foreground">#{row.attempt}</span> : null}
-                            <span className="rounded-full border px-1.5 py-0.5 text-[10px]">{row.resumedSession === null ? "unknown" : row.resumedSession ? "resumed" : "new"}</span>
-                            {row.status ? <span className="text-muted-foreground">{row.status}</span> : null}
-                            {row.durationMs !== null ? <span className="ml-auto text-muted-foreground">{formatDuration(row.durationMs)}</span> : null}
-                          </div>
-                          <p className="text-muted-foreground">start: {row.startedAt ? new Date(row.startedAt).toLocaleString() : "n/a"} · finish: {row.finishedAt ? new Date(row.finishedAt).toLocaleString() : "n/a"}</p>
-                          {row.codexSessionId ? <p className="break-all text-muted-foreground">session: {row.codexSessionId}</p> : null}
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </CardContent>
-              </Card>
-
-              {/* Agent events */}
-              <Card>
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-sm">Agent Events</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  {events.length === 0 ? (
-                    <p className="text-xs text-muted-foreground">No agent events captured yet.</p>
-                  ) : (
-                    <ul className="max-h-[260px] space-y-2 overflow-y-auto pr-1 text-xs">
-                      {events.map((event, idx) => (
-                        <li key={`${event.agent_id}-${event.recorded_at}-${idx}`} className="rounded-lg border p-2.5">
-                          <p><span className="font-medium">{event.event_type}</span> by {event.agent_id}</p>
-                          <p className="text-muted-foreground">{new Date(event.recorded_at).toLocaleString()}</p>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </CardContent>
-              </Card>
-
-              {/* Raw logs */}
-              <Card>
-                <CardHeader className="pb-2">
-                  <div className="flex flex-wrap items-center justify-between gap-2">
-                    <CardTitle className="text-sm">Raw Agent Logs</CardTitle>
-                    <div className="flex items-center gap-1.5 text-xs">
-                      <Button variant="outline" size="sm" className="h-7" onClick={() => void handleLoadOlderLogs()} disabled={loadingOlderLogs || !hasMoreLogs || logs.length === 0}>
-                        {loadingOlderLogs ? "Loading..." : hasMoreLogs ? "Load older" : "All loaded"}
-                      </Button>
-                      {[
-                        { label: "Agent", value: logAgentFilter, onChange: setLogAgentFilter, options: [["all", "All agents"], ["pm", "pm"], ["dev", "dev"], ["tester", "tester"], ["review", "review"]] },
-                        { label: "Stage", value: logStageFilter, onChange: setLogStageFilter, options: [["all", "All stages"], ["pm", "pm"], ["dev", "dev"], ["test", "test"], ["review", "review"], ["orchestrated_run", "orchestrated_run"]] },
-                        { label: "Stream", value: logStreamFilter, onChange: setLogStreamFilter, options: [["all", "All"], ["stdout", "stdout"], ["stderr", "stderr"]] }
-                      ].map((filter) => (
-                        <select key={filter.label} className="h-7 rounded border border-input bg-background px-2 text-xs" value={filter.value} onChange={(e) => filter.onChange(e.target.value)}>
-                          {filter.options.map(([val, lbl]) => <option key={val} value={val}>{lbl}</option>)}
-                        </select>
-                      ))}
-                    </div>
+              <div className="overflow-hidden rounded-2xl border bg-background divide-y">
+                {/* Session timeline */}
+                <div className="px-5 py-5">
+                  <h2 className="text-sm font-semibold">Codex Session Timeline</h2>
+                  <div className="mt-3">
+                    {invocationSessionRows.length === 0 ? (
+                      <p className="text-xs text-muted-foreground">No stage invocation telemetry captured yet.</p>
+                    ) : (
+                      <ul className="max-h-[280px] space-y-2 overflow-y-auto pr-1 text-xs">
+                        {invocationSessionRows.map((row) => (
+                          <li key={row.key} className="rounded-lg border bg-background p-2.5">
+                            <div className="flex items-center gap-2 mb-1">
+                              <span className="font-semibold uppercase" style={{ color: stageColor(row.stage) }}>{row.stage}</span>
+                              {row.attempt !== null ? <span className="text-muted-foreground">#{row.attempt}</span> : null}
+                              <span className="rounded-full border px-1.5 py-0.5 text-[10px]">{row.resumedSession === null ? "unknown" : row.resumedSession ? "resumed" : "new"}</span>
+                              {row.status ? <span className="text-muted-foreground">{row.status}</span> : null}
+                              {row.durationMs !== null ? <span className="ml-auto text-muted-foreground">{formatDuration(row.durationMs)}</span> : null}
+                            </div>
+                            <p className="text-muted-foreground">start: {formatTimestamp(row.startedAt, "n/a")} · finish: {formatTimestamp(row.finishedAt, "n/a")}</p>
+                            {row.codexSessionId ? <p className="break-all text-muted-foreground">session: {row.codexSessionId}</p> : null}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
                   </div>
-                </CardHeader>
-                <CardContent>
-                  {logs.length === 0 ? (
-                    <p className="text-xs text-muted-foreground">No logs captured yet.</p>
-                  ) : filteredLogs.length === 0 ? (
-                    <p className="text-xs text-muted-foreground">No log lines match current filters.</p>
-                  ) : (
-                    <ul className="max-h-[320px] space-y-2 overflow-y-auto pr-1 text-xs">
-                      {filteredLogs.map((entry, idx) => (
-                        <li key={`${entry.recorded_at}-${idx}`} className="rounded-lg border p-2.5" style={{ borderLeft: `2px solid ${stageColor(entry.stage)}` }}>
-                          <p className="mb-0.5 text-muted-foreground">
-                            <span className="font-medium text-foreground">{entry.agent_id}</span> · {entry.stage}{entry.attempt !== null ? ` #${entry.attempt}` : ""} [{entry.stream}] · {new Date(entry.recorded_at).toLocaleString()}
-                          </p>
-                          <p className="whitespace-pre-wrap">{entry.message}</p>
-                        </li>
-                      ))}
-                    </ul>
-                  )}
-                </CardContent>
-              </Card>
+                </div>
 
-              {/* Plan JSON */}
-              <Card>
-                <CardHeader className="pb-2">
-                  <CardTitle className="text-sm">Plan JSON</CardTitle>
-                </CardHeader>
-                <CardContent>
-                  <pre className="max-h-[360px] overflow-auto rounded-lg bg-muted/50 p-3 text-xs whitespace-pre-wrap">
-                    {run.plan ? JSON.stringify(run.plan, null, 2) : "No plan captured for this run."}
-                  </pre>
-                </CardContent>
-              </Card>
+                {/* Agent events */}
+                <div className="px-5 py-5">
+                  <h2 className="text-sm font-semibold">Agent Events</h2>
+                  <div className="mt-3">
+                    {events.length === 0 ? (
+                      <p className="text-xs text-muted-foreground">No agent events captured yet.</p>
+                    ) : (
+                      <ul className="max-h-[260px] space-y-2 overflow-y-auto pr-1 text-xs">
+                        {events.map((event, idx) => (
+                          <li key={`${event.agent_id}-${event.recorded_at}-${idx}`} className="rounded-lg border bg-background p-2.5">
+                            <p><span className="font-medium">{event.event_type}</span> by {event.agent_id}</p>
+                            <p className="text-muted-foreground" title={formatTimestamp(event.recorded_at)}>{formatTimeAgo(event.recorded_at)}</p>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                </div>
+
+                <RawAgentLogsPanel
+                  logs={logs}
+                  filteredLogs={filteredLogs}
+                  agentFilter={logAgentFilter}
+                  stageFilter={logStageFilter}
+                  streamFilter={logStreamFilter}
+                  loadingOlderLogs={loadingOlderLogs}
+                  hasMoreLogs={hasMoreLogs}
+                  stageColor={stageColor}
+                  onAgentFilterChange={setLogAgentFilter}
+                  onStageFilterChange={setLogStageFilter}
+                  onStreamFilterChange={setLogStreamFilter}
+                  onLoadOlderLogs={() => void handleLoadOlderLogs()}
+                />
+
+                {/* Plan JSON */}
+                <div className="px-5 py-5">
+                  <h2 className="text-sm font-semibold">Plan JSON</h2>
+                  <div className="mt-3">
+                    <pre className="max-h-[360px] overflow-auto rounded-lg bg-muted/50 p-3 text-xs whitespace-pre-wrap">
+                      {run.plan ? JSON.stringify(run.plan, null, 2) : "No plan captured for this run."}
+                    </pre>
+                  </div>
+                </div>
+              </div>
             </div>
           ) : null}
         </>

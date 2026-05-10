@@ -3,6 +3,8 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import logging
 
+from orchestrator.core.clarification.questions import ClarificationQuestion, ClarificationQuestionSet
+from orchestrator.core.pm.followup_context_service import upsert_followup_context
 from orchestrator.core.discord.thread_context import normalize_issue_key
 from orchestrator.tools.discord_api import DiscordApiError
 
@@ -128,12 +130,13 @@ def send_discord_ask_response_with_thread(
     content: str,
     components: list[dict] | None = None,
     issue_key: str | None = None,
+    followup_context_type: str = "ask_thread",
+    request_id: str | None = None,
     discord_api_client_fn,
     project_ask_thread_channel_ids_for_tenant_fn,
     resolve_project_for_channel_fn,
     ask_thread_message_map_from_config_fn,
     ask_reply_components_fn,
-    put_thread_issue_key_fn,
 ) -> None:
     client = discord_api_client_fn(session=session, settings=settings)
     ask_thread_channel_ids = project_ask_thread_channel_ids_for_tenant_fn(
@@ -142,32 +145,37 @@ def send_discord_ask_response_with_thread(
     )
     normalized_issue_key = normalize_issue_key(issue_key)
 
-    def _persist_tenant_thread_issue_binding(*, thread_channel_id: str) -> None:
-        if not normalized_issue_key:
-            return
-        tenant.discord_config = put_thread_issue_key_fn(
-            discord_config=tenant.discord_config,
-            channel_id=thread_channel_id,
+    def _persist_followup_context(*, project, root_channel_id: str, target_thread_channel_id: str, root_message_id: str | None) -> None:
+        normalized_followup_context_type = str(followup_context_type or "ask_thread").strip() or "ask_thread"
+        if normalized_followup_context_type == "pm_interview":
+            origin_command = "pm"
+        elif normalized_followup_context_type == "ask_thread":
+            origin_command = "ask"
+        else:
+            origin_command = normalized_followup_context_type
+        upsert_followup_context(
+            session=session,
+            tenant_id=tenant.tenant_id,
+            project_id=str(getattr(project, "project_id", "") or "").strip() or None,
+            context_type=normalized_followup_context_type,
+            channel_id=root_channel_id,
+            thread_channel_id=target_thread_channel_id,
+            root_message_id=root_message_id,
+            owner_user_id=user_id,
+            origin_command=origin_command,
             issue_key=normalized_issue_key,
+            request_id=str(request_id or "").strip() or None,
         )
-        tenant.updated_at = datetime.now(timezone.utc)
-
-    def _persist_thread_issue_binding(*, project, thread_channel_id: str) -> None:
-        if project is None or not normalized_issue_key:
-            return
-        project.discord_config = put_thread_issue_key_fn(
-            discord_config=project.discord_config,
-            channel_id=thread_channel_id,
-            issue_key=normalized_issue_key,
-        )
-        project.updated_at = datetime.now(timezone.utc)
 
     if channel_id in ask_thread_channel_ids:
         project = resolve_project_for_channel_fn(session=session, tenant=tenant, channel_id=channel_id)
-        _persist_thread_issue_binding(project=project, thread_channel_id=channel_id)
-        _persist_tenant_thread_issue_binding(thread_channel_id=channel_id)
-        if normalized_issue_key:
-            session.commit()
+        _persist_followup_context(
+            project=project,
+            root_channel_id=channel_id,
+            target_thread_channel_id=channel_id,
+            root_message_id=None,
+        )
+        session.commit()
         client.post_message(
             channel_id=channel_id,
             content=content,
@@ -205,21 +213,29 @@ def send_discord_ask_response_with_thread(
         project_discord_config["ask_thread_channel_ids"] = thread_ids[-200:]
         project_discord_config["ask_thread_by_message_id"] = dict(list(ask_message_map.items())[-500:])
         project.discord_config = project_discord_config
-        _persist_thread_issue_binding(project=project, thread_channel_id=thread_channel_id)
         project.updated_at = datetime.now(timezone.utc)
-    elif normalized_issue_key:
+    elif normalized_issue_key and followup_context_type == "decision_gate":
         logger.info(
-            "discord_ask_thread_issue_binding_skipped tenant_id=%s thread_channel_id=%s issue_key=%s reason=project_not_resolved",
+            "discord_followup_context_project_unresolved tenant_id=%s thread_channel_id=%s issue_key=%s context_type=%s",
             tenant.tenant_id,
             thread_channel_id,
             normalized_issue_key,
+            followup_context_type,
         )
-    _persist_tenant_thread_issue_binding(thread_channel_id=thread_channel_id)
+    _persist_followup_context(
+        project=project,
+        root_channel_id=channel_id,
+        target_thread_channel_id=thread_channel_id,
+        root_message_id=posted_message_id,
+    )
     tenant.updated_at = datetime.now(timezone.utc)
     session.commit()
+    intro_message = "Continue here with follow-up questions."
+    if str(followup_context_type or "").strip().lower() == "pm_interview":
+        intro_message = "Continue here with PM follow-up questions."
     client.post_message(
         channel_id=thread_channel_id,
-        content=f"<@{user_id}> Continue here with follow-up questions.",
+        content=f"<@{user_id}> {intro_message}",
     )
 
 
@@ -233,7 +249,7 @@ def send_discord_seed_followup_with_thread(
     user_id: str,
     content: str,
     request_id: str,
-    questions: list[str],
+    questions: tuple[ClarificationQuestion, ...],
     discord_api_client_fn,
     project_seed_followup_thread_channel_ids_for_tenant_fn,
     resolve_project_for_channel_fn,
@@ -243,9 +259,27 @@ def send_discord_seed_followup_with_thread(
         session=session,
         tenant_id=tenant.tenant_id,
     )
+    question_set = ClarificationQuestionSet.from_values(questions)
     if channel_id in seed_thread_channel_ids:
-        numbered_questions = [f"{idx}. {value}" for idx, value in enumerate(questions, start=1) if value.strip()]
-        question_block = "\n".join(numbered_questions) if numbered_questions else "No additional questions."
+        project = resolve_project_for_channel_fn(session=session, tenant=tenant, channel_id=channel_id)
+        upsert_followup_context(
+            session=session,
+            tenant_id=tenant.tenant_id,
+            project_id=str(getattr(project, "project_id", "") or "").strip() or None,
+            context_type="seed_followup",
+            channel_id=channel_id,
+            thread_channel_id=channel_id,
+            owner_user_id=user_id,
+            origin_command="issues",
+            request_id=str(request_id or "").strip() or None,
+            metadata={
+                "request_id": str(request_id or "").strip() or None,
+                "questions": question_set.to_payload(),
+                "channel_ids": [channel_id],
+            },
+        )
+        session.commit()
+        question_block = "\n".join(question_set.render_lines(numbered=True)) if question_set else "No additional questions."
         client.post_message(
             channel_id=channel_id,
             content=(
@@ -268,7 +302,6 @@ def send_discord_seed_followup_with_thread(
         name=thread_name[:100],
     )
 
-    discord_config = dict(tenant.discord_config or {})
     project = resolve_project_for_channel_fn(session=session, tenant=tenant, channel_id=channel_id)
     if project is not None:
         project_discord_config = dict(project.discord_config or {})
@@ -283,38 +316,27 @@ def send_discord_seed_followup_with_thread(
         project_discord_config["seed_followup_thread_channel_ids"] = seed_thread_ids[-200:]
         project.discord_config = project_discord_config
         project.updated_at = datetime.now(timezone.utc)
-
-    raw_seed_followups = discord_config.get("seed_followups")
-    if isinstance(raw_seed_followups, list):
-        updated_followups: list[dict] = []
-        now_iso = datetime.now(timezone.utc).isoformat()
-        for item in raw_seed_followups:
-            if not isinstance(item, dict):
-                continue
-            if str(item.get("request_id") or "").strip() != request_id:
-                updated_followups.append(item)
-                continue
-            raw_channel_ids = item.get("channel_ids")
-            channel_ids = (
-                [str(value).strip() for value in raw_channel_ids if str(value).strip()]
-                if isinstance(raw_channel_ids, list)
-                else []
-            )
-            if channel_id not in channel_ids:
-                channel_ids.append(channel_id)
-            if thread_channel_id not in channel_ids:
-                channel_ids.append(thread_channel_id)
-            item["channel_ids"] = channel_ids
-            item["updated_at"] = now_iso
-            updated_followups.append(item)
-        discord_config["seed_followups"] = updated_followups
-
-    tenant.discord_config = discord_config
+    upsert_followup_context(
+        session=session,
+        tenant_id=tenant.tenant_id,
+        project_id=str(getattr(project, "project_id", "") or "").strip() or None,
+        context_type="seed_followup",
+        channel_id=channel_id,
+        thread_channel_id=thread_channel_id,
+        root_message_id=posted_message_id,
+        owner_user_id=user_id,
+        origin_command="issues",
+        request_id=str(request_id or "").strip() or None,
+        metadata={
+            "request_id": str(request_id or "").strip() or None,
+            "questions": question_set.to_payload(),
+            "channel_ids": [channel_id, thread_channel_id],
+        },
+    )
     tenant.updated_at = datetime.now(timezone.utc)
     session.commit()
 
-    numbered_questions = [f"{idx}. {value}" for idx, value in enumerate(questions, start=1) if value.strip()]
-    question_block = "\n".join(numbered_questions) if numbered_questions else "No additional questions."
+    question_block = "\n".join(question_set.render_lines(numbered=True)) if question_set else "No additional questions."
     client.post_message(
         channel_id=thread_channel_id,
         content=(

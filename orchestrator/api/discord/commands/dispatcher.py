@@ -13,7 +13,7 @@ from orchestrator.api.discord.shared.state import (
 )
 from orchestrator.api.schemas import DiscordCommandRequest, DiscordCommandResponse
 from orchestrator.core.communications.command_pipeline import CommandScope
-from orchestrator.core.runs import RUN_STATUS_QUEUED, RUN_STATUS_RUNNING
+from orchestrator.core.runs.service import RUN_STATUS_QUEUED, RUN_STATUS_RUNNING
 from orchestrator.storage.models import Run, Tenant
 
 
@@ -47,8 +47,10 @@ def _format_elapsed_seconds(*, started_at: datetime | None, created_at: datetime
 def _command_help_message() -> str:
     return (
         "Commands: !help, !status, !runs [N], !run <ISSUE_KEY>, !cancel <RUN_ID>, "
-        "!retry <ISSUE_KEY|RUN_ID>, !issues seed <markdown>, !issues followup <answers>, "
-        "!bug <summary> [-- details], !gap <ISSUE_KEY>, !pm <product request>, !policy, !link <ISSUE_KEY>, "
+        "!retry <ISSUE_KEY|RUN_ID>, !issues seed <markdown batch brief>, !issues followup <answers>, "
+        "!pm <product request>, !architect [@ISSUE-123] <question>, !engineer [@ISSUE-123] <question>, "
+        "!tester [@ISSUE-123] <question>, !security [@ISSUE-123] <question>, !reviewer [@ISSUE-123] <question>, "
+        "!bug <summary> [-- details], !gap <ISSUE_KEY>, !policy, !link <ISSUE_KEY>, "
         "!request <run_controls|seed_issues|all_sensitive> [reason]"
     )
 

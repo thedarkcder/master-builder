@@ -21,7 +21,10 @@ class DiscordInteractionDispatchDeps:
     find_tenant_for_discord_channel: Callable[..., object | None]
     find_focused_discord_option: Callable[[object], tuple[str, str] | None]
     discord_issue_autocomplete_choices: Callable[..., list[dict]]
-    decision_gate_issue_for_thread: Callable[..., tuple[str, str] | None]
+    resolve_thread_channel_for_reply: Callable[..., str]
+    resolve_followup_context_match: Callable[..., object]
+    resolve_followup_context: Callable[..., object | None]
+    resolve_followup_reaction: Callable[..., object | None]
     run_discord_ask_confirmation_followup: Callable[..., object]
     run_discord_command_followup: Callable[..., object]
     run_discord_decision_gate_reply_followup: Callable[..., object]
@@ -216,27 +219,82 @@ def _handle_modal_submit(*, payload: dict, session, deps: DiscordInteractionDisp
     if user_id is None:
         return deps.interaction_response(content="Missing interaction user_id", ephemeral=True)
 
-    decision_gate_context = deps.decision_gate_issue_for_thread(session=session, channel_id=channel_id.strip())
-    if decision_gate_context is not None:
-        _, issue_key = decision_gate_context
+    normalized_channel_id = channel_id.strip()
+    effective_channel_id = deps.resolve_thread_channel_for_reply(
+        session=session,
+        channel_id=normalized_channel_id,
+        reply_to_message_id=reply_to_message_id,
+    )
+    if effective_channel_id != normalized_channel_id:
+        deps.logger.info(
+            "discord_reply_context_resolved_to_thread source=%s channel_id=%s reply_to_message_id=%s resolved_thread_channel_id=%s",
+            deps.transport_source,
+            normalized_channel_id,
+            reply_to_message_id,
+            effective_channel_id,
+        )
+    tenant = deps.find_tenant_for_discord_channel(session=session, channel_id=effective_channel_id)
+    followup_context = None
+    if tenant is not None:
+        resolution = deps.resolve_followup_context_match(
+            session=session,
+            tenant_id=tenant.tenant_id,
+            channel_id=effective_channel_id,
+            root_message_id=reply_to_message_id,
+            user_id=user_id,
+        )
+        if str(getattr(resolution, "status", "") or "") == "ambiguous":
+            return deps.interaction_response(
+                content=(
+                    "I found multiple active follow-up contexts for that reply. "
+                    "Continue in the correct thread or clean up the stale follow-up first."
+                ),
+                ephemeral=True,
+            )
+        followup_context = getattr(resolution, "context", None)
+    reaction = deps.resolve_followup_reaction(
+        raw_text=question,
+        source_ref=reply_to_message_id,
+        followup_context=followup_context,
+        room_mode=False,
+    )
+    if reaction is not None and getattr(reaction, "kind", "") == "command":
+        resolved_command_text = str(getattr(reaction, "command_text", "") or "").strip() or f"!ask {question}"
+        resolved_command_params = getattr(reaction, "command_params", None)
+        deps.logger.info(
+            "discord_reply_context_reaction_resolved source=%s channel_id=%s effective_channel_id=%s reply_to_message_id=%s context_type=%s command_text=%s",
+            deps.transport_source,
+            normalized_channel_id,
+            effective_channel_id,
+            reply_to_message_id,
+            str(getattr(followup_context, "context_type", "") or "").strip() or "none",
+            resolved_command_text,
+        )
         deps.task_scheduler(
-            deps.run_discord_decision_gate_reply_followup(
-                tenant_id=None,
+            deps.run_discord_command_followup(
+                tenant_id=str(getattr(tenant, "tenant_id", "") or "").strip() or None,
                 user_id=user_id,
-                channel_id=channel_id.strip(),
-                issue_key=issue_key,
-                reply_text=question,
+                channel_id=effective_channel_id,
+                command_text=resolved_command_text,
+                command_params=dict(resolved_command_params) if isinstance(resolved_command_params, dict) else None,
                 application_id=application_id,
                 interaction_token=interaction_token,
                 reply_to_message_id=reply_to_message_id,
             )
         )
     else:
+        deps.logger.info(
+            "discord_reply_context_fallback_to_ask source=%s channel_id=%s effective_channel_id=%s reply_to_message_id=%s",
+            deps.transport_source,
+            normalized_channel_id,
+            effective_channel_id,
+            reply_to_message_id,
+        )
         deps.task_scheduler(
             deps.run_discord_command_followup(
-                tenant_id=None,
+                tenant_id=str(getattr(tenant, "tenant_id", "") or "").strip() or None,
                 user_id=user_id,
-                channel_id=channel_id.strip(),
+                channel_id=effective_channel_id,
                 command_text=f"!ask {question}",
                 application_id=application_id,
                 interaction_token=interaction_token,

@@ -7,13 +7,16 @@ from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from orchestrator.core.knowledge_base import (
+from orchestrator.core.knowledge.base import (
     _build_knowledge_text_embedding_model,
+    _embed_texts,
     _knowledge_text_embedding_model,
+    KnowledgeEmbeddingAccessMode,
     build_knowledge_prompt_context,
     create_knowledge_asset,
     sync_project_knowledge_from_jira,
 )
+from orchestrator.core.knowledge import base as knowledge_base_module
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
 from orchestrator.storage.models import KnowledgeAsset, KnowledgeFact, Project, Tenant
@@ -39,6 +42,51 @@ def test_build_knowledge_text_embedding_model_respects_cache_dir_and_offline_env
 
     assert captured["model_name"] == "BAAI/bge-small-en-v1.5"
     assert captured["kwargs"] == {"cache_dir": "/tmp/hf-cache", "local_files_only": True}
+
+
+def test_embed_texts_uses_local_cache_for_runtime_embedding_access() -> None:
+    fake_model = SimpleNamespace(embed=lambda texts: [[0.1] for _ in texts])
+    previous_unavailable_until = knowledge_base_module._embedding_model_unavailable_until_epoch
+
+    try:
+        knowledge_base_module._embedding_model_unavailable_until_epoch = 0.0
+        with patch(
+            "orchestrator.core.knowledge.base._knowledge_text_embedding_model",
+            return_value=fake_model,
+        ) as model_mock:
+            vectors = _embed_texts(
+                ["bundle id"],
+                embedding_access_mode=KnowledgeEmbeddingAccessMode.BEST_EFFORT,
+            )
+    finally:
+        knowledge_base_module._embedding_model_unavailable_until_epoch = previous_unavailable_until
+
+    model_mock.assert_called_once_with(True)
+    assert vectors == [[0.1]]
+
+
+def test_embed_texts_suppresses_repeated_embedding_bootstrap_failures() -> None:
+    previous_unavailable_until = knowledge_base_module._embedding_model_unavailable_until_epoch
+    try:
+        knowledge_base_module._embedding_model_unavailable_until_epoch = 0.0
+        with patch(
+            "orchestrator.core.knowledge.base._knowledge_text_embedding_model",
+            side_effect=RuntimeError("embedding model unavailable"),
+        ) as model_mock:
+            first = _embed_texts(
+                ["query-a"],
+                embedding_access_mode=KnowledgeEmbeddingAccessMode.LOCAL_ONLY,
+            )
+            second = _embed_texts(
+                ["query-b"],
+                embedding_access_mode=KnowledgeEmbeddingAccessMode.LOCAL_ONLY,
+            )
+
+        assert first == [None]
+        assert second == [None]
+        model_mock.assert_called_once_with(True)
+    finally:
+        knowledge_base_module._embedding_model_unavailable_until_epoch = previous_unavailable_until
 
 
 def test_build_knowledge_prompt_context_requires_project_scope() -> None:
@@ -200,6 +248,67 @@ def test_create_knowledge_asset_extracts_source_agnostic_facts() -> None:
         assert all(fact.approval_state == "approved" for fact in facts)
 
 
+def test_create_knowledge_asset_keeps_long_generic_labels_with_safe_slot_name() -> None:
+    with TemporaryDirectory() as temp_dir:
+        database_url = f"sqlite:///{temp_dir}/knowledge_fact_long_label.db"
+        reset_db_engine_cache()
+        run_migrations(database_url=database_url)
+        session_factory = create_session_factory(database_url)
+        with session_factory() as session:
+            session.add(
+                Tenant(
+                    tenant_id="tenant-1",
+                    name="Tenant",
+                    is_enabled=True,
+                    jira_config={},
+                    github_config={},
+                    repos_config={},
+                    policy_config={},
+                    discord_config={},
+                    created_at=datetime.now(timezone.utc),
+                    updated_at=datetime.now(timezone.utc),
+                )
+            )
+            session.add(
+                Project(
+                    project_id="project-1",
+                    tenant_id="tenant-1",
+                    name="Project",
+                    github_repository="example/repo",
+                    jira_project_key="MAB",
+                    policy_overrides={},
+                    environment={},
+                    secret_refs={},
+                    discord_config={},
+                    is_archived=False,
+                    created_at=datetime.now(timezone.utc),
+                    updated_at=datetime.now(timezone.utc),
+                )
+            )
+            session.commit()
+
+            create_knowledge_asset(
+                session=session,
+                tenant_id="tenant-1",
+                project_id="project-1",
+                source_type="jira_issue",
+                title="Long fact label",
+                mime_type="text/plain",
+                source_ref="jira:GP-122",
+                text_content=(
+                    "Implemented GP-122 on branch run-gp-122-ed1554de-484b-46ed-831f-781376230734 "
+                    "and opened PR https://github.com/example/repo/pull/7.: Success."
+                ),
+            )
+
+            facts = session.query(KnowledgeFact).filter(KnowledgeFact.fact_type == "reference_fact").all()
+
+        assert facts
+        assert any(fact.slot_name == "reference_fact" for fact in facts)
+        assert all(len(fact.slot_name) <= 128 for fact in facts)
+        assert any("implemented_gp_122_on_branch_run_gp_122" in fact.fact_key for fact in facts)
+
+
 def test_sync_project_knowledge_from_jira_upserts_comments_and_attachments() -> None:
     with TemporaryDirectory() as temp_dir:
         database_url = f"sqlite:///{temp_dir}/knowledge_sync.db"
@@ -347,6 +456,89 @@ def test_sync_project_knowledge_from_jira_upserts_comments_and_attachments() -> 
             assert any(asset.source_type == "jira_comment" and "com.example.girlpower.stage" in str(asset.text_content) for asset in active_assets)
 
 
+def test_sync_project_knowledge_from_jira_handles_long_labeled_fact_lines() -> None:
+    with TemporaryDirectory() as temp_dir:
+        database_url = f"sqlite:///{temp_dir}/knowledge_sync_long_fact.db"
+        reset_db_engine_cache()
+        run_migrations(database_url=database_url)
+        session_factory = create_session_factory(database_url)
+
+        with session_factory() as session:
+            session.add(
+                Tenant(
+                    tenant_id="tenant-1",
+                    name="Tenant",
+                    is_enabled=True,
+                    jira_config={},
+                    github_config={},
+                    repos_config={},
+                    policy_config={},
+                    discord_config={},
+                    created_at=datetime.now(timezone.utc),
+                    updated_at=datetime.now(timezone.utc),
+                )
+            )
+            session.add(
+                Project(
+                    project_id="project-1",
+                    tenant_id="tenant-1",
+                    name="Project",
+                    github_repository="example/repo",
+                    jira_project_key="GP",
+                    policy_overrides={},
+                    environment={},
+                    secret_refs={},
+                    discord_config={},
+                    is_archived=False,
+                    created_at=datetime.now(timezone.utc),
+                    updated_at=datetime.now(timezone.utc),
+                )
+            )
+            session.commit()
+
+            class _JiraClient:
+                def search_issues_by_jql(self, **kwargs):  # noqa: ANN003
+                    start_at = int(kwargs.get("start_at", 0) or 0)
+                    if start_at > 0:
+                        return []
+                    return [SimpleNamespace(key="GP-122")]
+
+                def get_issue_detail(self, **_kwargs):
+                    return SimpleNamespace(
+                        key="GP-122",
+                        summary="Knowledge sync fact overflow",
+                        status="To Do",
+                        description=(
+                            "Implemented GP-122 on branch run-gp-122-ed1554de-484b-46ed-831f-781376230734 "
+                            "and opened PR https://github.com/example/repo/pull/7.: Success."
+                        ),
+                        labels=[],
+                    )
+
+                def list_issue_comments(self, **_kwargs):
+                    return []
+
+                def list_issue_attachments(self, **_kwargs):
+                    return []
+
+            result = sync_project_knowledge_from_jira(
+                session=session,
+                tenant_id="tenant-1",
+                project_id="project-1",
+                project_key="GP",
+                jira_client=_JiraClient(),
+                access_token="tok",
+                cloud_id="cloud",
+            )
+
+            facts = session.query(KnowledgeFact).filter(KnowledgeFact.fact_type == "reference_fact").all()
+
+        assert result.failed_assets == 0
+        assert facts
+        assert all(len(fact.slot_name) <= 128 for fact in facts)
+        assert any(fact.slot_name == "reference_fact" for fact in facts)
+
+
 def test_sync_project_knowledge_from_jira_with_pgvector_string_embeddings() -> None:
     from unittest.mock import patch
 
@@ -412,7 +604,7 @@ def test_sync_project_knowledge_from_jira_with_pgvector_string_embeddings() -> N
                     return []
 
             with patch(
-                "orchestrator.core.knowledge_base._embed_texts",
+                "orchestrator.core.knowledge.base._embed_texts",
                 return_value=["[0.1,0.2,0.3]"],
             ):
                 result = sync_project_knowledge_from_jira(

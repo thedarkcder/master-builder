@@ -9,7 +9,7 @@ from datetime import datetime, timezone
 from fastapi import HTTPException, Request, status
 from sqlalchemy.orm import Session
 
-from orchestrator.api.jira_oauth.connection_service import tenant_jira_oauth_context
+from orchestrator.api.atlassian_oauth.connection_service import tenant_atlassian_oauth_context
 from orchestrator.api.webhooks.github_payload_contracts import (
     extract_installation_id,
     extract_pull_request_targets,
@@ -18,6 +18,8 @@ from orchestrator.api.webhooks.github_payload_contracts import (
 )
 from orchestrator.api.webhooks.jira_payload_contracts import (
     adf_to_text,
+    extract_changed_fields,
+    extract_jira_comment_id,
     extract_issue_payload,
     extract_jira_comment_author_account_id,
     extract_jira_comment_text,
@@ -26,14 +28,15 @@ from orchestrator.api.webhooks.jira_payload_contracts import (
     parse_jira_comment_command,
 )
 from orchestrator.api.webhooks.payload_utils import extract_webhook_token
-from orchestrator.core.project_routing import (
+from orchestrator.core.projects.routing import (
     find_active_project_for_issue_key,
     find_active_project_for_repo_full_name,
 )
-from orchestrator.core.platform_secret_service import resolve_platform_secret_ref
-from orchestrator.core.tenant_secret_service import resolve_scoped_secret_ref
+from orchestrator.core.platform.secret_service import resolve_platform_secret_ref
+from orchestrator.core.platform.tenant_secret_service import resolve_scoped_secret_ref
+from orchestrator.core.decision.types import tenant_jira_webhook_secret_ref
 from orchestrator.storage.models import Project, Tenant
-from orchestrator.tools.jira_oauth import JiraOAuthError
+from orchestrator.tools.atlassian_oauth import AtlassianOAuthError
 
 logger = logging.getLogger(__name__)
 
@@ -44,7 +47,9 @@ JIRA_COMMENT_EVENTS = {"comment_created", "comment_updated"}
 __all__ = [
     "JIRA_COMMENT_EVENTS",
     "adf_to_text",
+    "extract_changed_fields",
     "extract_delivery_id",
+    "extract_jira_comment_id",
     "extract_installation_id",
     "extract_issue_payload",
     "extract_jira_comment_author_account_id",
@@ -55,6 +60,7 @@ __all__ = [
     "find_tenant_by_installation_id",
     "normalize_jira_webhook_event",
     "parse_jira_comment_command",
+    "create_jira_comment",
     "post_jira_comment",
     "record_jira_webhook_receipt",
     "resolve_active_project_for_issue",
@@ -66,23 +72,23 @@ __all__ = [
 ]
 
 
-def post_jira_comment(
+def create_jira_comment(
     *,
     session: Session,
     tenant: Tenant,
     issue_key: str,
-    comment: str,
+    comment: str | dict,
     settings,  # noqa: ANN001
-) -> tuple[bool, str | None]:
+) -> tuple[dict | None, str | None]:
     try:
-        oauth = tenant_jira_oauth_context(session=session, tenant=tenant, settings=settings)
-        oauth.client.add_issue_comment(
+        oauth = tenant_atlassian_oauth_context(session=session, tenant=tenant, settings=settings)
+        created = oauth.client.add_issue_comment(
             access_token=oauth.access_token,
             cloud_id=oauth.connection.cloud_id,
             issue_id_or_key=issue_key,
             comment=comment,
         )
-        return True, None
+        return created if isinstance(created, dict) else None, None
     except HTTPException as exc:
         logger.exception(
             "jira_comment_post_failed_http tenant_id=%s issue_key=%s detail=%s error=%s",
@@ -91,16 +97,33 @@ def post_jira_comment(
             exc.detail,
             exc,
         )
-        return False, str(exc.detail)
-    except (JiraOAuthError, ValueError) as exc:
+        return None, str(exc.detail)
+    except (AtlassianOAuthError, ValueError) as exc:
         logger.exception(
             "jira_comment_post_failed tenant_id=%s issue_key=%s error=%s",
             tenant.tenant_id,
             issue_key,
             exc,
         )
-        return False, str(exc)
+        return None, str(exc)
 
+
+def post_jira_comment(
+    *,
+    session: Session,
+    tenant: Tenant,
+    issue_key: str,
+    comment: str | dict,
+    settings,  # noqa: ANN001
+) -> tuple[bool, str | None]:
+    created, error = create_jira_comment(
+        session=session,
+        tenant=tenant,
+        issue_key=issue_key,
+        comment=comment,
+        settings=settings,
+    )
+    return created is not None or error is None, error
 
 def extract_delivery_id(request: Request) -> str | None:
     header_candidates = (
@@ -125,13 +148,13 @@ def validate_webhook_auth(
     session: Session,
     settings,
 ) -> None:  # noqa: ANN001
-    webhook_secret_ref = tenant.jira_config.get("webhook_secret_ref")
+    webhook_secret_ref = tenant_jira_webhook_secret_ref(tenant)
     if not webhook_secret_ref:
         return
 
     expected_token = resolve_scoped_secret_ref(
         session,
-        secret_ref=str(webhook_secret_ref),
+        secret_ref=webhook_secret_ref,
         encryption_key=settings.secrets_encryption_key,
         tenant_id=tenant.tenant_id,
     )

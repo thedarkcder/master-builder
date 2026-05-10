@@ -1,5 +1,4 @@
-import Link from "next/link";
-import { CheckCircle2, KeyRound, Link2, RefreshCw } from "lucide-react";
+import { CheckCircle2, Link2, RefreshCw } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 
@@ -19,43 +18,36 @@ export function GitHubStep({
   onLoadRepositories
 }: GitHubStepProps) {
   return (
-    <div className="space-y-3">
-      <div className="rounded-md border bg-muted/30 p-3 text-xs text-muted-foreground">
-        <p className="font-medium text-foreground">Before installing GitHub App</p>
-        <p>
-          Required secret ref in <strong>Secrets</strong>: <code className="font-mono">GITHUB_APP_SLUG</code>
-        </p>
-        <p>
-          Required secret refs in <strong>Secrets</strong>: <code className="font-mono">GITHUB_APP_ID</code>,{" "}
-          <code className="font-mono">GITHUB_APP_PRIVATE_KEY</code>
-        </p>
-        <p>
-          Optional webhook secret ref: <code className="font-mono">GITHUB_WEBHOOK_SECRET</code>
+    <div className="grid gap-6 xl:grid-cols-[320px_minmax(0,1fr)]">
+      <div className="min-w-0 rounded-2xl border border-slate-200 bg-slate-50/70 px-5 py-5">
+        <div className="space-y-4">
+          <div className="flex items-center gap-2 text-sm font-medium text-slate-900">
+            <CheckCircle2 className="h-4 w-4 text-emerald-600" />
+            Workspace ready for install
+          </div>
+          <div className="text-sm text-slate-600">{createdTenantId || tenantIdPreview}</div>
+
+          <div className="flex flex-col gap-2 pt-1">
+            <Button onClick={onStartInstall}>
+              <Link2 className="mr-2 h-4 w-4" />
+              Install GitHub App
+            </Button>
+            <Button variant="outline" onClick={onLoadRepositories} disabled={!installationId}>
+              <RefreshCw className="mr-2 h-4 w-4" />
+              Load repositories
+            </Button>
+          </div>
+        </div>
+      </div>
+
+      <div className="min-w-0 rounded-2xl border border-slate-200 bg-white px-5 py-5">
+        <div className="text-[11px] font-semibold uppercase tracking-[0.18em] text-slate-500">Current installation</div>
+        <div className="mt-3 text-sm font-medium text-slate-900">{installationId ?? "Not connected yet"}</div>
+        <p className="mt-3 text-sm text-slate-500">
+          After install, click Load repositories, then continue to Repository defaults. Jira-to-repository mapping is
+          configured per project after workspace setup.
         </p>
       </div>
-      <p className="rounded-md border border-emerald-300 bg-emerald-50 px-3 py-2 text-sm text-emerald-800">
-        <CheckCircle2 className="mr-1 inline h-4 w-4" />
-        Tenant <strong>{createdTenantId || tenantIdPreview}</strong> is ready for GitHub install.
-      </p>
-      <div className="flex flex-wrap gap-2">
-        <Button asChild variant="outline">
-          <Link href="/secrets">
-            <KeyRound className="mr-2 h-4 w-4" />
-            Open Secrets
-          </Link>
-        </Button>
-        <Button onClick={onStartInstall}>
-          <Link2 className="mr-2 h-4 w-4" />
-          Install GitHub App
-        </Button>
-        <Button variant="outline" onClick={onLoadRepositories} disabled={!installationId}>
-          <RefreshCw className="mr-2 h-4 w-4" />
-          Load Repositories
-        </Button>
-      </div>
-      <p className="text-xs text-muted-foreground">
-        Current installation ID: <strong>{installationId ?? "not connected yet"}</strong>
-      </p>
     </div>
   );
 }

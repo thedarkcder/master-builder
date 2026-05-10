@@ -1,15 +1,19 @@
 from __future__ import annotations
 
+import logging
 import re
 
 from sqlalchemy import select
 
-from orchestrator.api.jira_oauth.service import jira_oauth_client, refresh_jira_connection_tokens
-from orchestrator.storage.models import JiraOAuthConnection, Run
-from orchestrator.tools.jira_oauth import JiraIssueCreateInput
+from orchestrator.api.atlassian_oauth.service import atlassian_oauth_client, refresh_atlassian_connection_tokens
+from orchestrator.core.decision.types import JiraConfigKey, tenant_jira_config_text
+from orchestrator.core.workflow.execution_snapshot import require_github_pr_remediation_context_from_plan
+from orchestrator.storage.models import AtlassianOAuthConnection, Run
+from orchestrator.tools.atlassian_oauth import JiraIssueCreateInput
 
 _ISSUE_KEY_PATTERN = re.compile(r"\b([A-Z][A-Z0-9]+-\d+)\b")
 _STRICT_ISSUE_KEY_PATTERN = re.compile(r"^[A-Z][A-Z0-9]+-\d+$")
+logger = logging.getLogger(__name__)
 
 
 def extract_issue_key(*, texts: list[str]) -> str | None:
@@ -63,22 +67,37 @@ def find_existing_issue_key_for_pr_head(
         issue_key = normalize_issue_key(getattr(run, "issue_key", None))
         if issue_key is None:
             continue
-        plan = run.plan if isinstance(run.plan, dict) else {}
-        trigger = plan.get("trigger_context") if isinstance(plan, dict) else None
-        if not isinstance(trigger, dict):
-            continue
-        if str(trigger.get("source") or "").strip() != "github_pr_review_feedback":
-            continue
         try:
-            trigger_pr_number = int(trigger.get("pr_number") or 0)
-        except (TypeError, ValueError):
-            continue
-        if trigger_pr_number != pr_number:
-            continue
-        if str(trigger.get("head_sha") or "").strip() != normalized_head_sha:
+            if not run_matches_pr_remediation_head(
+                run=run,
+                pr_number=pr_number,
+                head_sha=normalized_head_sha,
+            ):
+                continue
+        except ValueError as exc:
+            logger.warning(
+                "pr_remediation_invalid_snapshot_skipped tenant_id=%s project_id=%s run_id=%s issue_key=%s error=%s",
+                tenant_id,
+                project_id,
+                getattr(run, "run_id", None),
+                getattr(run, "issue_key", None),
+                exc,
+            )
             continue
         return issue_key
     return None
+
+
+def run_matches_pr_remediation_head(
+    *,
+    run: Run,
+    pr_number: int,
+    head_sha: str,
+) -> bool:
+    context = require_github_pr_remediation_context_from_plan(getattr(run, "plan", None))
+    if context is None:
+        return False
+    return context.matches_pr_head(pr_number=pr_number, head_sha=head_sha)
 
 
 def create_pr_remediation_bug_issue_key(
@@ -99,20 +118,20 @@ def create_pr_remediation_bug_issue_key(
     issue_comments: list,
     manual_fix_request: dict[str, object] | None = None,
 ) -> str:
-    connection_id = str((tenant.jira_config or {}).get("connection_id") or "").strip()
+    connection_id = tenant_jira_config_text(tenant=tenant, key=JiraConfigKey.CONNECTION_ID)
     if not connection_id:
         raise ValueError("jira_connection_missing")
-    connection = session.get(JiraOAuthConnection, connection_id)
+    connection = session.get(AtlassianOAuthConnection, connection_id)
     if connection is None:
         raise ValueError(f"jira_connection_not_found:{connection_id}")
 
-    access_token = refresh_jira_connection_tokens(
+    access_token = refresh_atlassian_connection_tokens(
         session,
         connection=connection,
         settings=settings,
         tenant_id=tenant.tenant_id,
     )
-    client = jira_oauth_client(
+    client = atlassian_oauth_client(
         session=session,
         settings=settings,
         tenant_id=tenant.tenant_id,

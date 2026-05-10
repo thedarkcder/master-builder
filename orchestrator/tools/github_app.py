@@ -66,7 +66,10 @@ class PullRequestSummary:
     html_url: str
     head_ref: str
     base_ref: str
+    created_at: str | None = None
     updated_at: str | None = None
+    closed_at: str | None = None
+    merged_at: str | None = None
 
 
 @dataclass(frozen=True)
@@ -85,6 +88,7 @@ class PullRequestReviewComment:
     path: str | None
     line: int | None
     state: str | None
+    created_at: str | None
     user_login: str | None
 
 
@@ -100,6 +104,13 @@ class PullRequestIssueComment:
 class CommentReactionResult:
     reaction_id: int | None
     content: str | None
+
+
+@dataclass(frozen=True)
+class ReactionSummary:
+    reaction_id: int
+    content: str | None
+    user_login: str | None
 
 
 @dataclass(frozen=True)
@@ -204,6 +215,7 @@ class GitHubAppClient:
     def __init__(self, config: GitHubAppConfig):
         self._config = config
         self._cached_installation_token: _InstallationToken | None = None
+        self._cached_actor_login: str | None = None
 
     def create_app_jwt(self) -> str:
         private_key_pem = self._normalize_private_key(self._config.private_key_pem)
@@ -302,6 +314,21 @@ class GitHubAppClient:
         expires_at = _parse_github_datetime(expires_at_raw)
         self._cached_installation_token = _InstallationToken(token=token, expires_at=expires_at)
         return token
+
+    def get_actor_login(self) -> str:
+        if self._cached_actor_login is not None:
+            return self._cached_actor_login
+        installation_token = self.get_installation_token()
+        response = self._request_json(
+            method="GET",
+            path="/user",
+            bearer_token=installation_token,
+        )
+        login = response.get("login")
+        if not isinstance(login, str) or not login.strip():
+            raise GitHubApiError("GitHub authenticated user response did not include login")
+        self._cached_actor_login = login.strip()
+        return self._cached_actor_login
 
     def create_pull_request(
         self,
@@ -472,12 +499,24 @@ class GitHubAppClient:
             raise GitHubApiError(f"GitHub file content could not be decoded: {exc}") from exc
         return decoded.decode("utf-8")
 
-    def list_open_pull_requests(self, *, repo_full_name: str, limit: int = 20) -> list[PullRequestSummary]:
+    def list_pull_requests(
+        self,
+        *,
+        repo_full_name: str,
+        state: str = "open",
+        limit: int = 20,
+    ) -> list[PullRequestSummary]:
         installation_token = self.get_installation_token()
+        normalized_state = str(state or "").strip().lower() or "open"
+        if normalized_state not in {"open", "closed", "all"}:
+            raise ValueError(f"Unsupported pull request state '{state}'")
         safe_limit = min(max(1, int(limit)), 100)
         response = self._request_json(
             method="GET",
-            path=f"/repos/{repo_full_name}/pulls?state=open&sort=updated&direction=desc&per_page={safe_limit}",
+            path=(
+                f"/repos/{repo_full_name}/pulls"
+                f"?state={quote(normalized_state, safe='')}&sort=updated&direction=desc&per_page={safe_limit}"
+            ),
             bearer_token=installation_token,
         )
         if not isinstance(response, list):
@@ -491,7 +530,10 @@ class GitHubAppClient:
             title = item.get("title")
             state = item.get("state")
             html_url = item.get("html_url")
+            created_at = item.get("created_at")
             updated_at = item.get("updated_at")
+            closed_at = item.get("closed_at")
+            merged_at = item.get("merged_at")
             head = item.get("head")
             base = item.get("base")
             head_ref = head.get("ref") if isinstance(head, dict) else None
@@ -516,10 +558,16 @@ class GitHubAppClient:
                     html_url=html_url.strip(),
                     head_ref=head_ref.strip(),
                     base_ref=base_ref.strip(),
+                    created_at=created_at.strip() if isinstance(created_at, str) and created_at.strip() else None,
                     updated_at=updated_at.strip() if isinstance(updated_at, str) and updated_at.strip() else None,
+                    closed_at=closed_at.strip() if isinstance(closed_at, str) and closed_at.strip() else None,
+                    merged_at=merged_at.strip() if isinstance(merged_at, str) and merged_at.strip() else None,
                 )
             )
         return parsed
+
+    def list_open_pull_requests(self, *, repo_full_name: str, limit: int = 20) -> list[PullRequestSummary]:
+        return self.list_pull_requests(repo_full_name=repo_full_name, state="open", limit=limit)
 
     def find_open_pull_request(
         self,
@@ -781,6 +829,89 @@ class GitHubAppClient:
             content=reaction_content if isinstance(reaction_content, str) else None,
         )
 
+    def add_pull_request_reaction(
+        self,
+        *,
+        repo_full_name: str,
+        pr_number: int,
+        content: str = "eyes",
+    ) -> CommentReactionResult:
+        installation_token = self.get_installation_token()
+        response = self._request_json(
+            method="POST",
+            path=f"/repos/{repo_full_name}/issues/{pr_number}/reactions",
+            bearer_token=installation_token,
+            payload={"content": content},
+        )
+        reaction_id = response.get("id")
+        reaction_content = response.get("content")
+        return CommentReactionResult(
+            reaction_id=reaction_id if isinstance(reaction_id, int) else None,
+            content=reaction_content if isinstance(reaction_content, str) else None,
+        )
+
+    def list_pull_request_reactions(
+        self,
+        *,
+        repo_full_name: str,
+        pr_number: int,
+    ) -> list[ReactionSummary]:
+        installation_token = self.get_installation_token()
+        response = self._request_json(
+            method="GET",
+            path=f"/repos/{repo_full_name}/issues/{pr_number}/reactions?per_page=100",
+            bearer_token=installation_token,
+        )
+        if not isinstance(response, list):
+            raise GitHubApiError("GitHub pull request reactions response was not a list")
+        reactions: list[ReactionSummary] = []
+        for item in response:
+            if not isinstance(item, dict):
+                continue
+            reaction_id = item.get("id")
+            if not isinstance(reaction_id, int) or reaction_id <= 0:
+                continue
+            content = item.get("content")
+            if content is not None and not isinstance(content, str):
+                content = None
+            user = item.get("user")
+            login = user.get("login") if isinstance(user, dict) else None
+            reactions.append(
+                ReactionSummary(
+                    reaction_id=reaction_id,
+                    content=content.strip() if isinstance(content, str) and content.strip() else None,
+                    user_login=login.strip() if isinstance(login, str) and login.strip() else None,
+                )
+            )
+        return reactions
+
+    def delete_issue_reaction(
+        self,
+        *,
+        repo_full_name: str,
+        reaction_id: int,
+    ) -> None:
+        installation_token = self.get_installation_token()
+        self._request_json(
+            method="DELETE",
+            path=f"/repos/{repo_full_name}/issues/reactions/{reaction_id}",
+            bearer_token=installation_token,
+        )
+
+    def sync_pull_request_reaction(
+        self,
+        *,
+        repo_full_name: str,
+        pr_number: int,
+        content: str,
+    ) -> CommentReactionResult:
+        # Installation tokens cannot call GET /user. Use idempotent create-reaction behavior instead.
+        return self.add_pull_request_reaction(
+            repo_full_name=repo_full_name,
+            pr_number=pr_number,
+            content=content,
+        )
+
     def submit_pull_request_review(
         self,
         *,
@@ -875,5 +1006,6 @@ class GitHubAppClient:
             path=item.get("path") if isinstance(item.get("path"), str) else None,
             line=line if isinstance(line, int) else None,
             state=item.get("state") if isinstance(item.get("state"), str) else None,
+            created_at=created_at.strip() if isinstance((created_at := item.get("created_at")), str) and created_at.strip() else None,
             user_login=user_login.strip() if isinstance(user_login, str) and user_login.strip() else None,
         )

@@ -6,15 +6,16 @@ from sqlalchemy.orm import Session
 
 from orchestrator.api.discord.ask.history_service import DiscordAskHistoryService
 from orchestrator.api.discord.shared.channel_scope_repository import SqlAlchemyDiscordChannelScopeRepository
-from orchestrator.api.jira_oauth.connection_service import (
-    resolve_tenant_jira_connection,
-    tenant_jira_oauth_context,
+from orchestrator.api.atlassian_oauth.connection_service import (
+    resolve_tenant_atlassian_connection,
+    tenant_atlassian_oauth_context,
 )
-from orchestrator.api.jira_oauth.service import jira_oauth_client as _jira_oauth_client
-from orchestrator.api.jira_oauth.service import refresh_jira_connection_tokens as _refresh_jira_connection_tokens
+from orchestrator.api.atlassian_oauth.service import atlassian_oauth_client as _atlassian_oauth_client
+from orchestrator.api.atlassian_oauth.service import refresh_atlassian_connection_tokens as _refresh_atlassian_connection_tokens
 from orchestrator.core.config import get_settings
+from orchestrator.core.decision.types import tenant_jira_project_keys
 from orchestrator.storage.models import Project, Tenant
-from orchestrator.tools.jira_oauth import JiraIssueDetail, JiraIssuePreview, JiraOAuthError
+from orchestrator.tools.atlassian_oauth import JiraIssueDetail, JiraIssuePreview, AtlassianOAuthError
 
 _channel_scope_repository = SqlAlchemyDiscordChannelScopeRepository()
 _ask_history_service = DiscordAskHistoryService(
@@ -51,7 +52,7 @@ def tenant_project_keys(*, session: Session, tenant: Tenant) -> list[str]:
     keys = [project.jira_project_key for project in tenant_active_projects(session=session, tenant_id=tenant.tenant_id)]
     if keys:
         return keys
-    return [str(key).strip().upper() for key in tenant.jira_config.get("project_keys", []) if str(key).strip()]
+    return [key.upper() for key in tenant_jira_project_keys(tenant)]
 
 
 def project_filter_jql(*, session: Session, tenant: Tenant, channel_id: str | None = None) -> str:
@@ -86,14 +87,14 @@ def search_jira_issues_for_tenant(
 ) -> list[JiraIssuePreview]:
     settings = get_settings()
     try:
-        oauth = tenant_jira_oauth_context(session=session, tenant=tenant, settings=settings)
+        oauth = tenant_atlassian_oauth_context(session=session, tenant=tenant, settings=settings)
         return oauth.client.search_issues_by_jql(
             access_token=oauth.access_token,
             cloud_id=oauth.connection.cloud_id,
             jql=jql,
             max_results=max_results,
         )
-    except (ValueError, JiraOAuthError) as exc:
+    except (ValueError, AtlassianOAuthError) as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=f"Failed to query Jira board: {exc}",
@@ -127,20 +128,20 @@ def fetch_jira_issue_detail_for_tenant(
     issue_key: str,
 ) -> JiraIssueDetail:
     settings = get_settings()
-    connection = resolve_tenant_jira_connection(session=session, tenant=tenant)
+    connection = resolve_tenant_atlassian_connection(session=session, tenant=tenant)
     try:
-        access_token = _refresh_jira_connection_tokens(
+        access_token = _refresh_atlassian_connection_tokens(
             session,
             connection=connection,
             settings=settings,
         )
-        client = _jira_oauth_client(session=session, settings=settings)
+        client = _atlassian_oauth_client(session=session, settings=settings)
         return client.get_issue_detail(
             access_token=access_token,
             cloud_id=connection.cloud_id,
             issue_id_or_key=issue_key,
         )
-    except (ValueError, JiraOAuthError) as exc:
+    except (ValueError, AtlassianOAuthError) as exc:
         raise HTTPException(
             status_code=status.HTTP_502_BAD_GATEWAY,
             detail=f"Failed to query Jira issue details: {exc}",

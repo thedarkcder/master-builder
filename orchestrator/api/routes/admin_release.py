@@ -63,6 +63,6 @@ def run_release_bootstrap(
         settings=get_settings(),
         required_statuses=deps.RELEASE_BOOTSTRAP_REQUIRED_STATUSES,
         compute_release_bootstrap_result_fn=compute_release_bootstrap_result_impl,
-        refresh_jira_connection_tokens_fn=deps.refresh_jira_connection_tokens,
-        jira_oauth_client_fn=deps.jira_oauth_client,
+        refresh_atlassian_connection_tokens_fn=deps.refresh_atlassian_connection_tokens,
+        atlassian_oauth_client_fn=deps.atlassian_oauth_client,
     )

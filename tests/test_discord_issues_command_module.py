@@ -21,11 +21,12 @@ class DiscordIssuesCommandDispatchTests(unittest.TestCase):
             "payload": self.payload,
             "command_name": "issues",
             "arguments": [],
+            "scoped_project_id": None,
             "scoped_project_keys": [],
             "codex_working_dir": "/tmp",
             "normalized_user_id": "u-1",
             "defer_seed_issues": False,
-            "seed_issues_with_codex": MagicMock(return_value=("ok", {"requires_input": False})),
+            "seed_parent_issues_with_runtime": MagicMock(return_value=("ok", {"requires_input": False})),
             "find_seed_followup_context": MagicMock(return_value=None),
             "store_seed_followup_context": MagicMock(return_value="req-1"),
             "clear_seed_followup_context": MagicMock(),
@@ -52,10 +53,11 @@ class DiscordIssuesCommandDispatchTests(unittest.TestCase):
         response = self._call(
             arguments=["seed", "spec"],
             scoped_project_keys=["GP"],
-            seed_issues_with_codex=seed_mock,
+            seed_parent_issues_with_runtime=seed_mock,
         )
         self.assertEqual(response.message, "ok")
         self.assertEqual(seed_mock.call_args.kwargs["scoped_project_keys"], ["GP"])
+        self.assertEqual(seed_mock.call_args.kwargs["scoped_project_id"], None)
 
     def test_followup_requires_channel_context(self) -> None:
         payload = DiscordCommandRequest(user_id="u-1", command="!issues")
@@ -93,7 +95,7 @@ class DiscordIssuesCommandDispatchTests(unittest.TestCase):
         response = self._call(
             arguments=["followup", "answer text"],
             find_seed_followup_context=MagicMock(return_value=context),
-            seed_issues_with_codex=MagicMock(return_value=("updated", {"requires_input": False})),
+            seed_parent_issues_with_runtime=MagicMock(return_value=("updated", {"requires_input": False})),
             clear_seed_followup_context=clear_context,
         )
         self.assertEqual(response.message, "updated")

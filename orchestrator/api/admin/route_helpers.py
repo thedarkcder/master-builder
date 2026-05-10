@@ -15,9 +15,9 @@ from orchestrator.api.admin.discord_allowlist_helpers import (
     notify_discord_allowlist_approved as _notify_discord_allowlist_approved_impl,
     parse_discord_allowlist_requests as _parse_discord_allowlist_requests_impl,
 )
-from orchestrator.api.admin.jira_oauth_helpers import (
-    jira_oauth_client as _jira_oauth_client_impl,
-    refresh_jira_connection_tokens as _refresh_jira_connection_tokens_impl,
+from orchestrator.api.admin.atlassian_oauth_helpers import (
+    atlassian_oauth_client as _atlassian_oauth_client_impl,
+    refresh_atlassian_connection_tokens as _refresh_atlassian_connection_tokens_impl,
     resolve_secret_ref as _resolve_secret_ref_impl,
 )
 from orchestrator.api.admin.jira_webhook_cleanup import (
@@ -46,6 +46,7 @@ from orchestrator.api.admin.jira_webhook_response_helpers import (
 )
 from orchestrator.api.admin.project_normalization import (
     default_project_name_from_repo as _default_project_name_from_repo,
+    normalize_project_architecture_docs_config as _normalize_project_architecture_docs_config,
     normalize_project_discord_config as _normalize_project_discord_config,
     normalize_project_key as _normalize_project_key,
     normalize_project_repo as _normalize_project_repo,
@@ -62,26 +63,29 @@ from orchestrator.api.admin.tenant_project_helpers import (
     primary_repo_url as _primary_repo_url_impl,
     resolve_project_discord_channel_binding as _resolve_project_discord_channel_binding_impl,
     slugify_tenant_name as _slugify_tenant_name_impl,
+    sync_tenant_project_discord_channels as _sync_tenant_project_discord_channels_impl,
     sync_tenant_jira_project_keys as _sync_tenant_jira_project_keys_impl,
 )
+from orchestrator.core.jira_project_reconciliation.start import start_jira_project_reconciliation
 from orchestrator.api.schemas import (
     DiscordAllowlistRequestRead,
     JiraWebhookActionResult,
 )
 from orchestrator.core.config import get_settings
-from orchestrator.core.project_policy import normalize_project_policy_overrides
-from orchestrator.core.platform_secret_service import resolve_platform_secret_ref
-from orchestrator.core.platform_secret_service import (
+from orchestrator.core.decision.types import JiraConfigKey, tenant_jira_config_text
+from orchestrator.core.projects.policy import normalize_project_policy_overrides
+from orchestrator.core.platform.secret_service import resolve_platform_secret_ref
+from orchestrator.core.platform.secret_service import (
     PLATFORM_SECRET_GITHUB_APP_ID_REF,
     PLATFORM_SECRET_GITHUB_PRIVATE_KEY_REF,
 )
-from orchestrator.core.tenant_secret_service import resolve_scoped_secret_ref
-from orchestrator.storage.models import JiraOAuthConnection, Project, Tenant
+from orchestrator.core.platform.tenant_secret_service import resolve_scoped_secret_ref
+from orchestrator.storage.models import AtlassianOAuthConnection, Project, Tenant
 from orchestrator.tools.discord_api import DiscordApiClient
 from orchestrator.tools.github_app import GitHubApiError, github_client_from_tenant_config
-from orchestrator.tools.jira_oauth import JiraOAuthClient
-from orchestrator.tools.jira_oauth import JiraOAuthError
-from orchestrator.tools.jira_oauth_http import JiraOAuthHttpClient
+from orchestrator.tools.atlassian_oauth import AtlassianOAuthClient
+from orchestrator.tools.atlassian_oauth import AtlassianOAuthError
+from orchestrator.tools.atlassian_oauth_http import AtlassianOAuthHttpClient
 from orchestrator.tools.project_repo_checkout import ensure_project_checkout
 from orchestrator.tools.project_repo_checkout import ProjectRepoCheckoutError
 
@@ -152,6 +156,33 @@ def sync_tenant_jira_project_keys(session: Session, *, tenant: Tenant) -> None:
     )
 
 
+def reconcile_tenant_projects(session: Session, *, tenant: Tenant) -> None:
+    ensure_default_project_for_tenant(session, tenant=tenant)
+    sync_tenant_jira_project_keys(session, tenant=tenant)
+    _sync_tenant_project_discord_channels_impl(
+        session,
+        tenant=tenant,
+        settings=get_settings(),
+        resolve_project_discord_channel_binding_fn=resolve_project_discord_channel_binding,
+    )
+    projects = (
+        session.query(Project)
+        .filter(Project.tenant_id == tenant.tenant_id, Project.is_archived.is_(False))
+        .order_by(Project.project_id.asc())
+        .all()
+    )
+    for project in projects:
+        if not str(getattr(project, "jira_project_key", "") or "").strip():
+            continue
+        start_jira_project_reconciliation(
+            session=session,
+            settings=get_settings(),
+            tenant=tenant,
+            project=project,
+            trigger_event="tenant_setup_reconciliation",
+        )
+
+
 def with_managed_github_refs(raw_github_config: dict) -> dict:
     return _with_managed_github_refs_impl(
         raw_github_config=raw_github_config,
@@ -183,14 +214,14 @@ def resolve_secret_ref(
     )
 
 
-def jira_oauth_client(
+def atlassian_oauth_client(
     *,
     session: Session,
     settings,
     tenant_id: str | None = None,
     project_id: str | None = None,
-) -> JiraOAuthClient:  # noqa: ANN001
-    return _jira_oauth_client_impl(
+) -> AtlassianOAuthClient:  # noqa: ANN001
+    return _atlassian_oauth_client_impl(
         session=session,
         settings=settings,
         tenant_id=tenant_id,
@@ -198,19 +229,19 @@ def jira_oauth_client(
     )
 
 
-def refresh_jira_connection_tokens(
+def refresh_atlassian_connection_tokens(
     session: Session,
     *,
-    connection: JiraOAuthConnection,
+    connection: AtlassianOAuthConnection,
     settings,
     tenant_id: str | None = None,
 ) -> str:  # noqa: ANN001
-    return _refresh_jira_connection_tokens_impl(
+    return _refresh_atlassian_connection_tokens_impl(
         session,
         connection=connection,
         settings=settings,
         tenant_id=tenant_id,
-        jira_oauth_client_fn=jira_oauth_client,
+        atlassian_oauth_client_fn=atlassian_oauth_client,
     )
 
 
@@ -224,7 +255,7 @@ def all_managed_webhook_ids(session: Session) -> set[int]:
 def cleanup_unmanaged_jira_webhooks_for_connection(
     *,
     session: Session,
-    client: JiraOAuthClient,
+    client: AtlassianOAuthClient,
     access_token: str,
     cloud_id: str,
 ) -> tuple[int, str]:
@@ -241,7 +272,7 @@ def cleanup_unmanaged_jira_webhooks_for_connection(
 def cleanup_conflicting_jira_webhook_url(
     *,
     session: Session,
-    client: JiraOAuthClient,
+    client: AtlassianOAuthClient,
     access_token: str,
     cloud_id: str,
     callback_url: str,
@@ -310,8 +341,8 @@ def delete_jira_webhooks(
         tenant=tenant,
         settings=settings,
         parse_managed_webhook_ids_fn=_parse_managed_webhook_ids,
-        refresh_jira_connection_tokens_fn=refresh_jira_connection_tokens,
-        jira_oauth_client_fn=jira_oauth_client,
+        refresh_atlassian_connection_tokens_fn=refresh_atlassian_connection_tokens,
+        atlassian_oauth_client_fn=atlassian_oauth_client,
     )
 
 
@@ -321,6 +352,7 @@ def admin_project_service() -> AdminProjectService:
         normalize_project_key=_normalize_project_key,
         normalize_project_policy_overrides=normalize_project_policy_overrides,
         normalize_string_map=_normalize_string_map,
+        normalize_project_architecture_docs_config=_normalize_project_architecture_docs_config,
         normalize_project_discord_config=_normalize_project_discord_config,
         with_preserved_discord_system_fields=_with_preserved_discord_system_fields,
         resolve_project_discord_channel_binding=resolve_project_discord_channel_binding,
@@ -339,10 +371,10 @@ def discover_project_run_board_id(
     jira_project_key: str,
     settings,  # noqa: ANN001
 ) -> int | None:
-    connection_id = str((tenant.jira_config or {}).get("connection_id") or "").strip()
+    connection_id = tenant_jira_config_text(tenant=tenant, key=JiraConfigKey.CONNECTION_ID)
     if not connection_id:
         return None
-    connection = session.get(JiraOAuthConnection, connection_id)
+    connection = session.get(AtlassianOAuthConnection, connection_id)
     if connection is None:
         logger.warning(
             "project_board_discovery_skipped tenant_id=%s jira_project_key=%s reason=connection_missing connection_id=%s",
@@ -352,13 +384,13 @@ def discover_project_run_board_id(
         )
         return None
 
-    access_token = refresh_jira_connection_tokens(
+    access_token = refresh_atlassian_connection_tokens(
         session,
         connection=connection,
         settings=settings,
         tenant_id=tenant.tenant_id,
     )
-    http_client = JiraOAuthHttpClient()
+    http_client = AtlassianOAuthHttpClient()
     cloud_id = connection.cloud_id
     project_key = str(jira_project_key or "").strip().upper()
     if not project_key:
@@ -367,7 +399,7 @@ def discover_project_run_board_id(
     project_url = f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/project/{quote_plus(project_key)}"
     try:
         project_payload = http_client.get_json(url=project_url, access_token=access_token)
-    except (JiraOAuthError, URLError, ValueError) as exc:
+    except (AtlassianOAuthError, URLError, ValueError) as exc:
         logger.warning(
             "project_board_discovery_skipped tenant_id=%s jira_project_key=%s reason=project_metadata_error error=%s",
             tenant.tenant_id,
@@ -412,7 +444,7 @@ def discover_project_run_board_id(
                         fallback_board_id = board_id
                 if fallback_board_id is not None:
                     return fallback_board_id
-    except (JiraOAuthError, URLError, ValueError) as exc:
+    except (AtlassianOAuthError, URLError, ValueError) as exc:
         logger.warning(
             "project_board_discovery_skipped tenant_id=%s jira_project_key=%s reason=board_list_lookup_failed error=%s",
             tenant.tenant_id,
@@ -424,7 +456,7 @@ def discover_project_run_board_id(
         board_url = f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/agile/1.0/board/{board_id}"
         try:
             board_payload = http_client.get_json(url=board_url, access_token=access_token)
-        except (JiraOAuthError, URLError, ValueError):
+        except (AtlassianOAuthError, URLError, ValueError):
             continue
         if not isinstance(board_payload, dict):
             continue
@@ -530,9 +562,10 @@ def provision_jira_webhook(
     session: Session,
     tenant: Tenant,
     settings,  # noqa: ANN001
+    commit: bool = True,
     replace_existing: bool,
-    refresh_jira_connection_tokens_fn=refresh_jira_connection_tokens,
-    jira_oauth_client_fn=jira_oauth_client,
+    refresh_atlassian_connection_tokens_fn=refresh_atlassian_connection_tokens,
+    atlassian_oauth_client_fn=atlassian_oauth_client,
     cleanup_unmanaged_jira_webhooks_for_connection_fn=cleanup_unmanaged_jira_webhooks_for_connection,
     remove_managed_webhook_id_from_tenants_fn=remove_managed_webhook_id_from_tenants,
     cleanup_conflicting_jira_webhook_url_fn=cleanup_conflicting_jira_webhook_url,
@@ -541,12 +574,13 @@ def provision_jira_webhook(
         session=session,
         tenant=tenant,
         settings=settings,
+        commit=commit,
         replace_existing=replace_existing,
         jira_webhook_events=JIRA_WEBHOOK_EVENTS,
         delete_jira_webhooks_fn=delete_jira_webhooks,
         parse_managed_webhook_ids_fn=_parse_managed_webhook_ids,
-        refresh_jira_connection_tokens_fn=refresh_jira_connection_tokens_fn,
-        jira_oauth_client_fn=jira_oauth_client_fn,
+        refresh_atlassian_connection_tokens_fn=refresh_atlassian_connection_tokens_fn,
+        atlassian_oauth_client_fn=atlassian_oauth_client_fn,
         jira_webhook_callback_url_fn=_jira_webhook_callback_url,
         jira_webhook_filter_jql_fn=_jira_webhook_filter_jql,
         is_jira_webhook_limit_error_fn=_is_jira_webhook_limit_error,

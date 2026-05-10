@@ -18,6 +18,27 @@ def parse_ingress_source(value: str) -> IngressSource:
 
 
 @dataclass(frozen=True)
+class CommandIngressPolicy:
+    require_ask_confirmation: bool
+    allow_plain_ask: bool
+
+
+def resolve_command_ingress_policy(source: IngressSource) -> CommandIngressPolicy:
+    normalized = str(getattr(source, "value", source) or "").strip()
+    if normalized == IngressSource.DISCORD.value:
+        return CommandIngressPolicy(
+            require_ask_confirmation=True,
+            allow_plain_ask=True,
+        )
+    if normalized == IngressSource.JIRA_COMMENT.value:
+        return CommandIngressPolicy(
+            require_ask_confirmation=False,
+            allow_plain_ask=False,
+        )
+    raise ValueError(f"Unsupported ingress source: {source}")
+
+
+@dataclass(frozen=True)
 class CommandScope:
     project_id: str | None = None
     project_keys: tuple[str, ...] = ()

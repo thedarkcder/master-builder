@@ -9,12 +9,24 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from orchestrator.core.guardrails import redact_sensitive_text
 from orchestrator.storage.models import Project
 from orchestrator.tools.repo_allowlist import normalize_repo_identifier
 
 
 class ProjectRepoCheckoutError(RuntimeError):
     pass
+
+
+@dataclass(frozen=True)
+class PreparedExecutionRepo:
+    repo_dir: Path
+    execution_branch: str
+    start_point_ref: str
+    start_point_sha: str
+    workspace_key: str
+    repo_kind: str
+    issue_key: str | None = None
 
 
 _SEEDED_GITIGNORE_CONTENT = """# Seeded by Master Builder
@@ -57,10 +69,8 @@ out/
 *.class
 """
 
-_MCP_SERVER_DISABLED_LINES = (
-    ("jira_master_builder", 'enabled = false'),
-    ("jira_bsktpay", 'enabled = false'),
-)
+_MCP_SERVER_SECTION_PATTERN = re.compile(r"(?ms)^(\[mcp_servers\.(?P<name>[^\]]+)\]\s*\n)(.*?)(?=^\[|\Z)")
+_FEATURES_SECTION_PATTERN = re.compile(r"(?ms)^(\[features\]\s*\n)(.*?)(?=^\[|\Z)")
 
 
 def _repo_full_name(repository_url: str) -> str:
@@ -76,7 +86,9 @@ def _repo_full_name(repository_url: str) -> str:
 
 def _safe_git_error(stderr: str, stdout: str) -> str:
     message = (stderr or stdout or "git command failed").strip()
-    return re.sub(r"https://x-access-token:[^@]+@", "https://x-access-token:[REDACTED]@", message)
+    return redact_sensitive_text(
+        re.sub(r"https://x-access-token:[^@]+@", "https://x-access-token:[REDACTED]@", message)
+    )
 
 
 def _github_git_extraheader(github_installation_token: str) -> str:
@@ -113,6 +125,10 @@ def _resolve_git_path(*, repo_dir: Path, git_path: str) -> Path:
 
 def project_repo_dir(*, base_dir: str, tenant_id: str, project_id: str) -> Path:
     return Path(base_dir) / tenant_id / project_id / "repo"
+
+
+def project_checkout_root_dir(*, base_dir: str, tenant_id: str, project_id: str) -> Path:
+    return Path(base_dir) / tenant_id / project_id
 
 
 def project_run_root_dir(*, base_dir: str, tenant_id: str, project_id: str, run_id: str) -> Path:
@@ -160,15 +176,6 @@ def project_run_repo_dir(
         project_id=project_id,
         run_id=run_id,
         workspace_key=workspace_key,
-    ) / "repo"
-
-
-def project_legacy_run_repo_dir(*, base_dir: str, tenant_id: str, project_id: str, run_id: str) -> Path:
-    return project_run_root_dir(
-        base_dir=base_dir,
-        tenant_id=tenant_id,
-        project_id=project_id,
-        run_id=run_id,
     ) / "repo"
 
 
@@ -228,7 +235,7 @@ def _sync_agent_workspace_files(*, repo_dir: Path) -> None:
 
     if codex_src.exists() and codex_src.is_dir():
         shutil.copytree(codex_src, repo_dir / ".codex", dirs_exist_ok=True)
-        _disable_jira_mcp_servers_in_project_codex(repo_dir=repo_dir)
+        _restrict_external_tool_surfaces_in_project_codex(repo_dir=repo_dir)
 
     gitignore_path = repo_dir / ".gitignore"
     seeded_gitignore = False
@@ -246,7 +253,7 @@ def _sync_agent_workspace_files(*, repo_dir: Path) -> None:
             for line in exclude_path.read_text(encoding="utf-8").splitlines()
             if line.strip()
         }
-    required_lines = {"AGENTS.md", ".codex/", ".master-builder-run.json"}
+    required_lines = {"AGENTS.md", ".codex/", ".master-builder-run.json", ".master-builder-execution-repo.json"}
     if seeded_gitignore:
         required_lines.add(".gitignore")
     missing_lines = [line for line in sorted(required_lines) if line not in existing_lines]
@@ -258,6 +265,10 @@ def _sync_agent_workspace_files(*, repo_dir: Path) -> None:
 
 def _run_metadata_path(*, repo_dir: Path | str) -> Path:
     return Path(repo_dir) / ".master-builder-run.json"
+
+
+def _execution_repo_metadata_path(*, repo_dir: Path | str) -> Path:
+    return Path(repo_dir) / ".master-builder-execution-repo.json"
 
 
 def read_run_worktree_metadata(*, repo_dir: Path | str) -> dict[str, str] | None:
@@ -304,6 +315,82 @@ def _read_run_metadata(*, repo_dir: Path | str) -> dict[str, str] | None:
     except json.JSONDecodeError:
         return None
     return payload if isinstance(payload, dict) else None
+
+
+def read_execution_repo_metadata(*, repo_dir: Path | str) -> dict[str, str] | None:
+    path = _execution_repo_metadata_path(repo_dir=repo_dir)
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError:
+        return None
+    return payload if isinstance(payload, dict) else None
+
+
+def validate_execution_repo(
+    *,
+    checkout_root: Path,
+    repo_dir: Path | str,
+    run_id: str,
+    execution_branch: str,
+    workspace_key: str,
+) -> PreparedExecutionRepo:
+    resolved_checkout_root = checkout_root.resolve()
+    resolved_repo_dir = Path(repo_dir).resolve()
+    try:
+        resolved_repo_dir.relative_to(resolved_checkout_root)
+    except ValueError as exc:
+        raise ProjectRepoCheckoutError(
+            f"Execution repo {resolved_repo_dir} is outside checkout root {resolved_checkout_root}"
+        ) from exc
+    if not (resolved_repo_dir / ".git").exists():
+        raise ProjectRepoCheckoutError(f"Execution repo is missing git metadata at {resolved_repo_dir}")
+
+    _sync_agent_workspace_files(repo_dir=resolved_repo_dir)
+    metadata = read_execution_repo_metadata(repo_dir=resolved_repo_dir)
+    if metadata is None:
+        raise ProjectRepoCheckoutError(f"Execution repo metadata is missing at {resolved_repo_dir}")
+    if str(metadata.get("run_id") or "").strip() != str(run_id or "").strip():
+        raise ProjectRepoCheckoutError(f"Execution repo metadata does not match run_id={run_id}")
+
+    normalized_workspace_key = _normalize_workspace_key(workspace_key)
+    actual_workspace_key = str(metadata.get("workspace_key") or "").strip()
+    if actual_workspace_key != normalized_workspace_key:
+        raise ProjectRepoCheckoutError(
+            "Execution repo metadata workspace_key mismatch: "
+            f"expected {normalized_workspace_key}, found {actual_workspace_key or '<missing>'}"
+        )
+
+    expected_branch = str(metadata.get("execution_branch") or "").strip() or str(execution_branch or "").strip()
+    if not expected_branch:
+        raise ProjectRepoCheckoutError("Execution repo metadata is missing execution_branch")
+    current_branch = _run_git(["rev-parse", "--abbrev-ref", "HEAD"], cwd=resolved_repo_dir).strip()
+    if current_branch != expected_branch:
+        raise ProjectRepoCheckoutError(
+            f"Execution repo branch mismatch: expected {expected_branch}, found {current_branch}"
+        )
+    if _run_git(["status", "--porcelain"], cwd=resolved_repo_dir).strip():
+        raise ProjectRepoCheckoutError("Execution repo is unexpectedly dirty before execution")
+
+    start_point_ref = str(metadata.get("start_point_ref") or "").strip()
+    start_point_sha = str(metadata.get("start_point_sha") or "").strip()
+    repo_kind = str(metadata.get("repo_kind") or "").strip()
+    if not start_point_ref or not start_point_sha:
+        raise ProjectRepoCheckoutError("Execution repo metadata is missing start point data")
+    if not repo_kind:
+        raise ProjectRepoCheckoutError("Execution repo metadata is missing repo_kind")
+
+    issue_key = str(metadata.get("issue_key") or "").strip() or None
+    return PreparedExecutionRepo(
+        repo_dir=resolved_repo_dir,
+        execution_branch=expected_branch,
+        start_point_ref=start_point_ref,
+        start_point_sha=start_point_sha,
+        workspace_key=normalized_workspace_key,
+        repo_kind=repo_kind,
+        issue_key=issue_key,
+    )
 
 
 def _git_ref_exists(*, cwd: Path, ref: str) -> bool:
@@ -376,6 +463,7 @@ def cleanup_run_workspaces(
 ) -> None:
     repo_dir = project_repo_dir(base_dir=base_dir, tenant_id=tenant_id, project_id=project_id)
     run_root = project_run_root_dir(base_dir=base_dir, tenant_id=tenant_id, project_id=project_id, run_id=run_id)
+    workspaces_root = run_root / "workspaces"
     if workspace_key is not None:
         workspace_root = project_run_workspace_root_dir(
             base_dir=base_dir,
@@ -386,18 +474,14 @@ def cleanup_run_workspaces(
         )
         if workspace_root.exists():
             shutil.rmtree(workspace_root, ignore_errors=True)
+        if workspaces_root.exists():
+            try:
+                workspaces_root.rmdir()
+            except OSError:
+                pass
     else:
-        workspaces_root = run_root / "workspaces"
         if workspaces_root.exists():
             shutil.rmtree(workspaces_root, ignore_errors=True)
-        legacy_repo = project_legacy_run_repo_dir(
-            base_dir=base_dir,
-            tenant_id=tenant_id,
-            project_id=project_id,
-            run_id=run_id,
-        )
-        if legacy_repo.exists():
-            _remove_run_worktree(repo_dir=repo_dir, run_repo_dir=legacy_repo)
 
     if run_root.exists():
         try:
@@ -486,17 +570,8 @@ def ensure_run_worktree(
         run_id=run_id,
         workspace_key=normalized_workspace_key,
     )
-    legacy_run_repo = project_legacy_run_repo_dir(
-        base_dir=base_dir,
-        tenant_id=tenant_id,
-        project_id=project.project_id,
-        run_id=run_id,
-    )
     execution_branch = execution_branch_name(issue_key=issue_key, run_id=run_id)
     _run_git(["fetch", "origin", "--prune"], cwd=repo_dir)
-    if legacy_run_repo.exists():
-        _remove_run_worktree(repo_dir=repo_dir, run_repo_dir=legacy_run_repo)
-        _run_git(["worktree", "prune"], cwd=repo_dir)
     start_point_ref = _resolve_worktree_start_point(
         repo_dir=repo_dir,
         base_branch=base_branch,
@@ -576,30 +651,30 @@ def validate_run_worktree(
     return None
 
 
-def _disable_jira_mcp_servers_in_project_codex(*, repo_dir: Path) -> None:
+def _restrict_external_tool_surfaces_in_project_codex(*, repo_dir: Path) -> None:
     config_path = repo_dir / ".codex" / "config.toml"
     if not config_path.exists():
         return
     raw = config_path.read_text(encoding="utf-8")
     updated = raw
-    for server_name, enabled_line in _MCP_SERVER_DISABLED_LINES:
-        section_pattern = rf"(?ms)^(\[mcp_servers\.{re.escape(server_name)}\]\s*\n)(.*?)(?=^\[|\Z)"
-        section_match = re.search(section_pattern, updated)
+    cursor = 0
+    while True:
+        section_match = _MCP_SERVER_SECTION_PATTERN.search(updated, cursor)
         if section_match is None:
-            continue
+            break
         section_header = section_match.group(1)
-        section_body = section_match.group(2)
+        section_body = section_match.group(3)
         if re.search(r"(?m)^\s*enabled\s*=\s*(true|false)\s*$", section_body):
             section_body = re.sub(
                 r"(?m)^\s*enabled\s*=\s*(true|false)\s*$",
-                enabled_line,
+                "enabled = false",
                 section_body,
                 count=1,
             )
         else:
             if not section_body.endswith("\n"):
                 section_body += "\n"
-            section_body += f"{enabled_line}\n"
+            section_body += "enabled = false\n"
         # Keep TOML sections separated even when source file omits trailing newline.
         if not section_body.endswith("\n"):
             section_body += "\n"
@@ -607,6 +682,39 @@ def _disable_jira_mcp_servers_in_project_codex(*, repo_dir: Path) -> None:
             f"{updated[:section_match.start()]}"
             f"{section_header}{section_body}"
             f"{updated[section_match.end():]}"
+        )
+        cursor = section_match.start() + len(section_header) + len(section_body)
+
+    features_match = _FEATURES_SECTION_PATTERN.search(updated)
+    if features_match is None:
+        suffix = "" if updated.endswith("\n") else "\n"
+        updated = (
+            f"{updated}{suffix}\n[features]\n"
+            "apps = false\n"
+            "plugins = false\n"
+        )
+    else:
+        section_header = features_match.group(1)
+        section_body = features_match.group(2)
+        for feature_name in ("apps", "plugins"):
+            feature_pattern = rf"(?m)^\s*{re.escape(feature_name)}\s*=\s*(true|false)\s*$"
+            if re.search(feature_pattern, section_body):
+                section_body = re.sub(
+                    feature_pattern,
+                    f"{feature_name} = false",
+                    section_body,
+                    count=1,
+                )
+            else:
+                if not section_body.endswith("\n"):
+                    section_body += "\n"
+                section_body += f"{feature_name} = false\n"
+        if not section_body.endswith("\n"):
+            section_body += "\n"
+        updated = (
+            f"{updated[:features_match.start()]}"
+            f"{section_header}{section_body}"
+            f"{updated[features_match.end():]}"
         )
     if updated != raw:
         config_path.write_text(updated, encoding="utf-8")

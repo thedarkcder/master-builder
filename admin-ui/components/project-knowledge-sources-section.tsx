@@ -3,10 +3,11 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import { Textarea } from "@/components/ui/textarea";
+import { useToast } from "@/components/ui/toast-provider";
 import {
   createProjectKnowledgeSource,
   deleteProjectKnowledgeSource,
@@ -19,6 +20,7 @@ import {
   type ProjectKnowledgeSourceCreatePayload,
   type ProjectKnowledgeSourceRecord,
 } from "@/lib/api";
+import { formatTimestamp } from "@/lib/datetime";
 
 type ProjectKnowledgeSourcesSectionProps = {
   credentials: Credentials | null;
@@ -27,14 +29,6 @@ type ProjectKnowledgeSourcesSectionProps = {
 };
 
 type ConnectorType = "jira" | "google_drive" | "discord";
-
-function formatTimestamp(value: string | null): string {
-  if (!value) {
-    return "—";
-  }
-  const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString();
-}
 
 function splitLines(value: string): string[] {
   return value
@@ -48,6 +42,7 @@ export function ProjectKnowledgeSourcesSection({
   tenantId,
   projectId,
 }: ProjectKnowledgeSourcesSectionProps) {
+  const { showToast } = useToast();
   const [sources, setSources] = useState<ProjectKnowledgeSourceRecord[]>([]);
   const [runtimeStatus, setRuntimeStatus] = useState<KnowledgeJiraSyncProjectStatusRecord | null>(null);
   const [loading, setLoading] = useState(false);
@@ -165,9 +160,9 @@ export function ProjectKnowledgeSourcesSection({
       const source = await createProjectKnowledgeSource(activeCredentials, tenantId, projectId, buildPayload());
       resetForm();
       await loadSources();
-      setStatusLine(`Added source "${source.display_name}".`);
+      showToast({ title: "Knowledge source added", description: source.display_name, tone: "success" });
     } catch (error) {
-      setStatusLine(`Unable to add source: ${(error as Error).message}`);
+      showToast({ title: "Knowledge source add failed", description: (error as Error).message, tone: "error" });
     } finally {
       setSaving(false);
     }
@@ -185,9 +180,9 @@ export function ProjectKnowledgeSourcesSection({
         status: nextStatus,
       });
       await loadSources();
-      setStatusLine(`Source "${updated.display_name}" is now ${updated.status}.`);
+      showToast({ title: "Knowledge source updated", description: `${updated.display_name} is now ${updated.status}.`, tone: "success" });
     } catch (error) {
-      setStatusLine(`Unable to update source: ${(error as Error).message}`);
+      showToast({ title: "Knowledge source update failed", description: (error as Error).message, tone: "error" });
     } finally {
       setMutatingSourceId(null);
     }
@@ -202,9 +197,9 @@ export function ProjectKnowledgeSourcesSection({
     try {
       await deleteProjectKnowledgeSource(activeCredentials, tenantId, projectId, source.source_id);
       await loadSources();
-      setStatusLine(`Removed source "${source.display_name}".`);
+      showToast({ title: "Knowledge source removed", description: source.display_name, tone: "success" });
     } catch (error) {
-      setStatusLine(`Unable to remove source: ${(error as Error).message}`);
+      showToast({ title: "Knowledge source remove failed", description: (error as Error).message, tone: "error" });
     } finally {
       setMutatingSourceId(null);
     }
@@ -219,11 +214,13 @@ export function ProjectKnowledgeSourcesSection({
     try {
       const result = await syncProjectKnowledgeSource(activeCredentials, tenantId, projectId, source.source_id);
       await loadSources();
-      setStatusLine(
-        `Synced "${source.display_name}": created ${result.created_assets}, updated ${result.updated_assets}, unchanged ${result.unchanged_assets}, deleted ${result.deleted_assets}, failed ${result.failed_assets}.`,
-      );
+      showToast({
+        title: "Knowledge source synced",
+        description: `${source.display_name}: created ${result.created_assets}, updated ${result.updated_assets}, unchanged ${result.unchanged_assets}, deleted ${result.deleted_assets}, failed ${result.failed_assets}.`,
+        tone: result.failed_assets ? "error" : "success",
+      });
     } catch (error) {
-      setStatusLine(`Unable to sync source: ${(error as Error).message}`);
+      showToast({ title: "Knowledge source sync failed", description: (error as Error).message, tone: "error" });
     } finally {
       setSyncingSourceId(null);
     }
@@ -231,21 +228,18 @@ export function ProjectKnowledgeSourcesSection({
 
   return (
     <div className="space-y-6">
-      <Card>
-        <CardHeader className="pb-3">
+      <div className="overflow-hidden rounded-2xl border bg-background">
+        <div className="p-6 pb-3">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
-              <CardTitle>Managed Sources</CardTitle>
-              <CardDescription>
-                Configure the upstream knowledge connectors for this project. The semantic layer stays source-agnostic.
-              </CardDescription>
+              <h2 className="text-base font-semibold">Managed Sources</h2>
             </div>
             <Button variant="outline" size="sm" onClick={() => void loadSources()} disabled={!credentials || loading}>
               {loading ? "Refreshing..." : "Refresh"}
             </Button>
           </div>
-        </CardHeader>
-        <CardContent className="space-y-3">
+        </div>
+        <div className="space-y-3 p-6 pt-0">
           <div className="rounded-md border p-3 text-sm text-muted-foreground">
             <p>
               <span className="font-medium text-foreground">Configured connectors:</span>{" "}
@@ -337,17 +331,14 @@ export function ProjectKnowledgeSourcesSection({
               </TableBody>
             </Table>
           )}
-        </CardContent>
-      </Card>
+        </div>
+      </div>
 
-      <Card>
-        <CardHeader className="pb-3">
-          <CardTitle>Add Source</CardTitle>
-          <CardDescription>
-            Add Jira, Google Drive, or Discord as a project knowledge source.
-          </CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
+      <div className="overflow-hidden rounded-2xl border bg-background">
+        <div className="p-6 pb-3">
+          <h2 className="text-base font-semibold">Add Source</h2>
+        </div>
+        <div className="space-y-4 p-6 pt-0">
           <div className="flex flex-wrap gap-2">
             {(["jira", "google_drive", "discord"] as const).map((value) => (
               <Button
@@ -419,8 +410,8 @@ export function ProjectKnowledgeSourcesSection({
               {saving ? "Adding..." : "Add source"}
             </Button>
           </div>
-        </CardContent>
-      </Card>
+        </div>
+      </div>
 
       {statusLine ? <p className="rounded-md border px-3 py-2 text-sm text-muted-foreground">{statusLine}</p> : null}
     </div>

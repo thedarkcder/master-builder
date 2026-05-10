@@ -15,6 +15,7 @@ from orchestrator.core.communications.command_pipeline import CommandExecutionCo
 class DiscordIngressHandlers:
     simple: Callable[[CommandExecutionContext], DiscordCommandResponse | None]
     ask: Callable[[CommandExecutionContext], DiscordCommandResponse | None]
+    persona: Callable[[CommandExecutionContext], DiscordCommandResponse | None]
     bug_gap: Callable[[CommandExecutionContext], DiscordCommandResponse | None]
     issues: Callable[[CommandExecutionContext], DiscordCommandResponse | None]
     run_control: Callable[[CommandExecutionContext], DiscordCommandResponse | None]
@@ -27,6 +28,9 @@ class DiscordIngressDependencies:
     assert_channel_scope: Callable
     assert_sensitive_command_permission: Callable
     resolve_scope: Callable
+    enrich_scope: Callable
+    rewrite_raw_command: Callable
+    allow_sensitive_command_bypass: Callable
     handlers: DiscordIngressHandlers
 
 
@@ -37,7 +41,6 @@ def execute_tenant_command_ingress(
     *,
     defer_seed_issues: bool = False,
     require_ask_confirmation: bool = False,
-    allow_plain_ask: bool = False,
     ingress_source: Literal["discord", "jira_comment"] = "discord",
     deps: DiscordIngressDependencies,
 ) -> DiscordCommandResponse:
@@ -53,6 +56,11 @@ def execute_tenant_command_ingress(
             "request": (handlers.simple,),
             "ask": (handlers.ask,),
             "pm": (handlers.ask,),
+            "architect": (handlers.persona,),
+            "engineer": (handlers.persona,),
+            "tester": (handlers.persona,),
+            "security": (handlers.persona,),
+            "reviewer": (handlers.persona,),
             "bug": (handlers.bug_gap,),
             "gap": (handlers.bug_gap,),
             "issues": (handlers.issues,),
@@ -69,6 +77,9 @@ def execute_tenant_command_ingress(
         assert_channel_scope=deps.assert_channel_scope,
         assert_sensitive_command_permission=deps.assert_sensitive_command_permission,
         resolve_scope=deps.resolve_scope,
+        enrich_scope=deps.enrich_scope,
+        rewrite_raw_command=deps.rewrite_raw_command,
+        allow_sensitive_command_bypass=deps.allow_sensitive_command_bypass,
         build_handler_registry=_build_handler_registry,
     )
     try:
@@ -78,7 +89,6 @@ def execute_tenant_command_ingress(
             session=session,
             defer_seed_issues=defer_seed_issues,
             require_ask_confirmation=require_ask_confirmation,
-            allow_plain_ask=allow_plain_ask,
             ingress_source=ingress_source,
             deps=runtime_deps,
         )

@@ -1,16 +1,20 @@
 import unittest
 from unittest.mock import patch
 
+import pytest
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 
 from orchestrator.api.main import create_app
+
+pytestmark = pytest.mark.contract
 
 
 class ApiErrorObservabilityTests(unittest.TestCase):
     def test_create_app_registers_discord_executor_once_on_startup(self) -> None:
         with (
             patch("orchestrator.api.main.run_migrations"),
+            patch("orchestrator.api.main.ensure_execution_snapshot_startup_bootstrap"),
             patch("orchestrator.api.main.register_discord_command_executor") as register_mock,
             patch("orchestrator.api.main.sync_discord_guild_commands"),
         ):
@@ -23,9 +27,10 @@ class ApiErrorObservabilityTests(unittest.TestCase):
     def test_create_app_does_not_start_knowledge_jira_sync_runtime(self) -> None:
         with (
             patch("orchestrator.api.main.run_migrations"),
+            patch("orchestrator.api.main.ensure_execution_snapshot_startup_bootstrap"),
             patch("orchestrator.api.main.register_discord_command_executor"),
             patch("orchestrator.api.main.sync_discord_guild_commands"),
-            patch("orchestrator.core.knowledge_jira_sync_runtime.run_knowledge_jira_sync") as sync_runtime_mock,
+            patch("orchestrator.core.knowledge.jira_sync_runtime.run_knowledge_jira_sync") as sync_runtime_mock,
         ):
             app = create_app()
             with TestClient(app, raise_server_exceptions=False):
@@ -42,6 +47,7 @@ class ApiErrorObservabilityTests(unittest.TestCase):
 
         with (
             patch("orchestrator.api.main.run_migrations"),
+            patch("orchestrator.api.main.ensure_execution_snapshot_startup_bootstrap"),
             patch("orchestrator.api.main.register_discord_command_executor"),
             patch("orchestrator.api.main.sync_discord_guild_commands"),
             patch("orchestrator.api.main.logger.exception") as exception_log,
@@ -64,6 +70,7 @@ class ApiErrorObservabilityTests(unittest.TestCase):
 
         with (
             patch("orchestrator.api.main.run_migrations"),
+            patch("orchestrator.api.main.ensure_execution_snapshot_startup_bootstrap"),
             patch("orchestrator.api.main.register_discord_command_executor"),
             patch("orchestrator.api.main.sync_discord_guild_commands"),
             patch("orchestrator.api.main.logger.error") as error_log,
@@ -88,6 +95,7 @@ class ApiErrorObservabilityTests(unittest.TestCase):
 
         with (
             patch("orchestrator.api.main.run_migrations"),
+            patch("orchestrator.api.main.ensure_execution_snapshot_startup_bootstrap"),
             patch("orchestrator.api.main.register_discord_command_executor"),
             patch("orchestrator.api.main.sync_discord_guild_commands"),
             TestClient(app, raise_server_exceptions=False) as client,
@@ -102,9 +110,10 @@ class ApiErrorObservabilityTests(unittest.TestCase):
 
         with (
             patch("orchestrator.api.main.run_migrations"),
+            patch("orchestrator.api.main.ensure_execution_snapshot_startup_bootstrap"),
             patch("orchestrator.api.main.register_discord_command_executor"),
             patch("orchestrator.api.main.sync_discord_guild_commands"),
-            patch("orchestrator.api.main.request_logger.info") as info_log,
+            patch("orchestrator.api.main.logger.info") as info_log,
             TestClient(app, raise_server_exceptions=False) as client,
         ):
             response = client.get("/jira/webhook/example")

@@ -5,247 +5,180 @@ from contextlib import ExitStack
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from fastapi import HTTPException
+import pytest
 
-from orchestrator.api.routes.webhook_discord_interactions import ingest_discord_interaction
+from orchestrator.api.routes.webhook_discord_interactions import (
+    _resolve_interaction_subject_scope,
+    ingest_discord_interaction,
+)
+from orchestrator.core.communications import (
+    DeferredTransportWork,
+    HttpJsonResponseBytesAction,
+    IngressResult,
+)
+
+pytestmark = pytest.mark.contract
 
 
 class DiscordInteractionsRouteTests(unittest.IsolatedAsyncioTestCase):
-    async def _call(self, payload: dict, *, headers: dict[str, str] | None = None, **overrides):
-        request = SimpleNamespace(headers=headers or {})
+    @staticmethod
+    def _result(*, body: bytes, deferred: bool) -> IngressResult:
+        async def _noop() -> None:
+            return None
+
+        deferred_work = ()
+        if deferred:
+            deferred_work = (
+                DeferredTransportWork(
+                    kind="test",
+                    runner=lambda: _noop(),
+                ),
+            )
+        return IngressResult(
+            actions=(
+                HttpJsonResponseBytesAction(
+                    status_code=200,
+                    body=body,
+                    headers={"content-type": "application/json"},
+                ),
+            ),
+            deferred_work=deferred_work,
+        )
+
+    async def _call(self, payload: dict, **overrides):
+        request = SimpleNamespace(headers={})
         session = MagicMock()
-
-        def _capture_and_close(coro):  # noqa: ANN001
-            coro.close()
-            return MagicMock()
-
+        session.get.return_value = None
         base = {
             "get_settings": MagicMock(return_value=SimpleNamespace()),
             "_read_json_payload": AsyncMock(return_value=(payload, b"{}")),
             "_resolve_discord_interactions_public_key": MagicMock(return_value=b"k"),
             "_validate_discord_interaction_signature": MagicMock(),
-            "_find_tenant_for_discord_channel": MagicMock(return_value=SimpleNamespace(tenant_id="example")),
-            "_discord_autocomplete_response": MagicMock(side_effect=lambda choices: SimpleNamespace(status_code=200, body=b"auto")),
-            "_find_focused_discord_option": MagicMock(return_value=("issue_key", "MAB")),
-            "_discord_issue_autocomplete_choices": MagicMock(return_value=[{"name": "MAB-1", "value": "MAB-1"}]),
-            "_discord_interaction_response": MagicMock(side_effect=lambda content, ephemeral=True: SimpleNamespace(status_code=200, body=str(content).encode())),
-            "_discord_interaction_modal_response": MagicMock(side_effect=lambda **_: SimpleNamespace(status_code=200, body=b"modal")),
-            "_discord_interaction_deferred_response": MagicMock(side_effect=lambda ephemeral=True: SimpleNamespace(status_code=200, body=b"deferred")),
-            "_parse_ask_confirmation_custom_id": MagicMock(return_value=("approve", "req-1")),
-            "_parse_ask_reply_modal_custom_id": MagicMock(return_value="m1"),
-            "_discord_modal_text_value": MagicMock(return_value="next step"),
-            "_run_discord_ask_confirmation_followup": AsyncMock(),
-            "_run_discord_command_followup": AsyncMock(),
-            "_run_discord_decision_gate_reply_followup": AsyncMock(),
-            "_decision_gate_issue_for_thread": MagicMock(return_value=None),
-            "_run_discord_application_command_followup": AsyncMock(),
-            "asyncio": SimpleNamespace(create_task=MagicMock(side_effect=_capture_and_close)),
-            "ASK_REPLY_OPEN_CUSTOM_ID": "ask.reply.open",
+            "enqueue_webhook_job": MagicMock(
+                return_value=SimpleNamespace(
+                    created=True,
+                    job=SimpleNamespace(job_id="job-1", dedupe_key=str(payload.get("id") or "").strip() or None, subject_key="discord_interaction:unknown"),
+                )
+            ),
+            "notify_webhook_job_enqueued": MagicMock(),
+            "_resolve_interaction_subject_scope": MagicMock(return_value=("example", None, "discord_channel:example:c1")),
+            "_close_deferred_interaction_work": MagicMock(),
+            "build_discord_interaction_ingress_result": AsyncMock(
+                return_value=self._result(body=b'{"type":1}', deferred=False)
+            ),
         }
         base.update(overrides)
 
         with ExitStack() as stack:
             for name, value in base.items():
                 stack.enter_context(patch(f"orchestrator.api.routes.webhook_discord_interactions.{name}", value))
-            return await ingest_discord_interaction(request=request, session=session)
+            response = await ingest_discord_interaction(request=request, session=session)
+        return response, session, base
 
-    async def test_ping_and_unsupported_type(self) -> None:
-        ping = await self._call({"type": 1})
+    async def test_ping_and_unsupported_type_do_not_enqueue(self) -> None:
+        ping, _, patched = await self._call(
+            {"type": 1},
+            build_discord_interaction_ingress_result=AsyncMock(
+                return_value=self._result(body=b'{"type":1}', deferred=False)
+            ),
+        )
         self.assertEqual(ping.status_code, 200)
+        patched["enqueue_webhook_job"].assert_not_called()
 
-        unsupported = await self._call({"type": 999})
+        unsupported, _, patched = await self._call(
+            {"type": 999},
+            build_discord_interaction_ingress_result=AsyncMock(
+                return_value=self._result(
+                    body=b'{"type":4,"data":{"content":"Unsupported Discord interaction type.","flags":64}}',
+                    deferred=False,
+                )
+            ),
+        )
         self.assertEqual(unsupported.status_code, 200)
         self.assertIn(b"Unsupported Discord interaction type", unsupported.body)
+        patched["enqueue_webhook_job"].assert_not_called()
 
-    async def test_autocomplete_paths(self) -> None:
-        response = await self._call({"type": 4, "channel_id": "", "data": {}}, _find_tenant_for_discord_channel=MagicMock(return_value=None))
-        self.assertEqual(response.status_code, 200)
-
-        response = await self._call(
-            {"type": 4, "channel_id": "c1", "data": {"name": "run", "options": []}},
-            _find_focused_discord_option=MagicMock(return_value=None),
-        )
-        self.assertEqual(response.status_code, 200)
-
-        response = await self._call(
-            {"type": 4, "channel_id": "c1", "data": {"name": "status", "options": []}},
-            _find_focused_discord_option=MagicMock(return_value=("issue_key", "MAB")),
-        )
-        self.assertEqual(response.status_code, 200)
-
-        response = await self._call(
-            {"type": 4, "channel_id": "c1", "data": {"name": "run", "options": []}},
-            _discord_issue_autocomplete_choices=MagicMock(side_effect=HTTPException(status_code=403, detail="no")),
-        )
-        self.assertEqual(response.status_code, 200)
-
-    async def test_bug_issue_key_autocomplete_is_supported(self) -> None:
-        autocomplete_choices = MagicMock(return_value=[{"name": "MAB-1", "value": "MAB-1"}])
-        response = await self._call(
-            {
-                "type": 4,
-                "channel_id": "c1",
-                "data": {"name": "bug", "options": [{"name": "issue_key", "value": "MAB", "focused": True}]},
-            },
-            _discord_issue_autocomplete_choices=autocomplete_choices,
-        )
-        self.assertEqual(response.status_code, 200)
-        autocomplete_choices.assert_called_once()
-
-    async def test_message_component_paths(self) -> None:
-        missing_channel = await self._call({"type": 3, "channel_id": ""})
-        self.assertIn(b"Missing interaction channel_id", missing_channel.body)
-
-        missing_context = await self._call({"type": 3, "channel_id": "c1", "token": "", "application_id": ""})
-        self.assertIn(b"Missing Discord interaction context", missing_context.body)
-
-        open_modal_missing_message = await self._call(
-            {
-                "type": 3,
-                "channel_id": "c1",
-                "application_id": "app",
-                "token": "tok",
-                "data": {"custom_id": "ask.reply.open"},
-                "message": {},
-            }
-        )
-        self.assertIn(b"Unable to open reply form", open_modal_missing_message.body)
-
-        open_modal = await self._call(
-            {
-                "type": 3,
-                "channel_id": "c1",
-                "application_id": "app",
-                "token": "tok",
-                "data": {"custom_id": "ask.reply.open"},
-                "message": {"id": "m1"},
-            }
-        )
-        self.assertEqual(open_modal.status_code, 200)
-
-        unsupported = await self._call(
-            {
-                "type": 3,
-                "channel_id": "c1",
-                "application_id": "app",
-                "token": "tok",
-                "data": {"custom_id": "x"},
-            },
-            _parse_ask_confirmation_custom_id=MagicMock(return_value=None),
-        )
-        self.assertIn(b"Unsupported interaction action", unsupported.body)
-
-        from_direct_user = await self._call(
-            {
-                "type": 3,
-                "channel_id": "c1",
-                "application_id": "app",
-                "token": "tok",
-                "data": {"custom_id": "ask.confirm.approve.req-1"},
-                "user": {"id": "u-direct"},
-            },
-            _parse_ask_confirmation_custom_id=MagicMock(return_value=("approve", "req-1")),
-        )
-        self.assertEqual(from_direct_user.body, b"deferred")
-
-        missing_user = await self._call(
-            {
-                "type": 3,
-                "channel_id": "c1",
-                "application_id": "app",
-                "token": "tok",
-                "data": {"custom_id": "ask.confirm.approve.req-1"},
-            },
-            _parse_ask_confirmation_custom_id=MagicMock(return_value=("approve", "req-1")),
-        )
-        self.assertIn(b"Missing interaction user_id", missing_user.body)
-
-    async def test_modal_submit_paths(self) -> None:
-        missing_data = await self._call({"type": 5, "channel_id": "c1", "application_id": "app", "token": "tok", "data": None})
-        self.assertIn(b"Missing modal interaction data", missing_data.body)
-
-        unsupported = await self._call(
-            {"type": 5, "channel_id": "c1", "application_id": "app", "token": "tok", "data": {"custom_id": "x"}},
-            _parse_ask_reply_modal_custom_id=MagicMock(return_value=""),
-        )
-        self.assertIn(b"Unsupported modal interaction", unsupported.body)
-
-        missing_question = await self._call(
-            {"type": 5, "channel_id": "c1", "application_id": "app", "token": "tok", "data": {"custom_id": "ask.reply.m1"}},
-            _discord_modal_text_value=MagicMock(return_value=""),
-        )
-        self.assertIn(b"Please provide a follow-up question", missing_question.body)
-
-        from_direct_user = await self._call(
-            {
-                "type": 5,
-                "channel_id": "c1",
-                "application_id": "app",
-                "token": "tok",
-                "data": {"custom_id": "ask.reply.m1"},
-                "user": {"id": "u-direct"},
-            },
-        )
-        self.assertEqual(from_direct_user.body, b"deferred")
-
-        missing_user = await self._call(
-            {"type": 5, "channel_id": "c1", "application_id": "app", "token": "tok", "data": {"custom_id": "ask.reply.m1"}},
-        )
-        self.assertIn(b"Missing interaction user_id", missing_user.body)
-
-    async def test_modal_submit_routes_decision_gate_thread_replies_to_gate_handler(self) -> None:
-        run_decision_gate_followup = AsyncMock()
-        run_ask_followup = AsyncMock()
-        await self._call(
-            {
-                "type": 5,
-                "channel_id": "c1",
-                "application_id": "app",
-                "token": "tok",
-                "data": {"custom_id": "ask.reply.m1"},
-                "user": {"id": "u-direct"},
-            },
-            _decision_gate_issue_for_thread=MagicMock(return_value=("tenant-1", "MAB-158")),
-            _run_discord_decision_gate_reply_followup=run_decision_gate_followup,
-            _run_discord_command_followup=run_ask_followup,
-        )
-        run_decision_gate_followup.assert_called_once()
-        run_ask_followup.assert_not_called()
-
-    async def test_application_command_reply_and_command_paths(self) -> None:
-        wrong_type = await self._call({"type": 2, "data": {"name": "reply", "type": 1}})
-        self.assertIn(b"Reply is a message command", wrong_type.body)
-
-        no_target = await self._call({"type": 2, "data": {"name": "reply", "type": 3, "target_id": ""}})
-        self.assertIn(b"Reply target message was not provided", no_target.body)
-
-        not_bot = await self._call(
+    async def test_application_command_acknowledges_and_enqueues(self) -> None:
+        response, session, patched = await self._call(
             {
                 "type": 2,
                 "application_id": "app",
+                "token": "tok",
+                "channel_id": "c1",
+                "data": {"name": "ask"},
+                "member": {"user": {"id": "u-1"}},
+            },
+            build_discord_interaction_ingress_result=AsyncMock(
+                return_value=self._result(body=b'{"type":5,"data":{"flags":64}}', deferred=True)
+            ),
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.body, b'{"type":5,"data":{"flags":64}}')
+        patched["enqueue_webhook_job"].assert_called_once()
+        request = patched["enqueue_webhook_job"].call_args.kwargs["request"]
+        self.assertEqual(request.transport, "discord_interaction")
+        self.assertEqual(request.event_type, "interaction_create")
+        self.assertEqual(request.payload_json["data"]["name"], "ask")
+        patched["notify_webhook_job_enqueued"].assert_called_once()
+        session.commit.assert_called_once()
+
+    async def test_modal_submit_acknowledges_and_enqueues(self) -> None:
+        response, session, patched = await self._call(
+            {
+                "type": 5,
+                "application_id": "app",
+                "token": "tok",
+                "channel_id": "c1",
+                "data": {"custom_id": "ask.reply.m1", "components": []},
+                "user": {"id": "u-1"},
+            },
+            build_discord_interaction_ingress_result=AsyncMock(
+                return_value=self._result(body=b'{"type":5,"data":{"flags":64}}', deferred=True)
+            ),
+        )
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.body, b'{"type":5,"data":{"flags":64}}')
+        patched["enqueue_webhook_job"].assert_called_once()
+        request = patched["enqueue_webhook_job"].call_args.kwargs["request"]
+        self.assertEqual(request.transport, "discord_interaction")
+        patched["notify_webhook_job_enqueued"].assert_called_once()
+        session.commit.assert_called_once()
+
+    async def test_autocomplete_does_not_enqueue(self) -> None:
+        response, _, patched = await self._call(
+            {
+                "type": 4,
+                "channel_id": "c1",
                 "data": {
-                    "name": "reply",
-                    "type": 3,
-                    "target_id": "m1",
-                    "resolved": {"messages": {"m1": {"author": {"id": "other"}}}},
+                    "name": "run",
+                    "options": [{"name": "issue_key", "value": "TP", "focused": True}],
                 },
-            }
+            },
+            build_discord_interaction_ingress_result=AsyncMock(
+                return_value=self._result(body=b'{"type":8,"data":{"choices":[]}}', deferred=False)
+            ),
         )
-        self.assertIn(b"Use Reply on a Master Builder message", not_bot.body)
+        self.assertEqual(response.status_code, 200)
+        patched["enqueue_webhook_job"].assert_not_called()
 
-        missing_context = await self._call(
-            {"type": 2, "application_id": "", "token": "", "data": {"name": "ask"}},
-        )
-        self.assertIn(b"Missing Discord interaction context", missing_context.body)
+    def test_resolve_interaction_subject_scope_uses_top_level_user_for_dm_payloads(self) -> None:
+        deps = SimpleNamespace(find_tenant_for_discord_channel=MagicMock(return_value=None))
+        with patch(
+            "orchestrator.api.routes.webhook_discord_interactions.build_default_discord_interaction_dispatch_deps",
+            return_value=deps,
+        ):
+            tenant_id, project_id, subject_key = _resolve_interaction_subject_scope(
+                session=MagicMock(),
+                payload={
+                    "type": 5,
+                    "user": {"id": "u-1"},
+                },
+                find_tenant_for_discord_channel=deps.find_tenant_for_discord_channel,
+            )
 
-        run_application_followup = AsyncMock()
-        ok = await self._call(
-            {"type": 2, "application_id": "app", "token": "tok", "data": {"name": "ask"}},
-            _run_discord_application_command_followup=run_application_followup,
-        )
-        self.assertEqual(ok.status_code, 200)
-        self.assertEqual(ok.body, b"deferred")
-        run_application_followup.assert_called_once()
+        self.assertIsNone(tenant_id)
+        self.assertIsNone(project_id)
+        self.assertEqual(subject_key, "discord_user::u-1")
 
 
 if __name__ == "__main__":

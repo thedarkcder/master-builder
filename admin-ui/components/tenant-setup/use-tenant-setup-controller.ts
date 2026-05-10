@@ -4,16 +4,26 @@ import { useEffect, useMemo, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 
 import { useAuth } from "@/components/auth-provider";
+import { useToast } from "@/components/ui/toast-provider";
 import {
   createTenant,
+  createTenantInvite,
   getTenant,
   listGitHubRepositories,
+  listTenantInvites,
   listJiraProjects,
+  startDiscordInstall,
   startGitHubInstall,
-  startJiraConnect,
-  updateTenant,
+  startAtlassianConnect,
+  updateTenantConfiguration,
+  updateTenantDiscord,
+  updateTenantGithub,
+  updateTenantJira,
+  updateTenantPolicy,
+  updateTenantRepos,
   type GitHubRepositoryRecord,
-  type JiraProjectRecord
+  type JiraProjectRecord,
+  type TenantInviteRecord
 } from "@/lib/api";
 import {
   defaultTenantFormValues,
@@ -26,8 +36,14 @@ import {
   type TenantFormValues
 } from "@/lib/tenant-form";
 
-import { STEP_ORDER, type WizardStepKey } from "@/components/tenant-setup/types";
-import { persistWizardDraft, previewTenantId, readWizardDraft, type WizardDraft } from "@/components/tenant-setup/wizard-draft";
+import { STEP_ORDER, stepIndexForKey, stepKeyAtIndex, type WizardStepKey } from "@/components/tenant-setup/types";
+import {
+  clearWizardDraft,
+  persistWizardDraft,
+  previewTenantId,
+  readWizardDraft,
+  type WizardDraft
+} from "@/components/tenant-setup/wizard-draft";
 
 type StatusTone = "info" | "success" | "error";
 
@@ -44,6 +60,7 @@ function statusTone(statusLine: string): StatusTone {
 
 export function useTenantSetupController(stepKey: WizardStepKey) {
   const { credentials } = useAuth();
+  const { showToast } = useToast();
   const searchParams = useSearchParams();
   const router = useRouter();
 
@@ -64,8 +81,9 @@ export function useTenantSetupController(stepKey: WizardStepKey) {
     }
     return formValuesToTextFields(defaultTenantFormValues());
   });
-  const [statusLine, setStatusLine] = useState("Start with tenant basics.");
+  const [statusLine, setStatusLine] = useState("");
   const [saving, setSaving] = useState(false);
+  const [freshResetApplied, setFreshResetApplied] = useState(false);
   const [createdTenantId, setCreatedTenantId] = useState(() => {
     const draft = readWizardDraft();
     return typeof draft?.createdTenantId === "string" ? draft.createdTenantId : "";
@@ -77,8 +95,13 @@ export function useTenantSetupController(stepKey: WizardStepKey) {
     return typeof draft?.selectedRepoUrl === "string" ? draft.selectedRepoUrl : "";
   });
   const [jiraProjects, setJiraProjects] = useState<JiraProjectRecord[]>([]);
+  const [inviteEmail, setInviteEmail] = useState("");
+  const [inviteFullName, setInviteFullName] = useState("");
+  const [inviteRole, setInviteRole] = useState<"tenant_admin" | "technical_member" | "business_member">("business_member");
+  const [sendingInvite, setSendingInvite] = useState(false);
+  const [recentInvites, setRecentInvites] = useState<TenantInviteRecord[]>([]);
 
-  const stepIndex = STEP_ORDER.findIndex((step) => step.key === stepKey);
+  const stepIndex = stepIndexForKey(stepKey);
 
   const advanceValidationError = useMemo(() => {
     if (!values.name.trim()) {
@@ -89,7 +112,7 @@ export function useTenantSetupController(stepKey: WizardStepKey) {
     }
     if (stepKey === "jira") {
       if (!values.jira.connection_id?.trim()) {
-        return "Connect Jira before continuing.";
+        return "Connect Atlassian before continuing.";
       }
       if (!textFields.projectKeysText.trim()) {
         return "Select at least one Jira project key before continuing.";
@@ -100,6 +123,9 @@ export function useTenantSetupController(stepKey: WizardStepKey) {
       if (!values.github.installation_id) {
         return "Install the GitHub App before continuing.";
       }
+      return null;
+    }
+    if (stepKey === "discord") {
       return null;
     }
     if (stepKey === "repos") {
@@ -127,6 +153,29 @@ export function useTenantSetupController(stepKey: WizardStepKey) {
   }, [values, textFields, createdTenantId, selectedRepoUrl]);
 
   useEffect(() => {
+    if (stepKey !== "basics") {
+      return;
+    }
+    if (freshResetApplied) {
+      return;
+    }
+    if (searchParams.get("fresh") !== "1") {
+      return;
+    }
+    const defaults = defaultTenantFormValues();
+    clearWizardDraft();
+    setValues(defaults);
+    setTextFields(formValuesToTextFields(defaults));
+    setCreatedTenantId("");
+    setSelectedRepoUrl("");
+    setInstallationRepos([]);
+    setJiraProjects([]);
+    setStatusLine("");
+    setFreshResetApplied(true);
+    router.replace("/tenants/new/basics");
+  }, [freshResetApplied, router, searchParams, stepKey]);
+
+  useEffect(() => {
     const tenantIdParam = searchParams.get("tenant_id");
     if (!credentials || typeof tenantIdParam !== "string" || tenantIdParam.length === 0) {
       return;
@@ -146,10 +195,10 @@ export function useTenantSetupController(stepKey: WizardStepKey) {
         setTextFields(formValuesToTextFields(form));
         setCreatedTenantId(record.tenant_id);
         setSelectedRepoUrl(form.repos.github_repository ?? "");
-        if (searchParams.get("github_install") === "success") {
-          setStatusLine("GitHub App install completed. Load repositories to continue setup.");
+        if (searchParams.get("discord_install") === "cancelled") {
+          setStatusLine("Discord install was cancelled. You can continue setup and configure Discord later.");
         } else {
-          setStatusLine(`Loaded tenant ${record.tenant_id}.`);
+          setStatusLine("");
         }
       } catch (error) {
         if (!ignore) {
@@ -165,15 +214,15 @@ export function useTenantSetupController(stepKey: WizardStepKey) {
   }, [credentials, searchParams]);
 
   useEffect(() => {
-    const connectionId = searchParams.get("jira_connection_id");
+    const connectionId = searchParams.get("atlassian_connection_id");
     if (!connectionId) {
       return;
     }
     setValues((prev) => ({ ...prev, jira: { ...prev.jira, connection_id: connectionId } }));
-    if (searchParams.get("jira_oauth") === "success") {
-      setStatusLine("Jira OAuth connected. Load Jira projects and select project keys.");
+    if (searchParams.get("atlassian_oauth") === "success") {
+      void loadJiraProjectsForConnectionId(connectionId, { statusPrefix: "Atlassian connected." });
     }
-  }, [searchParams]);
+  }, [credentials, searchParams]);
 
   async function ensureTenantCreated(): Promise<string | null> {
     if (!credentials) {
@@ -196,34 +245,37 @@ export function useTenantSetupController(stepKey: WizardStepKey) {
       setValues(form);
       setTextFields(formValuesToTextFields(form));
       setCreatedTenantId(created.tenant_id);
-      setStatusLine(`Created tenant ${created.tenant_id}.`);
+      setStatusLine("");
       return created.tenant_id;
     } catch (error) {
-      setStatusLine(`Create failed: ${(error as Error).message}`);
+      showToast({ title: "Tenant create failed", description: (error as Error).message, tone: "error" });
       return null;
     } finally {
       setSaving(false);
     }
   }
 
-  async function startJiraOAuth() {
+  async function startAtlassianOAuth() {
     if (!credentials) {
       return;
     }
     try {
-      const result = await startJiraConnect(credentials, { returnTo: "wizard" });
+      const result = await startAtlassianConnect(credentials, { returnTo: "wizard" });
       window.location.href = result.authorize_url;
     } catch (error) {
-      setStatusLine(`Unable to start Jira OAuth: ${(error as Error).message}`);
+      setStatusLine(`Unable to start Atlassian: ${(error as Error).message}`);
     }
   }
 
-  async function loadJiraProjectsForConnection() {
-    if (!credentials || !values.jira.connection_id) {
+  async function loadJiraProjectsForConnectionId(
+    connectionId: string,
+    options: { statusPrefix?: string } = {}
+  ) {
+    if (!credentials || !connectionId) {
       return;
     }
     try {
-      const projects = await listJiraProjects(credentials, values.jira.connection_id);
+      const projects = await listJiraProjects(credentials, connectionId);
       setJiraProjects(projects);
       if (projects.length === 0) {
         setStatusLine("Connected Jira site is valid, but no projects were returned.");
@@ -239,10 +291,21 @@ export function useTenantSetupController(stepKey: WizardStepKey) {
         }));
       }
 
-      setStatusLine(`Loaded ${projects.length} Jira project option(s).`);
+      if (options.statusPrefix) {
+        setStatusLine(options.statusPrefix);
+      } else {
+        setStatusLine("");
+      }
     } catch (error) {
       setStatusLine(`Unable to load Jira projects: ${(error as Error).message}`);
     }
+  }
+
+  async function loadJiraProjectsForConnection() {
+    if (!values.jira.connection_id) {
+      return;
+    }
+    await loadJiraProjectsForConnectionId(values.jira.connection_id);
   }
 
   function toggleJiraProject(projectKey: string) {
@@ -273,6 +336,22 @@ export function useTenantSetupController(stepKey: WizardStepKey) {
     }
   }
 
+  async function startDiscordInstallFlow() {
+    if (!credentials) {
+      return;
+    }
+    const tenantId = await ensureTenantCreated();
+    if (!tenantId) {
+      return;
+    }
+    try {
+      const result = await startDiscordInstall(credentials, tenantId, { returnTo: "wizard" });
+      window.location.href = result.install_url;
+    } catch (error) {
+      setStatusLine(`Unable to start Discord bot install: ${(error as Error).message}`);
+    }
+  }
+
   async function loadInstallationRepositories() {
     if (!credentials || !createdTenantId) {
       return;
@@ -293,7 +372,7 @@ export function useTenantSetupController(stepKey: WizardStepKey) {
         setSelectedRepoUrl(defaultRepo);
         setTextFields((prev) => ({ ...prev, githubRepositoryText: defaultRepo }));
       }
-      setStatusLine(`Loaded ${repositories.length} repository option(s) from GitHub installation.`);
+      setStatusLine("");
     } catch (error) {
       setStatusLine(`Unable to load repositories: ${(error as Error).message}`);
     }
@@ -306,39 +385,120 @@ export function useTenantSetupController(stepKey: WizardStepKey) {
     void loadInstallationRepositories();
   }, [stepKey, values.github.installation_id, installationRepos.length]);
 
-  async function saveTenant() {
+  useEffect(() => {
+    if (stepKey !== "invite" || !credentials || !createdTenantId) {
+      return;
+    }
+    const auth = credentials;
+    const tenantId = createdTenantId;
+    let cancelled = false;
+    async function loadInvites(): Promise<void> {
+      try {
+        const payload = await listTenantInvites(auth, tenantId);
+        if (!cancelled) {
+          setRecentInvites(payload.items);
+        }
+      } catch {
+        if (!cancelled) {
+          setRecentInvites([]);
+        }
+      }
+    }
+    void loadInvites();
+    return () => {
+      cancelled = true;
+    };
+  }, [stepKey, credentials, createdTenantId]);
+
+  async function sendWorkspaceInvite(): Promise<void> {
     if (!credentials) {
+      setStatusLine("Missing API credentials.");
+      return;
+    }
+    if (!inviteEmail.trim()) {
+      setStatusLine("Invite email is required.");
       return;
     }
     const tenantId = await ensureTenantCreated();
     if (!tenantId) {
       return;
     }
+    setSendingInvite(true);
+    try {
+      const invite = await createTenantInvite(credentials, tenantId, {
+        email: inviteEmail.trim(),
+        full_name: inviteFullName.trim() || null,
+        role: inviteRole,
+        team_ids: [],
+        mode_override: null
+      });
+      setRecentInvites((prev) => [invite, ...prev.filter((item) => item.invite_id !== invite.invite_id)]);
+      setInviteEmail("");
+      setInviteFullName("");
+      setStatusLine("");
+    } catch (error) {
+      setStatusLine(`Unable to send invite: ${(error as Error).message}`);
+    } finally {
+      setSendingInvite(false);
+    }
+  }
+
+  async function saveTenant(): Promise<boolean> {
+    if (!credentials) {
+      return false;
+    }
+    const tenantId = await ensureTenantCreated();
+    if (!tenantId) {
+      return false;
+    }
 
     setSaving(true);
     try {
       const payload = toUpdatePayload(values, textFields);
-      const updated = await updateTenant(credentials, tenantId, payload);
+      let updated = await updateTenantConfiguration(credentials, tenantId, { name: payload.name });
+      updated = await updateTenantJira(credentials, tenantId, { jira: payload.jira });
+      updated = await updateTenantGithub(credentials, tenantId, { github: payload.github });
+      updated = await updateTenantRepos(credentials, tenantId, { repos: payload.repos });
+      updated = await updateTenantPolicy(credentials, tenantId, { policy: payload.policy });
+      updated = await updateTenantDiscord(credentials, tenantId, { discord: payload.discord });
       const form = recordToFormValues(updated);
       setValues(form);
       setTextFields(formValuesToTextFields(form));
-      setStatusLine(`Saved tenant ${updated.tenant_id}.`);
+      setStatusLine("");
+      return true;
     } catch (error) {
-      setStatusLine(`Save failed: ${(error as Error).message}`);
+      showToast({ title: "Tenant setup save failed", description: (error as Error).message, tone: "error" });
+      return false;
     } finally {
       setSaving(false);
     }
   }
 
+  async function saveTenantAndOpenWorkspace(): Promise<boolean> {
+    const saved = await saveTenant();
+    if (!saved) {
+      return false;
+    }
+    const tenantId = (createdTenantId || values.tenantId || "").trim();
+    if (!tenantId) {
+      return true;
+    }
+    router.push(`/${encodeURIComponent(tenantId)}/dashboard`);
+    return true;
+  }
+
   function goToStep(index: number) {
+    const nextStepKey = stepKeyAtIndex(index);
+    if (!nextStepKey) {
+      return;
+    }
     persistWizardDraft({
       values,
       textFields,
       createdTenantId,
       selectedRepoUrl
     });
-    const next = STEP_ORDER[index];
-    router.push(`/tenants/new/${next.key}`);
+    router.push(`/tenants/new/${nextStepKey}`);
   }
 
   async function nextStep() {
@@ -350,6 +510,13 @@ export function useTenantSetupController(stepKey: WizardStepKey) {
     if (stepKey === "jira") {
       const tenantId = await ensureTenantCreated();
       if (!tenantId) {
+        return;
+      }
+    }
+
+    if (stepKey === "discord" || stepKey === "repos") {
+      const saved = await saveTenant();
+      if (!saved) {
         return;
       }
     }
@@ -379,16 +546,27 @@ export function useTenantSetupController(stepKey: WizardStepKey) {
     setSelectedRepoUrl,
     installationRepos,
     jiraProjects,
+    inviteEmail,
+    setInviteEmail,
+    inviteFullName,
+    setInviteFullName,
+    inviteRole,
+    setInviteRole,
+    sendingInvite,
+    recentInvites,
     stepIndex,
     selectedProjectKeys,
     nextStep,
     previousStep,
-    startJiraOAuth,
+    startAtlassianOAuth,
     loadJiraProjectsForConnection,
     toggleJiraProject,
     startGitHubInstallFlow,
+    startDiscordInstallFlow,
+    sendWorkspaceInvite,
     loadInstallationRepositories,
-    saveTenant
+    saveTenant,
+    saveTenantAndOpenWorkspace
   };
 }
 

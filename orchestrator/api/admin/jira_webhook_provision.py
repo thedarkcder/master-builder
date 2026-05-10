@@ -3,8 +3,9 @@ from __future__ import annotations
 from datetime import datetime, timezone
 
 from orchestrator.api.schemas import JiraWebhookActionResult
-from orchestrator.storage.models import JiraOAuthConnection, Tenant
-from orchestrator.tools.jira_oauth import JiraOAuthError
+from orchestrator.core.decision.types import JiraConfigKey, jira_config_text
+from orchestrator.storage.models import AtlassianOAuthConnection, Tenant
+from orchestrator.tools.atlassian_oauth import AtlassianOAuthError
 
 
 def provision_jira_webhook(
@@ -12,12 +13,13 @@ def provision_jira_webhook(
     session,
     tenant: Tenant,
     settings,
+    commit: bool = True,
     replace_existing: bool,
     jira_webhook_events: list[str],
     delete_jira_webhooks_fn,
     parse_managed_webhook_ids_fn,
-    refresh_jira_connection_tokens_fn,
-    jira_oauth_client_fn,
+    refresh_atlassian_connection_tokens_fn,
+    atlassian_oauth_client_fn,
     jira_webhook_callback_url_fn,
     jira_webhook_filter_jql_fn,
     is_jira_webhook_limit_error_fn,
@@ -29,34 +31,41 @@ def provision_jira_webhook(
     cleanup_conflicting_jira_webhook_url_fn,
 ) -> JiraWebhookActionResult:  # noqa: ANN001
     action_name = "reset" if replace_existing else "provision"
+
+    def _persist_tenant_jira_config(updated_jira_config: dict) -> None:
+        tenant.jira_config = updated_jira_config
+        tenant.updated_at = datetime.now(timezone.utc)
+        if commit:
+            session.commit()
+
     jira_config = dict(tenant.jira_config)
-    connection_id = jira_config.get("connection_id")
-    if not isinstance(connection_id, str) or not connection_id:
+    connection_id = jira_config_text(jira_config=jira_config, key=JiraConfigKey.CONNECTION_ID)
+    if not connection_id:
         return JiraWebhookActionResult(
             ok=False,
             action=action_name,
-            details="Jira OAuth connection is not linked for this tenant",
+            details="Atlassian connection is not linked for this tenant",
             webhook_ids=[],
         )
 
-    connection = session.get(JiraOAuthConnection, connection_id)
+    connection = session.get(AtlassianOAuthConnection, connection_id)
     if connection is None:
         return JiraWebhookActionResult(
             ok=False,
             action=action_name,
-            details="Configured Jira connection was not found",
+            details="Configured Atlassian connection was not found",
             webhook_ids=[],
         )
 
     prior_managed_webhook_ids = parse_managed_webhook_ids_fn(jira_config)
 
-    access_token = refresh_jira_connection_tokens_fn(
+    access_token = refresh_atlassian_connection_tokens_fn(
         session,
         connection=connection,
         settings=settings,
         tenant_id=tenant.tenant_id,
     )
-    client = jira_oauth_client_fn(session=session, settings=settings, tenant_id=tenant.tenant_id)
+    client = atlassian_oauth_client_fn(session=session, settings=settings, tenant_id=tenant.tenant_id)
     callback_url = jira_webhook_callback_url_fn(settings=settings, tenant_id=tenant.tenant_id)
     jql_filter = jira_webhook_filter_jql_fn(jira_config)
     webhook_ids: list[int] | None = None
@@ -69,7 +78,7 @@ def provision_jira_webhook(
             jql_filter=jql_filter,
             events=jira_webhook_events,
         )
-    except (ValueError, JiraOAuthError) as exc:
+    except (ValueError, AtlassianOAuthError) as exc:
         if is_jira_webhook_limit_error_fn(exc):
             try:
                 deleted_count, cleanup_details = cleanup_unmanaged_jira_webhooks_for_connection_fn(
@@ -127,14 +136,12 @@ def provision_jira_webhook(
                         jql_filter=jql_filter,
                         events=jira_webhook_events,
                     )
-            except (ValueError, JiraOAuthError) as cleanup_exc:
+            except (ValueError, AtlassianOAuthError) as cleanup_exc:
                 jira_config["webhook_last_error"] = (
                     "Failed to provision Jira webhook: "
                     f"{exc}. Cleanup attempt failed: {cleanup_exc}"
                 )
-                tenant.jira_config = jira_config
-                tenant.updated_at = datetime.now(timezone.utc)
-                session.commit()
+                _persist_tenant_jira_config(jira_config)
                 return JiraWebhookActionResult(
                     ok=False,
                     action=action_name,
@@ -162,14 +169,12 @@ def provision_jira_webhook(
                             jql_filter=jql_filter,
                             events=jira_webhook_events,
                         )
-                except (ValueError, JiraOAuthError) as cleanup_exc:
+                except (ValueError, AtlassianOAuthError) as cleanup_exc:
                     jira_config["webhook_last_error"] = (
                         "Failed to provision Jira webhook: "
                         f"{exc}. URL-conflict cleanup failed: {cleanup_exc}"
                     )
-                    tenant.jira_config = jira_config
-                    tenant.updated_at = datetime.now(timezone.utc)
-                    session.commit()
+                    _persist_tenant_jira_config(jira_config)
                     return JiraWebhookActionResult(
                         ok=False,
                         action=action_name,
@@ -178,9 +183,7 @@ def provision_jira_webhook(
                     )
         if webhook_ids is None:
             jira_config["webhook_last_error"] = f"Failed to provision Jira webhook: {exc}"
-            tenant.jira_config = jira_config
-            tenant.updated_at = datetime.now(timezone.utc)
-            session.commit()
+            _persist_tenant_jira_config(jira_config)
             return JiraWebhookActionResult(
                 ok=False,
                 action=action_name,
@@ -203,15 +206,13 @@ def provision_jira_webhook(
                 )
                 stale_cleanup_note = f"Deleted {len(stale_webhook_ids)} previous managed Jira webhook(s)."
                 cleanup_note = f"{cleanup_note} {stale_cleanup_note}".strip() if cleanup_note else stale_cleanup_note
-            except (ValueError, JiraOAuthError) as exc:
+            except (ValueError, AtlassianOAuthError) as exc:
                 stale_cleanup_note = (
                     f"Registered new webhook(s) but could not delete {len(stale_webhook_ids)} previous managed "
                     f"webhook(s): {exc}"
                 )
                 cleanup_note = f"{cleanup_note} {stale_cleanup_note}".strip() if cleanup_note else stale_cleanup_note
-    tenant.jira_config = jira_config
-    tenant.updated_at = datetime.now(timezone.utc)
-    session.commit()
+    _persist_tenant_jira_config(jira_config)
     details = f"Provisioned {len(webhook_ids)} Jira webhook(s)."
     if cleanup_note:
         details = f"{details} {cleanup_note}"

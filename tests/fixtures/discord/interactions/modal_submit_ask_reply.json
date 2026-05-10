@@ -1,0 +1,33 @@
+{
+  "id": "1485467000000000002",
+  "application_id": "app-1",
+  "type": 5,
+  "data": {
+    "custom_id": "ask.reply.123456789012345",
+    "components": [
+      {
+        "type": 1,
+        "components": [
+          {
+            "type": 4,
+            "custom_id": "question",
+            "value": "Use the existing relink policy."
+          }
+        ]
+      }
+    ]
+  },
+  "guild_id": "guild-1",
+  "channel_id": "discord-channel-1",
+  "member": {
+    "user": {
+      "id": "u-1",
+      "username": "example-user",
+      "discriminator": "0"
+    },
+    "roles": [],
+    "permissions": "0"
+  },
+  "token": "token-1",
+  "version": 1
+}

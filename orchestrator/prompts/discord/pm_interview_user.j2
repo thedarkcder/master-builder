@@ -1,0 +1,15 @@
+Stage: pm-interview
+Request: {{ request_text }}
+Current brief: {{ brief_json }}
+Evidence: {{ evidence_json }}
+Missing slots: {{ missing_slots_json }}
+Current outstanding question: {{ current_question_json }}
+Current question examples: {{ current_question_examples_json }}
+Projects: {{ project_keys_json }}
+Status counts: {{ status_counts_json }}
+GitHub context: {{ github_context_json }}
+Recent conversation context: {{ history_json }}
+Issues (sample): {{ issues_json }}
+
+Return JSON matching this domain model:
+{{ domain_model | tojson(indent=2) }}

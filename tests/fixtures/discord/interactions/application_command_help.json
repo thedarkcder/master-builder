@@ -1,0 +1,24 @@
+{
+  "id": "1485467000000000001",
+  "application_id": "app-1",
+  "type": 2,
+  "data": {
+    "id": "cmd-help",
+    "name": "help",
+    "type": 1,
+    "options": []
+  },
+  "guild_id": "guild-1",
+  "channel_id": "discord-channel-1",
+  "member": {
+    "user": {
+      "id": "u-1",
+      "username": "example-user",
+      "discriminator": "0"
+    },
+    "roles": [],
+    "permissions": "0"
+  },
+  "token": "token-1",
+  "version": 1
+}

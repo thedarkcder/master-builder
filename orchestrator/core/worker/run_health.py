@@ -8,21 +8,35 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from uuid import uuid4
 
-from sqlalchemy import delete, func, select, update
+from sqlalchemy import func, select, update
 from sqlalchemy.orm import Session
 
-from orchestrator.core.agent_observability import record_agent_lifecycle_event
-from orchestrator.core.config import Settings
-from orchestrator.core.run_logs import record_run_log_event
-from orchestrator.core.runs import RUN_STATUS_FAILED, RUN_STATUS_RUNNING
+from orchestrator.core.observability.agent_observability import record_agent_lifecycle_event
+from orchestrator.core.config import Settings, get_settings
+from orchestrator.core.observability.logging_pane import emit_logging_pane_event
+from orchestrator.core.workflow.execution_lifecycle import apply_execution_failure
+from orchestrator.core.runs.service import RUN_STATUS_DISPATCHING, RUN_STATUS_FAILED, RUN_STATUS_RUNNING
 from orchestrator.storage.db import create_session_factory
-from orchestrator.storage.models import Run, RunLock
+from orchestrator.storage.models import Run, WorkflowExecution
 
 logger = logging.getLogger(__name__)
 
 
 def worker_service_instance_id() -> str:
-    return f"{os.uname().nodename}:{os.getpid()}"
+    settings = get_settings()
+    agent_id = str(getattr(settings, "agent_id", "") or "").strip()
+    if agent_id:
+        return agent_id
+    return os.uname().nodename
+
+
+def worker_service_instance_id_for_mode(*, settings: Settings | None = None, mode: str | None = None) -> str:
+    resolved_settings = settings or get_settings()
+    base_id = str(getattr(resolved_settings, "agent_id", "") or "").strip() or os.uname().nodename
+    normalized_mode = str(mode or "").strip().lower()
+    if normalized_mode:
+        return f"{base_id}:{normalized_mode}"
+    return base_id
 
 
 def stale_run_cutoff(*, settings: Settings, now: datetime | None = None) -> datetime:
@@ -32,7 +46,7 @@ def stale_run_cutoff(*, settings: Settings, now: datetime | None = None) -> date
 
 
 def _effective_last_seen_expr():  # noqa: ANN202
-    return func.coalesce(Run.last_heartbeat_at, Run.started_at, Run.created_at)
+    return func.coalesce(Run.last_heartbeat_at, Run.started_at, Run.dispatch_claimed_at, Run.created_at)
 
 
 def touch_run_heartbeat(
@@ -40,11 +54,13 @@ def touch_run_heartbeat(
     *,
     run_id: str,
     worker_service_instance_id: str,
+    claim_id: str,
     heartbeat_at: datetime | None = None,
 ) -> bool:
     timestamp = heartbeat_at or datetime.now(timezone.utc)
     normalized_owner = str(worker_service_instance_id or "").strip()
-    if not normalized_owner:
+    normalized_claim_id = str(claim_id or "").strip()
+    if not normalized_owner or not normalized_claim_id:
         return False
     result = session.execute(
         update(Run)
@@ -52,6 +68,7 @@ def touch_run_heartbeat(
             Run.run_id == run_id,
             Run.status == RUN_STATUS_RUNNING,
             Run.worker_service_instance_id == normalized_owner,
+            Run.claim_id == normalized_claim_id,
         )
         .values(last_heartbeat_at=timestamp)
     )
@@ -60,20 +77,6 @@ def touch_run_heartbeat(
         return False
     session.commit()
     return True
-
-
-def cleanup_orphan_run_locks(*, session: Session) -> int:
-    removed = 0
-    locks = session.execute(select(RunLock)).scalars().all()
-    for lock in locks:
-        run = session.get(Run, lock.run_id)
-        if run is not None and run.status in {"queued", RUN_STATUS_RUNNING}:
-            continue
-        session.delete(lock)
-        removed += 1
-    if removed:
-        session.commit()
-    return removed
 
 
 @dataclass(frozen=True)
@@ -98,7 +101,7 @@ def recover_stale_running_runs(
     rows = session.execute(
         select(Run)
         .where(
-            Run.status == RUN_STATUS_RUNNING,
+            Run.status.in_((RUN_STATUS_DISPATCHING, RUN_STATUS_RUNNING)),
             _effective_last_seen_expr() <= cutoff,
         )
         .order_by(Run.started_at.asc(), Run.created_at.asc())
@@ -106,10 +109,12 @@ def recover_stale_running_runs(
 
     recovered: list[StaleRunRecoveryRecord] = []
     for row in rows:
-        last_seen = row.last_heartbeat_at or row.started_at or row.created_at
+        last_seen = row.last_heartbeat_at or row.started_at or row.dispatch_claimed_at or row.created_at
         recovered_at = now or datetime.now(timezone.utc)
+        stale_status = str(row.status or "").strip().lower()
+        stale_kind = "dispatching" if stale_status == RUN_STATUS_DISPATCHING else "running"
         message = (
-            "Recovered stale running run after heartbeat timeout. "
+            f"Recovered stale {stale_kind} run after heartbeat timeout. "
             f"previous_owner={row.worker_service_instance_id or 'unknown'} "
             f"last_heartbeat_at={(last_seen.isoformat() if last_seen is not None else 'unknown')} "
             f"recovered_by={recovered_by_service_instance_id}"
@@ -118,12 +123,14 @@ def recover_stale_running_runs(
             update(Run)
             .where(
                 Run.run_id == row.run_id,
-                Run.status == RUN_STATUS_RUNNING,
+                Run.status.in_((RUN_STATUS_DISPATCHING, RUN_STATUS_RUNNING)),
                 _effective_last_seen_expr() <= cutoff,
             )
             .values(
                 status=RUN_STATUS_FAILED,
                 last_error=message,
+                claim_id=None,
+                dispatch_claimed_at=None,
                 started_at=func.coalesce(Run.started_at, recovered_at),
                 finished_at=recovered_at,
                 worker_service_instance_id=None,
@@ -132,14 +139,14 @@ def recover_stale_running_runs(
         if int(result.rowcount or 0) == 0:
             session.rollback()
             continue
-        session.execute(
-            delete(RunLock).where(
-                RunLock.tenant_id == row.tenant_id,
-                RunLock.issue_key == row.issue_key,
-                RunLock.run_id == row.run_id,
+        workflow = session.get(WorkflowExecution, row.workflow_id)
+        if workflow is not None and workflow.status in {"queued", RUN_STATUS_RUNNING}:
+            apply_execution_failure(
+                workflow=workflow,
+                message=message,
+                now=recovered_at,
             )
-        )
-        record_run_log_event(
+        emit_logging_pane_event(
             session=session,
             tenant_id=row.tenant_id,
             project_id=row.project_id,
@@ -204,6 +211,7 @@ class WorkerRunHeartbeatController:
     database_url: str
     run_id: str
     worker_service_instance_id: str
+    claim_id: str
     heartbeat_interval_seconds: int
 
     def __post_init__(self) -> None:
@@ -236,6 +244,7 @@ class WorkerRunHeartbeatController:
                         session,
                         run_id=self.run_id,
                         worker_service_instance_id=self.worker_service_instance_id,
+                        claim_id=self.claim_id,
                     )
                 if not updated:
                     return

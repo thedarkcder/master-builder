@@ -11,7 +11,8 @@ from fastapi import HTTPException
 from sqlalchemy.orm import Session
 
 from orchestrator.api.discord.shared.errors import DiscordInteractionWebhookExpiredError
-from orchestrator.api.discord.shared.state import command_matches
+from orchestrator.api.discord.shared.state import command_matches, parse_command_text
+from orchestrator.core.clarification.questions import ClarificationQuestionSet
 from orchestrator.core.communications import (
     DiscordAskWithThreadAction,
     DiscordInteractionFollowupAction,
@@ -19,14 +20,39 @@ from orchestrator.core.communications import (
     DiscordThreadReplyAction,
 )
 from orchestrator.core.communications.integration_contracts import TransportActionExecutor
-from orchestrator.core.error_observability import emit_hard_error
-from orchestrator.core.observability import reset_log_context, set_log_context
+from orchestrator.core.observability.error import emit_hard_error
+from orchestrator.core.observability.otel import reset_log_context, set_log_context
 from orchestrator.storage.models import Tenant
 from orchestrator.tools.discord_api import DiscordApiError
 
 logger = logging.getLogger(__name__)
 ISSUE_KEY_PATTERN = re.compile(r"^[A-Z][A-Z0-9_]+-\d+$")
 ISSUE_KEY_IN_TEXT_PATTERN = re.compile(r"\b[A-Z][A-Z0-9_]+-\d+\b")
+THREAD_POSTED_ACK_TEXT = "Posted response in a follow-up thread."
+
+
+def _followup_context_type_for_message(
+    *,
+    command_name: str | None,
+    content: str,
+    issue_key: str | None,
+    response_followup_context_type: str | None = None,
+) -> str:
+    normalized_command_name = str(command_name or "").strip().lower()
+    normalized_content = str(content or "").strip()
+    normalized_issue_key = str(issue_key or "").strip().upper()
+    normalized_response_followup_context_type = str(response_followup_context_type or "").strip().lower()
+    if normalized_response_followup_context_type:
+        return normalized_response_followup_context_type
+    if normalized_command_name == "pm":
+        return "pm_interview"
+    if normalized_issue_key and (
+        normalized_command_name == "reply"
+        or "Decision Gate still needs clarification for `" in normalized_content
+        or "Good To Do still needs clarification for `" in normalized_content
+    ):
+        return "decision_gate"
+    return "ask_thread"
 
 
 @dataclass(frozen=True)
@@ -76,6 +102,7 @@ async def run_discord_command_followup(
     content = f"<@{user_id}> Command failed due to an internal error."
     components: list[dict] | None = None
     sent_to_thread = False
+    interaction_ack_sent = False
     try:
         context_tokens = set_log_context(
             correlation_id=correlation_id,
@@ -94,6 +121,12 @@ async def run_discord_command_followup(
                         command_text=command_text,
                         command_params=command_params,
                     )
+                    followup_request_id: str | None = None
+                    response_followup_context_type: str | None = None
+                    try:
+                        command_name_hint, _ = parse_command_text(command_text)
+                    except HTTPException:
+                        command_name_hint = None
                     try:
                         command_response = deps.execute_command_ingress(
                             tenant_id=tenant_id,
@@ -106,9 +139,9 @@ async def run_discord_command_followup(
                             ),
                             session=session,
                             defer_seed_issues=False,
-                            require_ask_confirmation=True,
                             ingress_source="discord",
                         )
+                        command_name_hint = command_response.command
                         data = command_response.data if isinstance(command_response.data, dict) else {}
                         requires_confirmation = bool(data.get("requires_confirmation")) and command_response.command == "ask"
                         if requires_confirmation:
@@ -135,6 +168,8 @@ async def run_discord_command_followup(
                                 command_response=command_response,
                             )
                             raw_issue_key = str(data.get("issue_key") or "").strip().upper()
+                            followup_request_id = str(data.get("request_id") or "").strip() or None
+                            response_followup_context_type = str(data.get("followup_context_type") or "").strip() or None
                             if ISSUE_KEY_PATTERN.fullmatch(raw_issue_key):
                                 issue_key = raw_issue_key
                             if command_response.command == "reply" and bool(data.get("recheck_required")):
@@ -150,6 +185,8 @@ async def run_discord_command_followup(
                                             content=content,
                                             components=components,
                                             issue_key=issue_key,
+                                            followup_context_type="ask_thread",
+                                            request_id=followup_request_id,
                                         )
                                     )
                                     sent_to_thread = True
@@ -166,9 +203,9 @@ async def run_discord_command_followup(
                                 followup_request_id = str(data.get("followup_request_id") or "").strip()
                                 question_values = data.get("questions")
                                 questions = (
-                                    [str(value).strip() for value in question_values if str(value).strip()]
+                                    ClarificationQuestionSet.from_values(question_values).questions
                                     if isinstance(question_values, list)
-                                    else []
+                                    else ()
                                 )
                                 if followup_request_id:
                                     try:
@@ -247,6 +284,13 @@ async def run_discord_command_followup(
                                     content=content,
                                     components=components,
                                     issue_key=issue_key,
+                                    followup_context_type=_followup_context_type_for_message(
+                                        command_name=command_name_hint,
+                                        content=content,
+                                        issue_key=issue_key,
+                                        response_followup_context_type=response_followup_context_type,
+                                    ),
+                                    request_id=followup_request_id,
                                 )
                             )
                             sent_to_thread = True
@@ -257,6 +301,36 @@ async def run_discord_command_followup(
                                 user_id,
                                 exc,
                             )
+            if sent_to_thread and not reply_to_message_id:
+                try:
+                    deps.transport_executor.execute(
+                        action=DiscordInteractionFollowupAction(
+                            application_id=application_id,
+                            interaction_token=interaction_token,
+                            content=THREAD_POSTED_ACK_TEXT,
+                            ephemeral=False,
+                            components=None,
+                            reply_to_message_id=None,
+                            channel_id=channel_id,
+                        )
+                    )
+                    interaction_ack_sent = True
+                except DiscordInteractionWebhookExpiredError as exc:
+                    logger.exception(
+                        "discord_command_followup_thread_ack_expired tenant_id=%s user_id=%s channel_id=%s error=%s",
+                        tenant_id,
+                        user_id,
+                        channel_id,
+                        exc,
+                    )
+                except Exception as exc:  # pragma: no cover
+                    logger.exception(
+                        "discord_command_followup_thread_ack_failed tenant_id=%s user_id=%s channel_id=%s error=%s",
+                        tenant_id,
+                        user_id,
+                        channel_id,
+                        exc,
+                    )
         except Exception as exc:  # pragma: no cover
             error_ref = uuid4().hex[:8]
             logger.exception(
@@ -273,7 +347,7 @@ async def run_discord_command_followup(
                 context={"tenant_id": tenant_id, "user_id": user_id, "channel_id": channel_id},
             )
             content = f"<@{user_id}> Command failed due to an internal error. Ref: `{error_ref}`"
-        if not sent_to_thread:
+        if not sent_to_thread and not interaction_ack_sent:
             try:
                 deps.transport_executor.execute(
                     action=DiscordInteractionFollowupAction(

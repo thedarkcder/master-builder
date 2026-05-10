@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import asyncio
 import json
 from collections.abc import Sequence
 from datetime import datetime, timezone
@@ -8,19 +9,27 @@ from typing import Any
 
 from sqlalchemy import func, select
 
-from orchestrator.core.agent_tools import execute_agent_tool, print_tool_event
+from orchestrator.core.runtime.tools import execute_agent_tool, print_tool_event
 from orchestrator.core.config import get_settings
-from orchestrator.core.decision_engine import resolve_enqueue_precheck_outcome
 from orchestrator.core.discord.gateway_runtime import run_discord_gateway
 from orchestrator.core.discord.live_voice_gateway_runtime import run_discord_live_voice
-from orchestrator.core.knowledge_prewarm import prewarm_knowledge_dependencies
-from orchestrator.core.knowledge_jira_sync_runtime import run_knowledge_jira_sync
-from orchestrator.core.runs import enqueue_run, resolve_precheck_outcome_for_enqueue
+from orchestrator.core.jira_project_reconciliation.scheduler import run_jira_project_reconciliation_runtime
+from orchestrator.core.knowledge.prewarm import prewarm_knowledge_dependencies
+from orchestrator.core.knowledge.jira_sync_runtime import run_knowledge_jira_sync
+from orchestrator.core.projects.automation_runtime import run_project_automation_runtime
+from orchestrator.core.runs.service import (
+    enqueue_run,
+    resolve_enqueue_precheck_outcome,
+    resolve_precheck_outcome_for_enqueue,
+)
 from orchestrator.core.voice.prewarm import prewarm_voice_dependencies
+from orchestrator.temporal.worker import run_temporal_worker
+from orchestrator.storage.database_support import ensure_postgres_database_url
 from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.migrations import run_migrations
 from orchestrator.storage.models import Run, Tenant
 from orchestrator.worker import main as worker_main
+from orchestrator.worker import run_worker_child_once
 
 
 def _coerce_positive_int(value: object, *, default: int) -> int:
@@ -35,10 +44,17 @@ def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="master-builder orchestrator")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    subparsers.add_parser("worker", help="Run background worker loop")
+    subparsers.add_parser("worker", help="Run background run worker loop")
+    subparsers.add_parser("worker-runs", help="Run background issue-execution worker loop")
+    subparsers.add_parser("worker-webhooks", help="Run background webhook worker loop")
+    subparsers.add_parser("worker-child-runs", help="Run one child issue-execution job")
+    subparsers.add_parser("worker-child-webhooks", help="Run one child webhook job")
+    subparsers.add_parser("temporal-worker", help="Run Temporal workflow worker loop")
     subparsers.add_parser("discord-gateway", help="Run Discord gateway leader loop")
     subparsers.add_parser("discord-live-voice", help="Run Discord live voice leader loop")
     subparsers.add_parser("knowledge-jira-sync", help="Run Jira knowledge sync leader loop")
+    subparsers.add_parser("jira-project-reconciliation", help="Run Jira project reconciliation leader loop")
+    subparsers.add_parser("project-automation", help="Run project automation scheduler leader loop")
     subparsers.add_parser("knowledge-prewarm", help="Prewarm knowledge embedding dependencies")
     subparsers.add_parser("migrate", help="Apply DB migrations")
     subparsers.add_parser("voice-prewarm", help="Prewarm voice model dependencies")
@@ -74,6 +90,12 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _handle_run(*, tenant_id: str, issue_key: str) -> int:
+    settings = get_settings()
+    ensure_postgres_database_url(
+        database_url=settings.database_url,
+        context="CLI runtime",
+        allow_sqlite_for_tests=bool(getattr(settings, "allow_sqlite_for_tests", False)),
+    )
     session_factory = create_session_factory()
     with session_factory() as session:
         tenant = session.get(Tenant, tenant_id)
@@ -142,6 +164,12 @@ def _tenant_poll_snapshot(session, tenant: Tenant) -> dict:  # noqa: ANN001
 
 
 def _handle_poll(*, tenant_filter: str) -> int:
+    settings = get_settings()
+    ensure_postgres_database_url(
+        database_url=settings.database_url,
+        context="CLI runtime",
+        allow_sqlite_for_tests=bool(getattr(settings, "allow_sqlite_for_tests", False)),
+    )
     session_factory = create_session_factory()
     with session_factory() as session:
         query = select(Tenant).order_by(Tenant.tenant_id.asc())
@@ -183,6 +211,11 @@ def _handle_agent_tool(
         return 2
 
     settings = get_settings()
+    ensure_postgres_database_url(
+        database_url=settings.database_url,
+        context="CLI runtime",
+        allow_sqlite_for_tests=bool(getattr(settings, "allow_sqlite_for_tests", False)),
+    )
     session_factory = create_session_factory()
     print_tool_event(stage=stage, tool_name=tool_name, args=parsed_args, outcome="started")
     with session_factory() as session:
@@ -214,9 +247,9 @@ def _handle_voice_prewarm() -> int:
         json.dumps(
             {
                 "ok": True,
-                "transcription_provider": result.transcription_provider,
+                "voice_stt_provider": result.voice_stt_provider,
+                "voice_tts_provider": result.voice_tts_provider,
                 "transcription_ready": result.transcription_ready,
-                "voice_reply_provider": result.voice_reply_provider,
                 "prewarmed_voice_ids": list(result.prewarmed_voice_ids),
             }
         )
@@ -243,7 +276,25 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if args.command == "worker":
-        worker_main()
+        worker_main(mode="runs")
+        return 0
+
+    if args.command == "worker-runs":
+        worker_main(mode="runs")
+        return 0
+
+    if args.command == "worker-webhooks":
+        worker_main(mode="webhooks")
+        return 0
+
+    if args.command == "worker-child-runs":
+        return int(run_worker_child_once(mode="runs"))
+
+    if args.command == "worker-child-webhooks":
+        return int(run_worker_child_once(mode="webhooks"))
+
+    if args.command == "temporal-worker":
+        asyncio.run(run_temporal_worker())
         return 0
 
     if args.command == "discord-gateway":
@@ -256,6 +307,14 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     if args.command == "knowledge-jira-sync":
         run_knowledge_jira_sync()
+        return 0
+
+    if args.command == "jira-project-reconciliation":
+        run_jira_project_reconciliation_runtime()
+        return 0
+
+    if args.command == "project-automation":
+        run_project_automation_runtime()
         return 0
 
     if args.command == "knowledge-prewarm":
@@ -287,3 +346,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
     parser.error(f"Unknown command: {args.command}")
     return 2
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

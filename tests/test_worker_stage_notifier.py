@@ -3,8 +3,11 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
+from orchestrator.core.worker.stage_event_types import WorkerStageEvent
+from orchestrator.core.worker.stage_events import WorkerStageUpdate
 from orchestrator.core.worker.stage_notifier import RunStageNotifier
-from orchestrator.storage.models import Run, Tenant
+from orchestrator.storage.models import Tenant
+from tests.workflow_test_support import make_run
 
 
 class WorkerStageNotifierTests(unittest.TestCase):
@@ -22,7 +25,7 @@ class WorkerStageNotifierTests(unittest.TestCase):
             created_at=now,
             updated_at=now,
         )
-        run = Run(
+        run = make_run(
             run_id="run-stage-1",
             tenant_id="tenant-stage",
             issue_key="MAB-910",
@@ -32,8 +35,6 @@ class WorkerStageNotifierTests(unittest.TestCase):
             branch=None,
             pr_url=None,
             status="running",
-            last_error=None,
-            plan=None,
             created_at=now,
             started_at=now,
             finished_at=None,
@@ -77,14 +78,14 @@ class WorkerStageNotifierTests(unittest.TestCase):
             send_jira_message=fake_jira,
         )
 
-        stage_update = {
-            "stage": "lock_acquired",
-            "tenant_id": "tenant-stage",
-            "issue_key": "MAB-910",
-            "run_id": "run-stage-1",
-            "jira_message": "jira text",
-            "discord_message": "discord text",
-        }
+        stage_update = WorkerStageUpdate(
+            stage=WorkerStageEvent.LOCK_ACQUIRED,
+            tenant_id="tenant-stage",
+            issue_key="MAB-910",
+            run_id="run-stage-1",
+            jira_message="jira text",
+            discord_message="discord text",
+        )
         notifier.append(stage_update)
 
         self.assertEqual(notifier.stage_updates, [stage_update])

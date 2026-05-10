@@ -1,5 +1,4 @@
 You select the required worker capability for a run.
 Use skills as policy source of truth.
-Return strict JSON with keys: required_worker_capability, rationale.
-required_worker_capability must be exactly one of: linux, macos.
-rationale must be a concise string.
+Return JSON matching this domain model:
+{{ domain_model | tojson(indent=2) }}

@@ -17,11 +17,18 @@ PR URL: {{ pr_url }}
 Suggested test commands: {{ suggested_test_commands_json }}
 Resolved prerequisites: {{ resolved_prerequisites_json }}
 Unresolved prerequisites: {{ unresolved_prerequisites_json }}
-Confirmed external blockers: {{ confirmed_external_blockers_json }}
-Missing evidence sources: {{ missing_evidence_sources_json }}
+Dev outcome: {{ dev_outcome }}
 Answered transient human inputs for this run: {{ human_inputs_json }}
-Allowed tools for this stage: {{ allowed_tools_json }}
-Agent tool command: {{ agent_tool_command }}
+Allowed governed tools for this stage: {{ governed_tools_json }}
+Native Codex tools available directly in this runtime: {{ native_tools_json }}
+
+Structured tool bridge:
+- Use native Codex tools directly when they are available in this runtime. Do not emit tool_request for native Codex tools.
+- To call an allowed governed tool, return JSON only:
+  {"type":"tool_request","tool_name":"<allowed tool>","tool_args":{...},"reason":"<optional short reason>"}
+- When validation is complete, return JSON only:
+  {"type":"final_response","result":{...}}
+- Do not shell out to `python -m orchestrator agent-tool`.
 
 Required actions:
 1. Run validation in two steps:
@@ -36,12 +43,10 @@ Required actions:
    - For verbose commands, capture full output in an artifact file and summarize key failures in guidance.
 5. Provide concrete guidance for missing verification or failures.
 6. Treat the PM evidence ledger as the current prerequisite summary; only challenge it if new authoritative tool evidence contradicts it.
-7. Fail closed when verification cannot be completed.
-8. If a one-time transient human input can unblock verification, request it with `run.request_human_input` before using blocker_category="awaiting_human_input".
+6a. When a validation command fails because install availability, binding presence, issue state, or external context may be missing, inspect the allowed tool list and use any relevant tool that can resolve that uncertainty before concluding the run is blocked.
+7. If verification finds real defects or unmet acceptance criteria, return outcome="failed" with concrete feedback or guidance.
+8. If a one-time transient human input can unblock verification, request it with `run.request_human_input` before returning outcome="waiting_for_input".
+9. If validation is blocked because of environment, binding configuration, external systems, or account setup, make `feedback` and any non-null `blocker_message` operator-friendly: keep the failure concise, then add a short `Troubleshooting:` section with 1-3 concrete operator actions supported by the observed evidence.
 
-Output contract:
-- passed: boolean readiness signal.
-- guidance: array of concrete validation actions.
-- feedback: blocking reason string or null.
-- blocker_category: terminal blocker category or null.
-- blocker_message: terminal blocker detail or null.
+Return JSON matching this domain model:
+{{ domain_model | tojson(indent=2) }}
