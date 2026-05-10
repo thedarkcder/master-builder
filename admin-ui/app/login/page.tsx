@@ -122,7 +122,6 @@ function LoginPageInner() {
           </div>
           <div>
             <h1 className="text-2xl font-bold text-white">Master Builder</h1>
-            <p className="text-sm text-indigo-300/80">AI Orchestration Platform</p>
           </div>
         </div>
 

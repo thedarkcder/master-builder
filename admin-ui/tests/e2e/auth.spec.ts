@@ -827,13 +827,16 @@ test("keeps the public home page available without redirecting to login", async 
 
   await expect(page).toHaveURL(/\/$/);
   await expect(page.getByRole("heading", { name: "Master Builder" })).toBeVisible();
+  await expect(page.getByText("Build with agent teams")).toBeVisible();
   await expect(page.getByText("Deploy, manage, and observe AI agent teams.")).toBeVisible();
+  await expect(page.locator('meta[name="description"]')).toHaveAttribute("content", "Master Builder admin dashboard");
   await expect(page.locator('a[href="/login"]').first()).toBeVisible();
 });
 
 test("keeps auth pages linked back to the public home page", async ({ page }) => {
   await page.goto("/login");
   await expect(page.getByRole("link", { name: "Back to home" })).toBeVisible();
+  await expect(page.getByText("AI Orchestration Platform")).toHaveCount(0);
   await page.getByRole("link", { name: "Back to home" }).click();
   await expect(page).toHaveURL(/\/$/);
 

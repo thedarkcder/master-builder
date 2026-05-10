@@ -124,7 +124,7 @@ export default async function HomePage() {
         <div className="relative mx-auto flex min-h-[calc(100svh-5.25rem)] w-full max-w-[1440px] items-center px-5 py-14 sm:px-8 sm:py-16 lg:px-12 lg:py-20">
           <div className="grid w-full items-center gap-12 lg:grid-cols-[minmax(0,1.08fr)_minmax(320px,0.92fr)] lg:gap-10 xl:gap-14">
           <div className="relative z-10 max-w-3xl">
-            <p className="text-[11px] font-bold uppercase tracking-[0.28em] text-[#78d1ff]">Agent orchestration platform</p>
+            <p className="text-[11px] font-bold uppercase tracking-[0.28em] text-[#78d1ff]">Build with agent teams</p>
             <h1 className="mt-4 max-w-[14ch] text-[2.75rem] font-extrabold leading-[0.95] tracking-[-0.04em] text-white sm:text-[3.75rem] lg:text-[4.5rem]">
               Master Builder
             </h1>
