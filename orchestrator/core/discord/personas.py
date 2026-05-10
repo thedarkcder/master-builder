@@ -11,6 +11,7 @@ _VOICE_ROOM_ROLE_LABELS = {
     "engineer": "Engineering",
     "qa": "QA",
     "security": "Security",
+    "reviewer": "Review",
 }
 _PERSONA_NAME_KEYS = (
     "persona_names",
@@ -49,7 +50,7 @@ VOICE_ROOM_PERSONAS: dict[str, VoiceRoomPersonaDefinition] = {
         persona_id="pm",
         role_label="PM",
         default_display_name="Andy",
-        default_voice_id="alba",
+        default_voice_id="marius",
         system_prompt_template="discord/voice_room_pm_system.j2",
         user_prompt_template="discord/voice_room_pm_user.j2",
     ),
@@ -57,15 +58,15 @@ VOICE_ROOM_PERSONAS: dict[str, VoiceRoomPersonaDefinition] = {
         persona_id="architect",
         role_label="Architect",
         default_display_name="Soren",
-        default_voice_id="marius",
+        default_voice_id="javert",
         system_prompt_template="discord/voice_room_architect_system.j2",
         user_prompt_template="discord/voice_room_architect_user.j2",
     ),
     "engineer": VoiceRoomPersonaDefinition(
         persona_id="engineer",
         role_label="Engineer",
-        default_display_name="Bill",
-        default_voice_id="jean",
+        default_display_name="Judy",
+        default_voice_id="eponine",
         system_prompt_template="discord/voice_room_engineer_system.j2",
         user_prompt_template="discord/voice_room_engineer_user.j2",
     ),
@@ -81,9 +82,17 @@ VOICE_ROOM_PERSONAS: dict[str, VoiceRoomPersonaDefinition] = {
         persona_id="security",
         role_label="Security",
         default_display_name="June",
-        default_voice_id="javert",
+        default_voice_id="fantine",
         system_prompt_template="discord/voice_room_security_system.j2",
         user_prompt_template="discord/voice_room_security_user.j2",
+    ),
+    "reviewer": VoiceRoomPersonaDefinition(
+        persona_id="reviewer",
+        role_label="Reviewer",
+        default_display_name="Mira",
+        default_voice_id="azelma",
+        system_prompt_template="discord/voice_room_reviewer_system.j2",
+        user_prompt_template="discord/voice_room_reviewer_user.j2",
     ),
 }
 
@@ -102,7 +111,8 @@ def get_voice_room_persona_definition(persona_id: object) -> VoiceRoomPersonaDef
 
 def list_voice_room_personas() -> list[dict[str, str]]:
     personas: list[dict[str, str]] = []
-    for definition in VOICE_ROOM_PERSONAS.values():
+    for persona_id in VOICE_ROOM_PERSONA_IDS:
+        definition = VOICE_ROOM_PERSONAS[persona_id]
         personas.append(
             {
                 "persona_id": definition.persona_id,

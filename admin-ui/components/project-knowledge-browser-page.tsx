@@ -1,19 +1,19 @@
 "use client";
 
-import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 
 import { useAuth } from "@/components/auth-provider";
 import { ProjectKnowledgeAddSection } from "@/components/project-knowledge-add-section";
 import { ProjectKnowledgeSourcesSection } from "@/components/project-knowledge-sources-section";
+import { ProjectSectionTabs } from "@/components/project-section-tabs";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { useToast } from "@/components/ui/toast-provider";
+
 import { Input } from "@/components/ui/input";
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from "@/components/ui/table";
 import {
   debugProjectKnowledgeSearch,
   deleteProjectKnowledgeAsset,
-  getProject,
   getProjectKnowledgeAsset,
   getProjectKnowledgeStats,
   listProjectKnowledgeAssets,
@@ -25,6 +25,8 @@ import {
   type ProjectKnowledgeDebugMatchRecord,
   type ProjectKnowledgeStatsRecord
 } from "@/lib/api";
+import { canAccessPlatformAdmin, canManageProjects } from "@/lib/auth-routing";
+import { formatTimestamp } from "@/lib/datetime";
 
 type ProjectKnowledgeBrowserPageProps = {
   tenantId: string;
@@ -34,14 +36,6 @@ type ProjectKnowledgeBrowserPageProps = {
 
 const ASSET_PAGE_SIZE = 25;
 const CHUNK_PAGE_SIZE = 10;
-
-function formatTimestamp(value: string | null): string {
-  if (!value) {
-    return "—";
-  }
-  const parsed = new Date(value);
-  return Number.isNaN(parsed.getTime()) ? value : parsed.toLocaleString();
-}
 
 function summarizeSources(stats: ProjectKnowledgeStatsRecord | null): string {
   if (!stats) {
@@ -62,9 +56,9 @@ export function ProjectKnowledgeBrowserPage({
   projectId,
   initialView = "browse"
 }: ProjectKnowledgeBrowserPageProps) {
-  const { credentials } = useAuth();
+  const { credentials, principal } = useAuth();
+  const { showToast } = useToast();
   const [activeView, setActiveView] = useState<"browse" | "add" | "sources">(initialView);
-  const [projectName, setProjectName] = useState(projectId);
   const [stats, setStats] = useState<ProjectKnowledgeStatsRecord | null>(null);
   const [assets, setAssets] = useState<ProjectKnowledgeAssetRecord[]>([]);
   const [assetTotal, setAssetTotal] = useState(0);
@@ -93,6 +87,8 @@ export function ProjectKnowledgeBrowserPage({
   }, [stats]);
 
   const actionsDisabled = !credentials || loadingPage;
+  const allowProjectManagement = canManageProjects(principal, tenantId);
+  const isPlatformSuperAdmin = canAccessPlatformAdmin(principal);
 
   const ensureCredentials = useCallback((): boolean => {
     if (credentials) {
@@ -108,8 +104,7 @@ export function ProjectKnowledgeBrowserPage({
     }
     setLoadingPage(true);
     try {
-      const [project, statsPayload, page] = await Promise.all([
-        getProject(credentials, tenantId, projectId),
+      const [statsPayload, page] = await Promise.all([
         getProjectKnowledgeStats(credentials, tenantId, projectId),
         listProjectKnowledgeAssets(credentials, tenantId, projectId, {
           limit: ASSET_PAGE_SIZE,
@@ -119,7 +114,6 @@ export function ProjectKnowledgeBrowserPage({
           query: appliedQuery || undefined
         })
       ]);
-      setProjectName(project.name);
       setStats(statsPayload);
       setAssets(page.items);
       setAssetTotal(page.total);
@@ -187,6 +181,12 @@ export function ProjectKnowledgeBrowserPage({
     }
     void loadSelectedChunks();
   }, [credentials, loadSelectedChunks, selectedAssetId, chunkOffset]);
+
+  useEffect(() => {
+    if (!allowProjectManagement && activeView !== "browse") {
+      setActiveView("browse");
+    }
+  }, [activeView, allowProjectManagement]);
 
   function openAsset(assetId: string) {
     setSelectedAssetId(assetId);
@@ -256,9 +256,9 @@ export function ProjectKnowledgeBrowserPage({
         setAssetOffset(Math.max(0, assetOffset - ASSET_PAGE_SIZE));
       }
       await refreshAll();
-      setStatusLine("Knowledge asset deleted.");
+      showToast({ title: "Knowledge asset deleted", tone: "success" });
     } catch (error) {
-      setStatusLine(`Unable to delete knowledge asset: ${(error as Error).message}`);
+      showToast({ title: "Knowledge asset delete failed", description: (error as Error).message, tone: "error" });
     } finally {
       setDeletingAssetId(null);
     }
@@ -281,15 +281,18 @@ export function ProjectKnowledgeBrowserPage({
         setSelectedAsset((current) => (current ? { ...current, status: updatedAsset.status, updated_at: updatedAsset.updated_at } : current));
       }
       await refreshAll();
-      setStatusLine(
-        nextStatus === "ready"
-          ? `Knowledge asset "${updatedAsset.title}" approved.`
-          : nextStatus === "rejected"
-            ? `Knowledge asset "${updatedAsset.title}" rejected.`
-            : `Knowledge asset "${updatedAsset.title}" moved back to review.`
-      );
+      showToast({
+        title:
+          nextStatus === "ready"
+            ? "Knowledge asset approved"
+            : nextStatus === "rejected"
+              ? "Knowledge asset rejected"
+              : "Knowledge asset moved to review",
+        description: updatedAsset.title,
+        tone: "success",
+      });
     } catch (error) {
-      setStatusLine(`Unable to update knowledge asset status: ${(error as Error).message}`);
+      showToast({ title: "Knowledge asset update failed", description: (error as Error).message, tone: "error" });
     } finally {
       setUpdatingAssetId(null);
     }
@@ -300,21 +303,14 @@ export function ProjectKnowledgeBrowserPage({
 
   return (
     <div className="space-y-6">
+      <ProjectSectionTabs
+        tenantId={tenantId}
+        projectId={projectId}
+        activeSection="knowledge"
+        allowProjectManagement={allowProjectManagement}
+        isPlatformSuperAdmin={isPlatformSuperAdmin}
+      />
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <div>
-          <p className="text-sm text-muted-foreground">
-            <Link
-              href={`/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}`}
-              className="hover:underline"
-            >
-              Back to project
-            </Link>
-          </p>
-          <h1 className="text-2xl font-semibold tracking-tight">{projectName} Knowledge</h1>
-          <p className="text-sm text-muted-foreground">
-            Browse the stored knowledge behind this project, not just the asset titles.
-          </p>
-        </div>
         <div className="flex flex-wrap gap-2">
           <Button
             variant={activeView === "browse" ? "default" : "outline"}
@@ -326,38 +322,41 @@ export function ProjectKnowledgeBrowserPage({
           >
             Browse
           </Button>
-          <Button
-            variant={activeView === "add" ? "default" : "outline"}
-            size="sm"
-            onClick={() => {
-              closeDrawer();
-              setActiveView("add");
-            }}
-          >
-            Add knowledge
-          </Button>
-          <Button
-            variant={activeView === "sources" ? "default" : "outline"}
-            size="sm"
-            onClick={() => {
-              closeDrawer();
-              setActiveView("sources");
-            }}
-          >
-            Sources
-          </Button>
+          {allowProjectManagement ? (
+            <>
+              <Button
+                variant={activeView === "add" ? "default" : "outline"}
+                size="sm"
+                onClick={() => {
+                  closeDrawer();
+                  setActiveView("add");
+                }}
+              >
+                Add knowledge
+              </Button>
+              <Button
+                variant={activeView === "sources" ? "default" : "outline"}
+                size="sm"
+                onClick={() => {
+                  closeDrawer();
+                  setActiveView("sources");
+                }}
+              >
+                Sources
+              </Button>
+            </>
+          ) : null}
           <Button variant="outline" size="sm" onClick={() => void refreshAll()} disabled={actionsDisabled}>
             {loadingPage ? "Refreshing..." : "Refresh"}
           </Button>
         </div>
       </div>
 
-      <Card>
-        <CardHeader className="pb-3">
-          <CardTitle>Knowledge Analytics</CardTitle>
-          <CardDescription>Project-wide stats and hourly sync state.</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-3">
+      <div className="overflow-hidden rounded-2xl border bg-background">
+        <div className="p-6 pb-3">
+          <h2 className="text-base font-semibold">Knowledge Analytics</h2>
+        </div>
+        <div className="space-y-3 p-6 pt-0">
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-6">
             <div className="rounded-md border p-3">
               <p className="text-xs uppercase tracking-wide text-muted-foreground">Assets</p>
@@ -397,8 +396,8 @@ export function ProjectKnowledgeBrowserPage({
               {`${stats?.approved_facts ?? 0} approved · ${stats?.pending_review_facts ?? 0} pending review · ${stats?.superseded_facts ?? 0} superseded`}
             </p>
           </div>
-        </CardContent>
-      </Card>
+        </div>
+      </div>
 
       {activeView === "add" ? (
         <ProjectKnowledgeAddSection
@@ -417,12 +416,11 @@ export function ProjectKnowledgeBrowserPage({
       ) : null}
 
       {activeView === "browse" ? (
-      <Card>
-        <CardHeader className="pb-3">
-          <CardTitle>Asset Browser</CardTitle>
-          <CardDescription>Filter, page, and inspect all project knowledge assets.</CardDescription>
-        </CardHeader>
-        <CardContent className="space-y-4">
+      <div className="overflow-hidden rounded-2xl border bg-background">
+        <div className="p-6 pb-3">
+          <h2 className="text-base font-semibold">Asset Browser</h2>
+        </div>
+        <div className="space-y-4 p-6 pt-0">
           <div className="rounded-md border p-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
@@ -564,7 +562,7 @@ export function ProjectKnowledgeBrowserPage({
                         <Button size="sm" variant="outline" onClick={() => openAsset(asset.asset_id)} disabled={!credentials}>
                           View
                         </Button>
-                        {asset.status === "pending_review" ? (
+                        {allowProjectManagement && asset.status === "pending_review" ? (
                           <>
                             <Button
                               size="sm"
@@ -584,7 +582,7 @@ export function ProjectKnowledgeBrowserPage({
                             </Button>
                           </>
                         ) : null}
-                        {asset.status === "rejected" ? (
+                        {allowProjectManagement && asset.status === "rejected" ? (
                           <Button
                             size="sm"
                             variant="outline"
@@ -594,15 +592,17 @@ export function ProjectKnowledgeBrowserPage({
                             {updatingAssetId === asset.asset_id ? "Saving..." : "Move to review"}
                           </Button>
                         ) : null}
-                        <Button
-                          size="sm"
-                          variant="outline"
-                          className="text-red-700 hover:text-red-800"
-                          disabled={deletingAssetId === asset.asset_id}
-                          onClick={() => void removeAsset(asset.asset_id)}
-                        >
-                          {deletingAssetId === asset.asset_id ? "Deleting..." : "Delete"}
-                        </Button>
+                        {allowProjectManagement ? (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="text-red-700 hover:text-red-800"
+                            disabled={deletingAssetId === asset.asset_id}
+                            onClick={() => void removeAsset(asset.asset_id)}
+                          >
+                            {deletingAssetId === asset.asset_id ? "Deleting..." : "Delete"}
+                          </Button>
+                        ) : null}
                       </div>
                     </TableCell>
                   </TableRow>
@@ -636,8 +636,8 @@ export function ProjectKnowledgeBrowserPage({
               </Button>
             </div>
           </div>
-        </CardContent>
-      </Card>
+        </div>
+      </div>
       ) : null}
 
       {activeView === "browse" && selectedAssetId ? (

@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 from orchestrator.api.admin import (
-    jira_oauth_helpers,
+    atlassian_oauth_helpers,
     jira_webhook_delete,
     jira_webhook_helpers,
     jira_webhook_provision,
@@ -70,13 +70,13 @@ class JiraWebhookResponseHelpersTests(unittest.TestCase):
         )
         self.assertEqual(
             jira_webhook_response_helpers.jira_webhook_action_status_code(
-                JiraWebhookActionResult(ok=False, action="x", details="Jira OAuth connection is not linked")
+                JiraWebhookActionResult(ok=False, action="x", details="Atlassian connection is not linked")
             ),
             400,
         )
         self.assertEqual(
             jira_webhook_response_helpers.jira_webhook_action_status_code(
-                JiraWebhookActionResult(ok=False, action="x", details="Configured Jira connection was not found")
+                JiraWebhookActionResult(ok=False, action="x", details="Configured Atlassian connection was not found")
             ),
             400,
         )
@@ -119,45 +119,45 @@ class JiraWebhookResponseHelpersTests(unittest.TestCase):
         self.assertFalse(stale.recent_delivery_ok)
 
 
-class JiraOAuthHelpersTests(unittest.TestCase):
+class AtlassianOAuthHelpersTests(unittest.TestCase):
     def test_resolve_secret_ref(self) -> None:
         session = MagicMock()
         settings = SimpleNamespace(secrets_encryption_key="k")
         with patch(
-            "orchestrator.api.admin.jira_oauth_helpers.resolve_platform_secret_ref",
+            "orchestrator.api.admin.atlassian_oauth_helpers.resolve_platform_secret_ref",
             return_value="value",
         ) as resolve_secret_mock:
             self.assertEqual(
-                jira_oauth_helpers.resolve_secret_ref(session, ref_name="ref", settings=settings, tenant_id="t"),
+                atlassian_oauth_helpers.resolve_secret_ref(session, ref_name="ref", settings=settings, tenant_id="t"),
                 "value",
             )
         resolve_secret_mock.assert_called_once()
         self.assertEqual(resolve_secret_mock.call_args.kwargs["secret_ref"], "ref")
 
-        with patch("orchestrator.api.admin.jira_oauth_helpers.resolve_platform_secret_ref", return_value=""):
+        with patch("orchestrator.api.admin.atlassian_oauth_helpers.resolve_platform_secret_ref", return_value=""):
             with self.assertRaises(ValueError):
-                jira_oauth_helpers.resolve_secret_ref(session, ref_name="ref", settings=settings)
+                atlassian_oauth_helpers.resolve_secret_ref(session, ref_name="ref", settings=settings)
 
-    def test_jira_oauth_client(self) -> None:
+    def test_atlassian_oauth_client(self) -> None:
         session = MagicMock()
         settings = SimpleNamespace(
-            jira_oauth_client_id_ref="id_ref",
-            jira_oauth_client_secret_ref="secret_ref",
+            atlassian_oauth_client_id_ref="id_ref",
+            atlassian_oauth_client_secret_ref="secret_ref",
             public_api_base_url="https://api.example.com/",
         )
         with (
             patch(
-                "orchestrator.api.admin.jira_oauth_helpers.resolve_secret_ref",
+                "orchestrator.api.admin.atlassian_oauth_helpers.resolve_secret_ref",
                 side_effect=["cid", "csecret"],
             ),
-            patch("orchestrator.api.admin.jira_oauth_helpers.JiraOAuthClient", return_value=MagicMock()) as client_cls,
+            patch("orchestrator.api.admin.atlassian_oauth_helpers.AtlassianOAuthClient", return_value=MagicMock()) as client_cls,
         ):
-            client = jira_oauth_helpers.jira_oauth_client(session=session, settings=settings, tenant_id="t")
+            client = atlassian_oauth_helpers.atlassian_oauth_client(session=session, settings=settings, tenant_id="t")
 
         config = client_cls.call_args.args[0]
         self.assertEqual(config.client_id, "cid")
         self.assertEqual(config.client_secret, "csecret")
-        self.assertEqual(config.redirect_uri, "https://api.example.com/api/admin/jira/connect/callback")
+        self.assertEqual(config.redirect_uri, "https://api.example.com/api/admin/atlassian/connect/callback")
         self.assertIsNotNone(client)
 
     def test_refresh_tokens_paths(self) -> None:
@@ -173,8 +173,8 @@ class JiraOAuthHelpersTests(unittest.TestCase):
             updated_at=now,
         )
 
-        with patch("orchestrator.api.admin.jira_oauth_helpers.decrypt_value", return_value="current-token"):
-            token = jira_oauth_helpers.refresh_jira_connection_tokens(
+        with patch("orchestrator.api.admin.atlassian_oauth_helpers.decrypt_value", return_value="current-token"):
+            token = atlassian_oauth_helpers.refresh_atlassian_connection_tokens(
                 session,
                 connection=connection,
                 settings=settings,
@@ -197,15 +197,15 @@ class JiraOAuthHelpersTests(unittest.TestCase):
         client = MagicMock()
         client.refresh_tokens.return_value = token_set
         with (
-            patch("orchestrator.api.admin.jira_oauth_helpers.decrypt_value", return_value="refresh"),
-            patch("orchestrator.api.admin.jira_oauth_helpers.encrypt_value", side_effect=["enc-new-access", "enc-new-refresh"]),
+            patch("orchestrator.api.admin.atlassian_oauth_helpers.decrypt_value", return_value="refresh"),
+            patch("orchestrator.api.admin.atlassian_oauth_helpers.encrypt_value", side_effect=["enc-new-access", "enc-new-refresh"]),
         ):
-            token = jira_oauth_helpers.refresh_jira_connection_tokens(
+            token = atlassian_oauth_helpers.refresh_atlassian_connection_tokens(
                 session,
                 connection=expired_connection,
                 settings=settings,
                 tenant_id="route25",
-                jira_oauth_client_fn=MagicMock(return_value=client),
+                atlassian_oauth_client_fn=MagicMock(return_value=client),
             )
 
         self.assertEqual(token, "new-access")
@@ -225,12 +225,12 @@ class JiraWebhookDeleteTests(unittest.TestCase):
             tenant=tenant,
             settings=SimpleNamespace(),
             parse_managed_webhook_ids_fn=MagicMock(return_value=[]),
-            refresh_jira_connection_tokens_fn=MagicMock(),
-            jira_oauth_client_fn=MagicMock(),
+            refresh_atlassian_connection_tokens_fn=MagicMock(),
+            atlassian_oauth_client_fn=MagicMock(),
         )
         self.assertTrue(ok)
         self.assertEqual(ids, [])
-        self.assertIn("No Jira connection linked", details)
+        self.assertIn("No Atlassian connection linked", details)
 
         tenant.jira_config = {"connection_id": "conn-1", "managed_webhook_ids": [1, 2]}
         session.get.return_value = None
@@ -239,8 +239,8 @@ class JiraWebhookDeleteTests(unittest.TestCase):
             tenant=tenant,
             settings=SimpleNamespace(),
             parse_managed_webhook_ids_fn=jira_webhook_helpers.parse_managed_webhook_ids,
-            refresh_jira_connection_tokens_fn=MagicMock(),
-            jira_oauth_client_fn=MagicMock(),
+            refresh_atlassian_connection_tokens_fn=MagicMock(),
+            atlassian_oauth_client_fn=MagicMock(),
         )
         self.assertFalse(ok)
         self.assertEqual(ids, [1, 2])
@@ -258,8 +258,8 @@ class JiraWebhookDeleteTests(unittest.TestCase):
             tenant=tenant,
             settings=SimpleNamespace(),
             parse_managed_webhook_ids_fn=jira_webhook_helpers.parse_managed_webhook_ids,
-            refresh_jira_connection_tokens_fn=MagicMock(return_value="token"),
-            jira_oauth_client_fn=MagicMock(return_value=client),
+            refresh_atlassian_connection_tokens_fn=MagicMock(return_value="token"),
+            atlassian_oauth_client_fn=MagicMock(return_value=client),
         )
         self.assertTrue(ok)
         self.assertEqual(ids, [1])
@@ -272,8 +272,8 @@ class JiraWebhookDeleteTests(unittest.TestCase):
             tenant=tenant,
             settings=SimpleNamespace(),
             parse_managed_webhook_ids_fn=jira_webhook_helpers.parse_managed_webhook_ids,
-            refresh_jira_connection_tokens_fn=MagicMock(return_value="token"),
-            jira_oauth_client_fn=MagicMock(return_value=client),
+            refresh_atlassian_connection_tokens_fn=MagicMock(return_value="token"),
+            atlassian_oauth_client_fn=MagicMock(return_value=client),
         )
         self.assertFalse(ok)
         self.assertEqual(ids, [1])
@@ -302,8 +302,8 @@ class JiraWebhookProvisionTests(unittest.TestCase):
             jira_webhook_events=["jira:issue_updated"],
             delete_jira_webhooks_fn=MagicMock(),
             parse_managed_webhook_ids_fn=jira_webhook_helpers.parse_managed_webhook_ids,
-            refresh_jira_connection_tokens_fn=MagicMock(return_value="token"),
-            jira_oauth_client_fn=MagicMock(return_value=client),
+            refresh_atlassian_connection_tokens_fn=MagicMock(return_value="token"),
+            atlassian_oauth_client_fn=MagicMock(return_value=client),
             jira_webhook_callback_url_fn=MagicMock(return_value="https://api.example.com/jira/webhook/route25"),
             jira_webhook_filter_jql_fn=MagicMock(return_value='project in ("MAB")'),
             is_jira_webhook_limit_error_fn=MagicMock(return_value=False),
@@ -348,8 +348,8 @@ class JiraWebhookProvisionTests(unittest.TestCase):
             jira_webhook_events=["jira:issue_updated"],
             delete_jira_webhooks_fn=MagicMock(),
             parse_managed_webhook_ids_fn=jira_webhook_helpers.parse_managed_webhook_ids,
-            refresh_jira_connection_tokens_fn=MagicMock(return_value="token"),
-            jira_oauth_client_fn=MagicMock(return_value=client),
+            refresh_atlassian_connection_tokens_fn=MagicMock(return_value="token"),
+            atlassian_oauth_client_fn=MagicMock(return_value=client),
             jira_webhook_callback_url_fn=MagicMock(return_value="https://api.example.com/jira/webhook/route25"),
             jira_webhook_filter_jql_fn=MagicMock(return_value='project in ("MAB")'),
             is_jira_webhook_limit_error_fn=MagicMock(return_value=False),

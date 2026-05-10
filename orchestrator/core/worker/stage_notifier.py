@@ -7,6 +7,9 @@ from typing import Any
 
 from sqlalchemy.orm import Session
 
+from orchestrator.core.worker.stage_event_types import WorkerStageEvent
+from orchestrator.core.worker.stage_events import WorkerStageUpdate
+from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 from orchestrator.storage.models import Project, Run, Tenant
 
 logger = logging.getLogger(__name__)
@@ -31,48 +34,60 @@ class RunStageNotifier:
         self._project = project
         self._send_discord_message = send_discord_message
         self._send_jira_message = send_jira_message
-        self.stage_updates: list[dict[str, str]] = []
+        self.stage_updates: list[WorkerStageUpdate] = []
 
-    def append(self, stage_update: dict[str, str]) -> None:
-        self.stage_updates.append(stage_update)
-        existing_plan = dict(self._run.plan or {})
-        live_updates_raw = existing_plan.get("live_stage_updates")
-        live_updates: list[dict[str, str]] = []
-        if isinstance(live_updates_raw, list):
-            for item in live_updates_raw:
-                if isinstance(item, dict):
-                    live_updates.append({str(k): str(v) for k, v in item.items()})
-        live_updates.append(
-            {
-                "stage": stage_update["stage"],
-                "recorded_at": datetime.now(timezone.utc).isoformat(),
-            }
+    def append(self, stage_update: WorkerStageUpdate | dict[str, str]) -> None:
+        if isinstance(stage_update, WorkerStageUpdate):
+            normalized = stage_update
+        else:
+            normalized = WorkerStageUpdate.load(stage_update)
+            if normalized is None and isinstance(stage_update, dict):
+                stage_raw = str(stage_update.get("stage") or "").strip()
+                if stage_raw:
+                    try:
+                        normalized = WorkerStageUpdate(
+                            stage=WorkerStageEvent(stage_raw),
+                            tenant_id=str(getattr(self._run, "tenant_id", "") or "").strip(),
+                            issue_key=str(getattr(self._run, "issue_key", "") or "").strip(),
+                            run_id=str(getattr(self._run, "run_id", "") or "").strip(),
+                            jira_message=str(stage_update.get("jira_message") or "").strip(),
+                            discord_message=str(stage_update.get("discord_message") or "").strip(),
+                        )
+                    except ValueError:
+                        normalized = None
+        if normalized is None:
+            raise ValueError("stage_update must be a valid WorkerStageUpdate payload")
+        self.stage_updates.append(normalized)
+        self._session.refresh(self._run, attribute_names=["plan"])
+        snapshot = ExecutionSnapshot.require(self._run.plan, allow_empty=True)
+        snapshot.append_live_stage_update(
+            stage=normalized.event_name,
+            recorded_at=datetime.now(timezone.utc).isoformat(),
         )
-        existing_plan["live_stage_updates"] = live_updates[-40:]
-        self._run.plan = existing_plan
+        self._run.plan = snapshot.dump()
         self._session.commit()
         self._session.refresh(self._run)
         send_result = self._send_discord_message(
             session=self._session,
             tenant=self._tenant,
             project=self._project,
-            message=stage_update["discord_message"],
+            message=normalized.discord_message,
             settings=self._settings,
-            event=stage_update["stage"],
+            event=normalized.event_name,
         )
         if not send_result.sent:
             logger.info(
                 "worker_discord_stage_update_not_sent tenant_id=%s run_id=%s stage=%s reason=%s",
                 self._run.tenant_id,
                 self._run.run_id,
-                stage_update["stage"],
+                normalized.event_name,
                 send_result.reason,
             )
         self._send_jira_message(
             session=self._session,
             tenant=self._tenant,
             issue_key=self._run.issue_key,
-            stage=stage_update["stage"],
-            message=stage_update["jira_message"],
+            stage=normalized.event_name,
+            message=normalized.jira_message,
             settings=self._settings,
         )

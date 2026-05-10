@@ -1,0 +1,28 @@
+Project: {{ project_name }}
+Jira key: {{ jira_project_key }}
+Repository: {{ github_repository }}
+Window start: {{ window_start_at }}
+Window end: {{ window_end_at }}
+Facts JSON:
+{{ facts_json }}
+
+Create a standup brief shape with:
+- yesterday
+- today
+- blockers
+- notable PR/review activity
+- spoken tone requirements:
+  - sounds natural when read aloud
+  - each persona segment should be 2-4 short spoken sentences
+  - avoid formal report wording and dense technical phrasing
+
+Return JSON:
+{
+  "summary": "...",
+  "persona_segments": [
+    {"persona_id":"pm","text":"Product framing, priorities, and blockers."},
+    {"persona_id":"engineer","text":"Build/delivery progress and technical risks."},
+    {"persona_id":"qa","text":"Validation status, regressions, and test focus."},
+    {"persona_id":"reviewer","text":"PR/review activity and merge readiness."}
+  ]
+}

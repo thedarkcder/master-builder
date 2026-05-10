@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
-from orchestrator.core.pr_review_findings import evaluate_pr_review_findings
+from orchestrator.core.review.pr_review_findings import evaluate_pr_review_findings
 from orchestrator.tools.github_app import PullRequestFileChange, WorkflowCheckSuite
 
 
@@ -21,10 +21,10 @@ def test_evaluate_pr_review_findings_parses_payload() -> None:
         ],
     }
     with (
-        patch("orchestrator.core.pr_review_findings.get_settings", return_value=object()),
-        patch("orchestrator.core.pr_review_findings.build_codex_runtime", return_value=object()),
-        patch("orchestrator.core.pr_review_findings.invoke_codex_json", return_value=payload),
-        patch("orchestrator.core.pr_review_findings.render_prompt", return_value="prompt"),
+        patch("orchestrator.core.review.pr_review_findings.get_settings", return_value=object()),
+        patch("orchestrator.core.review.pr_review_findings.build_codex_runtime", return_value=object()),
+        patch("orchestrator.core.review.pr_review_findings.invoke_runtime_json", return_value=payload),
+        patch("orchestrator.core.review.pr_review_findings.render_prompt", return_value="prompt"),
     ):
         result = evaluate_pr_review_findings(
             repo_full_name="org/repo",

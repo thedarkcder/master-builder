@@ -9,9 +9,11 @@ from sqlalchemy.orm import Session
 
 from orchestrator.api.schemas import DiscordCommandRequest, DiscordCommandResponse
 from orchestrator.core.communications.command_pipeline import (
+    CommandIngressPolicy,
     CommandExecutionContext,
     CommandScope,
     dispatch_registered_command,
+    resolve_command_ingress_policy,
 )
 
 
@@ -23,6 +25,9 @@ class CommandExecutionDependencies:
     assert_channel_scope: Callable[[Session, Any, str | None], None]
     assert_sensitive_command_permission: Callable[[Session, Any, str, str, str | None], None]
     resolve_scope: Callable[[Session, Any, str | None], CommandScope]
+    enrich_scope: Callable[[Session, Any, str, tuple[str, ...], Any, CommandScope], CommandScope]
+    rewrite_raw_command: Callable[[Session, Any, DiscordCommandRequest, CommandIngressPolicy], str]
+    allow_sensitive_command_bypass: Callable[[Session, Any, str, tuple[str, ...], Any], bool]
     build_handler_registry: Callable[[CommandExecutionContext], dict[str, tuple[Callable, ...]]]
 
 
@@ -33,7 +38,6 @@ def execute_tenant_command(
     session: Session,
     defer_seed_issues: bool,
     require_ask_confirmation: bool,
-    allow_plain_ask: bool,
     ingress_source: str,
     deps: CommandExecutionDependencies,
 ) -> DiscordCommandResponse:
@@ -51,24 +55,40 @@ def execute_tenant_command(
     if str(getattr(normalized_ingress_source, "value", normalized_ingress_source)) == "discord":
         deps.assert_channel_scope(session, tenant, payload.channel_id)
 
-    raw_command = payload.command.strip()
+    policy = resolve_command_ingress_policy(normalized_ingress_source)
+    raw_command = deps.rewrite_raw_command(session, tenant, payload, policy).strip()
     _, command_name, arguments = deps.resolve_discord_command(
         tenant,
         raw_command,
         payload.channel_id,
-        allow_plain_ask,
+        policy.allow_plain_ask,
     )
-    deps.assert_sensitive_command_permission(
+    if not deps.allow_sensitive_command_bypass(
         session,
         tenant,
         command_name,
-        payload.user_id,
-        payload.channel_id,
-    )
+        tuple(arguments),
+        payload,
+    ):
+        deps.assert_sensitive_command_permission(
+            session,
+            tenant,
+            command_name,
+            payload.user_id,
+            payload.channel_id,
+        )
 
     normalized_user_id = payload.user_id.strip()
     normalized_channel_id = payload.channel_id.strip() if payload.channel_id else "__dm__"
     command_scope = deps.resolve_scope(session, tenant, payload.channel_id)
+    command_scope = deps.enrich_scope(
+        session,
+        tenant,
+        command_name,
+        tuple(arguments),
+        payload,
+        command_scope,
+    )
     context = CommandExecutionContext(
         command_name=command_name,
         arguments=tuple(arguments),
@@ -80,8 +100,8 @@ def execute_tenant_command(
         normalized_channel_id=normalized_channel_id,
         flags={
             "defer_seed_issues": defer_seed_issues,
-            "require_ask_confirmation": require_ask_confirmation,
-            "allow_plain_ask": allow_plain_ask,
+            "require_ask_confirmation": policy.require_ask_confirmation,
+            "allow_plain_ask": policy.allow_plain_ask,
         },
         ingress_source=normalized_ingress_source,
         scope=command_scope,

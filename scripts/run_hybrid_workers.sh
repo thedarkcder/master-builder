@@ -32,12 +32,31 @@ fi
 
 DOCKER_SERVICES=(
   postgres
+  mailpit
+  clickhouse
+  temporal
+  tempo
+  otel-collector
   api
-  worker-runtime
+  run-worker
+  webhook-worker
+  project-automation
   knowledge-sync
   discord-gateway
   discord-live-voice
+  temporal-worker
   tailscale
+)
+
+DOCKER_APP_SERVICES=(
+  api
+  run-worker
+  webhook-worker
+  project-automation
+  knowledge-sync
+  discord-gateway
+  discord-live-voice
+  temporal-worker
 )
 
 current_service_container_id() {
@@ -75,6 +94,11 @@ cleanup_dead_project_containers() {
   done <<< "$dead_ids"
 }
 
+stop_existing_app_services_before_migration() {
+  echo "Stopping app services before migrations..."
+  docker compose stop "${DOCKER_APP_SERVICES[@]}"
+}
+
 wait_for_docker_services_ready() {
   local timeout_seconds="$1"
   local poll_seconds="$2"
@@ -105,7 +129,7 @@ wait_for_docker_services_ready() {
         return 1
       fi
 
-      if [[ "$service_name" == "postgres" || "$service_name" == "api" ]]; then
+      if [[ "$service_name" == "postgres" || "$service_name" == "clickhouse" || "$service_name" == "api" ]]; then
         if [[ "$health_status" != "healthy" ]]; then
           all_ready="false"
         fi
@@ -132,6 +156,11 @@ wait_for_docker_services_ready() {
 run_compose_up() {
   local output_file
   output_file="$(mktemp)"
+  if ! docker compose up --build --force-recreate --exit-code-from migrate migrate; then
+    rm -f "$output_file"
+    return 1
+  fi
+
   if docker compose up --build -d --remove-orphans "${DOCKER_SERVICES[@]}" 2>&1 | tee "$output_file"; then
     rm -f "$output_file"
     return 0
@@ -156,6 +185,47 @@ admin_ui_listener_pids() {
 admin_ui_listener_cwd() {
   local pid="$1"
   lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | awk '/^n/ { sub(/^n/, ""); print; exit }'
+}
+
+local_worker_candidate_pids() {
+  ps -axo pid=,command= | awk '/[[:space:]]-m orchestrator worker-runs([[:space:]]|$)/ { print $1 }'
+}
+
+local_worker_pids() {
+  local candidate_pid
+  local pid_cwd
+  for candidate_pid in $(local_worker_candidate_pids); do
+    [[ -z "$candidate_pid" || "$candidate_pid" == "$$" ]] && continue
+    pid_cwd="$(admin_ui_listener_cwd "$candidate_pid")"
+    if [[ "$pid_cwd" == "$ROOT_DIR" ]]; then
+      printf '%s\n' "$candidate_pid"
+    fi
+  done
+}
+
+restart_existing_local_worker_if_owned() {
+  local worker_pids
+  worker_pids="$(local_worker_pids)"
+  if [[ -z "$worker_pids" ]]; then
+    return 0
+  fi
+
+  echo "Stopping existing local run worker..."
+  local pid
+  for pid in $worker_pids; do
+    kill "$pid" >/dev/null 2>&1 || true
+  done
+
+  local deadline
+  deadline="$(( $(date +%s) + 15 ))"
+  while [[ -n "$(local_worker_pids)" ]]; do
+    if (( $(date +%s) >= deadline )); then
+      echo "Timed out waiting for existing local run worker to stop."
+      return 1
+    fi
+    sleep 1
+  done
+  return 0
 }
 
 restart_existing_admin_ui_if_owned() {
@@ -202,6 +272,8 @@ cleanup() {
 trap cleanup EXIT INT TERM
 
 cleanup_dead_project_containers
+restart_existing_local_worker_if_owned
+stop_existing_app_services_before_migration
 
 run_compose_up
 
@@ -226,6 +298,14 @@ fi
 
 export ORCHESTRATOR_DATABASE_URL="${ORCHESTRATOR_DATABASE_URL:-postgresql+psycopg://orchestrator:orchestrator@127.0.0.1:4402/orchestrator}"
 export POSTGRES_URL="${POSTGRES_URL:-${ORCHESTRATOR_DATABASE_URL}}"
+export ORCHESTRATOR_CLICKHOUSE_HTTP_URL="${ORCHESTRATOR_CLICKHOUSE_HTTP_URL:-http://127.0.0.1:8123}"
+export ORCHESTRATOR_CLICKHOUSE_DATABASE="${ORCHESTRATOR_CLICKHOUSE_DATABASE:-master_builder}"
+export ORCHESTRATOR_CLICKHOUSE_USERNAME="${ORCHESTRATOR_CLICKHOUSE_USERNAME:-master_builder}"
+export ORCHESTRATOR_CLICKHOUSE_PASSWORD="${ORCHESTRATOR_CLICKHOUSE_PASSWORD:-master_builder}"
+export ORCHESTRATOR_OTEL_ENABLED="${ORCHESTRATOR_OTEL_ENABLED:-true}"
+export ORCHESTRATOR_OTEL_SERVICE_NAMESPACE="${ORCHESTRATOR_OTEL_SERVICE_NAMESPACE:-master-builder}"
+export ORCHESTRATOR_OTEL_EXPORTER_OTLP_ENDPOINT="${ORCHESTRATOR_OTEL_EXPORTER_OTLP_ENDPOINT:-http://127.0.0.1:4318}"
+export ORCHESTRATOR_OTEL_TRACES_SAMPLE_RATIO="${ORCHESTRATOR_OTEL_TRACES_SAMPLE_RATIO:-1.0}"
 export ORCHESTRATOR_WORKER_CAPABILITIES="${ORCHESTRATOR_WORKER_CAPABILITIES:-macos}"
 export ORCHESTRATOR_AGENT_ID="${ORCHESTRATOR_AGENT_ID:-worker-macos-local}"
 export ORCHESTRATOR_CODEX_SANDBOX_MODE="${ORCHESTRATOR_CODEX_SANDBOX_MODE:-danger-full-access}"
@@ -250,5 +330,5 @@ echo "Docker worker capability: linux (container)"
 echo "Local worker capability: ${ORCHESTRATOR_WORKER_CAPABILITIES}"
 echo "Local Codex sandbox: ${ORCHESTRATOR_CODEX_SANDBOX_MODE}"
 echo "Shared repo checkout dir: ${ORCHESTRATOR_PROJECT_REPO_CHECKOUT_BASE_DIR}"
-echo "Starting local worker..."
-exec "${VENV_DIR}/bin/python" -m orchestrator worker
+echo "Starting local run worker..."
+"${VENV_DIR}/bin/python" -m orchestrator worker-runs

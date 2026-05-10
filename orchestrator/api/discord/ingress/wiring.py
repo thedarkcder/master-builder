@@ -3,9 +3,12 @@ from __future__ import annotations
 from orchestrator.api.discord.commands.ask import dispatch_ask_command
 from orchestrator.api.discord.commands.bug_gap import dispatch_bug_gap_command
 from orchestrator.api.discord.commands.issues import dispatch_issues_command
+from orchestrator.api.discord.commands.personas import dispatch_persona_command
 from orchestrator.api.discord.commands.parser import resolve_discord_command
 from orchestrator.api.discord.commands.run_controls import dispatch_run_control_command
 from orchestrator.api.discord.commands.dispatcher import dispatch_simple_discord_command
+from orchestrator.api.discord.shared.command_authorization import allow_sensitive_command_bypass
+from orchestrator.api.discord.shared.plain_text_routing import rewrite_plain_text_command
 from orchestrator.api.discord.shared.followup_format import resolve_tenant_jira_browse_base_url
 from orchestrator.api.discord.ingress.service import DiscordIngressDependencies, DiscordIngressHandlers
 
@@ -14,10 +17,13 @@ def build_discord_ingress_dependencies(
     *,
     issue_key_pattern,
     retryable_statuses,
+    decision_clarification_port,
     get_tenant_fn,
     assert_channel_scope_fn,
     assert_sensitive_command_permission_fn,
     resolve_scope_fn,
+    prune_missing_issue_keys_from_ask_history_fn,
+    recent_ask_history_fn,
     collect_ask_context_with_history_context_fn,
     collect_github_ask_context_fn,
     store_pending_ask_action_fn,
@@ -26,7 +32,8 @@ def build_discord_ingress_dependencies(
     run_gap_analysis_fn,
     normalize_discord_attachments_fn,
     create_discord_bug_issue_fn,
-    seed_issues_with_codex_fn,
+    seed_parent_issues_with_runtime_fn,
+    seed_issues_with_runtime_fn,
     find_seed_followup_context_fn,
     store_seed_followup_context_fn,
     clear_seed_followup_context_fn,
@@ -36,9 +43,10 @@ def build_discord_ingress_dependencies(
     fetch_issue_detail_fn,
     settings_factory_fn,
     build_codex_runtime_fn,
-    tenant_jira_oauth_context_fn,
+    tenant_atlassian_oauth_context_fn,
     ensure_issue_is_executable_fn,
     resolve_codex_working_dir_fn,
+    enrich_scope_fn,
 ):  # noqa: ANN001
     handlers = DiscordIngressHandlers(
         simple=lambda ctx: dispatch_simple_discord_command(
@@ -61,12 +69,37 @@ def build_discord_ingress_dependencies(
             normalized_channel_id=ctx.normalized_channel_id,
             require_ask_confirmation=bool(ctx.flags.get("require_ask_confirmation")),
             issue_key_pattern=issue_key_pattern,
+            prune_missing_issue_keys_from_ask_history=prune_missing_issue_keys_from_ask_history_fn,
+            recent_ask_history=recent_ask_history_fn,
             collect_ask_context_with_history_context=collect_ask_context_with_history_context_fn,
             collect_github_ask_context=collect_github_ask_context_fn,
             store_pending_ask_action=store_pending_ask_action_fn,
             store_ask_history_entry=store_ask_history_entry_fn,
             ask_board_message=ask_board_message_fn,
-            seed_issues_with_codex=seed_issues_with_codex_fn,
+            seed_parent_issues_with_runtime=seed_parent_issues_with_runtime_fn,
+            seed_issues_with_runtime=seed_issues_with_runtime_fn,
+            scoped_project_keys=list(ctx.scope.project_keys),
+            scoped_project_id=ctx.scope.project_id,
+            codex_working_dir=resolve_codex_working_dir_fn(
+                session=ctx.session,
+                tenant=ctx.tenant,
+                settings=settings_factory_fn(),
+                project_id=ctx.scope.project_id,
+                project_keys=list(ctx.scope.project_keys),
+            ),
+        ),
+        persona=lambda ctx: dispatch_persona_command(
+            session=ctx.session,
+            tenant=ctx.tenant,
+            payload=ctx.payload,
+            command_name=ctx.command_name,
+            arguments=list(ctx.arguments),
+            normalized_user_id=ctx.normalized_user_id,
+            normalized_channel_id=ctx.normalized_channel_id,
+            issue_key_pattern=issue_key_pattern,
+            collect_ask_context_with_history_context=collect_ask_context_with_history_context_fn,
+            collect_github_ask_context=collect_github_ask_context_fn,
+            store_ask_history_entry=store_ask_history_entry_fn,
             scoped_project_keys=list(ctx.scope.project_keys),
             scoped_project_id=ctx.scope.project_id,
             codex_working_dir=resolve_codex_working_dir_fn(
@@ -96,6 +129,7 @@ def build_discord_ingress_dependencies(
             payload=ctx.payload,
             command_name=ctx.command_name,
             arguments=list(ctx.arguments),
+            scoped_project_id=ctx.scope.project_id,
             scoped_project_keys=list(ctx.scope.project_keys),
             codex_working_dir=resolve_codex_working_dir_fn(
                 session=ctx.session,
@@ -106,7 +140,7 @@ def build_discord_ingress_dependencies(
             ),
             normalized_user_id=ctx.normalized_user_id,
             defer_seed_issues=bool(ctx.flags.get("defer_seed_issues")),
-            seed_issues_with_codex=seed_issues_with_codex_fn,
+            seed_parent_issues_with_runtime=seed_parent_issues_with_runtime_fn,
             find_seed_followup_context=find_seed_followup_context_fn,
             store_seed_followup_context=store_seed_followup_context_fn,
             clear_seed_followup_context=clear_seed_followup_context_fn,
@@ -121,12 +155,13 @@ def build_discord_ingress_dependencies(
             arguments=list(ctx.arguments),
             scope=ctx.scope,
             retryable_statuses=retryable_statuses,
+            decision_clarification_port=decision_clarification_port,
             resolve_project_for_issue=resolve_project_for_issue_fn,
             fetch_issue_preview=fetch_issue_preview_fn,
             fetch_issue_detail=fetch_issue_detail_fn,
             settings_factory=settings_factory_fn,
             build_codex_runtime=build_codex_runtime_fn,
-            tenant_jira_oauth_context=tenant_jira_oauth_context_fn,
+            tenant_atlassian_oauth_context=tenant_atlassian_oauth_context_fn,
             ensure_issue_is_executable=ensure_issue_is_executable_fn,
             resolve_codex_working_dir=resolve_codex_working_dir_fn,
         ),
@@ -155,6 +190,29 @@ def build_discord_ingress_dependencies(
             db,
             current_tenant,
             channel_id,
+        ),
+        enrich_scope=lambda db, current_tenant, command_name, arguments, payload, current_scope: enrich_scope_fn(
+            db,
+            current_tenant,
+            command_name,
+            arguments,
+            payload,
+            current_scope,
+        ),
+        rewrite_raw_command=lambda db, current_tenant, payload, policy: rewrite_plain_text_command(
+            session=db,
+            tenant=current_tenant,
+            payload=payload,
+            allow_plain_ask=bool(getattr(policy, "allow_plain_ask", False)),
+            find_seed_followup_context_fn=find_seed_followup_context_fn,
+        ),
+        allow_sensitive_command_bypass=lambda db, current_tenant, command_name, arguments, payload: allow_sensitive_command_bypass(
+            session=db,
+            tenant=current_tenant,
+            command_name=command_name,
+            arguments=arguments,
+            payload=payload,
+            find_seed_followup_context_fn=find_seed_followup_context_fn,
         ),
         handlers=handlers,
     )

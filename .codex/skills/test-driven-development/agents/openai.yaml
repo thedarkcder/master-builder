@@ -1,0 +1,4 @@
+interface:
+  display_name: "Test-Driven Development"
+  short_description: "Run targeted and full suites with deterministic reporting."
+  default_prompt: "Use $test-driven-development when implementing any feature or bugfix, before writing implementation code. Run targeted tests first, then the full suite. Report results in a structured format."

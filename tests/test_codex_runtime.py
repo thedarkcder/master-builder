@@ -2,18 +2,46 @@ from __future__ import annotations
 
 import subprocess
 import unittest
+import json
+import os
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from orchestrator.core.codex_runtime import (
+from orchestrator.core.runtime.runtime import (
     CodexRuntime,
     CodexRuntimeError,
     _extract_json_payload,
     _extract_session_id_from_json_line,
     _extract_usage_from_json_stdout,
+    _openai_compatible_base_url_for_local_server,
     build_codex_runtime,
+    build_http_runtime,
+    build_runtime_with_fallback,
+    normalize_runtime_token_usage,
 )
+
+
+class CodexRuntimeErrorTests(unittest.TestCase):
+    def test_str_includes_payload_preview(self) -> None:
+        err = CodexRuntimeError("Runtime HTTP request failed with status 400", payload_preview='{"error":"Unknown model"}')
+        self.assertIn("400", str(err))
+        self.assertIn("Unknown model", str(err))
+
+
+class OpenAiCompatibleBaseUrlTests(unittest.TestCase):
+    def test_lm_studio_appends_v1_when_missing(self) -> None:
+        self.assertEqual(
+            _openai_compatible_base_url_for_local_server(base_url="http://127.0.0.1:1234", runtime_kind="lm_studio"),
+            "http://127.0.0.1:1234/v1",
+        )
+
+    def test_lm_studio_preserves_existing_v1(self) -> None:
+        self.assertEqual(
+            _openai_compatible_base_url_for_local_server(base_url="http://host.docker.internal:1234/v1", runtime_kind="lm_studio"),
+            "http://host.docker.internal:1234/v1",
+        )
 
 
 class ExtractJsonPayloadTests(unittest.TestCase):
@@ -66,6 +94,25 @@ class ExtractJsonPayloadTests(unittest.TestCase):
             {"prompt_tokens": 101, "completion_tokens": 33, "total_tokens": 134},
         )
 
+    def test_normalize_runtime_token_usage_accepts_provider_usage_shapes(self) -> None:
+        self.assertEqual(
+            normalize_runtime_token_usage(
+                {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15}
+            ),
+            {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+        )
+        self.assertEqual(
+            normalize_runtime_token_usage(
+                {"input_tokens": 12, "cached_input_tokens": 7, "output_tokens": 4}
+            ),
+            {
+                "prompt_tokens": 12,
+                "completion_tokens": 4,
+                "total_tokens": 16,
+                "cached_input_tokens": 7,
+            },
+        )
+
 
 class CodexRuntimeTests(unittest.TestCase):
     def test_run_text_and_json(self) -> None:
@@ -108,17 +155,18 @@ class CodexRuntimeTests(unittest.TestCase):
     def test_run_json_forwards_usage_callback(self) -> None:
         captured_usage: dict[str, int] = {}
 
-        def _request(  # noqa: ANN001
-            _system_prompt,
-            _user_prompt,
-            _working_dir,
-            _on_log_line,
-            _reasoning_effort,
-            _resume_session_id,
-            _on_session_id,
-            on_usage,
+        def _request(
+            _system_prompt: str,
+            _user_prompt: str,
+            _working_dir: str | None,
+            _on_log_line: object,
+            _reasoning_effort: str | None,
+            _resume_session_id: str | None,
+            _on_session_id: object,
+            on_usage: object,
         ) -> str:
             if on_usage is not None:
+                assert callable(on_usage)
                 on_usage(
                     {
                         "prompt_tokens": 12,
@@ -142,12 +190,57 @@ class CodexRuntimeTests(unittest.TestCase):
         self.assertEqual(payload, {"ok": True})
         self.assertEqual(captured_usage, {"prompt_tokens": 12, "completion_tokens": 5, "total_tokens": 17})
 
+    def test_runtime_with_fallback_uses_secondary_runtime_after_primary_failure(self) -> None:
+        primary_runtime = CodexRuntime(
+            model="primary",
+            max_output_tokens=1000,
+            command="primary",
+            _request=lambda *_args, **_kwargs: (_ for _ in ()).throw(CodexRuntimeError("primary failed")),
+        )
+        fallback_runtime = CodexRuntime(
+            model="fallback",
+            max_output_tokens=1000,
+            command="fallback",
+            _request=lambda *_args, **_kwargs: '{"ok": true, "source": "fallback"}',
+        )
+        runtime = build_runtime_with_fallback(
+            primary_runtime=primary_runtime,
+            fallback_runtime=fallback_runtime,
+        )
+        self.assertEqual(
+            runtime.run_json(system_prompt="sys", user_prompt="usr"),
+            {"ok": True, "source": "fallback"},
+        )
 
-class BuildCodexRuntimeTests(unittest.TestCase):
+
+class BuildCodexRuntimeDefaultProfileTests(unittest.TestCase):
+    def test_build_codex_runtime_does_not_require_global_codex_model_setting(self) -> None:
+        settings = SimpleNamespace(
+            database_url="postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator",
+            codex_max_output_tokens=512,
+            codex_cli_command="codex",
+            codex_sandbox_mode="workspace-write",
+            codex_tool_database_url="",
+            codex_reasoning_effort="medium",
+            codex_stderr_log_mode="all",
+            codex_hang_detection_quiet_seconds=300,
+            codex_hang_detection_report_interval_seconds=120,
+            runtime_home="",
+            agent_id="worker-macos-local",
+        )
+
+        runtime = build_codex_runtime(
+            settings=settings,
+            request_override=lambda _system, _user, _working_dir=None: '{"ok": true}',
+        )
+
+        self.assertEqual(runtime.model, "gpt-5.4")
+
+
+class BuildHttpRuntimeTests(unittest.TestCase):
     def _settings(self) -> SimpleNamespace:
         return SimpleNamespace(
             database_url="postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator",
-            codex_model="gpt-5-codex",
             codex_max_output_tokens=4096,
             codex_cli_command="codex",
             codex_sandbox_mode="workspace-write",
@@ -156,6 +249,290 @@ class BuildCodexRuntimeTests(unittest.TestCase):
             codex_stderr_log_mode="all",
             codex_hang_detection_quiet_seconds=300,
             codex_hang_detection_report_interval_seconds=120,
+            runtime_home="",
+            agent_id="worker-macos-local",
+        )
+
+    def test_openai_runtime_preserves_message_history_across_resume_calls(self) -> None:
+        settings = self._settings()
+        request_payloads: list[dict[str, object]] = []
+
+        class _FakeHttpResponse:
+            def __init__(self, payload: dict[str, object]) -> None:
+                self._payload = payload
+
+            def read(self) -> bytes:
+                return json.dumps(self._payload).encode("utf-8")
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb) -> None:  # noqa: ANN001
+                return None
+
+        responses = iter(
+            [
+                {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": json.dumps(
+                                    {
+                                        "type": "tool_request",
+                                        "tool_name": "decision.read_state",
+                                        "tool_args": {"issue_key": "GP-124"},
+                                    }
+                                )
+                            }
+                        }
+                    ],
+                    "usage": {"prompt_tokens": 10, "completion_tokens": 5, "total_tokens": 15},
+                },
+                {
+                    "choices": [
+                        {
+                            "message": {
+                                "content": json.dumps(
+                                    {
+                                        "type": "final_response",
+                                        "result": {"status": "ok"},
+                                    }
+                                )
+                            }
+                        }
+                    ],
+                    "usage": {"prompt_tokens": 20, "completion_tokens": 6, "total_tokens": 26},
+                },
+            ]
+        )
+
+        def fake_urlopen(request, timeout=120):  # noqa: ANN001, ARG001
+            request_payloads.append(json.loads(request.data.decode("utf-8")))
+            return _FakeHttpResponse(next(responses))
+
+        with patch("orchestrator.core.runtime.runtime.urllib_request.urlopen", side_effect=fake_urlopen):
+            runtime = build_http_runtime(
+                settings=settings,
+                runtime_kind="openai",
+                base_url="https://example-openai.test/v1",
+                api_key="secret",
+                default_model_override="gpt-5.4",
+            )
+            captured_session_ids: list[str] = []
+            first = runtime.run_json(
+                system_prompt="system",
+                user_prompt="initial user request",
+                on_session_id=lambda session_id: captured_session_ids.append(session_id),
+            )
+            second = runtime.run_json(
+                system_prompt="system",
+                user_prompt='Tool result:\n{"tool_name":"decision.read_state","ok":true,"result":{"case":"ok"}}',
+                resume_session_id=captured_session_ids[0],
+                on_session_id=lambda session_id: captured_session_ids.append(session_id),
+            )
+
+        self.assertEqual(first["type"], "tool_request")
+        self.assertEqual(second["type"], "final_response")
+        self.assertEqual(len(captured_session_ids), 2)
+        self.assertEqual(captured_session_ids[0], captured_session_ids[1])
+
+        first_messages = request_payloads[0]["messages"]
+        second_messages = request_payloads[1]["messages"]
+        self.assertEqual(
+            first_messages,
+            [
+                {"role": "system", "content": "system"},
+                {"role": "user", "content": "initial user request"},
+            ],
+        )
+        self.assertEqual(
+            second_messages,
+            [
+                {"role": "system", "content": "system"},
+                {"role": "user", "content": "initial user request"},
+                {
+                    "role": "assistant",
+                    "content": json.dumps(
+                        {
+                            "type": "tool_request",
+                            "tool_name": "decision.read_state",
+                            "tool_args": {"issue_key": "GP-124"},
+                        }
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": 'Tool result:\n{"tool_name":"decision.read_state","ok":true,"result":{"case":"ok"}}',
+                },
+            ],
+        )
+
+    def test_claude_runtime_preserves_message_history_across_resume_calls(self) -> None:
+        settings = self._settings()
+        request_payloads: list[dict[str, object]] = []
+
+        class _FakeHttpResponse:
+            def __init__(self, payload: dict[str, object]) -> None:
+                self._payload = payload
+
+            def read(self) -> bytes:
+                return json.dumps(self._payload).encode("utf-8")
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb) -> None:  # noqa: ANN001
+                return None
+
+        responses = iter(
+            [
+                {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": json.dumps(
+                                {
+                                    "type": "tool_request",
+                                    "tool_name": "decision.read_state",
+                                    "tool_args": {"issue_key": "GP-124"},
+                                }
+                            ),
+                        }
+                    ]
+                },
+                {
+                    "content": [
+                        {
+                            "type": "text",
+                            "text": json.dumps(
+                                {
+                                    "type": "final_response",
+                                    "result": {"status": "ok"},
+                                }
+                            ),
+                        }
+                    ]
+                },
+            ]
+        )
+
+        def fake_urlopen(request, timeout=120):  # noqa: ANN001, ARG001
+            request_payloads.append(json.loads(request.data.decode("utf-8")))
+            return _FakeHttpResponse(next(responses))
+
+        with patch("orchestrator.core.runtime.runtime.urllib_request.urlopen", side_effect=fake_urlopen):
+            runtime = build_http_runtime(
+                settings=settings,
+                runtime_kind="claude",
+                base_url="https://example-claude.test",
+                api_key="secret",
+                default_model_override="claude-sonnet-4-0",
+            )
+            captured_session_ids: list[str] = []
+            first = runtime.run_json(
+                system_prompt="system",
+                user_prompt="initial user request",
+                on_session_id=lambda session_id: captured_session_ids.append(session_id),
+            )
+            second = runtime.run_json(
+                system_prompt="system",
+                user_prompt='Tool result:\n{"tool_name":"decision.read_state","ok":true,"result":{"case":"ok"}}',
+                resume_session_id=captured_session_ids[0],
+                on_session_id=lambda session_id: captured_session_ids.append(session_id),
+            )
+
+        self.assertEqual(first["type"], "tool_request")
+        self.assertEqual(second["type"], "final_response")
+        self.assertEqual(captured_session_ids[0], captured_session_ids[1])
+        self.assertEqual(request_payloads[0]["system"], "system")
+        self.assertEqual(
+            request_payloads[0]["messages"],
+            [{"role": "user", "content": "initial user request"}],
+        )
+        self.assertEqual(
+            request_payloads[1]["messages"],
+            [
+                {"role": "user", "content": "initial user request"},
+                {
+                    "role": "assistant",
+                    "content": json.dumps(
+                        {
+                            "type": "tool_request",
+                            "tool_name": "decision.read_state",
+                            "tool_args": {"issue_key": "GP-124"},
+                        }
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": 'Tool result:\n{"tool_name":"decision.read_state","ok":true,"result":{"case":"ok"}}',
+                },
+            ],
+        )
+
+    def test_claude_runtime_reports_normalized_usage(self) -> None:
+        settings = self._settings()
+
+        class _FakeHttpResponse:
+            def read(self) -> bytes:
+                return json.dumps(
+                    {
+                        "content": [{"type": "text", "text": '{"ok": true}'}],
+                        "usage": {
+                            "input_tokens": 21,
+                            "cache_read_tokens": 13,
+                            "output_tokens": 8,
+                        },
+                    }
+                ).encode("utf-8")
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb) -> None:  # noqa: ANN001
+                return None
+
+        with patch("orchestrator.core.runtime.runtime.urllib_request.urlopen", return_value=_FakeHttpResponse()):
+            runtime = build_http_runtime(
+                settings=settings,
+                runtime_kind="claude",
+                base_url="https://example-claude.test",
+                api_key="secret",
+                default_model_override="claude-sonnet-4-0",
+            )
+            captured_usage: dict[str, int] = {}
+            payload = runtime.run_json(
+                system_prompt="system",
+                user_prompt="initial user request",
+                on_usage=lambda usage: captured_usage.update(usage),
+            )
+
+        self.assertEqual(payload, {"ok": True})
+        self.assertEqual(
+            captured_usage,
+            {
+                "prompt_tokens": 21,
+                "completion_tokens": 8,
+                "total_tokens": 29,
+                "cached_input_tokens": 13,
+            },
+        )
+
+
+class BuildCodexRuntimeTests(unittest.TestCase):
+    def _settings(self) -> SimpleNamespace:
+        return SimpleNamespace(
+            database_url="postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator",
+            codex_max_output_tokens=4096,
+            codex_cli_command="codex",
+            codex_sandbox_mode="workspace-write",
+            codex_tool_database_url="",
+            codex_reasoning_effort="medium",
+            codex_stderr_log_mode="all",
+            codex_hang_detection_quiet_seconds=300,
+            codex_hang_detection_report_interval_seconds=120,
+            runtime_home="/tmp/master-builder-test-runtime-home",
+            agent_id="worker-macos-local",
         )
 
     def test_build_with_request_override(self) -> None:
@@ -174,7 +551,7 @@ class BuildCodexRuntimeTests(unittest.TestCase):
 
         settings = self._settings()
         with (
-            patch("orchestrator.core.codex_runtime.shutil.which", return_value=None),
+            patch("orchestrator.core.runtime.runtime.shutil.which", return_value=None),
         ):
             with self.assertRaises(CodexRuntimeError):
                 build_codex_runtime(settings=settings)
@@ -226,13 +603,13 @@ class BuildCodexRuntimeTests(unittest.TestCase):
             def kill(self) -> None:
                 return None
 
-        def fake_popen_write_output(args, **kwargs):  # noqa: ANN001
+        def fake_popen_write_output(args: list[str], **_kwargs: object):
             output_idx = args.index("--output-last-message") + 1
             return _FakePopen(args[output_idx], output_text="json-output")
 
         with (
-            patch("orchestrator.core.codex_runtime.shutil.which", return_value="/usr/bin/codex"),
-            patch("orchestrator.core.codex_runtime.subprocess.Popen", side_effect=fake_popen_write_output) as popen_mock,
+            patch("orchestrator.core.runtime.runtime.shutil.which", return_value="/usr/bin/codex"),
+            patch("orchestrator.core.runtime.runtime.subprocess.Popen", side_effect=fake_popen_write_output) as popen_mock,
         ):
             runtime = build_codex_runtime(settings=settings)
             self.assertEqual(
@@ -276,13 +653,187 @@ class BuildCodexRuntimeTests(unittest.TestCase):
             def kill(self) -> None:
                 return None
 
-        def fake_popen(args, **kwargs):  # noqa: ANN001
+        def fake_popen(args: list[str], **_kwargs: object):
             output_idx = args.index("--output-last-message") + 1
             return _FakePopen(args[output_idx])
 
         with (
-            patch("orchestrator.core.codex_runtime.shutil.which", return_value="/usr/bin/codex"),
-            patch("orchestrator.core.codex_runtime.subprocess.Popen", side_effect=fake_popen) as popen_mock,
+            patch("orchestrator.core.runtime.runtime.shutil.which", return_value="/usr/bin/codex"),
+            patch("orchestrator.core.runtime.runtime.subprocess.Popen", side_effect=fake_popen) as popen_mock,
+        ):
+            runtime = build_codex_runtime(settings=settings)
+            self.assertEqual(runtime.run_text(system_prompt="s", user_prompt="u"), "json-output")
+
+        self.assertEqual(
+            popen_mock.call_args.kwargs["env"]["ORCHESTRATOR_DATABASE_URL"],
+            settings.codex_tool_database_url,
+        )
+
+    def test_cli_request_does_not_inherit_unrelated_parent_environment_values(self) -> None:
+        settings = self._settings()
+
+        class _FakePipe:
+            def readline(self) -> str:
+                return ""
+
+            def close(self) -> None:
+                return None
+
+        class _FakeStdin:
+            def write(self, _content: str) -> None:
+                return None
+
+            def close(self) -> None:
+                return None
+
+        class _FakePopen:
+            def __init__(self, output_path: str) -> None:
+                self.stdin = _FakeStdin()
+                self.stdout = _FakePipe()
+                self.stderr = _FakePipe()
+                Path(output_path).write_text("json-output", encoding="utf-8")
+
+            def wait(self, timeout: float | None = None) -> int:  # noqa: ARG002
+                return 0
+
+            def kill(self) -> None:
+                return None
+
+        def fake_popen(args: list[str], **_kwargs: object):
+            output_idx = args.index("--output-last-message") + 1
+            return _FakePopen(args[output_idx])
+
+        original_secret = os.environ.get("UNRELATED_PARENT_SECRET")
+        original_home = os.environ.get("HOME")
+        original_xdg = os.environ.get("XDG_CONFIG_HOME")
+        os.environ["UNRELATED_PARENT_SECRET"] = "should-not-leak"
+        os.environ["HOME"] = "/Users/example-user"
+        os.environ["XDG_CONFIG_HOME"] = "/Users/example-user/.config"
+        try:
+            with (
+                patch("orchestrator.core.runtime.runtime.shutil.which", return_value="/usr/bin/codex"),
+                patch("orchestrator.core.runtime.runtime.subprocess.Popen", side_effect=fake_popen) as popen_mock,
+            ):
+                runtime = build_codex_runtime(settings=settings)
+                self.assertEqual(runtime.run_text(system_prompt="s", user_prompt="u"), "json-output")
+
+            self.assertNotIn("UNRELATED_PARENT_SECRET", popen_mock.call_args.kwargs["env"])
+            self.assertEqual(
+                popen_mock.call_args.kwargs["env"]["ORCHESTRATOR_DATABASE_URL"],
+                settings.database_url,
+            )
+            self.assertNotEqual(popen_mock.call_args.kwargs["env"]["HOME"], "/Users/example-user")
+            self.assertNotEqual(
+                popen_mock.call_args.kwargs["env"]["XDG_CONFIG_HOME"],
+                "/Users/example-user/.config",
+            )
+        finally:
+            if original_secret is None:
+                os.environ.pop("UNRELATED_PARENT_SECRET", None)
+            else:
+                os.environ["UNRELATED_PARENT_SECRET"] = original_secret
+            if original_home is None:
+                os.environ.pop("HOME", None)
+            else:
+                os.environ["HOME"] = original_home
+            if original_xdg is None:
+                os.environ.pop("XDG_CONFIG_HOME", None)
+            else:
+                os.environ["XDG_CONFIG_HOME"] = original_xdg
+
+    def test_cli_request_uses_stable_runtime_home_outside_repo(self) -> None:
+        settings = self._settings()
+        settings.runtime_home = ""
+
+        class _FakePipe:
+            def readline(self) -> str:
+                return ""
+
+            def close(self) -> None:
+                return None
+
+        class _FakeStdin:
+            def write(self, _content: str) -> None:
+                return None
+
+            def close(self) -> None:
+                return None
+
+        class _FakePopen:
+            def __init__(self, output_path: str) -> None:
+                self.stdin = _FakeStdin()
+                self.stdout = _FakePipe()
+                self.stderr = _FakePipe()
+                Path(output_path).write_text("json-output", encoding="utf-8")
+
+            def wait(self, timeout: float | None = None) -> int:  # noqa: ARG002
+                return 0
+
+            def kill(self) -> None:
+                return None
+
+        def fake_popen(args: list[str], **_kwargs: object):
+            output_idx = args.index("--output-last-message") + 1
+            return _FakePopen(args[output_idx])
+
+        with TemporaryDirectory() as temp_dir:
+            working_dir = str(Path(temp_dir) / "checkout")
+            Path(working_dir).mkdir(parents=True, exist_ok=True)
+            runtime_home_root = Path(temp_dir) / "home"
+            with patch.dict(os.environ, {"HOME": str(runtime_home_root)}, clear=False):
+                with (
+                    patch("orchestrator.core.runtime.runtime.shutil.which", return_value="/usr/bin/codex"),
+                    patch("orchestrator.core.runtime.runtime.subprocess.Popen", side_effect=fake_popen) as popen_mock,
+                ):
+                    runtime = build_codex_runtime(settings=settings)
+                    self.assertEqual(
+                        runtime.run_text(system_prompt="s", user_prompt="u", working_dir=working_dir),
+                        "json-output",
+                    )
+
+            child_env = popen_mock.call_args.kwargs["env"]
+            expected_runtime_home = str(runtime_home_root / ".master-builder" / "runtime" / "worker-macos-local")
+            self.assertEqual(child_env["HOME"], expected_runtime_home)
+            self.assertEqual(child_env["XDG_CONFIG_HOME"], str(Path(expected_runtime_home) / ".config"))
+
+    def test_cli_request_preserves_non_postgres_tool_database_url(self) -> None:
+        settings = self._settings()
+        settings.codex_tool_database_url = "sqlite:////tmp/orchestrator-test.db"
+
+        class _FakePipe:
+            def readline(self) -> str:
+                return ""
+
+            def close(self) -> None:
+                return None
+
+        class _FakeStdin:
+            def write(self, _content: str) -> None:
+                return None
+
+            def close(self) -> None:
+                return None
+
+        class _FakePopen:
+            def __init__(self, output_path: str) -> None:
+                self.stdin = _FakeStdin()
+                self.stdout = _FakePipe()
+                self.stderr = _FakePipe()
+                Path(output_path).write_text("json-output", encoding="utf-8")
+
+            def wait(self, timeout: float | None = None) -> int:  # noqa: ARG002
+                return 0
+
+            def kill(self) -> None:
+                return None
+
+        def fake_popen(args: list[str], **_kwargs: object):
+            output_idx = args.index("--output-last-message") + 1
+            return _FakePopen(args[output_idx])
+
+        with (
+            patch("orchestrator.core.runtime.runtime.shutil.which", return_value="/usr/bin/codex"),
+            patch("orchestrator.core.runtime.runtime.subprocess.Popen", side_effect=fake_popen) as popen_mock,
         ):
             runtime = build_codex_runtime(settings=settings)
             self.assertEqual(runtime.run_text(system_prompt="s", user_prompt="u"), "json-output")
@@ -336,32 +887,33 @@ class BuildCodexRuntimeTests(unittest.TestCase):
             def kill(self) -> None:
                 return None
 
-        def fake_popen(args, **kwargs):  # noqa: ANN001, ARG001
+        def fake_popen(args: list[str], **_kwargs: object):
             output_idx = args.index("--output-last-message") + 1
             return _FakePopen(args[output_idx])
 
         with (
-            patch("orchestrator.core.codex_runtime.shutil.which", return_value="/usr/bin/codex"),
-            patch("orchestrator.core.codex_runtime.subprocess.Popen", side_effect=fake_popen) as popen_mock,
+            patch("orchestrator.core.runtime.runtime.shutil.which", return_value="/usr/bin/codex"),
+            patch("orchestrator.core.runtime.runtime.subprocess.Popen", side_effect=fake_popen) as popen_mock,
         ):
             runtime = build_codex_runtime(settings=settings)
-            runtime.run_text(system_prompt="s", user_prompt="u", model_override="gpt-5.3-codex-spark")
+            runtime.run_text(system_prompt="s", user_prompt="u", model_override="gpt-5.4-mini")
 
         args = popen_mock.call_args.args[0]
-        self.assertEqual(args[args.index("--model") + 1], "gpt-5.3-codex-spark")
+        self.assertEqual(args[args.index("--model") + 1], "gpt-5.4-mini")
+        self.assertEqual(args[2:6], ["--disable", "apps", "--disable", "plugins"])
         call_args = list(popen_mock.call_args.args[0])
         sandbox_idx = call_args.index("--sandbox") + 1
         self.assertEqual(call_args[sandbox_idx], "workspace-write")
         config_idx = call_args.index("-c") + 1
         self.assertEqual(call_args[config_idx], 'reasoning.effort="medium"')
 
-        def fake_popen_stdout(args, **kwargs):  # noqa: ANN001
+        def fake_popen_stdout(args: list[str], **_kwargs: object):
             output_idx = args.index("--output-last-message") + 1
             return _FakePopen(args[output_idx], stdout_lines=["stdout-output\n"], output_text="")
 
         with (
-            patch("orchestrator.core.codex_runtime.shutil.which", return_value="/usr/bin/codex"),
-            patch("orchestrator.core.codex_runtime.subprocess.Popen", side_effect=fake_popen_stdout),
+            patch("orchestrator.core.runtime.runtime.shutil.which", return_value="/usr/bin/codex"),
+            patch("orchestrator.core.runtime.runtime.subprocess.Popen", side_effect=fake_popen_stdout),
         ):
             runtime = build_codex_runtime(settings=settings)
             self.assertEqual(runtime.run_text(system_prompt="s", user_prompt="u"), "stdout-output")
@@ -400,15 +952,15 @@ class BuildCodexRuntimeTests(unittest.TestCase):
 
         holder: dict[str, _FakePopen] = {}
 
-        def fake_popen(args, **kwargs):  # noqa: ANN001
+        def fake_popen(args: list[str], **_kwargs: object):
             output_idx = args.index("--output-last-message") + 1
             proc = _FakePopen(args[output_idx])
             holder["proc"] = proc
             return proc
 
         with (
-            patch("orchestrator.core.codex_runtime.shutil.which", return_value="/usr/bin/codex"),
-            patch("orchestrator.core.codex_runtime.subprocess.Popen", side_effect=fake_popen),
+            patch("orchestrator.core.runtime.runtime.shutil.which", return_value="/usr/bin/codex"),
+            patch("orchestrator.core.runtime.runtime.subprocess.Popen", side_effect=fake_popen),
         ):
             runtime = build_codex_runtime(settings=settings)
             self.assertEqual(runtime.run_text(system_prompt="s", user_prompt="u"), "json-output")
@@ -452,7 +1004,7 @@ class BuildCodexRuntimeTests(unittest.TestCase):
             def kill(self) -> None:
                 return None
 
-        def fake_popen(args, **kwargs):  # noqa: ANN001
+        def fake_popen(args: list[str], **_kwargs: object):
             output_idx = args.index("--output-last-message") + 1
             return _FakePopen(args[output_idx])
 
@@ -467,9 +1019,9 @@ class BuildCodexRuntimeTests(unittest.TestCase):
                 return 140.0
 
         with (
-            patch("orchestrator.core.codex_runtime.time.monotonic", side_effect=_fake_monotonic),
-            patch("orchestrator.core.codex_runtime.shutil.which", return_value="/usr/bin/codex"),
-            patch("orchestrator.core.codex_runtime.subprocess.Popen", side_effect=fake_popen),
+            patch("orchestrator.core.runtime.runtime.time.monotonic", side_effect=_fake_monotonic),
+            patch("orchestrator.core.runtime.runtime.shutil.which", return_value="/usr/bin/codex"),
+            patch("orchestrator.core.runtime.runtime.subprocess.Popen", side_effect=fake_popen),
         ):
             runtime = build_codex_runtime(settings=settings)
             logged: list[tuple[str, str]] = []
@@ -524,13 +1076,13 @@ class BuildCodexRuntimeTests(unittest.TestCase):
             def kill(self) -> None:
                 return None
 
-        def fake_popen(args, **kwargs):  # noqa: ANN001
+        def fake_popen(args: list[str], **_kwargs: object):
             output_idx = args.index("--output-last-message") + 1
             return _FakePopen(args[output_idx])
 
         with (
-            patch("orchestrator.core.codex_runtime.shutil.which", return_value="/usr/bin/codex"),
-            patch("orchestrator.core.codex_runtime.subprocess.Popen", side_effect=fake_popen),
+            patch("orchestrator.core.runtime.runtime.shutil.which", return_value="/usr/bin/codex"),
+            patch("orchestrator.core.runtime.runtime.subprocess.Popen", side_effect=fake_popen),
         ):
             runtime = build_codex_runtime(settings=settings)
             logged: list[tuple[str, str]] = []
@@ -581,13 +1133,13 @@ class BuildCodexRuntimeTests(unittest.TestCase):
             def kill(self) -> None:
                 return None
 
-        def fake_popen(args, **kwargs):  # noqa: ANN001
+        def fake_popen(args: list[str], **_kwargs: object):
             output_idx = args.index("--output-last-message") + 1
             return _FakePopen(args[output_idx])
 
         with (
-            patch("orchestrator.core.codex_runtime.shutil.which", return_value="/usr/bin/codex"),
-            patch("orchestrator.core.codex_runtime.subprocess.Popen", side_effect=fake_popen),
+            patch("orchestrator.core.runtime.runtime.shutil.which", return_value="/usr/bin/codex"),
+            patch("orchestrator.core.runtime.runtime.subprocess.Popen", side_effect=fake_popen),
         ):
             runtime = build_codex_runtime(settings=settings)
             logged: list[tuple[str, str]] = []
@@ -638,13 +1190,13 @@ class BuildCodexRuntimeTests(unittest.TestCase):
             def kill(self) -> None:
                 return None
 
-        def fake_popen(args, **kwargs):  # noqa: ANN001
+        def fake_popen(args: list[str], **_kwargs: object):
             output_idx = args.index("--output-last-message") + 1
             return _FakePopen(args[output_idx])
 
         with (
-            patch("orchestrator.core.codex_runtime.shutil.which", return_value="/usr/bin/codex"),
-            patch("orchestrator.core.codex_runtime.subprocess.Popen", side_effect=fake_popen),
+            patch("orchestrator.core.runtime.runtime.shutil.which", return_value="/usr/bin/codex"),
+            patch("orchestrator.core.runtime.runtime.subprocess.Popen", side_effect=fake_popen),
         ):
             runtime = build_codex_runtime(settings=settings)
             logged: list[tuple[str, str]] = []
@@ -703,55 +1255,81 @@ class BuildCodexRuntimeTests(unittest.TestCase):
             def kill(self) -> None:
                 return None
 
-        def fake_popen_auth(args, **kwargs):  # noqa: ANN001
+        def fake_popen_auth(args: list[str], **_kwargs: object):
             output_idx = args.index("--output-last-message") + 1
             return _FakePopen(args[output_idx], returncode=1, stderr_lines=["auth required\n"])
 
-        with (
-            patch("orchestrator.core.codex_runtime.shutil.which", return_value="/usr/bin/codex"),
-            patch("orchestrator.core.codex_runtime.subprocess.Popen", side_effect=fake_popen_auth),
-        ):
-            runtime = build_codex_runtime(settings=settings)
-            with self.assertRaises(CodexRuntimeError) as exc_info:
-                runtime.run_text(system_prompt="s", user_prompt="u")
-            self.assertIn("docker compose run --rm worker-runtime codex login --device-auth", str(exc_info.exception))
-
-        def fake_popen_auth_with_link(args, **kwargs):  # noqa: ANN001
-            output_idx = args.index("--output-last-message") + 1
-            return _FakePopen(
-                args[output_idx],
-                returncode=1,
-                stderr_lines=["auth required https://auth.openai.com/device/abc123\n"],
+        def fake_run_not_logged_in(args: list[str], **_kwargs: object):
+            if args[1:] == ["login", "status"]:
+                return subprocess.CompletedProcess(args=args, returncode=1, stdout="Not logged in\n", stderr="")
+            self.assertEqual(args[1:], ["login", "--device-auth"])
+            raise subprocess.TimeoutExpired(
+                cmd=args,
+                timeout=5.0,
+                output="Open this link to authenticate\n",
             )
 
         with (
-            patch("orchestrator.core.codex_runtime.shutil.which", return_value="/usr/bin/codex"),
-            patch("orchestrator.core.codex_runtime.subprocess.Popen", side_effect=fake_popen_auth_with_link),
+            patch("orchestrator.core.runtime.runtime.shutil.which", return_value="/usr/bin/codex"),
+            patch("orchestrator.core.runtime.runtime.subprocess.Popen", side_effect=fake_popen_auth),
+            patch("orchestrator.core.runtime.runtime.subprocess.run", side_effect=fake_run_not_logged_in),
         ):
             runtime = build_codex_runtime(settings=settings)
             with self.assertRaises(CodexRuntimeError) as exc_info:
                 runtime.run_text(system_prompt="s", user_prompt="u")
-            self.assertIn("https://auth.openai.com/device/abc123", str(exc_info.exception))
+            self.assertEqual(
+                str(exc_info.exception),
+                "Codex CLI is not authenticated on this worker. Start a worker runtime login session and retry.",
+            )
 
-        def fake_popen_boom(args, **kwargs):  # noqa: ANN001
+        def fake_popen_boom(args: list[str], **_kwargs: object):
             output_idx = args.index("--output-last-message") + 1
             return _FakePopen(args[output_idx], returncode=2, stderr_lines=["boom\n"])
 
+        def fake_run_logged_in(args: list[str], **_kwargs: object):
+            self.assertEqual(args[1:], ["login", "status"])
+            return subprocess.CompletedProcess(args=args, returncode=0, stdout="Logged in\n", stderr="")
+
         with (
-            patch("orchestrator.core.codex_runtime.shutil.which", return_value="/usr/bin/codex"),
-            patch("orchestrator.core.codex_runtime.subprocess.Popen", side_effect=fake_popen_boom),
+            patch("orchestrator.core.runtime.runtime.shutil.which", return_value="/usr/bin/codex"),
+            patch("orchestrator.core.runtime.runtime.subprocess.Popen", side_effect=fake_popen_boom),
+            patch("orchestrator.core.runtime.runtime.subprocess.run", side_effect=fake_run_logged_in),
         ):
             runtime = build_codex_runtime(settings=settings)
             with self.assertRaises(CodexRuntimeError):
                 runtime.run_text(system_prompt="s", user_prompt="u")
 
-        def fake_popen_empty(args, **kwargs):  # noqa: ANN001
+        def fake_popen_structured_limit(args: list[str], **_kwargs: object):
+            output_idx = args.index("--output-last-message") + 1
+            return _FakePopen(
+                args[output_idx],
+                returncode=1,
+                stdout_lines=[
+                    '{"type":"error","message":"You\'ve hit your usage limit for GPT-5.3-Codex-Spark. Switch to another model now, or try again later."}\n',
+                    '{"type":"turn.failed","error":{"message":"You\'ve hit your usage limit for GPT-5.3-Codex-Spark. Switch to another model now, or try again later."}}\n',
+                ],
+                stderr_lines=["Warning: no last agent message; wrote empty content to /tmp/tmp.txt\n"],
+            )
+
+        with (
+            patch("orchestrator.core.runtime.runtime.shutil.which", return_value="/usr/bin/codex"),
+            patch("orchestrator.core.runtime.runtime.subprocess.Popen", side_effect=fake_popen_structured_limit),
+            patch("orchestrator.core.runtime.runtime.subprocess.run", side_effect=fake_run_logged_in),
+        ):
+            runtime = build_codex_runtime(settings=settings)
+            with self.assertRaises(CodexRuntimeError) as exc_info:
+                runtime.run_text(system_prompt="s", user_prompt="u")
+            self.assertIn("usage limit", str(exc_info.exception).lower())
+            self.assertNotIn("no last agent message", str(exc_info.exception).lower())
+
+        def fake_popen_empty(args: list[str], **_kwargs: object):
             output_idx = args.index("--output-last-message") + 1
             return _FakePopen(args[output_idx], output_text="")
 
         with (
-            patch("orchestrator.core.codex_runtime.shutil.which", return_value="/usr/bin/codex"),
-            patch("orchestrator.core.codex_runtime.subprocess.Popen", side_effect=fake_popen_empty),
+            patch("orchestrator.core.runtime.runtime.shutil.which", return_value="/usr/bin/codex"),
+            patch("orchestrator.core.runtime.runtime.subprocess.Popen", side_effect=fake_popen_empty),
+            patch("orchestrator.core.runtime.runtime.subprocess.run", side_effect=fake_run_logged_in),
         ):
             runtime = build_codex_runtime(settings=settings)
             with self.assertRaises(CodexRuntimeError):
@@ -800,8 +1378,8 @@ class BuildCodexRuntimeTests(unittest.TestCase):
                 return None
 
         with (
-            patch("orchestrator.core.codex_runtime.shutil.which", return_value="/usr/bin/codex"),
-            patch("orchestrator.core.codex_runtime.subprocess.Popen", return_value=_FakePopen()) as popen_mock,
+            patch("orchestrator.core.runtime.runtime.shutil.which", return_value="/usr/bin/codex"),
+            patch("orchestrator.core.runtime.runtime.subprocess.Popen", return_value=_FakePopen()) as popen_mock,
         ):
             runtime = build_codex_runtime(settings=settings)
             captured_session_ids: list[str] = []
@@ -814,6 +1392,7 @@ class BuildCodexRuntimeTests(unittest.TestCase):
             self.assertEqual(output, "resume-output")
             call_args = list(popen_mock.call_args.args[0])
             self.assertEqual(call_args[:4], ["codex", "exec", "resume", "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"])
+            self.assertEqual(call_args[4:8], ["--disable", "apps", "--disable", "plugins"])
             self.assertNotIn("--sandbox", call_args)
             self.assertIn("--full-auto", call_args)
             self.assertIn("--json", call_args)
@@ -863,8 +1442,8 @@ class BuildCodexRuntimeTests(unittest.TestCase):
                 return None
 
         with (
-            patch("orchestrator.core.codex_runtime.shutil.which", return_value="/usr/bin/codex"),
-            patch("orchestrator.core.codex_runtime.subprocess.Popen", return_value=_FakePopen()),
+            patch("orchestrator.core.runtime.runtime.shutil.which", return_value="/usr/bin/codex"),
+            patch("orchestrator.core.runtime.runtime.subprocess.Popen", return_value=_FakePopen()),
         ):
             runtime = build_codex_runtime(settings=settings)
             payload = runtime.run_json(
@@ -917,8 +1496,8 @@ class BuildCodexRuntimeTests(unittest.TestCase):
                 return None
 
         with (
-            patch("orchestrator.core.codex_runtime.shutil.which", return_value="/usr/bin/codex"),
-            patch("orchestrator.core.codex_runtime.subprocess.Popen", return_value=_FakePopen()) as popen_mock,
+            patch("orchestrator.core.runtime.runtime.shutil.which", return_value="/usr/bin/codex"),
+            patch("orchestrator.core.runtime.runtime.subprocess.Popen", return_value=_FakePopen()) as popen_mock,
         ):
             runtime = build_codex_runtime(settings=settings)
             output = runtime.run_text(

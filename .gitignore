@@ -10,21 +10,23 @@ dist/
 *.egg-info
 .coverage
 coverage.xml
+test-results/
 .cloudflared/*.json
 !.cloudflared/config.yml
-<<<<<<< HEAD
 .worktrees/
 .workdirs/
-.env
 .env.*
 !.env.example
-dist/
 coverage/
-coverage.xml
 **/next-env.d.ts
 *.egg
 *.egg-info/
-=======
-.workdirs/
 admin-ui/tsconfig.tsbuildinfo
->>>>>>> 747b1da608fd8b874e4363472a86074c3b4090b6
+mcp.json
+admin-ui/.next-playwright
+.playwright-mcp/
+.playwright-cli/
+.runtime-home/
+.DS_Store
+.runtime-home/
+.codex/tmp/

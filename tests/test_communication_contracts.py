@@ -1,11 +1,14 @@
 from __future__ import annotations
 
 import json
+from contextlib import nullcontext
 from dataclasses import asdict
 import unittest
 from datetime import datetime, timezone
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+from orchestrator.api.discord.interactions import followup as followup_module
 from orchestrator.core.communications.contracts import (
     ActorIdentity,
     CommandRequest,
@@ -14,6 +17,7 @@ from orchestrator.core.communications.contracts import (
     CommunicationLink,
     DiscordAskWithThreadAction,
     DiscordChannelMessageAction,
+    DiscordChannelMessageWithAttachmentAction,
     DiscordInteractionResponseAction,
     DiscordSeedWithThreadAction,
     DiscordTenantNotificationAction,
@@ -23,9 +27,8 @@ from orchestrator.core.communications.contracts import (
     GitHubManualFixIssueCommentReplyAction,
     GitHubManualFixReviewThreadReplyAction,
     GitHubPullRequestMergeAction,
+    GitHubPullRequestReactionAction,
     GitHubPullRequestReviewCommentReactionAction,
-    GitHubStickyRemediationCommentAction,
-    GitHubStickyRemediationReviewThreadReplyAction,
     GitHubStickyReviewCommentAction,
     HttpJsonResponseAction,
     HttpJsonResponseBytesAction,
@@ -36,6 +39,7 @@ from orchestrator.core.communications.contracts import (
 )
 from orchestrator.api.transport_runtime import (
     HttpTransportExecutor,
+    execute_side_effect_action,
     execute_http_ingress_result,
     execute_side_effect_ingress_result,
 )
@@ -229,6 +233,46 @@ class CommunicationContractsTests(unittest.TestCase):
         callback_sender.assert_called_once()
         client.post_message.assert_called_once_with(channel_id="c-1", content="hello", components=None)
 
+    def test_discord_transport_executor_returns_message_metadata_for_attachment_action(self) -> None:
+        client = MagicMock()
+        client.post_message_with_attachment.return_value = {"id": "discord-msg-1"}
+        executor = DiscordTransportExecutor(
+            bot_token="token",
+            client_factory=MagicMock(return_value=client),
+        )
+
+        result = executor.execute(
+            action=DiscordChannelMessageWithAttachmentAction(
+                channel_id="c-1",
+                content="hello",
+                filename="voice.wav",
+                file_bytes=b"wav",
+                content_type="audio/wav",
+            )
+        )
+
+        self.assertEqual(result, {"message_id": "discord-msg-1", "channel_id": "c-1"})
+
+    def test_execute_side_effect_action_returns_executor_metadata(self) -> None:
+        executor = MagicMock()
+        executor.execute.return_value = {"message_id": "discord-msg-1", "channel_id": "c-1"}
+
+        result = execute_side_effect_action(
+            action=GitHubIssueCommentReactionAction(
+                repo_full_name="org/repo",
+                comment_id=101,
+                content="eyes",
+            ),
+            envelope=TransportEnvelope(
+                transport="discord_gateway",
+                event_type="message_create",
+                request_id="req-3",
+            ),
+            transport_action_executors=(executor,),
+        )
+
+        self.assertEqual(result, {"message_id": "discord-msg-1", "channel_id": "c-1"})
+
     def test_discord_transport_executor_delegates_thread_style_actions_to_handler(self) -> None:
         handler = MagicMock()
         executor = DiscordTransportExecutor(
@@ -284,6 +328,57 @@ class CommunicationContractsTests(unittest.TestCase):
 
         notification_handler.execute_tenant_notification.assert_called_once()
 
+    def test_discord_transport_executor_executes_concrete_thread_senders_with_injected_dependencies(self) -> None:
+        session = MagicMock()
+        tenant = SimpleNamespace(tenant_id="tenant-1", is_enabled=True)
+        session.get.return_value = tenant
+        settings = SimpleNamespace()
+        executor = DiscordTransportExecutor(
+            session_factory=lambda: nullcontext(session),
+            settings_factory=lambda: settings,
+            thread_followup_sender=followup_module._send_discord_thread_followup,
+            ask_with_thread_sender=followup_module._send_discord_ask_response_with_thread,
+            seed_with_thread_sender=followup_module._send_discord_seed_followup_with_thread,
+        )
+
+        with (
+            patch.object(followup_module, "_send_discord_thread_followup_impl") as thread_impl,
+            patch.object(followup_module, "_send_discord_ask_response_with_thread_impl") as ask_impl,
+            patch.object(followup_module, "_send_discord_seed_followup_with_thread_impl") as seed_impl,
+        ):
+            executor.execute(
+                action=DiscordThreadReplyAction(
+                    tenant_id="tenant-1",
+                    channel_id="c1",
+                    reply_to_message_id="m1",
+                    content="thread",
+                )
+            )
+            executor.execute(
+                action=DiscordAskWithThreadAction(
+                    tenant_id="tenant-1",
+                    channel_id="c1",
+                    user_id="u1",
+                    content="ask",
+                    issue_key="MAB-174",
+                )
+            )
+            executor.execute(
+                action=DiscordSeedWithThreadAction(
+                    tenant_id="tenant-1",
+                    channel_id="c1",
+                    user_id="u1",
+                    content="seed",
+                    request_id="r1",
+                    questions=["q1"],
+                )
+            )
+
+        self.assertIsNotNone(thread_impl.call_args.kwargs["discord_api_client_fn"])
+        self.assertIsNotNone(ask_impl.call_args.kwargs["discord_api_client_fn"])
+        self.assertEqual(ask_impl.call_args.kwargs["issue_key"], "MAB-174")
+        self.assertIsNotNone(seed_impl.call_args.kwargs["discord_api_client_fn"])
+
     def test_github_transport_executor_supports_reaction_actions(self) -> None:
         github_client = MagicMock()
         executor = GitHubTransportExecutor(github_client=github_client, session=MagicMock())
@@ -302,6 +397,13 @@ class CommunicationContractsTests(unittest.TestCase):
                 content="eyes",
             )
         )
+        executor.execute(
+            action=GitHubPullRequestReactionAction(
+                repo_full_name="org/repo",
+                pr_number=12,
+                content="confused",
+            )
+        )
 
         github_client.add_issue_comment_reaction.assert_called_once_with(
             repo_full_name="org/repo",
@@ -313,6 +415,11 @@ class CommunicationContractsTests(unittest.TestCase):
             comment_id=202,
             content="eyes",
         )
+        github_client.sync_pull_request_reaction.assert_called_once_with(
+            repo_full_name="org/repo",
+            pr_number=12,
+            content="confused",
+        )
 
     def test_github_transport_executor_supports_publication_actions(self) -> None:
         github_client = MagicMock()
@@ -322,10 +429,6 @@ class CommunicationContractsTests(unittest.TestCase):
         with (
             patch("orchestrator.core.github.transport_executor.upsert_sticky_review_comment") as sticky_review,
             patch("orchestrator.core.github.transport_executor.publish_inline_review_batch") as inline_review,
-            patch("orchestrator.core.github.transport_executor.upsert_sticky_remediation_comment") as sticky_remediation,
-            patch(
-                "orchestrator.core.github.transport_executor.upsert_sticky_remediation_review_thread_reply"
-            ) as sticky_remediation_thread_reply,
             patch("orchestrator.core.github.transport_executor.upsert_manual_fix_issue_comment_reply") as manual_fix_issue_reply,
             patch("orchestrator.core.github.transport_executor.upsert_manual_fix_review_thread_reply") as manual_fix_reply,
         ):
@@ -353,41 +456,6 @@ class CommunicationContractsTests(unittest.TestCase):
                     project_id="project-1",
                     findings=(),
                     changed_paths={"a.py"},
-                )
-            )
-            executor.execute(
-                action=GitHubStickyRemediationCommentAction(
-                    repo_full_name="org/repo",
-                    pr_number=11,
-                    tenant_id="tenant-1",
-                    project_id="project-1",
-                    issue_key="GP-1",
-                    issue_url="https://jira/GP-1",
-                    issue_created=True,
-                    enqueued=True,
-                    reason=None,
-                    run_id="run-1",
-                    head_sha="abc123",
-                    event="pull_request",
-                    action_name="synchronize",
-                )
-            )
-            executor.execute(
-                action=GitHubStickyRemediationReviewThreadReplyAction(
-                    repo_full_name="org/repo",
-                    pr_number=11,
-                    tenant_id="tenant-1",
-                    project_id="project-1",
-                    triggering_comment_id=99,
-                    issue_key="GP-1",
-                    issue_url="https://jira/GP-1",
-                    issue_created=True,
-                    enqueued=True,
-                    reason=None,
-                    run_id="run-1",
-                    head_sha="abc123",
-                    event="pull_request_review_comment",
-                    action_name="created",
                 )
             )
             executor.execute(
@@ -434,8 +502,6 @@ class CommunicationContractsTests(unittest.TestCase):
 
         sticky_review.assert_called_once()
         inline_review.assert_called_once()
-        sticky_remediation.assert_called_once()
-        sticky_remediation_thread_reply.assert_called_once()
         manual_fix_reply.assert_called_once()
         manual_fix_issue_reply.assert_called_once()
 

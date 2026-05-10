@@ -3,52 +3,57 @@ from __future__ import annotations
 from fastapi import HTTPException, status
 
 from orchestrator.api.schemas import IntegrationTestResult
-from orchestrator.storage.models import JiraOAuthConnection, Tenant
-from orchestrator.tools.jira_oauth import JiraOAuthError
+from orchestrator.core.decision.types import (
+    JiraConfigKey,
+)
+from orchestrator.core.platform.operational_health_service import tenant_integration_snapshot
+from orchestrator.storage.models import AtlassianOAuthConnection, Tenant
+from orchestrator.tools.atlassian_oauth import AtlassianOAuthError
 
 
-def test_jira_connection(
+def test_atlassian_connection(
     *,
     session,
     tenant_id: str,
     settings,
-    refresh_jira_connection_tokens_fn,
-    jira_oauth_client_fn,
+    refresh_atlassian_connection_tokens_fn,
+    atlassian_oauth_client_fn,
 ) -> IntegrationTestResult:  # noqa: ANN001
     tenant = session.get(Tenant, tenant_id)
     if tenant is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
 
-    jira = tenant.jira_config
-    required = ["project_keys"]
-    missing = [field for field in required if not jira.get(field)]
+    integration = tenant_integration_snapshot(tenant=tenant)
+    missing: list[str] = []
+    if not integration.jira_project_keys:
+        missing.append(JiraConfigKey.PROJECT_KEYS.value)
     if missing:
         return IntegrationTestResult(ok=False, details=f"Missing Jira fields: {', '.join(missing)}")
 
-    connection_id = jira.get("connection_id")
-    if not isinstance(connection_id, str) or not connection_id:
-        return IntegrationTestResult(ok=False, details="Jira OAuth connection is not linked for this tenant")
+    connection_id = integration.atlassian_connection_id
+    if not connection_id:
+        return IntegrationTestResult(ok=False, details="Atlassian connection is not linked for this tenant")
 
-    connection = session.get(JiraOAuthConnection, connection_id)
+    connection = session.get(AtlassianOAuthConnection, connection_id)
     if connection is None:
-        return IntegrationTestResult(ok=False, details="Configured Jira connection was not found")
+        return IntegrationTestResult(ok=False, details="Configured Atlassian connection was not found")
 
     try:
-        access_token = refresh_jira_connection_tokens_fn(
+        access_token = refresh_atlassian_connection_tokens_fn(
             session,
             connection=connection,
             settings=settings,
             tenant_id=tenant_id,
         )
-        client = jira_oauth_client_fn(session=session, settings=settings, tenant_id=tenant_id)
+        client = atlassian_oauth_client_fn(session=session, settings=settings, tenant_id=tenant_id)
         projects = client.list_projects(access_token=access_token, cloud_id=connection.cloud_id)
-    except (ValueError, JiraOAuthError) as exc:
-        return IntegrationTestResult(ok=False, details=f"Jira OAuth validation failed: {exc}")
+    except (ValueError, AtlassianOAuthError) as exc:
+        return IntegrationTestResult(ok=False, details=f"Atlassian validation failed: {exc}")
 
     return IntegrationTestResult(
         ok=True,
         details=(
-            f"Jira OAuth connection is valid for {connection.site_url}; "
+            f"Atlassian connection is valid for {connection.site_url}; "
             f"{len(projects)} project(s) visible"
         ),
     )

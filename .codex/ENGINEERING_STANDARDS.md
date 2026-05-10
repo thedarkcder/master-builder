@@ -14,8 +14,71 @@ These are non-negotiable standards for agent and human changes in this repo. If 
 - Don’t upgrade dependencies unless required by the ticket.
 
 ### Testable by default
+- Every behavior change must include automated tests.
+- Automated tests must prove the behavior a QA engineer would otherwise need to verify manually.
+- For user-facing changes, the critical acceptance path must be covered by automated UI tests.
+- Any omission requires explicit justification in the PR and is subject to review blocking.
+- Use platform-standard UI automation:
+  - Web: Playwright
+  - Apple platforms: XCTest / XCUITest
+  - Other platforms: equivalent standard automation tooling
+- Tests must cover the appropriate layers:
+  - unit tests for isolated logic
+  - integration tests for boundaries and wiring
+  - behavior / end-to-end tests for real workflows
+  - UI automation for user-visible journeys
 - Core logic must be testable without external services.
-- Keep side effects at the edges (DB/HTTP/queues/etc.).
+- Keep side effects at the edges (DB / HTTP / queues / filesystem / third-party APIs) to keep core logic clean and testable.
+- Tests must validate the layer where the behavior actually lives.
+- Never mock the layer you are trying to prove works; mock only beyond the system boundary.
+- A page rendering is not proof of behavior.
+- The proof point is the state-changing action.
+- Don’t just prove the feature works; actively try to break it the way a real tester would.
+- Never describe partial coverage as full coverage.
+- For bug fixes, add a regression test that fails before the fix and passes after it.
+- Implementation is not complete until the relevant automated tests are written and passing.
+- For user facing applications, API tests are not enough. Verify the real operation path in browser, computer application, mobile app for all flows, including runtime-specific required fields and defaults.
+
+## UI automation standard
+
+For any change that affects user-visible behavior, evaluate whether the acceptance criteria should be proven through UI automation.
+
+UI automation is required when:
+- the feature is verified through screens, forms, navigation, or visible state changes
+- the workflow is one a QA engineer would normally execute manually
+- the change affects a critical user journey
+- the bug being fixed was observed at the UI level
+- the integration between frontend and backend is part of the value
+- UI automation for real workflows must hit the real backend API.
+- Mock only external systems outside the product boundary.
+- For critical workflows, UI automation must cover both the main success path and at least one meaningful failure, misuse, or repeat-action scenario.
+
+Preferred frameworks:
+- Web: Playwright
+- Apple platforms: XCTest / XCUITest
+- Other platforms: standard platform automation tooling
+
+Minimum expectation:
+- coverage of the main success path
+- coverage of at least one meaningful failure or validation path
+- tests must assert visible user outcomes, not internal implementation details
+
+Do not rely only on:
+- shallow component/unit tests
+- snapshots without behavioral assertions
+- mocked UI assertions that do not prove real outcomes
+
+If UI automation is not added for a user-facing change, the PR must explicitly justify why.
+
+## Failure-path and boundary-testing standard
+
+For bug fixes, incident fixes, and risky workflows:
+- The primary test must reproduce the real failure mode.
+- Happy-path-only tests are insufficient.
+- If the defect is in an owned layer, tests must exercise that layer.
+- Where a user-visible issue is caused by backend behavior, add:
+  - a backend/API/integration regression test for the real failure path
+  - UI automation for the user-visible workflow
 
 ## 2) Execution gate: “Good To Do” requirement
 
@@ -23,7 +86,7 @@ Agents must only work on items that are “Good To Do”. Before coding, confirm
 - Objective is clear in 1–2 sentences.
 - Acceptance criteria exists (or is proposed and confirmed).
 - Component/repo is clear.
-- “How to test” is clear or proposed.
+- “How to automate test” is clear or proposed.
 - Non-functional intent is explicit: **MVP quick test** vs **scale-ready**.
 - Risks/dependencies identified.
 
@@ -87,6 +150,9 @@ If partial work is unavoidable:
 - Create a follow-up Jira issue in **Backlog** describing exactly what remains (file paths, behavior).
 - Mark current run **blocked** and stop.
 
+Don't leave dead code around
+- If the code and is behaviour is no longer required remove it
+
 Reviewer must block PRs with untracked placeholders.
 
 ## 6) Error handling & observability
@@ -105,6 +171,13 @@ A PR should be blocked if it contains:
 - placeholders without linked follow-up issue
 - unclear “how to test”
 - changes that imply major NFR impact without Decision Gate discussion
+- missing UI automation for user-facing changes without justification
+- missing demo evidence for UI-visible changes
+- "how to test" steps that depend on manual exploration when the workflow is automatable
+- tests only cover the happy path for workflows with meaningful failure or misuse paths
+- tests mock the owned layer where the defect actually exists
+- UI tests are used as the main proof of backend/API behavior without hitting the real backend
+- no regression test reproduces the reported failure mode for a bug fix
 
 ## 7.1) Mandatory test execution gate (pre-commit and pre-PR)
 
@@ -142,37 +215,23 @@ Jira final comment:
 - notes (rollout/migrations/monitoring)
 - follow-ups created (Backlog)
 
-## 9) Universal UX principles
 
-Apply these to all UI/UX work by default:
+## 9) Shared Logic Recognition & Reuse Standard
 
-### Consistent structure
-- Maintain uniform layouts.
-- Similar tasks should follow the same structural pattern, whether modular steps or single cohesive flows.
+When designing new commands, workflows, or logic paths, the agent must assume that similar problems may already have been solved elsewhere in the system. Before implementing any new logic, the agent should actively evaluate whether an existing service, module, or function provides the same or similar behaviour. This reflects the principle that systems should evolve toward a **single implementation of shared behaviour**, rather than duplicating logic across multiple paths.
 
-### Clear navigation
-- Ensure users always know where they are.
-- Use clear headings, breadcrumbs, or step indicators.
+If a potential overlap is identified, the agent must not proceed with implementation immediately. Instead, it should pause and validate intent by asking:  
+- “Does this new functionality rely on the same underlying logic as an existing capability?”  
+- “Should this reuse or extend an existing service, or is this intentionally different?”  
 
-### Predictable feedback
-- Alerts, errors, or confirmations should always appear in a consistent spot (for example top-right toast or top banner).
+This ensures alignment with product expectations and prevents divergence in behaviour across the system.
 
-### Responsive design
-- On all screen sizes, layouts adapt.
-- On mobile, components should use full width or stack vertically.
+## 10)  Agent Design Behaviour (Engineering Mindset)
 
-### Consistent spacing and typographic hierarchy
-- Use consistent spacing scales and clear typography for hierarchy.
+The agent must think like an experienced engineer: pattern recognition comes before implementation. When multiple inputs, commands, or workflows appear to produce similar outcomes, the agent should treat them as **clients of a shared capability**, not as independent implementations. If no shared abstraction exists yet, the agent should propose creating one before proceeding.
 
-### Accessible interactions
-- All interactions must be keyboard-accessible, with clear focus states.
+In ambiguous cases—especially where acceptance criteria are incomplete or unclear—the agent must surface the assumption explicitly. For example:  
+- “This appears similar to existing behaviour in [X]. Should this follow the same logic?”  
+- “If these paths are expected to behave consistently, I recommend extracting this into a shared service/module.”  
 
-### Context retention
-- Multi-step flows must retain input and context across steps.
-- No resets.
-
-### Guided user flow
-- Guide users with clear next steps or progress indicators.
-
-### Full-width for data-dense interfaces
-- For admin dashboards or data-heavy screens, always use full-width layouts to maximize space and clarity.
+The default behaviour is **reuse and centralisation**, not duplication. Any deviation from shared logic must be intentional and explicitly confirmed.

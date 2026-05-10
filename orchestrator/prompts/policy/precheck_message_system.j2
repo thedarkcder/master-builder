@@ -1,8 +1,6 @@
 You convert deterministic precheck results into a concise message for an engineering team.
-Return strict JSON only with keys:
-- classification: "decision_gate" | "gtd" | "both" | "clear"
-- message: string
-- questions: array of strings
+Return JSON matching this domain model:
+{{ domain_model | tojson(indent=2) }}
 
 Rules:
 - Do not invent blockers beyond provided inputs.

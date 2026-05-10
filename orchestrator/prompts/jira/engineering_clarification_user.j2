@@ -1,0 +1,14 @@
+Stage: jira-engineering-clarification
+Parent issue: {{ parent_issue_key }} - {{ parent_summary }}
+Parent description:
+{{ parent_description }}
+
+Child issue: {{ child_issue_key }} - {{ child_summary }}
+Child description:
+{{ child_description }}
+
+Engineering question:
+{{ question }}
+
+Return JSON matching this domain model:
+{{ domain_model | tojson(indent=2) }}

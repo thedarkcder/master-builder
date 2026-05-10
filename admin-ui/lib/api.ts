@@ -1,3 +1,18 @@
+import { DEFAULT_API_BASE_URL } from "@/lib/auth-constants";
+import { parseResponseBody, readNdjsonStream, request, stringifyErrorDetail, type Credentials } from "@/lib/api/http";
+import type { RunRecord } from "@/lib/api/run-events";
+export type { Credentials } from "@/lib/api/http";
+export {
+  cancelRun,
+  getRun,
+  listRunEvents,
+  listRunLogs,
+  listRuns,
+  RUN_STATUSES,
+  streamRunEvents,
+} from "@/lib/api/run-events";
+export type { RunEventRecord, RunRecord, RunStatus, RuntimeLogEventRecord } from "@/lib/api/run-events";
+
 export type JiraConfig = {
   connection_id: string | null;
   project_keys: string[];
@@ -37,11 +52,22 @@ export type PolicyConfig = {
   knowledge_auto_answer_mode: "safe" | "balanced" | "aggressive";
   codex_model?: string | null;
   codex_reasoning_effort?: "low" | "medium" | "high" | null;
+  observability: {
+    audit_retention_days: number;
+    audit_export_enabled: boolean;
+    legal_hold_enabled: boolean;
+    legal_hold_reason?: string | null;
+  };
 };
 
 export type DiscordConfig = {
   guild_id?: string | null;
+  installed_at?: string | null;
+  installer_user_id?: string | null;
   channel_id?: string | null;
+  onboarding_channel_id?: string | null;
+  onboarding_invite_expires_in_seconds?: number | null;
+  onboarding_invite_max_uses?: number | null;
   notify_events: string[];
   allowed_user_ids?: string[];
   command_secret_ref?: string | null;
@@ -59,27 +85,55 @@ export type TenantCreatePayload = {
   repos: ReposConfig;
   policy: PolicyConfig;
   discord: DiscordConfig | null;
+  experience?: Record<string, unknown>;
 };
 
-export type TenantUpdatePayload = {
+export type TenantConfigurationUpdatePayload = {
   name: string;
-  is_enabled: boolean;
+};
+
+export type TenantJiraUpdatePayload = {
   jira: JiraConfig;
+};
+
+export type TenantGithubUpdatePayload = {
   github: GithubConfig;
+};
+
+export type TenantReposUpdatePayload = {
   repos: ReposConfig;
+};
+
+export type TenantPolicyUpdatePayload = {
   policy: PolicyConfig;
+};
+
+export type TenantObservabilityUpdatePayload = {
+  observability: PolicyConfig["observability"];
+};
+
+export type TenantDiscordUpdatePayload = {
   discord: DiscordConfig | null;
+};
+
+export type TenantExperienceUpdatePayload = {
+  experience?: Record<string, unknown>;
+  setup_state?: Record<string, unknown>;
 };
 
 export type TenantRecord = {
   tenant_id: string;
   name: string;
   is_enabled: boolean;
+  archived_at?: string | null;
+  purge_after_at?: string | null;
   jira: JiraConfig;
   github: GithubConfig;
   repos: ReposConfig;
   policy: PolicyConfig;
   discord: DiscordConfig | null;
+  experience: Record<string, unknown>;
+  setup_state: Record<string, unknown>;
   created_at: string;
   updated_at: string;
 };
@@ -94,6 +148,32 @@ export type GitHubRepositoryRecord = {
 export type JiraProjectRecord = {
   key: string;
   name: string;
+};
+
+export type AdminNotificationRecord = {
+  notification_id: string;
+  tenant_id: string | null;
+  project_id: string | null;
+  scope_type: string;
+  scope_id: string | null;
+  source: string;
+  kind: string;
+  severity: string;
+  title: string;
+  detail: string;
+  action_label: string | null;
+  action_path: string | null;
+  fingerprint: string;
+  status: string;
+  context: Record<string, unknown>;
+  first_emitted_at: string;
+  last_emitted_at: string;
+  acknowledged_at: string | null;
+  resolved_at: string | null;
+};
+
+export type AdminNotificationListRecord = {
+  notifications: AdminNotificationRecord[];
 };
 
 export type ProjectPolicyOverrides = Partial<
@@ -116,7 +196,9 @@ export type ProjectPolicyOverrides = Partial<
     | "codex_model"
     | "codex_reasoning_effort"
   >
->;
+> & {
+  run_board_id?: number | string | null;
+};
 
 export type CodexModelOptionRecord = {
   id: string;
@@ -127,6 +209,8 @@ export type CodexModelOptionRecord = {
 export type CodexModelCatalogRecord = {
   default_model: string;
   default_reasoning_effort: "low" | "medium" | "high";
+  runtime_kind: string;
+  profile_name?: string | null;
   models: CodexModelOptionRecord[];
   reasoning_efforts: CodexModelOptionRecord[];
 };
@@ -142,6 +226,29 @@ export type ProjectDiscordConfig = {
   live_voice_linked_text_channel_id?: string | null;
 };
 
+export type ProjectArchitectureDocsConfig = {
+  provider: "internal" | "confluence";
+  space_key?: string | null;
+  parent_page_id?: string | null;
+};
+
+export type ConfluenceSpaceRecord = {
+  space_id: string;
+  key: string;
+  name: string;
+};
+
+export type ConfluenceSpaceCatalogRecord = {
+  items: ConfluenceSpaceRecord[];
+  create_space_url: string;
+};
+
+export type ConfluencePageRecord = {
+  page_id: string;
+  title: string;
+  webui_url: string;
+};
+
 export type ProjectRecord = {
   project_id: string;
   tenant_id: string;
@@ -152,10 +259,112 @@ export type ProjectRecord = {
   environment: Record<string, string>;
   secret_refs: Record<string, string>;
   discord: ProjectDiscordConfig | null;
+  architecture_docs?: ProjectArchitectureDocsConfig | null;
   effective_policy: PolicyConfig;
   is_archived: boolean;
   created_at: string;
   updated_at: string;
+};
+
+export type ProjectAutomationExecutionRecord = {
+  execution_id: string;
+  automation_id: string;
+  scheduled_for: string;
+  window_start_at: string;
+  window_end_at: string;
+  status: string;
+  dedupe_key: string;
+  started_at: string | null;
+  completed_at: string | null;
+  discord_message_id: string | null;
+  last_error: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ProjectAutomationRecord = {
+  automation_id: string;
+  project_id: string;
+  tenant_id: string;
+  kind: string;
+  enabled: boolean;
+  timezone: string;
+  days_of_week: number[];
+  local_time: string;
+  fallback_lookback_hours: number;
+  last_successful_window_end_at: string | null;
+  next_run_at: string;
+  executions: ProjectAutomationExecutionRecord[];
+  created_at: string;
+  updated_at: string;
+};
+
+export type ProjectAutomationWritePayload = {
+  kind: string;
+  enabled: boolean;
+  timezone: string;
+  days_of_week: Array<number | string>;
+  local_time: string;
+  fallback_lookback_hours: number;
+};
+
+export type ProjectAutomationsPayload = {
+  automations: ProjectAutomationWritePayload[];
+};
+
+export type ProjectAutomationsRecord = {
+  automations: ProjectAutomationRecord[];
+};
+
+export type ProjectInstallRecord = {
+  install_id: string;
+  tenant_id: string;
+  project_id: string;
+  kind: string;
+  label: string;
+  enabled: boolean;
+  config: Record<string, unknown>;
+  binding_names: string[];
+  created_at: string;
+  updated_at: string;
+};
+
+export type ProjectInstallsRecord = {
+  installs: ProjectInstallRecord[];
+};
+
+export type ProjectInstallPayload = {
+  kind: string;
+  label: string;
+  enabled: boolean;
+  config: Record<string, unknown>;
+  binding_names: string[];
+};
+
+export type ProjectInstallRequestRecord = {
+  request_id: string;
+  tenant_id: string;
+  project_id: string;
+  workflow_id: string | null;
+  run_id: string | null;
+  issue_key: string;
+  kind: string;
+  label: string;
+  reason: string;
+  suggested_config: Record<string, unknown>;
+  required_bindings: string[];
+  status: string;
+  request_kind: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ProjectInstallRequestsRecord = {
+  requests: ProjectInstallRequestRecord[];
+};
+
+export type ProjectInstallRequestUpdatePayload = {
+  status: string;
 };
 
 export type ProjectCreatePayload = {
@@ -166,17 +375,75 @@ export type ProjectCreatePayload = {
   environment?: Record<string, string>;
   secret_refs?: Record<string, string>;
   discord?: ProjectDiscordConfig | null;
+  architecture_docs?: ProjectArchitectureDocsConfig | null;
 };
 
-export type ProjectUpdatePayload = {
+export type ProjectConfigurationUpdatePayload = {
   name: string;
   github_repository: string;
   jira_project_key: string;
-  policy_overrides?: ProjectPolicyOverrides;
-  environment?: Record<string, string>;
-  secret_refs?: Record<string, string>;
-  discord?: ProjectDiscordConfig | null;
+  architecture_docs?: ProjectArchitectureDocsConfig | null;
+};
+
+export type ProjectPolicyUpdatePayload = {
+  policy_overrides: ProjectPolicyOverrides;
+};
+
+export type ProjectEnvironmentUpdatePayload = {
+  environment: Record<string, string>;
+};
+
+export type ProjectSecretRefsUpdatePayload = {
+  secret_refs: Record<string, string>;
+};
+
+export type ProjectDiscordUpdatePayload = {
+  discord: ProjectDiscordConfig | null;
+};
+
+export type ProjectArchiveUpdatePayload = {
   is_archived: boolean;
+};
+
+export type ArchitectureDocumentRecord = {
+  document_id: string;
+  tenant_id: string;
+  project_id: string;
+  parent_issue_key: string;
+  provider: "internal" | "confluence";
+  title: string;
+  status: "draft" | "ready" | "superseded";
+  is_active: boolean;
+  canonical_url: string;
+  provider_ref?: string | null;
+  knowledge_asset_id?: string | null;
+  content_markdown?: string | null;
+  metadata: Record<string, unknown>;
+  created_by?: string | null;
+  updated_by?: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ArchitectureDocumentPageRecord = {
+  items: ArchitectureDocumentRecord[];
+  total: number;
+};
+
+export type ArchitectureDocumentCreatePayload = {
+  parent_issue_key: string;
+  issue_summary?: string | null;
+  title?: string | null;
+  canonical_url?: string | null;
+  provider_ref?: string | null;
+};
+
+export type ArchitectureDocumentUpdatePayload = {
+  title: string;
+  status: "draft" | "ready" | "superseded";
+  content_markdown?: string | null;
+  canonical_url?: string | null;
+  provider_ref?: string | null;
 };
 
 export type ProjectKnowledgeAssetRecord = {
@@ -371,6 +638,91 @@ export type KnowledgeJiraSyncRuntimeRecord = {
   projects: KnowledgeJiraSyncProjectStatusRecord[];
 };
 
+export type PlatformServiceStatusRecord = {
+  service_id: string;
+  label: string;
+  status: "healthy" | "degraded" | "idle" | "unavailable" | string;
+  summary: string;
+  updated_at: string | null;
+  capabilities: string[];
+  runtime_dependencies?: Record<string, PlatformRuntimeDependencyRecord>;
+  instances?: PlatformServiceInstanceRecord[];
+};
+
+export type PlatformRuntimeDependencyRecord = {
+  state?: string;
+  summary?: string;
+  remediation_text?: string | null;
+  remediation_expires_at?: string | null;
+  login_service_instance_id?: string | null;
+};
+
+export type WorkerRuntimeAuthRequestRecord = {
+  request_id: string;
+  service_instance_id: string;
+  runtime_kind: string;
+  status: string;
+  remediation_text?: string | null;
+  requested_at: string;
+  started_at?: string | null;
+  completed_at?: string | null;
+  expires_at?: string | null;
+  last_error?: string | null;
+};
+
+export type PlatformServiceInstanceRecord = {
+  instance_id: string;
+  label: string;
+  status: "healthy" | "degraded" | "idle" | "unavailable" | "busy" | "stale" | "stopped" | string;
+  summary?: string | null;
+  last_heartbeat_at?: string | null;
+  updated_at: string | null;
+  capabilities: string[];
+  current_run_id?: string | null;
+  active_run_count?: number;
+  runtime_dependencies?: Record<string, PlatformRuntimeDependencyRecord>;
+};
+
+export type PlatformStatusRecord = {
+  services: PlatformServiceStatusRecord[];
+};
+
+export type WebhookQueueJobRecord = {
+  job_id: string;
+  transport: string;
+  tenant_id: string | null;
+  project_id: string | null;
+  subject_key: string;
+  related_run_id: string | null;
+  dedupe_key: string | null;
+  request_id: string;
+  event_type: string | null;
+  status: "pending" | "processing" | "failed" | "done" | string;
+  lease_expires_at: string | null;
+  available_at: string;
+  attempt_count: number;
+  last_error: string | null;
+  created_at: string;
+  updated_at: string;
+  started_at: string | null;
+  completed_at: string | null;
+};
+
+export type WebhookQueueSummaryRecord = {
+  pending_count: number;
+  processing_count: number;
+  failed_count: number;
+  done_count: number;
+};
+
+export type WebhookQueueJobPageRecord = {
+  items: WebhookQueueJobRecord[];
+  total: number;
+  limit: number;
+  offset: number;
+  summary: WebhookQueueSummaryRecord;
+};
+
 export type JiraWebhookActionResult = {
   ok: boolean;
   action: string;
@@ -405,66 +757,371 @@ export type ReadyGatePreviewRecord = {
   guidance: string;
 };
 
-export const RUN_STATUSES = [
-  "queued",
-  "running",
-  "succeeded",
-  "failed",
-  "blocked",
-  "cancelled",
-] as const;
-
-export type RunStatus = (typeof RUN_STATUSES)[number];
-
-export type RunRecord = {
-  run_id: string;
+export type WorkflowRecord = {
+  execution_id: string;
+  workflow_id: string;
   tenant_id: string;
   project_id: string | null;
-  issue_key: string;
-  issue_summary: string | null;
-  issue_url: string | null;
+  source_system: string;
+  source_ref: string;
+  display_name: string | null;
   repo_url: string | null;
   branch: string | null;
   pr_url: string | null;
-  dev_session_id: string | null;
-  pm_session_id: string | null;
-  orchestrated_session_id: string | null;
-  status: RunStatus;
-  last_error: string | null;
+  orchestration_backend: string;
+  dedupe_scope: string;
+  status: string;
+  workflow_type: WorkflowTypeRecord;
+  current_state: string;
+  waiting_on: string | null;
+  next_step: string | null;
+  active_run_id: string | null;
+  latest_checkpoint_id: string | null;
+  source_workflow_id: string | null;
+  source_run_id: string | null;
+  failure_reason: string | null;
+  pending_input_request_id: string | null;
+  latest_checkpoint_kind: string | null;
+  state_path: WorkflowStatePathEntryRecord[];
+  completed_steps: string[];
+  failed_steps: string[];
+  pending_steps: string[];
+  retrying_steps: string[];
+  conditional_branches_taken: string[];
+  conditional_branches_available: string[];
+  can_resume: boolean;
+  resume_unavailable_reason: string | null;
+  links: WorkflowLinkRecord[];
+  operations: WorkflowOperationRecord[];
+  runs: RunRecord[];
   created_at: string;
   started_at: string | null;
   finished_at: string | null;
-  plan: Record<string, unknown> | null;
 };
 
-export type RunRerunPayload = {
-  mode: "fresh" | "resume";
-  resume_stage?: "orchestrated" | "pm" | "dev";
-};
-
-export type RunEventRecord = {
-  event_type: string;
+export type WorkflowBoardRunSummaryRecord = {
   run_id: string;
-  issue_key: string | null;
-  project_id: string | null;
-  agent_id: string;
-  recorded_at: string;
+  workflow_id: string;
+  issue_key: string;
+  issue_summary: string | null;
+  status: string;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
 };
 
-export type RunLogEventRecord = {
-  run_id: string;
-  issue_key: string | null;
+export type WorkflowBoardItemRecord = {
+  execution_id: string;
+  workflow_id: string;
+  workflow_type_key: string;
+  tenant_id: string;
   project_id: string | null;
-  agent_id: string;
-  invocation_id?: string | null;
-  channel?: string | null;
-  command?: string | null;
-  working_dir: string | null;
-  stage: string;
-  attempt: number | null;
-  stream: string;
+  source_system: string;
+  source_ref: string;
+  display_name: string | null;
+  dedupe_scope: string;
+  status: string;
+  failure_reason: string | null;
+  pending_input_request_id: string | null;
+  run_count: number;
+  active_run_count: number;
+  failed_run_count: number;
+  latest_run: WorkflowBoardRunSummaryRecord | null;
+  runs: WorkflowBoardRunSummaryRecord[];
+  links: WorkflowLinkRecord[];
+  latest_activity_at: string;
+  created_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+  updated_at: string;
+};
+
+export type WorkflowTypeOperationRecord = {
+  operation_type: string;
+  label: string;
+  description: string | null;
+  completion_required: boolean;
+  kind: string;
+  after: string[];
+  supports: string[];
+  required: boolean;
+  retryable: boolean;
+  graph_index: number;
+  status: string | null;
+};
+
+export type WorkflowRetryPolicyRecord = {
+  manual_retry_enabled: boolean;
+  max_attempts: number;
+  initial_interval_seconds: number;
+  max_interval_seconds: number;
+  backoff_coefficient: number;
+};
+
+export type WorkflowTypeRecord = {
+  key: string;
+  label: string;
+  description: string | null;
+  orchestration_backend: string;
+  retry_policy: WorkflowRetryPolicyRecord;
+  capabilities: Record<string, unknown>;
+  lifecycle: {
+    state_path_kind: string;
+    execution_modes: string[];
+    conditional_paths: string[];
+    states: Array<{
+      key: string;
+      label: string;
+      terminal: boolean;
+      waits_for_input: boolean;
+    }>;
+    transitions: Array<{
+      from_state: string;
+      to_state: string;
+      label: string;
+    }>;
+  };
+  operations: WorkflowTypeOperationRecord[];
+};
+
+export type WorkflowExecutionPreviewRecord = {
+  execution_id: string;
+  workflow_id: string;
+  source_system: string;
+  source_ref: string;
+  display_name: string | null;
+  status: string;
+  waiting_on: string | null;
+  next_step: string | null;
+  failure_reason: string | null;
+  created_at: string;
+  finished_at: string | null;
+};
+
+export type WorkflowTypeSummaryRecord = {
+  key: string;
+  label: string;
+  description: string | null;
+  operation_count: number;
+  execution_count: number;
+  latest_execution_at: string | null;
+};
+
+export type WorkflowTypeDetailRecord = {
+  key: string;
+  label: string;
+  description: string | null;
+  orchestration_backend: string;
+  retry_policy: WorkflowRetryPolicyRecord;
+  capabilities: Record<string, unknown>;
+  lifecycle: {
+    state_path_kind: string;
+    execution_modes: string[];
+    conditional_paths: string[];
+    states: Array<{
+      key: string;
+      label: string;
+      terminal: boolean;
+      waits_for_input: boolean;
+    }>;
+    transitions: Array<{
+      from_state: string;
+      to_state: string;
+      label: string;
+    }>;
+  };
+  operations: WorkflowTypeOperationRecord[];
+  execution_count: number;
+  latest_execution_at: string | null;
+  recent_executions: WorkflowExecutionPreviewRecord[];
+};
+
+export type WorkflowStatePathEntryRecord = {
+  key: string;
+  label: string;
+  status: string;
+  recorded_at: string | null;
+  detail: string | null;
+};
+
+export type WorkflowLinkRecord = {
+  kind: string;
+  label: string;
+  ref: string | null;
+  url: string | null;
+  status: string | null;
+};
+
+export type WorkflowOperationAttemptRecord = {
+  attempt_id: string;
+  attempt_number: number;
+  status: string;
+  error_category: string | null;
+  error_message: string | null;
+  status_detail: string | null;
+  retryable: boolean;
+  next_retry_at: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+  work_units?: WorkflowOperationWorkUnitRecord[];
+};
+
+export type WorkflowOperationWorkUnitAttemptRecord = {
+  work_unit_attempt_id: string;
+  operation_attempt_id: string;
+  attempt_number: number;
+  status: string;
+  error_category: string | null;
+  error_message: string | null;
+  next_retry_at: string | null;
+  started_at: string | null;
+  finished_at: string | null;
+};
+
+export type WorkflowOperationWorkUnitRecord = {
+  work_unit_id: string;
+  unit_key: string;
+  unit_kind: string;
+  idempotency_key: string;
+  input_fingerprint: string;
+  status: string;
+  error_category: string | null;
+  error_message: string | null;
+  completed_at: string | null;
+  attempts: WorkflowOperationWorkUnitAttemptRecord[];
+};
+
+export type WorkflowObservabilityEventRecord = {
+  event_id: string;
+  event_sequence?: number | string | null;
+  source: "audit" | "telemetry";
+  level: string;
+  event_kind: string;
   message: string;
+  source_component: string | null;
+  run_id: string | null;
+  operation_id: string | null;
+  attempt_id: string | null;
+  agent_id: string | null;
+  invocation_id: string | null;
+  stage: string | null;
+  attempt: number | null;
+  stream: string | null;
+  payload: Record<string, unknown>;
   recorded_at: string;
+};
+
+export type WorkflowTranscriptEntryRecord = {
+  entry_id: string;
+  recorded_at: string;
+  level: string;
+  title: string;
+  message: string;
+  source_component: string | null;
+  payload: Record<string, unknown>;
+};
+
+export type WorkflowTranscriptSectionRecord = {
+  kind: "summary" | "runtime" | "prompts" | "tool_calls" | "external_requests" | "external_responses" | "outcome";
+  label: string;
+  entries: WorkflowTranscriptEntryRecord[];
+};
+
+export type WorkflowStepAttemptTranscriptRecord = {
+  attempt_id: string;
+  attempt_number: number;
+  status: string;
+  started_at: string | null;
+  finished_at: string | null;
+  duration_ms: number | null;
+  error_category: string | null;
+  failure_message: string | null;
+  status_detail: string | null;
+  recommended_next_action: string | null;
+  sections: WorkflowTranscriptSectionRecord[];
+};
+
+export type WorkflowStepTranscriptRecord = {
+  execution_id: string;
+  operation_id: string;
+  operation_label: string;
+  current_status: string;
+  source: "audit" | "telemetry";
+  attempts: WorkflowStepAttemptTranscriptRecord[];
+};
+
+export type WorkflowOperationRetryResponseRecord = {
+  workflow: WorkflowRecord;
+  started_attempt?: WorkflowOperationAttemptRecord | null;
+};
+
+export type WorkflowExecutionStartPayload = {
+  workflow_type_key: string;
+  tenant_id: string;
+  project_id?: string | null;
+  input?: Record<string, unknown>;
+};
+
+export type WorkflowExecutionStartRecord = {
+  execution_id: string;
+  workflow_id: string;
+  workflow_type_key: string;
+  status: string;
+  started_attempt_id: string | null;
+};
+
+export type StartWorkIssueRecord = {
+  issue_key: string;
+  run_id: string | null;
+  status: string;
+  reason: string | null;
+};
+
+export type WorkflowStartWorkResponseRecord = {
+  workflow: WorkflowRecord;
+  queued: StartWorkIssueRecord[];
+  skipped: StartWorkIssueRecord[];
+  promoted_issue_keys: string[];
+  started_attempt?: WorkflowOperationAttemptRecord | null;
+};
+
+export type StartEngineeringPreviewRecord = {
+  tenant_id: string;
+  project_id: string;
+  execution_id: string;
+  issue_key: string;
+  display_name: string | null;
+  workflow_status: string;
+  can_start: boolean;
+  unavailable_reason: string | null;
+};
+
+export type WorkflowOperationRecord = {
+  operation_id: string;
+  run_id: string | null;
+  operation_type: string;
+  status: string;
+  label?: string | null;
+  description?: string | null;
+  required?: boolean;
+  kind: string;
+  after: string[];
+  supports: string[];
+  definition_only?: boolean;
+  target_system: string | null;
+  target_ref: string | null;
+  summary: string | null;
+  can_retry: boolean;
+  retry_unavailable_reason: string | null;
+  can_restart?: boolean;
+  restart_unavailable_reason?: string | null;
+  attempts: WorkflowOperationAttemptRecord[];
+  events: WorkflowObservabilityEventRecord[];
+};
+
+export type WorkflowAttemptCreatePayload = {
+  mode: "fresh" | "restart" | "resume";
+  checkpoint_kind?: "pm" | "execution";
 };
 
 export type TokenTimelineTurnRecord = {
@@ -691,6 +1348,71 @@ export type ManagedSecretResolveResult = {
   resolved: boolean;
 };
 
+export type AgentExecutionProfileRecord = {
+  profile_name: string;
+  runtime_kind: string;
+  cli_command: string;
+  model: string;
+  reasoning_effort: "low" | "medium" | "high" | null;
+  tool_bridge_allowed: boolean;
+  fallback_profile: string | null;
+  base_url: string | null;
+  api_key_secret_ref: string | null;
+  is_builtin: boolean;
+  is_overridden: boolean;
+  can_delete: boolean;
+  can_reset: boolean;
+  usage_references: string[];
+};
+
+export type AgentExecutionProfileWritePayload = {
+  runtime_kind: string;
+  cli_command: string;
+  model: string;
+  reasoning_effort: "low" | "medium" | "high" | null;
+  tool_bridge_allowed: boolean;
+  fallback_profile: string | null;
+  base_url: string | null;
+  api_key_secret_ref: string | null;
+};
+
+export type AgentExecutionProfileCreatePayload = AgentExecutionProfileWritePayload & {
+  profile_name: string;
+};
+
+export type AgentExecutionProfilesRecord = {
+  profiles: Record<string, AgentExecutionProfileRecord>;
+};
+
+export type AgentRuntimeToolRecord = {
+  tool_name: string;
+  category: string;
+  description: string;
+  stages: string[];
+};
+
+export type AgentRuntimeToolsRecord = {
+  available_stages: string[];
+  tools: AgentRuntimeToolRecord[];
+};
+
+export type AgentRuntimeRoutingDefaultsRecord = {
+  role_routing: Record<string, string>;
+  name_routing: Record<string, string>;
+  selector_routing: Record<string, string>;
+};
+
+export type AgentRuntimeRoutingRecord = {
+  role_routing: Record<string, string>;
+  name_routing: Record<string, string>;
+  selector_routing: Record<string, string>;
+  available_roles: string[];
+  available_named_agents: string[];
+  available_selectors: string[];
+  available_profiles: Record<string, AgentExecutionProfileRecord>;
+  effective_defaults: AgentRuntimeRoutingDefaultsRecord;
+};
+
 export type DiscordAllowlistRequestRecord = {
   project_id: string | null;
   user_id: string;
@@ -708,9 +1430,28 @@ export type DiscordAllowlistApprovalResult = {
   notified: boolean;
 };
 
-export type Credentials = {
-  apiBaseUrl: string;
-  accessToken: string;
+export type MembershipRecord = {
+  membership_id: string;
+  tenant_id: string;
+  role: string;
+  permission_keys: string[];
+  effective_mode: "technical" | "non_technical";
+  mode_override: "technical" | "non_technical" | null;
+  onboarding_kind: "tenant_admin_setup" | "member_join";
+  first_signed_in_at: string | null;
+  onboarding_completed_at: string | null;
+  onboarding_version: string | null;
+  team_ids: string[];
+  discord_state: Record<string, unknown>;
+};
+
+export type AuthenticatedPrincipalRecord = {
+  principal_type: "platform_super_admin" | "tenant_user";
+  username?: string | null;
+  user_id?: string | null;
+  email?: string | null;
+  full_name?: string | null;
+  memberships: MembershipRecord[];
 };
 
 export type AdminLoginInput = {
@@ -719,56 +1460,167 @@ export type AdminLoginInput = {
   password: string;
 };
 
-function authHeader(credentials: Credentials): string {
-  if (!credentials.accessToken) {
-    throw new Error("Admin access token is required.");
-  }
-  return `Bearer ${credentials.accessToken}`;
-}
+export type RegistrationInput = {
+  full_name: string;
+  email: string;
+  password: string;
+  tenant_name: string;
+};
 
-function parseResponseBody(text: string): unknown {
-  if (!text) {
-    return null;
-  }
+export type PasswordResetRequestInput = {
+  email: string;
+};
 
-  try {
-    return JSON.parse(text);
-  } catch {
-    return { detail: text };
-  }
-}
+export type PasswordResetConfirmInput = {
+  token: string;
+  new_password: string;
+};
 
-async function request<T>(
-  credentials: Credentials,
-  path: string,
-  init?: RequestInit
-): Promise<T> {
-  const base = credentials.apiBaseUrl.replace(/\/$/, "");
-  const response = await fetch(`${base}${path}`, {
-    ...init,
-    headers: {
-      "Content-Type": "application/json",
-      Authorization: authHeader(credentials),
-      ...(init?.headers ?? {})
-    }
-  });
+export type RegistrationResponse = {
+  access_token: string;
+  token_type: string;
+  expires_in: number;
+  principal: AuthenticatedPrincipalRecord;
+  tenant: TenantRecord;
+};
 
-  const text = await response.text();
-  const body = parseResponseBody(text);
+export type InviteAcceptInput = {
+  token: string;
+  password: string;
+  full_name?: string | null;
+};
 
-  if (!response.ok) {
-    const detail =
-      typeof body === "object" && body && "detail" in body
-        ? String((body as { detail: unknown }).detail)
-        : response.statusText;
-    throw new Error(`${response.status}: ${detail}`);
-  }
+export type DeliverySummaryRecord = {
+  summary: {
+    completed_count: number;
+    in_review_count: number;
+    blocked_count: number;
+    failed_count: number;
+    queued_count: number;
+    median_cycle_time_hours: number | null;
+    average_cycle_time_hours: number | null;
+  };
+  timeline: Array<{
+    run_id: string;
+    project_id: string | null;
+    issue_key: string;
+    issue_summary: string | null;
+    status: string;
+    completed_at: string | null;
+    started_at: string | null;
+    pr_url: string | null;
+  }>;
+};
 
-  return body as T;
-}
+export type TenantInviteRecord = {
+  invite_id: string;
+  tenant_id: string;
+  email: string;
+  full_name: string | null;
+  role: string;
+  team_ids: string[];
+  mode_override: "technical" | "non_technical" | null;
+  status: string;
+  invite_url: string | null;
+  expires_at: string;
+  accepted_at: string | null;
+  revoked_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type TenantTeamRecord = {
+  team_id: string;
+  tenant_id: string;
+  name: string;
+  description: string | null;
+  permission_keys: string[];
+  created_at: string;
+  updated_at: string;
+};
+
+export type TenantMemberRecord = {
+  membership_id: string;
+  tenant_id: string;
+  user_id: string;
+  email: string;
+  full_name: string | null;
+  is_active: boolean;
+  role: string;
+  permission_keys: string[];
+  effective_mode: "technical" | "non_technical";
+  mode_override: "technical" | "non_technical" | null;
+  onboarding_kind: "tenant_admin_setup" | "member_join";
+  first_signed_in_at: string | null;
+  onboarding_completed_at: string | null;
+  onboarding_version: string | null;
+  team_ids: string[];
+  discord_state: Record<string, unknown>;
+  created_at: string;
+  updated_at: string;
+};
+
+export type TenantMemberUpdatePayload = {
+  role: "tenant_admin" | "technical_member" | "business_member";
+  team_ids: string[];
+  mode_override: "technical" | "non_technical" | null;
+  is_active: boolean;
+};
+
+export type TenantTeamCreatePayload = {
+  name: string;
+  description?: string | null;
+  permission_keys: string[];
+};
+
+export type TenantInviteCreatePayload = {
+  email: string;
+  full_name?: string | null;
+  role: "tenant_admin" | "technical_member" | "business_member";
+  team_ids: string[];
+  mode_override: "technical" | "non_technical" | null;
+};
+
+export type TenantDiscordIdentityRecord = {
+  oauth_configured?: boolean;
+  linked: boolean;
+  discord_user_id?: string | null;
+  discord_username?: string | null;
+  discord_global_name?: string | null;
+  discord_avatar_hash?: string | null;
+  linked_at?: string | null;
+};
+
+export type TenantDiscordInviteRecord = {
+  invite_url: string;
+  expires_at: string | null;
+  max_uses: number | null;
+};
+
+export type DiscordInstallStartRecord = {
+  install_url: string;
+  expires_at: string;
+};
+
+export type TenantUserSettingsUpdatePayload = {
+  mode_override: "technical" | "non_technical" | null;
+};
+
+export type TenantUserPasswordChangePayload = {
+  current_password: string;
+  new_password: string;
+};
+
+export type TenantUserProfileUpdatePayload = {
+  full_name: string;
+};
 
 export async function verifyAdminCredentials(credentials: Credentials): Promise<void> {
   await request<{ username: string }>(credentials, "/api/admin/auth/me");
+}
+
+export async function readAuthenticatedPrincipal(credentials: Credentials): Promise<AuthenticatedPrincipalRecord> {
+  return request<AuthenticatedPrincipalRecord>(credentials, "/api/app/auth/me");
 }
 
 export async function authenticateAdmin(input: AdminLoginInput): Promise<Credentials> {
@@ -787,7 +1639,7 @@ export async function authenticateAdmin(input: AdminLoginInput): Promise<Credent
   if (!response.ok) {
     const detail =
       typeof body === "object" && body && "detail" in body
-        ? String((body as { detail: unknown }).detail)
+        ? stringifyErrorDetail((body as { detail: unknown }).detail)
         : response.statusText;
     throw new Error(`${response.status}: ${detail}`);
   }
@@ -797,10 +1649,289 @@ export async function authenticateAdmin(input: AdminLoginInput): Promise<Credent
     throw new Error("Authentication failed: missing access token");
   }
 
+  void parsed.access_token;
   return {
-    apiBaseUrl: base,
-    accessToken: parsed.access_token
+    apiBaseUrl: base
   };
+}
+
+export async function registerTenantAdministrator(
+  input: RegistrationInput,
+  apiBaseUrl = ""
+): Promise<RegistrationResponse> {
+  const base = apiBaseUrl.replace(/\/$/, "");
+  const response = await fetch(`${base}/api/public/register`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input)
+  });
+
+  const text = await response.text();
+  const body = parseResponseBody(text);
+  if (!response.ok) {
+    const detail =
+      typeof body === "object" && body && "detail" in body
+        ? stringifyErrorDetail((body as { detail: unknown }).detail)
+        : response.statusText;
+    throw new Error(`${response.status}: ${detail}`);
+  }
+
+  return body as RegistrationResponse;
+}
+
+export async function acceptPublicInvite(
+  input: InviteAcceptInput,
+  apiBaseUrl = ""
+): Promise<{
+  access_token: string;
+  token_type: string;
+  expires_in: number;
+  principal: AuthenticatedPrincipalRecord;
+}> {
+  const base = apiBaseUrl.replace(/\/$/, "");
+  const response = await fetch(`${base}/api/public/invites/accept`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input)
+  });
+  const text = await response.text();
+  const body = parseResponseBody(text);
+  if (!response.ok) {
+    const detail =
+      typeof body === "object" && body && "detail" in body
+        ? stringifyErrorDetail((body as { detail: unknown }).detail)
+        : response.statusText;
+    throw new Error(`${response.status}: ${detail}`);
+  }
+  return body as {
+    access_token: string;
+    token_type: string;
+    expires_in: number;
+    principal: AuthenticatedPrincipalRecord;
+  };
+}
+
+export async function requestPasswordReset(
+  input: PasswordResetRequestInput,
+  apiBaseUrl = ""
+): Promise<{ detail: string }> {
+  const base = apiBaseUrl.replace(/\/$/, "");
+  const response = await fetch(`${base}/api/public/password-reset/request`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  const text = await response.text();
+  const body = parseResponseBody(text);
+  if (!response.ok) {
+    const detail =
+      typeof body === "object" && body && "detail" in body
+        ? stringifyErrorDetail((body as { detail: unknown }).detail)
+        : response.statusText;
+    throw new Error(`${response.status}: ${detail}`);
+  }
+  return body as { detail: string };
+}
+
+export async function confirmPasswordReset(
+  input: PasswordResetConfirmInput,
+  apiBaseUrl = ""
+): Promise<{ detail: string }> {
+  const base = apiBaseUrl.replace(/\/$/, "");
+  const response = await fetch(`${base}/api/public/password-reset/confirm`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(input),
+  });
+  const text = await response.text();
+  const body = parseResponseBody(text);
+  if (!response.ok) {
+    const detail =
+      typeof body === "object" && body && "detail" in body
+        ? stringifyErrorDetail((body as { detail: unknown }).detail)
+        : response.statusText;
+    throw new Error(`${response.status}: ${detail}`);
+  }
+  return body as { detail: string };
+}
+
+export async function completeOnboarding(
+  credentials: Credentials,
+  tenantId: string
+): Promise<AuthenticatedPrincipalRecord> {
+  return request<AuthenticatedPrincipalRecord>(
+    credentials,
+    `/api/app/onboarding/${encodeURIComponent(tenantId)}/complete`,
+    { method: "POST" }
+  );
+}
+
+export async function updateTenantUserSettings(
+  credentials: Credentials,
+  tenantId: string,
+  payload: TenantUserSettingsUpdatePayload,
+): Promise<AuthenticatedPrincipalRecord> {
+  return request<AuthenticatedPrincipalRecord>(
+    credentials,
+    `/api/app/tenants/${encodeURIComponent(tenantId)}/me/settings`,
+    {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
+export async function updateAuthenticatedUserProfile(
+  credentials: Credentials,
+  payload: TenantUserProfileUpdatePayload,
+): Promise<AuthenticatedPrincipalRecord> {
+  return request<AuthenticatedPrincipalRecord>(credentials, "/api/app/me/profile", {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function changeTenantUserPassword(
+  credentials: Credentials,
+  payload: TenantUserPasswordChangePayload,
+): Promise<AuthenticatedPrincipalRecord> {
+  return request<AuthenticatedPrincipalRecord>(credentials, "/api/app/me/password", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export async function getTenantDeliverySummary(
+  credentials: Credentials,
+  tenantId: string
+): Promise<DeliverySummaryRecord> {
+  return request<DeliverySummaryRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/delivery-summary`
+  );
+}
+
+export function listTenantInvites(credentials: Credentials, tenantId: string): Promise<{ items: TenantInviteRecord[] }> {
+  return request(credentials, `/api/admin/tenants/${encodeURIComponent(tenantId)}/invites`);
+}
+
+export function createTenantInvite(
+  credentials: Credentials,
+  tenantId: string,
+  payload: TenantInviteCreatePayload
+): Promise<TenantInviteRecord> {
+  return request<{ invite: TenantInviteRecord } | TenantInviteRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/invites`,
+    {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }
+  ).then((result) => ("invite" in result ? result.invite : result));
+}
+
+export function resendTenantInvite(
+  credentials: Credentials,
+  tenantId: string,
+  inviteId: string
+): Promise<TenantInviteRecord> {
+  return request<{ invite: TenantInviteRecord }>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/invites/${encodeURIComponent(inviteId)}/resend`,
+    { method: "POST" }
+  ).then((result) => result.invite);
+}
+
+export function revokeTenantInvite(
+  credentials: Credentials,
+  tenantId: string,
+  inviteId: string
+): Promise<TenantInviteRecord> {
+  return request<{ invite: TenantInviteRecord }>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/invites/${encodeURIComponent(inviteId)}/revoke`,
+    { method: "POST" }
+  ).then((result) => result.invite);
+}
+
+export function listTenantTeams(credentials: Credentials, tenantId: string): Promise<TenantTeamRecord[]> {
+  return request(credentials, `/api/admin/tenants/${encodeURIComponent(tenantId)}/teams`);
+}
+
+export function createTenantTeam(
+  credentials: Credentials,
+  tenantId: string,
+  payload: TenantTeamCreatePayload
+): Promise<TenantTeamRecord> {
+  return request(credentials, `/api/admin/tenants/${encodeURIComponent(tenantId)}/teams`, {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
+export function updateTenantTeamRecord(
+  credentials: Credentials,
+  tenantId: string,
+  teamId: string,
+  payload: TenantTeamCreatePayload
+): Promise<TenantTeamRecord> {
+  return request(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/teams/${encodeURIComponent(teamId)}`,
+    {
+      method: "PUT",
+      body: JSON.stringify(payload)
+    }
+  );
+}
+
+export function listTenantMembers(credentials: Credentials, tenantId: string): Promise<TenantMemberRecord[]> {
+  return request(credentials, `/api/admin/tenants/${encodeURIComponent(tenantId)}/members`);
+}
+
+export function updateTenantMemberRecord(
+  credentials: Credentials,
+  tenantId: string,
+  membershipId: string,
+  payload: TenantMemberUpdatePayload
+): Promise<TenantMemberRecord> {
+  return request(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/members/${encodeURIComponent(membershipId)}`,
+    {
+      method: "PUT",
+      body: JSON.stringify(payload)
+    }
+  );
+}
+
+export function getTenantDiscordIdentity(
+  credentials: Credentials,
+  tenantId: string
+): Promise<TenantDiscordIdentityRecord> {
+  return request(credentials, `/api/admin/tenants/${encodeURIComponent(tenantId)}/discord/identity`);
+}
+
+export function startTenantDiscordLink(
+  credentials: Credentials,
+  tenantId: string,
+  redirectTo = "/get-started"
+): Promise<{ authorize_url: string }> {
+  const query = new URLSearchParams({ redirect_to: redirectTo });
+  return request(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/discord/link/start?${query.toString()}`,
+    { method: "POST" }
+  );
+}
+
+export function createTenantDiscordInvite(
+  credentials: Credentials,
+  tenantId: string
+): Promise<TenantDiscordInviteRecord> {
+  return request(credentials, `/api/admin/tenants/${encodeURIComponent(tenantId)}/discord/onboarding-invite`, {
+    method: "POST"
+  });
 }
 
 export function listTenants(credentials: Credentials): Promise<TenantRecord[]> {
@@ -811,8 +1942,31 @@ export function getTenant(credentials: Credentials, tenantId: string): Promise<T
   return request<TenantRecord>(credentials, `/api/admin/tenants/${encodeURIComponent(tenantId)}`);
 }
 
-export function listCodexModels(credentials: Credentials): Promise<CodexModelCatalogRecord> {
-  return request<CodexModelCatalogRecord>(credentials, "/api/admin/codex/models");
+export function listTenantNotifications(
+  credentials: Credentials,
+  tenantId: string,
+  status = "open"
+): Promise<AdminNotificationListRecord> {
+  const query = new URLSearchParams({ status });
+  return request<AdminNotificationListRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/notifications?${query.toString()}`
+  );
+}
+
+export function listCodexModels(
+  credentials: Credentials,
+  options?: { runtimeKind?: string | null; profileName?: string | null }
+): Promise<CodexModelCatalogRecord> {
+  const query = new URLSearchParams();
+  if (options?.runtimeKind) {
+    query.set("runtime_kind", options.runtimeKind);
+  }
+  if (options?.profileName) {
+    query.set("profile_name", options.profileName);
+  }
+  const suffix = query.size > 0 ? `?${query.toString()}` : "";
+  return request<CodexModelCatalogRecord>(credentials, `/api/admin/codex/models${suffix}`);
 }
 
 export function createTenant(
@@ -825,15 +1979,80 @@ export function createTenant(
   });
 }
 
-export function updateTenant(
+function patchTenantSection<TPayload>(
   credentials: Credentials,
   tenantId: string,
-  payload: TenantUpdatePayload
+  section: string,
+  payload: TPayload
 ): Promise<TenantRecord> {
-  return request<TenantRecord>(credentials, `/api/admin/tenants/${encodeURIComponent(tenantId)}`, {
-    method: "PUT",
+  return request<TenantRecord>(credentials, `/api/admin/tenants/${encodeURIComponent(tenantId)}/${section}`, {
+    method: "PATCH",
     body: JSON.stringify(payload)
   });
+}
+
+export function updateTenantConfiguration(
+  credentials: Credentials,
+  tenantId: string,
+  payload: TenantConfigurationUpdatePayload
+): Promise<TenantRecord> {
+  return patchTenantSection(credentials, tenantId, "configuration", payload);
+}
+
+export function updateTenantJira(
+  credentials: Credentials,
+  tenantId: string,
+  payload: TenantJiraUpdatePayload
+): Promise<TenantRecord> {
+  return patchTenantSection(credentials, tenantId, "jira", payload);
+}
+
+export function updateTenantGithub(
+  credentials: Credentials,
+  tenantId: string,
+  payload: TenantGithubUpdatePayload
+): Promise<TenantRecord> {
+  return patchTenantSection(credentials, tenantId, "github", payload);
+}
+
+export function updateTenantRepos(
+  credentials: Credentials,
+  tenantId: string,
+  payload: TenantReposUpdatePayload
+): Promise<TenantRecord> {
+  return patchTenantSection(credentials, tenantId, "repos", payload);
+}
+
+export function updateTenantPolicy(
+  credentials: Credentials,
+  tenantId: string,
+  payload: TenantPolicyUpdatePayload
+): Promise<TenantRecord> {
+  return patchTenantSection(credentials, tenantId, "policy", payload);
+}
+
+export function updateTenantObservability(
+  credentials: Credentials,
+  tenantId: string,
+  payload: TenantObservabilityUpdatePayload
+): Promise<TenantRecord> {
+  return patchTenantSection(credentials, tenantId, "observability", payload);
+}
+
+export function updateTenantDiscord(
+  credentials: Credentials,
+  tenantId: string,
+  payload: TenantDiscordUpdatePayload
+): Promise<TenantRecord> {
+  return patchTenantSection(credentials, tenantId, "discord", payload);
+}
+
+export function updateTenantExperience(
+  credentials: Credentials,
+  tenantId: string,
+  payload: TenantExperienceUpdatePayload
+): Promise<TenantRecord> {
+  return patchTenantSection(credentials, tenantId, "experience", payload);
 }
 
 export async function deleteTenant(credentials: Credentials, tenantId: string): Promise<void> {
@@ -854,16 +2073,16 @@ export function unarchiveTenant(credentials: Credentials, tenantId: string): Pro
   });
 }
 
-export function testJira(
+export function testAtlassian(
   credentials: Credentials,
   tenantId: string
 ): Promise<{ ok: boolean; details: string }> {
-  return request(credentials, `/api/admin/tenants/${encodeURIComponent(tenantId)}/test-jira`, {
+  return request(credentials, `/api/admin/tenants/${encodeURIComponent(tenantId)}/test-atlassian`, {
     method: "POST"
   });
 }
 
-export function startJiraConnect(
+export function startAtlassianConnect(
   credentials: Credentials,
   options?: { returnTo?: "wizard" | "edit"; tenantId?: string }
 ): Promise<{ authorize_url: string; expires_at: string }> {
@@ -875,7 +2094,7 @@ export function startJiraConnect(
     query.set("tenant_id", options.tenantId);
   }
   const suffix = query.toString() ? `?${query.toString()}` : "";
-  return request(credentials, `/api/admin/jira/connect/start${suffix}`, {
+  return request(credentials, `/api/admin/atlassian/connect/start${suffix}`, {
     method: "POST"
   });
 }
@@ -886,7 +2105,34 @@ export function listJiraProjects(
 ): Promise<JiraProjectRecord[]> {
   return request<JiraProjectRecord[]>(
     credentials,
-    `/api/admin/jira/connections/${encodeURIComponent(connectionId)}/projects`
+    `/api/admin/atlassian/connections/${encodeURIComponent(connectionId)}/jira-projects`
+  );
+}
+
+export function listConfluenceSpaces(
+  credentials: Credentials,
+  tenantId: string
+): Promise<ConfluenceSpaceCatalogRecord> {
+  return request<ConfluenceSpaceCatalogRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/atlassian/confluence/spaces`
+  );
+}
+
+export function listConfluencePages(
+  credentials: Credentials,
+  tenantId: string,
+  spaceKey: string,
+  selectedPageId?: string | null
+): Promise<ConfluencePageRecord[]> {
+  const query = new URLSearchParams();
+  if (selectedPageId) {
+    query.set("selected_page_id", selectedPageId);
+  }
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  return request<ConfluencePageRecord[]>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/atlassian/confluence/spaces/${encodeURIComponent(spaceKey)}/pages${suffix}`
   );
 }
 
@@ -898,7 +2144,7 @@ export function getJiraWebhookDiagnostics(
   const query = new URLSearchParams({ within_minutes: String(withinMinutes) });
   return request<JiraWebhookDiagnosticsRecord>(
     credentials,
-    `/api/admin/tenants/${encodeURIComponent(tenantId)}/jira/webhooks/diagnostics?${query.toString()}`
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/atlassian/jira/webhooks/diagnostics?${query.toString()}`
   );
 }
 
@@ -908,7 +2154,7 @@ export function provisionJiraWebhook(
 ): Promise<JiraWebhookActionResult> {
   return request<JiraWebhookActionResult>(
     credentials,
-    `/api/admin/tenants/${encodeURIComponent(tenantId)}/jira/webhooks/provision`,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/atlassian/jira/webhooks/provision`,
     { method: "POST" }
   );
 }
@@ -919,18 +2165,18 @@ export function resetJiraWebhook(
 ): Promise<JiraWebhookActionResult> {
   return request<JiraWebhookActionResult>(
     credentials,
-    `/api/admin/tenants/${encodeURIComponent(tenantId)}/jira/webhooks/reset`,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/atlassian/jira/webhooks/reset`,
     { method: "POST" }
   );
 }
 
-export function disconnectJira(
+export function disconnectAtlassian(
   credentials: Credentials,
   tenantId: string
 ): Promise<JiraWebhookActionResult> {
   return request<JiraWebhookActionResult>(
     credentials,
-    `/api/admin/tenants/${encodeURIComponent(tenantId)}/jira/disconnect`,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/atlassian/disconnect`,
     { method: "POST" }
   );
 }
@@ -980,6 +2226,21 @@ export function startGitHubInstall(
   });
 }
 
+export function startDiscordInstall(
+  credentials: Credentials,
+  tenantId: string,
+  options?: { returnTo?: "edit" | "wizard" }
+): Promise<DiscordInstallStartRecord> {
+  const query = new URLSearchParams();
+  if (options?.returnTo) {
+    query.set("return_to", options.returnTo);
+  }
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  return request(credentials, `/api/admin/tenants/${encodeURIComponent(tenantId)}/discord/install/start${suffix}`, {
+    method: "POST"
+  });
+}
+
 export function listGitHubRepositories(
   credentials: Credentials,
   tenantId: string
@@ -1005,19 +2266,86 @@ export function createProject(
   });
 }
 
-export function updateProject(
+function patchProjectSection<TPayload>(
   credentials: Credentials,
   tenantId: string,
   projectId: string,
-  payload: ProjectUpdatePayload
+  section: string,
+  payload: TPayload
 ): Promise<ProjectRecord> {
   return request<ProjectRecord>(
     credentials,
-    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}`,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/${section}`,
     {
-      method: "PUT",
+      method: "PATCH",
       body: JSON.stringify(payload)
     }
+  );
+}
+
+export function updateProjectConfiguration(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string,
+  payload: ProjectConfigurationUpdatePayload
+): Promise<ProjectRecord> {
+  return patchProjectSection(credentials, tenantId, projectId, "configuration", payload);
+}
+
+export function updateProjectPolicy(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string,
+  payload: ProjectPolicyUpdatePayload
+): Promise<ProjectRecord> {
+  return patchProjectSection(credentials, tenantId, projectId, "policy", payload);
+}
+
+export function updateProjectEnvironment(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string,
+  payload: ProjectEnvironmentUpdatePayload
+): Promise<ProjectRecord> {
+  return patchProjectSection(credentials, tenantId, projectId, "environment", payload);
+}
+
+export function updateProjectSecretRefs(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string,
+  payload: ProjectSecretRefsUpdatePayload
+): Promise<ProjectRecord> {
+  return patchProjectSection(credentials, tenantId, projectId, "secrets", payload);
+}
+
+export function updateProjectDiscord(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string,
+  payload: ProjectDiscordUpdatePayload
+): Promise<ProjectRecord> {
+  return patchProjectSection(credentials, tenantId, projectId, "discord", payload);
+}
+
+export function updateProjectArchiveState(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string,
+  payload: ProjectArchiveUpdatePayload
+): Promise<ProjectRecord> {
+  return patchProjectSection(credentials, tenantId, projectId, "archive", payload);
+}
+
+export function resolveProjectJiraRunBoard(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string
+): Promise<ProjectRecord> {
+  return request<ProjectRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/jira/resolve-run-board`,
+    { method: "POST" }
   );
 }
 
@@ -1025,6 +2353,195 @@ export function getProject(credentials: Credentials, tenantId: string, projectId
   return request<ProjectRecord>(
     credentials,
     `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}`
+  );
+}
+
+export function listArchitectureDocuments(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string,
+  parentIssueKey?: string
+): Promise<ArchitectureDocumentPageRecord> {
+  const query = parentIssueKey?.trim()
+    ? `?parent_issue_key=${encodeURIComponent(parentIssueKey.trim().toUpperCase())}`
+    : "";
+  return request<ArchitectureDocumentPageRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/architecture-documents${query}`
+  );
+}
+
+export function getArchitectureDocument(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string,
+  documentId: string
+): Promise<ArchitectureDocumentRecord> {
+  return request<ArchitectureDocumentRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/architecture-documents/${encodeURIComponent(documentId)}`
+  );
+}
+
+export function createArchitectureDocument(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string,
+  payload: ArchitectureDocumentCreatePayload
+): Promise<ArchitectureDocumentRecord> {
+  return request<ArchitectureDocumentRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/architecture-documents`,
+    {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }
+  );
+}
+
+export function updateArchitectureDocument(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string,
+  documentId: string,
+  payload: ArchitectureDocumentUpdatePayload
+): Promise<ArchitectureDocumentRecord> {
+  return request<ArchitectureDocumentRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/architecture-documents/${encodeURIComponent(documentId)}`,
+    {
+      method: "PUT",
+      body: JSON.stringify(payload)
+    }
+  );
+}
+
+export function getProjectAutomations(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string
+): Promise<ProjectAutomationsRecord> {
+  return request<ProjectAutomationsRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/automations`
+  );
+}
+
+export function updateProjectAutomations(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string,
+  payload: ProjectAutomationsPayload
+): Promise<ProjectAutomationsRecord> {
+  return request<ProjectAutomationsRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/automations`,
+    {
+      method: "PUT",
+      body: JSON.stringify(payload)
+    }
+  );
+}
+
+export function runProjectAutomationNow(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string,
+  kind: string
+): Promise<ProjectAutomationsRecord> {
+  return request<ProjectAutomationsRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/automations/${encodeURIComponent(kind)}/run-now`,
+    {
+      method: "POST"
+    }
+  );
+}
+
+export function getProjectInstalls(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string
+): Promise<ProjectInstallsRecord> {
+  return request<ProjectInstallsRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/installs`
+  );
+}
+
+export function createProjectInstall(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string,
+  payload: ProjectInstallPayload
+): Promise<ProjectInstallRecord> {
+  return request<ProjectInstallRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/installs`,
+    {
+      method: "POST",
+      body: JSON.stringify(payload)
+    }
+  );
+}
+
+export function updateProjectInstall(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string,
+  installId: string,
+  payload: ProjectInstallPayload
+): Promise<ProjectInstallRecord> {
+  return request<ProjectInstallRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/installs/${encodeURIComponent(installId)}`,
+    {
+      method: "PUT",
+      body: JSON.stringify(payload)
+    }
+  );
+}
+
+export function deleteProjectInstall(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string,
+  installId: string
+): Promise<void> {
+  return request<void>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/installs/${encodeURIComponent(installId)}`,
+    {
+      method: "DELETE"
+    }
+  );
+}
+
+export function getProjectInstallRequests(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string
+): Promise<ProjectInstallRequestsRecord> {
+  return request<ProjectInstallRequestsRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/install-requests`
+  );
+}
+
+export function updateProjectInstallRequest(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string,
+  requestId: string,
+  payload: ProjectInstallRequestUpdatePayload
+): Promise<ProjectInstallRequestRecord> {
+  return request<ProjectInstallRequestRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/install-requests/${encodeURIComponent(requestId)}`,
+    {
+      method: "PUT",
+      body: JSON.stringify(payload)
+    }
   );
 }
 
@@ -1268,20 +2785,149 @@ export function getKnowledgeJiraSyncRuntimeStatus(
   );
 }
 
-export function listRuns(
+export function getPlatformStatus(credentials: Credentials): Promise<PlatformStatusRecord> {
+  return request<PlatformStatusRecord>(credentials, "/api/admin/status");
+}
+
+export function startWorkerRuntimeLoginSession(
+  credentials: Credentials,
+  serviceInstanceId: string,
+  runtimeKind: string,
+): Promise<WorkerRuntimeAuthRequestRecord> {
+  return request<WorkerRuntimeAuthRequestRecord>(
+    credentials,
+    `/api/admin/workers/${encodeURIComponent(serviceInstanceId)}/runtime-dependencies/${encodeURIComponent(runtimeKind)}/login-session`,
+    {
+      method: "POST",
+    },
+  );
+}
+
+export function getWorkerRuntimeAuthRequest(
+  credentials: Credentials,
+  requestId: string,
+): Promise<WorkerRuntimeAuthRequestRecord> {
+  return request<WorkerRuntimeAuthRequestRecord>(
+    credentials,
+    `/api/admin/workers/runtime-auth-requests/${encodeURIComponent(requestId)}`,
+  );
+}
+
+export function listWebhookQueueJobs(
+  credentials: Credentials,
+  params: {
+    tenantId: string;
+    projectId: string;
+    status?: string;
+    transport?: string;
+    subjectKey?: string;
+    limit?: number;
+    offset?: number;
+  }
+): Promise<WebhookQueueJobPageRecord> {
+  const query = new URLSearchParams();
+  if (params?.status) {
+    query.set("status", params.status);
+  }
+  if (params?.transport) {
+    query.set("transport", params.transport);
+  }
+  query.set("tenant_id", params.tenantId);
+  query.set("project_id", params.projectId);
+  if (params?.subjectKey) {
+    query.set("subject_key", params.subjectKey);
+  }
+  if (typeof params?.limit === "number") {
+    query.set("limit", String(params.limit));
+  }
+  if (typeof params?.offset === "number") {
+    query.set("offset", String(params.offset));
+  }
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  return request<WebhookQueueJobPageRecord>(credentials, `/api/admin/observability/webhook-jobs${suffix}`);
+}
+
+export function retryWebhookJob(
+  credentials: Credentials,
+  params: {
+    tenantId: string;
+    projectId: string;
+    jobId: string;
+  },
+): Promise<WebhookQueueJobRecord> {
+  const query = new URLSearchParams();
+  query.set("tenant_id", params.tenantId);
+  query.set("project_id", params.projectId);
+  return request<WebhookQueueJobRecord>(
+    credentials,
+    `/api/admin/observability/webhook-jobs/${encodeURIComponent(params.jobId)}/retry?${query.toString()}`,
+    {
+      method: "POST",
+    },
+  );
+}
+
+export function getWorkflow(credentials: Credentials, executionId: string): Promise<WorkflowRecord> {
+  return request<WorkflowRecord>(credentials, `/api/admin/workflows/${encodeURIComponent(executionId)}`);
+}
+
+export function listWorkflowTypes(
+  credentials: Credentials,
+  params: {
+    tenantId?: string;
+  } = {},
+): Promise<WorkflowTypeSummaryRecord[]> {
+  const query = new URLSearchParams();
+  if (params.tenantId) {
+    query.set("tenant_id", params.tenantId);
+  }
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  return request<WorkflowTypeSummaryRecord[]>(credentials, `/api/admin/workflow-types${suffix}`);
+}
+
+export function getWorkflowType(
+  credentials: Credentials,
+  workflowTypeKey: string,
+  params: {
+    tenantId?: string;
+  } = {},
+): Promise<WorkflowTypeDetailRecord> {
+  const query = new URLSearchParams();
+  if (params.tenantId) {
+    query.set("tenant_id", params.tenantId);
+  }
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  return request<WorkflowTypeDetailRecord>(
+    credentials,
+    `/api/admin/workflow-types/${encodeURIComponent(workflowTypeKey)}${suffix}`,
+  );
+}
+
+export function startWorkflowExecution(
+  credentials: Credentials,
+  payload: WorkflowExecutionStartPayload,
+): Promise<WorkflowExecutionStartRecord> {
+  return request<WorkflowExecutionStartRecord>(
+    credentials,
+    "/api/admin/workflows",
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+    },
+  );
+}
+
+export function listWorkflows(
   credentials: Credentials,
   params: {
     tenantId?: string;
     projectId?: string;
-    status?: RunStatus;
+    status?: string;
     issue?: string;
-    prState?: "none" | "has_value";
-    from?: string;
-    to?: string;
     limit?: number;
     offset?: number;
-  }
-): Promise<RunRecord[]> {
+  } = {},
+): Promise<WorkflowRecord[]> {
   const query = new URLSearchParams();
   if (params.tenantId) {
     query.set("tenant_id", params.tenantId);
@@ -1295,15 +2941,6 @@ export function listRuns(
   if (params.issue) {
     query.set("issue", params.issue);
   }
-  if (params.prState) {
-    query.set("pr_state", params.prState);
-  }
-  if (params.from) {
-    query.set("from", params.from);
-  }
-  if (params.to) {
-    query.set("to", params.to);
-  }
   if (typeof params.limit === "number") {
     query.set("limit", String(params.limit));
   }
@@ -1311,51 +2948,127 @@ export function listRuns(
     query.set("offset", String(params.offset));
   }
   const suffix = query.toString() ? `?${query.toString()}` : "";
-  return request<RunRecord[]>(credentials, `/api/admin/runs${suffix}`);
+  return request<WorkflowRecord[]>(credentials, `/api/admin/workflows${suffix}`);
 }
 
-export function getRun(credentials: Credentials, runId: string): Promise<RunRecord> {
-  return request<RunRecord>(credentials, `/api/admin/runs/${encodeURIComponent(runId)}`);
-}
-
-export function rerunRun(
+export function listWorkflowBoardItems(
   credentials: Credentials,
-  runId: string,
-  payload: RunRerunPayload = { mode: "fresh" }
+  params: {
+    tenantId: string;
+    projectId?: string;
+    limit?: number;
+    offset?: number;
+  },
+): Promise<WorkflowBoardItemRecord[]> {
+  const query = new URLSearchParams();
+  query.set("tenant_id", params.tenantId);
+  if (params.projectId) {
+    query.set("project_id", params.projectId);
+  }
+  if (typeof params.limit === "number") {
+    query.set("limit", String(params.limit));
+  }
+  if (typeof params.offset === "number") {
+    query.set("offset", String(params.offset));
+  }
+  return request<WorkflowBoardItemRecord[]>(credentials, `/api/admin/workflows/board?${query.toString()}`);
+}
+
+export function createWorkflowAttempt(
+  credentials: Credentials,
+  executionId: string,
+  payload: WorkflowAttemptCreatePayload
 ): Promise<RunRecord> {
-  return request<RunRecord>(credentials, `/api/admin/runs/${encodeURIComponent(runId)}/rerun`, {
+  return request<RunRecord>(credentials, `/api/admin/workflows/${encodeURIComponent(executionId)}/attempts`, {
     method: "POST",
     body: JSON.stringify(payload)
   });
 }
 
-export function cancelRun(credentials: Credentials, runId: string): Promise<RunRecord> {
-  return request<RunRecord>(credentials, `/api/admin/runs/${encodeURIComponent(runId)}/cancel`, {
-    method: "POST"
+export function resumeWorkflowExecution(
+  credentials: Credentials,
+  executionId: string
+): Promise<RunRecord> {
+  return request<RunRecord>(credentials, `/api/admin/workflows/${encodeURIComponent(executionId)}/resume`, {
+    method: "POST",
   });
 }
 
-export function listRunEvents(
+export function startParentPlanning(
   credentials: Credentials,
-  runId: string,
-  params: { limit?: number } = {}
-): Promise<RunEventRecord[]> {
-  const query = new URLSearchParams();
-  if (params.limit) {
-    query.set("limit", String(params.limit));
-  }
-  const suffix = query.toString() ? `?${query.toString()}` : "";
-  return request<RunEventRecord[]>(
+  executionId: string,
+): Promise<WorkflowRecord> {
+  return request<WorkflowRecord>(
     credentials,
-    `/api/admin/runs/${encodeURIComponent(runId)}/events${suffix}`
+    `/api/admin/workflows/${encodeURIComponent(executionId)}/start-planning`,
+    {
+      method: "POST",
+    },
   );
 }
 
-export function listRunLogs(
+export function getStartEngineeringPreview(
   credentials: Credentials,
-  runId: string,
-  params: { limit?: number; beforeRecordedAt?: string; beforeEventId?: string } = {}
-): Promise<RunLogEventRecord[]> {
+  executionId: string,
+  actionToken: string,
+): Promise<StartEngineeringPreviewRecord> {
+  const query = new URLSearchParams({ action_token: actionToken });
+  return request<StartEngineeringPreviewRecord>(
+    credentials,
+    `/api/app/start-engineering/${encodeURIComponent(executionId)}/preview?${query.toString()}`,
+  );
+}
+
+export function startEngineeringFromAction(
+  credentials: Credentials,
+  executionId: string,
+  actionToken: string,
+): Promise<WorkflowStartWorkResponseRecord> {
+  return request<WorkflowStartWorkResponseRecord>(
+    credentials,
+    `/api/app/start-engineering/${encodeURIComponent(executionId)}/start`,
+    {
+      method: "POST",
+      body: JSON.stringify({ action_token: actionToken }),
+    },
+  );
+}
+
+export function retryWorkflowOperation(
+  credentials: Credentials,
+  executionId: string,
+  operationId: string
+): Promise<WorkflowOperationRetryResponseRecord> {
+  return request<WorkflowOperationRetryResponseRecord>(
+    credentials,
+    `/api/admin/workflows/${encodeURIComponent(executionId)}/operations/${encodeURIComponent(operationId)}/retry`,
+    {
+      method: "POST",
+    }
+  );
+}
+
+export function restartWorkflowOperation(
+  credentials: Credentials,
+  executionId: string,
+  operationId: string,
+  restartReason = "Restarted stale running workflow operation attempt."
+): Promise<WorkflowOperationRetryResponseRecord> {
+  return request<WorkflowOperationRetryResponseRecord>(
+    credentials,
+    `/api/admin/workflows/${encodeURIComponent(executionId)}/operations/${encodeURIComponent(operationId)}/restart`,
+    {
+      method: "POST",
+      body: JSON.stringify({ restart_reason: restartReason }),
+    }
+  );
+}
+
+function workflowObservabilityQuery(params: {
+  limit?: number;
+  beforeRecordedAt?: string;
+  beforeEventId?: string;
+} = {}): string {
   const query = new URLSearchParams();
   if (params.limit) {
     query.set("limit", String(params.limit));
@@ -1367,9 +3080,145 @@ export function listRunLogs(
     query.set("before_event_id", params.beforeEventId);
   }
   const suffix = query.toString() ? `?${query.toString()}` : "";
-  return request<RunLogEventRecord[]>(
+  return suffix;
+}
+
+export function listWorkflowOperationTelemetryEvents(
+  credentials: Credentials,
+  executionId: string,
+  operationId: string,
+  params: { limit?: number; beforeRecordedAt?: string; beforeEventId?: string; attemptId?: string } = {},
+): Promise<WorkflowObservabilityEventRecord[]> {
+  const query = new URLSearchParams();
+  if (params.limit) {
+    query.set("limit", String(params.limit));
+  }
+  if (params.attemptId) {
+    query.set("attempt_id", params.attemptId);
+  }
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  return request<WorkflowObservabilityEventRecord[]>(
     credentials,
-    `/api/admin/runs/${encodeURIComponent(runId)}/logs${suffix}`
+    `/api/admin/workflows/${encodeURIComponent(executionId)}/operations/${encodeURIComponent(operationId)}/telemetry${suffix}`,
+  );
+}
+
+export function listWorkflowOperationAttemptTelemetryEvents(
+  credentials: Credentials,
+  executionId: string,
+  operationId: string,
+  attemptId: string,
+  params: { limit?: number } = {},
+): Promise<WorkflowObservabilityEventRecord[]> {
+  const query = new URLSearchParams();
+  if (params.limit) {
+    query.set("limit", String(params.limit));
+  }
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  return request<WorkflowObservabilityEventRecord[]>(
+    credentials,
+    `/api/admin/workflows/${encodeURIComponent(executionId)}/operations/${encodeURIComponent(operationId)}/attempts/${encodeURIComponent(attemptId)}/telemetry${suffix}`,
+  );
+}
+
+export function listWorkflowOperationAuditEvents(
+  credentials: Credentials,
+  executionId: string,
+  operationId: string,
+  params: { limit?: number; beforeRecordedAt?: string; beforeEventId?: string } = {},
+): Promise<WorkflowObservabilityEventRecord[]> {
+  return request<WorkflowObservabilityEventRecord[]>(
+    credentials,
+    `/api/admin/workflows/${encodeURIComponent(executionId)}/operations/${encodeURIComponent(operationId)}/audit${workflowObservabilityQuery(params)}`,
+  );
+}
+
+export function getWorkflowOperationTranscript(
+  credentials: Credentials,
+  executionId: string,
+  operationId: string,
+  source: "telemetry" | "audit",
+  params: { limit?: number; attemptId?: string } = {},
+): Promise<WorkflowStepTranscriptRecord> {
+  const query = new URLSearchParams();
+  query.set("source", source);
+  if (params.limit) {
+    query.set("limit", String(params.limit));
+  }
+  if (params.attemptId) {
+    query.set("attempt_id", params.attemptId);
+  }
+  return request<WorkflowStepTranscriptRecord>(
+    credentials,
+    `/api/admin/workflows/${encodeURIComponent(executionId)}/operations/${encodeURIComponent(operationId)}/transcript?${query.toString()}`,
+  );
+}
+
+export async function streamWorkflowOperationTelemetryEvents(
+  credentials: Credentials,
+  executionId: string,
+  operationId: string,
+  onEvent: (event: WorkflowObservabilityEventRecord) => void,
+  options: { attemptId?: string; afterEventSequence?: string; signal?: AbortSignal; onOpen?: () => void } = {},
+): Promise<void> {
+  void credentials;
+  const query = new URLSearchParams();
+  if (options.attemptId) {
+    query.set("attempt_id", options.attemptId);
+  }
+  if (options.afterEventSequence) {
+    query.set("after_event_sequence", options.afterEventSequence);
+  }
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  const response = await fetch(
+    `/api/bff/api/admin/workflows/${encodeURIComponent(executionId)}/operations/${encodeURIComponent(operationId)}/telemetry/stream${suffix}`,
+    {
+      method: "GET",
+      headers: {
+        Accept: "application/x-ndjson",
+      },
+      signal: options.signal,
+    },
+  );
+  if (!response.ok || !response.body) {
+    throw new Error(`${response.status}: unable to open workflow telemetry stream`);
+  }
+  options.onOpen?.();
+  await readNdjsonStream<WorkflowObservabilityEventRecord>(response, onEvent, {
+    signal: options.signal,
+    malformedMessage: "Malformed workflow telemetry stream event",
+  });
+}
+
+export async function streamWorkflowOperationAttemptTelemetryEvents(
+  credentials: Credentials,
+  executionId: string,
+  operationId: string,
+  attemptId: string,
+  onEvent: (event: WorkflowObservabilityEventRecord) => void,
+  options: { signal?: AbortSignal } = {},
+): Promise<void> {
+  return streamWorkflowOperationTelemetryEvents(credentials, executionId, operationId, onEvent, {
+    attemptId,
+    signal: options.signal,
+  });
+}
+
+export function getWorkflowOperationAttemptAudit(
+  credentials: Credentials,
+  executionId: string,
+  operationId: string,
+  attemptId: string,
+  params: { limit?: number } = {},
+): Promise<WorkflowStepAttemptTranscriptRecord> {
+  const query = new URLSearchParams();
+  if (params.limit) {
+    query.set("limit", String(params.limit));
+  }
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  return request<WorkflowStepAttemptTranscriptRecord>(
+    credentials,
+    `/api/admin/workflows/${encodeURIComponent(executionId)}/operations/${encodeURIComponent(operationId)}/attempts/${encodeURIComponent(attemptId)}/audit${suffix}`,
   );
 }
 
@@ -1604,54 +3453,6 @@ export function getTokenStageDiagnosticsCompare(
   );
 }
 
-export async function streamRunEvents(
-  credentials: Credentials,
-  runId: string,
-  onEvent: (event: RunEventRecord | (RunLogEventRecord & { event_kind?: string })) => void,
-  signal?: AbortSignal
-): Promise<void> {
-  const base = credentials.apiBaseUrl.replace(/\/$/, "");
-  const response = await fetch(`${base}/api/admin/runs/${encodeURIComponent(runId)}/events/stream`, {
-    method: "GET",
-    headers: {
-      Authorization: authHeader(credentials),
-      Accept: "application/x-ndjson"
-    },
-    signal
-  });
-  if (!response.ok || !response.body) {
-    throw new Error(`${response.status}: unable to open run event stream`);
-  }
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  try {
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) {
-        break;
-      }
-      buffer += decoder.decode(value, { stream: true });
-      let newline = buffer.indexOf("\n");
-      while (newline >= 0) {
-        const line = buffer.slice(0, newline).trim();
-        buffer = buffer.slice(newline + 1);
-        if (line) {
-          try {
-            const payload = JSON.parse(line) as RunEventRecord;
-            onEvent(payload);
-          } catch {
-            // Ignore malformed stream lines.
-          }
-        }
-        newline = buffer.indexOf("\n");
-      }
-    }
-  } finally {
-    reader.releaseLock();
-  }
-}
-
 export function listManagedSecrets(credentials: Credentials): Promise<ManagedSecretRecord[]> {
   return request<ManagedSecretRecord[]>(credentials, "/api/admin/secrets");
 }
@@ -1711,6 +3512,85 @@ export function resolveManagedSecret(
     method: "POST",
     body: JSON.stringify({ secret_ref: secretRef })
   });
+}
+
+export function getAgentRuntimeRouting(credentials: Credentials): Promise<AgentRuntimeRoutingRecord> {
+  return request<AgentRuntimeRoutingRecord>(credentials, "/api/admin/agent-runtimes");
+}
+
+export function updateAgentRuntimeRouting(
+  credentials: Credentials,
+  payload: Pick<AgentRuntimeRoutingRecord, "role_routing" | "name_routing" | "selector_routing">
+): Promise<AgentRuntimeRoutingRecord> {
+  return request<AgentRuntimeRoutingRecord>(credentials, "/api/admin/agent-runtimes", {
+    method: "PUT",
+    body: JSON.stringify(payload)
+  });
+}
+
+export function resetAgentRuntimeRouting(credentials: Credentials): Promise<AgentRuntimeRoutingRecord> {
+  return request<AgentRuntimeRoutingRecord>(credentials, "/api/admin/agent-runtimes/reset", {
+    method: "POST"
+  });
+}
+
+export function listAgentRuntimeProfiles(credentials: Credentials): Promise<AgentExecutionProfilesRecord> {
+  return request<AgentExecutionProfilesRecord>(credentials, "/api/admin/agent-runtime-profiles");
+}
+
+export function listAgentRuntimeTools(credentials: Credentials): Promise<AgentRuntimeToolsRecord> {
+  return request<AgentRuntimeToolsRecord>(credentials, "/api/admin/agent-runtime-tools");
+}
+
+export function createAgentRuntimeProfile(
+  credentials: Credentials,
+  payload: AgentExecutionProfileCreatePayload
+): Promise<AgentExecutionProfileRecord> {
+  return request<AgentExecutionProfileRecord>(credentials, "/api/admin/agent-runtime-profiles", {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
+export function updateAgentRuntimeProfile(
+  credentials: Credentials,
+  profileName: string,
+  payload: AgentExecutionProfileWritePayload
+): Promise<AgentExecutionProfileRecord> {
+  return request<AgentExecutionProfileRecord>(
+    credentials,
+    `/api/admin/agent-runtime-profiles/${encodeURIComponent(profileName)}`,
+    {
+      method: "PUT",
+      body: JSON.stringify(payload)
+    }
+  );
+}
+
+export function resetAgentRuntimeProfile(
+  credentials: Credentials,
+  profileName: string
+): Promise<AgentExecutionProfileRecord> {
+  return request<AgentExecutionProfileRecord>(
+    credentials,
+    `/api/admin/agent-runtime-profiles/${encodeURIComponent(profileName)}/reset`,
+    {
+      method: "POST"
+    }
+  );
+}
+
+export function deleteAgentRuntimeProfile(
+  credentials: Credentials,
+  profileName: string
+): Promise<AgentExecutionProfilesRecord> {
+  return request<AgentExecutionProfilesRecord>(
+    credentials,
+    `/api/admin/agent-runtime-profiles/${encodeURIComponent(profileName)}`,
+    {
+      method: "DELETE"
+    }
+  );
 }
 
 export function upsertTenantManagedSecret(

@@ -2,7 +2,7 @@ import unittest
 
 from cryptography.fernet import Fernet
 
-from orchestrator.core.secrets import decrypt_value, encrypt_value
+from orchestrator.core.platform.secrets import decrypt_value, encrypt_value
 
 
 class SecretsTests(unittest.TestCase):

@@ -9,7 +9,9 @@ import { useAuth } from "@/components/auth-provider";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
+import { useToast } from "@/components/ui/toast-provider";
 import { createProject, getTenant, listGitHubRepositories, listJiraProjects } from "@/lib/api";
+import { canManageProjects } from "@/lib/auth-routing";
 
 type Step = 1 | 2 | 3 | 4;
 
@@ -23,7 +25,8 @@ const STEPS = [
 export function ProjectSetupWizard() {
   const params = useParams<{ tenantId: string }>();
   const router = useRouter();
-  const { credentials, ready } = useAuth();
+  const { credentials, ready, principal } = useAuth();
+  const { showToast } = useToast();
 
   const [step, setStep] = useState<Step>(1);
   const [busy, setBusy] = useState(false);
@@ -33,6 +36,7 @@ export function ProjectSetupWizard() {
   const [jiraProjectKey, setJiraProjectKey] = useState("");
   const [repoOptions, setRepoOptions] = useState<string[]>([]);
   const [jiraOptions, setJiraOptions] = useState<string[]>([]);
+  const allowProjectManagement = canManageProjects(principal, params.tenantId);
 
   async function loadOptions(auth = credentials) {
     if (!auth) return;
@@ -54,7 +58,7 @@ export function ProjectSetupWizard() {
         setJiraOptions(jiraProjects.map((p) => p.key));
       } else {
         setJiraOptions([]);
-        setStatusLine("Jira is not connected for this tenant. Connect Jira first.");
+        setStatusLine("Atlassian is not connected for this tenant. Connect Atlassian first.");
       }
     } catch (error) {
       setStatusLine(`Failed to load setup options: ${(error as Error).message}`);
@@ -69,6 +73,10 @@ export function ProjectSetupWizard() {
 
   async function create() {
     if (!credentials) return;
+    if (!allowProjectManagement) {
+      setStatusLine("You do not have permission to create projects.");
+      return;
+    }
     if (!name.trim() || !githubRepository.trim() || !jiraProjectKey.trim()) {
       setStatusLine("Name, GitHub repository, and Jira project are required.");
       return;
@@ -81,23 +89,44 @@ export function ProjectSetupWizard() {
         jira_project_key: jiraProjectKey.trim().toUpperCase(),
         policy_overrides: {},
       });
-      router.push(`/tenants/${encodeURIComponent(params.tenantId)}/projects/${encodeURIComponent(created.project_id)}`);
+      router.push(`/${encodeURIComponent(params.tenantId)}/projects/${encodeURIComponent(created.project_id)}`);
     } catch (error) {
-      setStatusLine(`Create failed: ${(error as Error).message}`);
+      showToast({ title: "Project create failed", description: (error as Error).message, tone: "error" });
       setBusy(false);
     }
   }
 
   const currentStepDef = STEPS[step - 1];
 
+  if (ready && credentials && !allowProjectManagement) {
+    return (
+      <div className="mx-auto w-full max-w-xl space-y-6 py-8">
+        <Card>
+          <CardHeader>
+            <CardTitle className="text-base">Project setup unavailable</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4 text-sm text-muted-foreground">
+            <p>You do not have permission to create or edit projects in this workspace.</p>
+            <Button asChild variant="outline" size="sm">
+              <Link href={`/${encodeURIComponent(params.tenantId)}/dashboard`}>
+                <ArrowLeft className="mr-1.5 h-3.5 w-3.5" />
+                Back to dashboard
+              </Link>
+            </Button>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
+
   return (
     <div className="mx-auto w-full max-w-xl space-y-6 py-8">
       {/* Back link */}
       <div>
         <Button asChild variant="ghost" size="sm" className="-ml-1">
-          <Link href={`/tenants/${encodeURIComponent(params.tenantId)}/projects`}>
+          <Link href={`/${encodeURIComponent(params.tenantId)}/dashboard`}>
             <ArrowLeft className="mr-1.5 h-3.5 w-3.5" />
-            Back to Projects
+            Back to dashboard
           </Link>
         </Button>
       </div>

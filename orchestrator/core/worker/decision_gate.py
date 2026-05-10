@@ -1,18 +1,59 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+import logging
 from types import SimpleNamespace
-
-from sqlalchemy import delete
-
-from orchestrator.core.decision_engine import evaluate_worker_decision
-from orchestrator.core.dashboard_links import admin_run_url
-from orchestrator.core.jira_links import tenant_jira_issue_url
-from orchestrator.core.pre_run_check import evaluate_pre_run_check
-from orchestrator.core.runs import mark_run_terminal
-from orchestrator.storage.models import RunLock
+from orchestrator.core.platform.dashboard_links import admin_run_url
+from orchestrator.core.integrations.atlassian.links import tenant_jira_issue_url
+from orchestrator.core.runs.service import mark_run_terminal
+from orchestrator.core.worker.run_not_ready import derive_run_not_ready_outcome
+from orchestrator.core.worker.readiness import evaluate_worker_decision as evaluate_worker_readiness_decision
 from orchestrator.core.worker.run_lifecycle import resolve_project_for_run
-from orchestrator.core.worker.stage_events import decision_gate_required_update
+from orchestrator.core.worker.stage_events import run_not_ready_update
+from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
+from orchestrator.core.workflow.execution_snapshot import SnapshotWorkflow
+
+logger = logging.getLogger(__name__)
+
+
+def _load_live_issue_context(
+    *,
+    session,
+    tenant,
+    settings,
+    tenant_atlassian_oauth_context_fn,
+    issue_key: str,
+    fallback_summary: str | None,
+    fallback_description: str | None,
+) -> tuple[str | None, str | None, list[str] | None]:
+    issue_summary = fallback_summary
+    issue_description = fallback_description
+    issue_labels: list[str] | None = None
+    try:
+        oauth = tenant_atlassian_oauth_context_fn(session=session, tenant=tenant, settings=settings)
+        client = getattr(oauth, "client", None)
+        connection = getattr(oauth, "connection", None)
+        access_token = getattr(oauth, "access_token", None)
+        cloud_id = getattr(connection, "cloud_id", None)
+        if client is None or access_token is None or not str(cloud_id or "").strip():
+            return issue_summary, issue_description, issue_labels
+        issue_detail = client.get_issue_detail(
+            access_token=access_token,
+            cloud_id=str(cloud_id),
+            issue_id_or_key=issue_key,
+        )
+        issue_summary = str(getattr(issue_detail, "summary", "") or "").strip() or issue_summary
+        issue_description = str(getattr(issue_detail, "description", "") or "").strip() or issue_description
+        labels_raw = getattr(issue_detail, "labels", None)
+        if isinstance(labels_raw, (list, tuple, set)):
+            issue_labels = [str(label).strip() for label in labels_raw if str(label).strip()]
+    except Exception as exc:  # noqa: BLE001
+        logger.warning(
+            "worker_issue_context_refresh_failed tenant_id=%s issue_key=%s error=%s",
+            getattr(tenant, "tenant_id", None),
+            issue_key,
+            exc,
+        )
+    return issue_summary, issue_description, issue_labels
 
 
 def apply_decision_gate(
@@ -21,112 +62,110 @@ def apply_decision_gate(
     run,
     tenant,
     settings,
-    tenant_jira_oauth_context_fn,
-    evaluate_pre_run_check_fn=evaluate_pre_run_check,
+    tenant_atlassian_oauth_context_fn,
+    evaluate_worker_decision_fn=evaluate_worker_readiness_decision,
     send_discord_message_fn,
     send_jira_message_fn,
     ask_reply_components_fn,
     blocked_status: str,
     failed_status: str,
+    mark_run_terminal_fn=None,
 ) -> tuple[object | None, dict | None]:
-    worker_decision = evaluate_worker_decision(
-        run_plan=run.plan,
-        tenant_id=run.tenant_id,
-        project_id=run.project_id,
-        issue_key=run.issue_key,
-        run_id=run.run_id,
-        issue_summary=run.issue_summary,
-        issue_description=run.issue_description,
+    terminalizer = mark_run_terminal if mark_run_terminal_fn is None else mark_run_terminal_fn
+    project = resolve_project_for_run(session, run=run)
+    issue_summary, issue_description, issue_labels = _load_live_issue_context(
         session=session,
         tenant=tenant,
-        issue_labels=[],
-        evaluate_pre_run_check_fn=evaluate_pre_run_check_fn,
+        settings=settings,
+        tenant_atlassian_oauth_context_fn=tenant_atlassian_oauth_context_fn,
+        issue_key=run.issue_key,
+        fallback_summary=run.issue_summary,
+        fallback_description=run.issue_description,
     )
-
-    if worker_decision.configuration_error:
-        run.status = failed_status
-        run.last_error = f"Decision Gate configuration error: {worker_decision.configuration_error}"
-        run.finished_at = datetime.now(timezone.utc)
-        session.execute(
-            delete(RunLock).where(
-                RunLock.tenant_id == run.tenant_id,
-                RunLock.issue_key == run.issue_key,
-                RunLock.run_id == run.run_id,
-            )
+    try:
+        worker_decision = evaluate_worker_decision_fn(
+            run_plan=getattr(run, "plan", None),
+            tenant_id=run.tenant_id,
+            project_id=run.project_id,
+            issue_key=run.issue_key,
+            run_id=run.run_id,
+            issue_summary=issue_summary,
+            issue_description=issue_description,
+            session=session,
+            tenant=tenant,
+            project=project,
+            issue_labels=issue_labels,
+            settings=settings,
+            tenant_atlassian_oauth_context_fn=tenant_atlassian_oauth_context_fn,
         )
-        session.commit()
-        session.refresh(run)
-        return run, None
+    except Exception as exc:  # noqa: BLE001
+        error_text = f"Execution readiness check failed: {exc}"
+        terminal_run = terminalizer(
+            session=session,
+            run_id=run.run_id,
+            terminal_status=failed_status,
+            last_error=error_text,
+        )
+        return terminal_run, None
 
-    if worker_decision.block_reason not in {"decision_gate_required", "gtd_required"}:
+    if worker_decision.allowed:
         return None, None
 
-    pre_check = worker_decision.pre_check
-    decision_gate = getattr(pre_check, "decision_gate", None) if pre_check is not None else None
-    gtd = getattr(pre_check, "gtd", None) if pre_check is not None else None
-    reason = ""
-    questions: list[str] = []
-    if worker_decision.block_reason == "decision_gate_required" and decision_gate is not None:
-        reason = str(getattr(decision_gate, "reason", "") or "").strip()
-        questions = [str(question).strip() for question in getattr(decision_gate, "questions", ()) if str(question).strip()]
-        decision_gate_payload = decision_gate.to_payload()
-    else:
-        missing = [
-            str(item).strip()
-            for item in getattr(gtd, "missing_criteria", ())
-            if str(item).strip()
-        ]
-        reason = "Good To Do details are incomplete."
-        if missing:
-            reason = f"Missing GTD criteria: {', '.join(missing)}"
-        questions = [str(question).strip() for question in getattr(gtd, "clarification_questions", ()) if str(question).strip()]
-        decision_gate_payload = {
-            "triggered": True,
-            "reason": reason,
-            "missing_sections": missing,
-            "questions": questions,
-            "recommendation": "Clarification required before execution.",
-            "tags": [],
-        }
+    if worker_decision.decision_gate is None:
+        error_text = (
+            worker_decision.configuration_error
+            or "Execution readiness check failed: worker decision rejected run without decision-gate details"
+        )
+        terminal_run = terminalizer(
+            session=session,
+            run_id=run.run_id,
+            terminal_status=failed_status,
+            last_error=error_text,
+        )
+        return terminal_run, None
+
+    try:
+        run_not_ready = derive_run_not_ready_outcome(worker_decision=worker_decision)
+    except ValueError as exc:
+        error_text = f"Execution readiness check failed: {exc}"
+        terminal_run = terminalizer(
+            session=session,
+            run_id=run.run_id,
+            terminal_status=failed_status,
+            last_error=error_text,
+        )
+        return terminal_run, None
 
     jira_url = tenant_jira_issue_url(session=session, tenant=tenant, issue_key=run.issue_key)
-    stage_update = decision_gate_required_update(
+    stage_update = run_not_ready_update(
         tenant_id=run.tenant_id,
         issue_key=run.issue_key,
         run_id=run.run_id,
         jira_url=jira_url,
         run_url=admin_run_url(admin_ui_base_url=settings.admin_ui_base_url, run_id=run.run_id),
-        reason=reason,
-        questions=questions,
+        reason=run_not_ready.reason,
+        next_steps=run_not_ready.next_steps,
     )
-    previous_plan = run.plan if isinstance(run.plan, dict) else {}
-    previous_trigger_context = (
-        dict(previous_plan.get("trigger_context"))
-        if isinstance(previous_plan.get("trigger_context"), dict)
-        else None
+    session.refresh(run, attribute_names=["plan"])
+    snapshot = ExecutionSnapshot.require(run.plan, allow_empty=True)
+    snapshot.workflow = SnapshotWorkflow(
+        outcome="blocked",
+        attempts=0,
+        summary=[],
+        blocker_message=run_not_ready.reason,
+        requeue_target=None,
+        requeue_reason=None,
     )
-    next_plan = {
-        "succeeded": False,
-        "attempts": 0,
-        "summary": [],
-        "test_guidance": [],
-        "pr_url": None,
-        "stage_updates": [stage_update],
-        "decision_gate": decision_gate_payload,
-        "pre_check": {
-            "outcome": getattr(pre_check, "outcome", None) if pre_check is not None else None,
-        },
-    }
-    if previous_trigger_context is not None:
-        next_plan["trigger_context"] = previous_trigger_context
-    run.plan = next_plan
-    terminal_run = mark_run_terminal(
-        session,
+    snapshot.events.stage_updates = [stage_update.to_payload()]
+    snapshot.context.execution_context["run_not_ready"] = run_not_ready.dump()
+    snapshot.context.execution_context["pre_check_outcome"] = run_not_ready.pre_check_outcome
+    run.plan = snapshot.dump()
+    terminal_run = terminalizer(
+        session=session,
         run_id=run.run_id,
         terminal_status=blocked_status,
-        last_error=f"Decision Gate required: {reason}",
+        last_error=run_not_ready.reason,
     )
-    project = resolve_project_for_run(session, run=run)
     send_result = SimpleNamespace(sent=False, reason="not_attempted")
     send_error: str | None = None
     try:
@@ -134,29 +173,23 @@ def apply_decision_gate(
             session=session,
             tenant=tenant,
             project=project,
-            message=stage_update["discord_message"],
+            message=stage_update.discord_message,
             settings=settings,
-            event="decision_gate_required",
-            open_thread=True,
-            thread_name=f"{run.issue_key}-decision-gate",
-            thread_intro=(
-                "Reply here with clarification questions, then update the Jira issue with GTD details "
-                "and run !retry <ISSUE_KEY>."
-            ),
-            thread_intro_components=ask_reply_components_fn(),
+            event=stage_update.event_name,
+            open_thread=False,
         )
         send_jira_message_fn(
             session=session,
             tenant=tenant,
             issue_key=run.issue_key,
-            stage=stage_update["stage"],
-            message=stage_update["jira_message"],
+            stage=stage_update.event_name,
+            message=stage_update.jira_message,
             settings=settings,
         )
     except Exception as exc:  # noqa: BLE001
         send_error = str(exc)
     return terminal_run, {
-        "stage_update": stage_update,
+        "stage_update": stage_update.to_payload(),
         "send_result": send_result,
         "send_error": send_error,
     }

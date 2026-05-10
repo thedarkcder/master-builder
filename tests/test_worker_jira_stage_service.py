@@ -75,8 +75,8 @@ class WorkerJiraStageServiceTests(unittest.TestCase):
         client = MagicMock()
         self.session.get.return_value = connection
         with (
-            patch("orchestrator.core.worker.jira_stage_service.refresh_jira_connection_tokens", return_value="token"),
-            patch("orchestrator.core.worker.jira_stage_service.jira_oauth_client", return_value=client),
+            patch("orchestrator.core.worker.jira_stage_service.refresh_atlassian_connection_tokens", return_value="token"),
+            patch("orchestrator.core.worker.jira_stage_service.atlassian_oauth_client", return_value=client),
         ):
             send_stage_update_to_jira(
                 session=self.session,
@@ -93,8 +93,8 @@ class WorkerJiraStageServiceTests(unittest.TestCase):
         client = MagicMock()
         self.session.get.return_value = connection
         with (
-            patch("orchestrator.core.worker.jira_stage_service.refresh_jira_connection_tokens", return_value="token"),
-            patch("orchestrator.core.worker.jira_stage_service.jira_oauth_client", return_value=client),
+            patch("orchestrator.core.worker.jira_stage_service.refresh_atlassian_connection_tokens", return_value="token"),
+            patch("orchestrator.core.worker.jira_stage_service.atlassian_oauth_client", return_value=client),
         ):
             send_stage_update_to_jira(
                 session=self.session,
@@ -107,13 +107,13 @@ class WorkerJiraStageServiceTests(unittest.TestCase):
         client.add_issue_comment.assert_called_once()
 
     def test_catches_refresh_or_client_errors(self) -> None:
-        from orchestrator.tools.jira_oauth import JiraOAuthError
+        from orchestrator.tools.atlassian_oauth import AtlassianOAuthError
 
         connection = SimpleNamespace(cloud_id="cloud-1")
         self.session.get.return_value = connection
         with patch(
-            "orchestrator.core.worker.jira_stage_service.refresh_jira_connection_tokens",
-            side_effect=JiraOAuthError("boom"),
+            "orchestrator.core.worker.jira_stage_service.refresh_atlassian_connection_tokens",
+            side_effect=AtlassianOAuthError("boom"),
         ):
             send_stage_update_to_jira(
                 session=self.session,

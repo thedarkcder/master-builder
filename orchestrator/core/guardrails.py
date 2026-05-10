@@ -5,21 +5,14 @@ import re
 import traceback
 from collections.abc import Iterable
 
+from orchestrator.core.observability.log_redaction import redact_log_text
+
 _DANGEROUS_COMMAND_PATTERNS = (
     re.compile(r"(^|\s)rm\s+-rf(\s|$)", re.IGNORECASE),
     re.compile(r"(^|\s)(curl|wget)\b[^|]*\|\s*(sh|bash)\b", re.IGNORECASE),
     re.compile(r"(^|\s)sudo(\s|$)", re.IGNORECASE),
     re.compile(r"(^|\s)chmod\s+777(\s|$)", re.IGNORECASE),
 )
-
-_SENSITIVE_TEXT_PATTERNS = (
-    re.compile(r'(?i)("?(?:token|secret|password|api[_-]?key|private[_-]?key)"?\s*:\s*")[^"]+(")'),
-    re.compile(r"(?i)\b(authorization\s*:\s*(?:bearer|token)\s+)[^\s,;]+"),
-    re.compile(r"(?i)\b(x-[a-z0-9-]*token\s*:\s*)[^\s,;]+"),
-    re.compile(r"(?i)\b((?:token|secret|password|api[_-]?key|private[_-]?key)\s*[=:]\s*)[^\s,;]+"),
-)
-
-_REDACTED = "[REDACTED]"
 
 
 def contains_dangerous_command_pattern(command: str) -> bool:
@@ -56,17 +49,7 @@ def enforce_command_allowlist(command: str, allowlist: Iterable[str]) -> None:
 
 
 def redact_sensitive_text(value: str) -> str:
-    redacted = value
-    for pattern in _SENSITIVE_TEXT_PATTERNS:
-        redacted = pattern.sub(
-            lambda match: (
-                f"{match.group(1)}{_REDACTED}{match.group(2)}"
-                if match.lastindex and match.lastindex >= 2
-                else f"{match.group(1)}{_REDACTED}"
-            ),
-            redacted,
-        )
-    return redacted
+    return redact_log_text(value)
 
 
 def _redact_log_arg(arg: object) -> object:

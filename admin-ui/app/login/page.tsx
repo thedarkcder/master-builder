@@ -1,29 +1,86 @@
 "use client";
 
-import { FormEvent, useEffect, useState } from "react";
+import { FormEvent, Suspense, useEffect, useState } from "react";
 import Link from "next/link";
-import { useRouter } from "next/navigation";
+import { useRouter, useSearchParams } from "next/navigation";
 import { Zap } from "lucide-react";
 
 import { useAuth } from "@/components/auth-provider";
+import { getDefaultAuthenticatedRoute } from "@/lib/auth-routing";
+import { clearLogoutRedirectBarrier, hasLogoutRedirectBarrier } from "@/lib/auth-redirect-barrier";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { DEFAULT_API_BASE_URL } from "@/lib/auth-constants";
+import { readLastWorkspaceTenantIdFromBrowser } from "@/lib/workspace-preference";
 
 export default function LoginPage() {
-  const router = useRouter();
-  const { credentials, ready, login } = useAuth();
+  return (
+    <Suspense fallback={<LoginPageFallback />}>
+      <LoginPageInner />
+    </Suspense>
+  );
+}
 
-  const [username, setUsername] = useState("admin");
+function LoginPageFallback() {
+  return (
+    <main className="relative flex min-h-screen items-center justify-center overflow-hidden bg-gradient-to-br from-slate-950 via-indigo-950 to-slate-900 px-4 py-8">
+      <div className="relative w-full max-w-md">
+        <p className="text-center text-sm text-slate-400">Loading…</p>
+      </div>
+    </main>
+  );
+}
+
+function LoginPageInner() {
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const { credentials, ready, login, needsOnboarding, principal } = useAuth();
+
+  const [identifier, setIdentifier] = useState("");
   const [password, setPassword] = useState("");
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  useEffect(() => {
-    if (ready && credentials) {
-      router.replace("/dashboard");
+  function normalizeAuthErrorMessage(message: string | null | undefined): string | null {
+    if (!message) {
+      return null;
     }
-  }, [credentials, ready, router]);
+    if (message === "CredentialsSignin" || message === "Invalid tenant credentials") {
+      return "Invalid credentials";
+    }
+    return message;
+  }
+
+  useEffect(() => {
+    if (ready && !credentials) {
+      clearLogoutRedirectBarrier();
+    }
+  }, [credentials, ready]);
+
+  useEffect(() => {
+    if (ready && credentials && principal) {
+      if (hasLogoutRedirectBarrier()) {
+        return;
+      }
+      const preferredTenantId = readLastWorkspaceTenantIdFromBrowser();
+      router.replace(
+        needsOnboarding
+          ? "/get-started"
+          : getDefaultAuthenticatedRoute(principal, { preferredTenantId }),
+      );
+    }
+  }, [credentials, needsOnboarding, principal, ready, router]);
+
+  useEffect(() => {
+    const authError = searchParams.get("error");
+    const nextError = normalizeAuthErrorMessage(authError);
+    if (nextError) {
+      setErrorMessage(nextError);
+    }
+  }, [searchParams]);
+
+  const resetSucceeded = searchParams.get("reset") === "success";
+  const nextPath = searchParams.get("next");
+  const safeNextPath = nextPath && nextPath.startsWith("/") && !nextPath.startsWith("//") ? nextPath : null;
 
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -31,13 +88,12 @@ export default function LoginPage() {
     setIsSubmitting(true);
     try {
       await login({
-        apiBaseUrl: DEFAULT_API_BASE_URL,
-        username: username.trim(),
-        password
+        identifier: identifier.trim(),
+        password,
+        redirectTo: safeNextPath,
       });
-      router.push("/dashboard");
     } catch (error) {
-      const message = error instanceof Error ? error.message : "Invalid admin credentials";
+      const message = normalizeAuthErrorMessage(error instanceof Error ? error.message : "Invalid credentials");
       setErrorMessage(message);
     } finally {
       setIsSubmitting(false);
@@ -53,6 +109,12 @@ export default function LoginPage() {
       </div>
 
       <div className="relative w-full max-w-md">
+        <div className="mb-6">
+          <Link href="/" className="inline-flex items-center text-sm text-slate-300 underline-offset-2 hover:text-white hover:underline">
+            Back to home
+          </Link>
+        </div>
+
         {/* Logo + wordmark above card */}
         <div className="mb-8 flex flex-col items-center gap-3 text-center">
           <div className="flex h-14 w-14 items-center justify-center rounded-2xl bg-indigo-600 shadow-[0_0_32px_rgba(99,102,241,0.5)] ring-1 ring-indigo-400/30">
@@ -66,18 +128,18 @@ export default function LoginPage() {
 
         {/* Frosted glass card */}
         <div className="rounded-2xl border border-white/10 bg-white/5 p-8 backdrop-blur-xl shadow-2xl">
-          <h2 className="mb-1 text-lg font-semibold text-white">Admin sign in</h2>
-          <p className="mb-6 text-sm text-slate-400">Sign in to manage tenants and monitor runs.</p>
+          <h2 className="mb-1 text-lg font-semibold text-white">Sign in</h2>
+          <p className="mb-6 text-sm text-slate-400">Use your email for tenant access or a username for platform administration.</p>
 
           <form className="space-y-4" onSubmit={handleSubmit}>
             <div className="space-y-1.5">
-              <label className="text-sm font-medium text-slate-300" htmlFor="username">
-                Username
+              <label className="text-sm font-medium text-slate-300" htmlFor="identifier">
+                Email or username
               </label>
               <Input
-                id="username"
-                value={username}
-                onChange={(e) => setUsername(e.target.value)}
+                id="identifier"
+                value={identifier}
+                onChange={(e) => setIdentifier(e.target.value)}
                 required
                 className="border-white/10 bg-white/10 text-white placeholder:text-slate-500 focus-visible:ring-indigo-500"
               />
@@ -96,19 +158,37 @@ export default function LoginPage() {
               />
             </div>
 
-            {errorMessage ? (
-              <p className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-400" role="alert">
-                {errorMessage}
-              </p>
-            ) : null}
+            <div className="flex justify-end">
+              <Link href="/forgot-password" className="text-sm text-indigo-300 underline-offset-2 hover:underline">
+                Forgot password?
+              </Link>
+            </div>
 
-            <Button
+          {errorMessage ? (
+            <p className="rounded-lg border border-red-500/30 bg-red-500/10 px-3 py-2 text-sm text-red-400" role="alert">
+              {errorMessage}
+            </p>
+          ) : null}
+          {resetSucceeded ? (
+            <p className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 px-3 py-2 text-sm text-emerald-300">
+              Password updated. Sign in with your new password.
+            </p>
+          ) : null}
+
+          <Button
               className="w-full bg-indigo-600 text-white hover:bg-indigo-500 focus-visible:ring-indigo-500"
               type="submit"
               disabled={isSubmitting}
             >
               {isSubmitting ? "Signing in..." : "Sign in"}
             </Button>
+
+            <p className="text-center text-sm text-slate-400">
+              New to Master Builder?{" "}
+              <Link href="/register" className="text-indigo-300 underline-offset-2 hover:underline">
+                Create your workspace
+              </Link>
+            </p>
 
             <p className="text-center text-xs text-slate-500">
               <Link href="/privacy" className="text-indigo-400 underline-offset-2 hover:underline">

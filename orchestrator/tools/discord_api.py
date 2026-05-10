@@ -19,6 +19,19 @@ class DiscordTextChannel:
     parent_id: str | None
 
 
+@dataclass(frozen=True)
+class DiscordVoiceChannel:
+    channel_id: str
+    name: str
+    parent_id: str | None
+
+
+@dataclass(frozen=True)
+class DiscordCategoryChannel:
+    channel_id: str
+    name: str
+
+
 class DiscordApiClient:
     def __init__(self, *, bot_token: str):
         token = bot_token.strip()
@@ -145,6 +158,48 @@ class DiscordApiClient:
             channels.append(DiscordTextChannel(channel_id=channel_id, name=name, parent_id=normalized_parent))
         return channels
 
+    def list_voice_channels(self, *, guild_id: str) -> list[DiscordVoiceChannel]:
+        payload = self._request_json(method="GET", path=f"/guilds/{guild_id}/channels")
+        if not isinstance(payload, list):
+            raise DiscordApiError("Discord list channels response was not a list")
+
+        channels: list[DiscordVoiceChannel] = []
+        for item in payload:
+            if not isinstance(item, dict):
+                continue
+            if item.get("type") != 2:
+                continue
+            channel_id = item.get("id")
+            name = item.get("name")
+            parent_id = item.get("parent_id")
+            if not isinstance(channel_id, str) or not channel_id:
+                continue
+            if not isinstance(name, str) or not name:
+                continue
+            normalized_parent = parent_id if isinstance(parent_id, str) and parent_id.strip() else None
+            channels.append(DiscordVoiceChannel(channel_id=channel_id, name=name, parent_id=normalized_parent))
+        return channels
+
+    def list_channel_categories(self, *, guild_id: str) -> list[DiscordCategoryChannel]:
+        payload = self._request_json(method="GET", path=f"/guilds/{guild_id}/channels")
+        if not isinstance(payload, list):
+            raise DiscordApiError("Discord list channels response was not a list")
+
+        categories: list[DiscordCategoryChannel] = []
+        for item in payload:
+            if not isinstance(item, dict):
+                continue
+            if item.get("type") != 4:
+                continue
+            channel_id = item.get("id")
+            name = item.get("name")
+            if not isinstance(channel_id, str) or not channel_id:
+                continue
+            if not isinstance(name, str) or not name:
+                continue
+            categories.append(DiscordCategoryChannel(channel_id=channel_id, name=name))
+        return categories
+
     def create_text_channel(self, *, guild_id: str, name: str, parent_id: str | None = None) -> DiscordTextChannel:
         payload: dict = {"name": name, "type": 0}
         if parent_id:
@@ -162,7 +217,31 @@ class DiscordApiClient:
         normalized_parent = created_parent if isinstance(created_parent, str) and created_parent.strip() else None
         return DiscordTextChannel(channel_id=channel_id, name=created_name, parent_id=normalized_parent)
 
-    def post_message(self, *, channel_id: str, content: str, components: list[dict] | None = None) -> dict:
+    def create_voice_channel(self, *, guild_id: str, name: str, parent_id: str | None = None) -> DiscordVoiceChannel:
+        payload: dict = {"name": name, "type": 2}
+        if parent_id:
+            payload["parent_id"] = parent_id
+        data = self._request_json(method="POST", path=f"/guilds/{guild_id}/channels", payload=payload)
+        if not isinstance(data, dict):
+            raise DiscordApiError("Discord create channel response was not an object")
+        channel_id = data.get("id")
+        created_name = data.get("name")
+        created_parent = data.get("parent_id")
+        if not isinstance(channel_id, str) or not channel_id:
+            raise DiscordApiError("Discord create channel response missing id")
+        if not isinstance(created_name, str) or not created_name:
+            raise DiscordApiError("Discord create channel response missing name")
+        normalized_parent = created_parent if isinstance(created_parent, str) and created_parent.strip() else None
+        return DiscordVoiceChannel(channel_id=channel_id, name=created_name, parent_id=normalized_parent)
+
+    def post_message(
+        self,
+        *,
+        channel_id: str,
+        content: str,
+        components: list[dict] | None = None,
+        flags: int | None = None,
+    ) -> dict:
         normalized_channel_id = channel_id.strip()
         normalized_content = content.strip()
         if not normalized_channel_id:
@@ -172,6 +251,8 @@ class DiscordApiClient:
         payload: dict[str, object] = {"content": normalized_content}
         if components:
             payload["components"] = components
+        if flags is not None:
+            payload["flags"] = int(flags)
         data = self._request_json(
             method="POST",
             path=f"/channels/{normalized_channel_id}/messages",
@@ -190,6 +271,7 @@ class DiscordApiClient:
         file_bytes: bytes,
         content_type: str = "application/octet-stream",
         components: list[dict] | None = None,
+        flags: int | None = None,
     ) -> dict:
         normalized_channel_id = channel_id.strip()
         normalized_content = content.strip()
@@ -205,6 +287,8 @@ class DiscordApiClient:
             payload["content"] = normalized_content
         if components:
             payload["components"] = components
+        if flags is not None:
+            payload["flags"] = int(flags)
         data = self._request_multipart(
             method="POST",
             path=f"/channels/{normalized_channel_id}/messages",
@@ -317,6 +401,56 @@ class DiscordApiClient:
         channel_id = self.create_dm_channel(user_id=user_id)
         return self.post_message(channel_id=channel_id, content=content)
 
+    def create_invite(
+        self,
+        *,
+        channel_id: str,
+        max_age: int | None = None,
+        max_uses: int | None = None,
+        unique: bool = True,
+    ) -> dict:
+        normalized_channel_id = channel_id.strip()
+        if not normalized_channel_id:
+            raise ValueError("Discord channel ID cannot be empty")
+        payload: dict[str, object] = {"unique": unique}
+        if max_age is not None:
+            payload["max_age"] = int(max_age)
+        if max_uses is not None:
+            payload["max_uses"] = int(max_uses)
+        data = self._request_json(
+            method="POST",
+            path=f"/channels/{normalized_channel_id}/invites",
+            payload=payload,
+        )
+        if not isinstance(data, dict):
+            raise DiscordApiError("Discord create invite response was not an object")
+        return data
+
+    def add_guild_member(
+        self,
+        *,
+        guild_id: str,
+        user_id: str,
+        user_access_token: str,
+    ) -> dict:
+        normalized_guild_id = guild_id.strip()
+        normalized_user_id = user_id.strip()
+        normalized_access_token = user_access_token.strip()
+        if not normalized_guild_id:
+            raise ValueError("Discord guild ID cannot be empty")
+        if not normalized_user_id:
+            raise ValueError("Discord user ID cannot be empty")
+        if not normalized_access_token:
+            raise ValueError("Discord user access token cannot be empty")
+        data = self._request_json(
+            method="PUT",
+            path=f"/guilds/{normalized_guild_id}/members/{normalized_user_id}",
+            payload={"access_token": normalized_access_token},
+        )
+        if not isinstance(data, dict):
+            raise DiscordApiError("Discord add guild member response was not an object")
+        return data
+
     def ensure_text_channel(
         self,
         *,
@@ -329,6 +463,19 @@ class DiscordApiClient:
             if channel.name == name and same_parent:
                 return channel
         return self.create_text_channel(guild_id=guild_id, name=name, parent_id=parent_id)
+
+    def ensure_voice_channel(
+        self,
+        *,
+        guild_id: str,
+        name: str,
+        parent_id: str | None = None,
+    ) -> DiscordVoiceChannel:
+        for channel in self.list_voice_channels(guild_id=guild_id):
+            same_parent = channel.parent_id == parent_id
+            if channel.name == name and same_parent:
+                return channel
+        return self.create_voice_channel(guild_id=guild_id, name=name, parent_id=parent_id)
 
     def get_application_id(self) -> str:
         payload = self._request_json(method="GET", path="/oauth2/applications/@me")

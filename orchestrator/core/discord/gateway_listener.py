@@ -5,6 +5,7 @@ import json
 import logging
 import re
 import threading
+from datetime import UTC, datetime
 from collections.abc import Callable
 from typing import Any
 from uuid import uuid4
@@ -12,6 +13,10 @@ from uuid import uuid4
 from sqlalchemy import select
 
 from orchestrator.api.commands.entrypoint import execute_tenant_discord_command
+from orchestrator.api.discord.shared.room_history import DiscordRoomHistoryService
+from orchestrator.core.runtime.working_dir import resolve_codex_working_dir
+from orchestrator.core.config import get_settings
+from orchestrator.core.discord.voice_entry_routing import route_discord_voice_entry
 from orchestrator.api.transport_runtime import (
     build_discord_transport_executor,
     build_transport_action_executors,
@@ -36,7 +41,10 @@ from orchestrator.api.discord.interactions.auth import (
 )
 from orchestrator.api.discord.interactions.dispatcher import DiscordInteractionDispatchDeps
 from orchestrator.api.discord.interactions.followup import (
-    _decision_gate_issue_for_thread as _interaction_decision_gate_issue_for_thread,
+    _resolve_followup_context_match as _interaction_resolve_followup_context_match,
+    _resolve_followup_context as _interaction_resolve_followup_context,
+    _resolve_followup_reaction as _interaction_resolve_followup_reaction,
+    _resolve_thread_channel_for_reply as _interaction_resolve_thread_channel_for_reply,
     _run_discord_application_command_followup,
     _run_discord_ask_confirmation_followup,
     _run_discord_command_followup,
@@ -56,7 +64,6 @@ from orchestrator.api.discord.shared.followup_format import (
     resolve_tenant_jira_browse_base_url,
 )
 from orchestrator.api.discord.shared.state import (
-    find_seed_followup_context,
     live_voice_linked_channel_ids_from_discord_config,
 )
 from orchestrator.core.discord.channel_tenant_index import resolve_tenant_for_discord_channel
@@ -67,26 +74,31 @@ from orchestrator.core.communications import (
     TransportEnvelope,
 )
 from orchestrator.core.config import Settings
-from orchestrator.core.observability import scoped_log_context
+from orchestrator.core.observability.otel import scoped_log_context
 from orchestrator.core.discord.personas import (
     build_voice_room_spoken_reply_text,
     format_voice_room_persona_label,
 )
-from orchestrator.core.error_observability import emit_hard_error
-from orchestrator.core.run_human_input_service import (
-    pending_human_input_for_thread,
-    resume_run_from_human_input_reply,
+from orchestrator.core.observability.error import emit_hard_error
+from orchestrator.core.pm.followup_context_service import (
+    resolve_followup_context,
+    resolve_followup_context_match,
+    resolve_followup_reaction,
 )
-from orchestrator.core.platform_secret_service import (
+from orchestrator.core.runs.human_input_service import (
+    answer_human_input_request,
+    pending_human_input_for_request_id,
+    resume_workflow_from_human_input_answer,
+)
+from orchestrator.core.platform.secret_service import (
     PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF,
     resolve_platform_secret_ref,
 )
-from orchestrator.core.discord.thread_context import get_thread_issue_key
 from orchestrator.core.voice import VoiceTranscriptionError, download_audio_bytes, transcribe_audio_bytes
 from orchestrator.core.voice.tts import VoiceReplyError, synthesize_reply_audio
 from orchestrator.api.discord.shared.state_repository import resolve_project_for_discord_channel
 from orchestrator.storage.db import create_session_factory
-from orchestrator.storage.models import Project, Tenant
+from orchestrator.storage.models import Project, Tenant, TenantMembership, TenantUserDiscordIdentity
 from orchestrator.tools.discord_api import DiscordApiClient, DiscordApiError
 
 try:
@@ -99,6 +111,7 @@ logger = logging.getLogger("orchestrator.discord_gateway")
 
 DISCORD_GATEWAY_URL = "wss://gateway.discord.gg/?v=10&encoding=json"
 INTENT_GUILDS = 1 << 0
+INTENT_GUILD_MEMBERS = 1 << 1
 INTENT_GUILD_MESSAGES = 1 << 9
 INTENT_MESSAGE_CONTENT = 1 << 15
 _ISSUE_KEY_PATTERN = re.compile(r"\b[A-Z][A-Z0-9_]+-\d+\b")
@@ -130,6 +143,7 @@ _ROOM_SINGLE_KEYS = (
 )
 _AUDIO_CONTENT_TYPE_PREFIX = "audio/"
 _AUDIO_FILENAME_EXTENSIONS = (".mp3", ".wav", ".m4a", ".aac", ".ogg", ".webm", ".flac", ".mp4")
+_VOICE_MESSAGE_FLAG = 1 << 13
 
 
 def _ask_reply_components() -> list[dict]:
@@ -238,26 +252,17 @@ def _project_seed_followup_thread_project_keys(*, session, tenant_id: str) -> di
 
 
 def _decision_gate_issue_for_thread(*, session, tenant_id: str, channel_id: str) -> str | None:  # noqa: ANN001
-    normalized_channel_id = str(channel_id or "").strip()
-    if not normalized_channel_id:
+    context = resolve_followup_context(
+        session=session,
+        tenant_id=tenant_id,
+        channel_id=channel_id,
+    )
+    if context is None or str(getattr(context, "context_type", "") or "").strip() != "decision_gate":
         return None
-    projects = session.execute(
-        select(Project).where(
-            Project.tenant_id == tenant_id,
-            Project.is_archived.is_(False),
-        )
-    ).scalars().all()
-    for project in projects:
-        issue_key = get_thread_issue_key(discord_config=project.discord_config, channel_id=normalized_channel_id)
-        if issue_key and _ISSUE_KEY_PATTERN.fullmatch(issue_key):
-            return issue_key
-    tenant = session.get(Tenant, tenant_id)
-    if tenant is None:
+    issue_key = str(getattr(context, "issue_key", "") or "").strip().upper()
+    if not issue_key or _ISSUE_KEY_PATTERN.fullmatch(issue_key) is None:
         return None
-    issue_key = get_thread_issue_key(discord_config=tenant.discord_config, channel_id=normalized_channel_id)
-    if issue_key and _ISSUE_KEY_PATTERN.fullmatch(issue_key):
-        return issue_key
-    return None
+    return issue_key
 
 
 class DiscordGatewayListener:
@@ -354,7 +359,7 @@ class DiscordGatewayListener:
                                 "op": 2,
                                 "d": {
                                     "token": bot_token,
-                                    "intents": INTENT_GUILDS | INTENT_GUILD_MESSAGES | INTENT_MESSAGE_CONTENT,
+                                    "intents": INTENT_GUILDS | INTENT_GUILD_MEMBERS | INTENT_GUILD_MESSAGES | INTENT_MESSAGE_CONTENT,
                                     "properties": {
                                         "os": "linux",
                                         "browser": "master-builder",
@@ -405,6 +410,10 @@ class DiscordGatewayListener:
 
                     if event_type == "MESSAGE_CREATE":
                         await asyncio.to_thread(self._handle_message_create, data, bot_token)
+                        continue
+
+                    if event_type == "GUILD_MEMBER_ADD":
+                        await asyncio.to_thread(self._handle_guild_member_add, data, bot_token)
             finally:
                 heartbeat_task.cancel()
                 try:
@@ -434,7 +443,10 @@ class DiscordGatewayListener:
             find_tenant_for_discord_channel=_find_tenant_for_discord_channel,
             find_focused_discord_option=_find_focused_discord_option,
             discord_issue_autocomplete_choices=_discord_issue_autocomplete_choices,
-            decision_gate_issue_for_thread=_interaction_decision_gate_issue_for_thread,
+            resolve_thread_channel_for_reply=_interaction_resolve_thread_channel_for_reply,
+            resolve_followup_context_match=_interaction_resolve_followup_context_match,
+            resolve_followup_context=_interaction_resolve_followup_context,
+            resolve_followup_reaction=_interaction_resolve_followup_reaction,
             run_discord_ask_confirmation_followup=_run_discord_ask_confirmation_followup,
             run_discord_command_followup=_run_discord_command_followup,
             run_discord_decision_gate_reply_followup=_run_discord_decision_gate_reply_followup,
@@ -444,6 +456,46 @@ class DiscordGatewayListener:
         )
 
     def _message_dispatch_deps(self, *, bot_token: str) -> DiscordMessageIngressDeps:
+        def _route_voice_entry(
+            session,
+            tenant,
+            *,
+            user_id: str,
+            channel_id: str,
+            project_id: str | None,
+            transcript: str,
+            project_keys: list[str],
+            room_channel_ids: frozenset[str],
+        ) -> dict[str, Any]:
+            _ = user_id
+            settings = get_settings()
+            working_dir = resolve_codex_working_dir(
+                session=session,
+                tenant=tenant,
+                settings=settings,
+                project_id=project_id,
+                project_keys=project_keys,
+            )
+            history = DiscordRoomHistoryService().recent_room_history(
+                discord_config=getattr(tenant, "discord_config", None) or {},
+                channel_id=channel_id,
+                limit=8,
+            )
+            return route_discord_voice_entry(
+                session=session,
+                settings=settings,
+                tenant=tenant,
+                project_id=project_id,
+                codex_working_dir=working_dir,
+                transcript=transcript,
+                entry_source="voice_note",
+                history=history,
+                room_context={
+                    "project_keys": project_keys,
+                    "channel_in_voice_room": channel_id in room_channel_ids,
+                },
+            )
+
         return DiscordMessageIngressDeps(
             find_tenant_for_channel=self._find_tenant_for_channel,
             resolve_project_for_discord_channel=resolve_project_for_discord_channel,
@@ -454,12 +506,12 @@ class DiscordGatewayListener:
                 bot_token=bot_token,
                 **kwargs,
             ),
-            pending_human_input_for_thread=pending_human_input_for_thread,
-            resume_run_from_human_input_reply=resume_run_from_human_input_reply,
-            decision_gate_issue_for_thread=_decision_gate_issue_for_thread,
-            project_seed_followup_thread_ids=_project_seed_followup_thread_ids,
-            project_seed_followup_thread_project_keys=_project_seed_followup_thread_project_keys,
-            find_seed_followup_context=find_seed_followup_context,
+            load_pending_human_input_request=pending_human_input_for_request_id,
+            answer_human_input_request=answer_human_input_request,
+            resume_workflow_from_human_input_answer=resume_workflow_from_human_input_answer,
+            resolve_followup_context_match=resolve_followup_context_match,
+            resolve_followup_context=resolve_followup_context,
+            resolve_followup_reaction=resolve_followup_reaction,
             execute_tenant_discord_command=execute_tenant_discord_command,
             resolve_tenant_jira_browse_base_url=resolve_tenant_jira_browse_base_url,
             build_command_followup_message=build_command_followup_message,
@@ -471,6 +523,7 @@ class DiscordGatewayListener:
             emit_hard_error=emit_hard_error,
             logger=logger,
             settings=self._settings,
+            route_voice_entry=_route_voice_entry,
         )
 
     def _execute_ingress_result(
@@ -598,6 +651,89 @@ class DiscordGatewayListener:
             bot_token=bot_token,
         )
 
+    def _handle_guild_member_add(self, payload: dict, bot_token: str) -> None:
+        guild_id = str(payload.get("guild_id") or "").strip()
+        user_payload = payload.get("user") if isinstance(payload.get("user"), dict) else {}
+        discord_user_id = str(user_payload.get("id") or "").strip()
+        if not guild_id or not discord_user_id:
+            return
+
+        with self._session_factory() as session:
+            tenant = next(
+                (
+                    candidate
+                    for candidate in session.execute(select(Tenant).where(Tenant.is_enabled.is_(True))).scalars().all()
+                    if str((candidate.discord_config or {}).get("guild_id") or "").strip() == guild_id
+                ),
+                None,
+            )
+            if tenant is None:
+                return
+
+            identity = session.execute(
+                select(TenantUserDiscordIdentity).where(TenantUserDiscordIdentity.discord_user_id == discord_user_id)
+            ).scalar_one_or_none()
+            if identity is None:
+                return
+
+            membership = session.execute(
+                select(TenantMembership).where(
+                    TenantMembership.tenant_id == tenant.tenant_id,
+                    TenantMembership.user_id == identity.user_id,
+                )
+            ).scalar_one_or_none()
+            if membership is None:
+                return
+
+            discord_state = dict(membership.discord_state or {})
+            discord_state["linked"] = True
+            discord_state["guild_joined"] = True
+            discord_state["guild_joined_at"] = datetime.now(UTC).isoformat()
+            current_status = str(discord_state.get("welcome_status") or "").strip().lower()
+            if current_status == "sent":
+                membership.discord_state = discord_state
+                membership.updated_at = datetime.now(UTC)
+                session.commit()
+                return
+
+            discord_state["welcome_status"] = "queued"
+            membership.discord_state = discord_state
+            membership.updated_at = datetime.now(UTC)
+            session.flush()
+
+            try:
+                audio = synthesize_reply_audio(
+                    settings=self._settings,
+                    text=f"Welcome to {tenant.name}. You're set up and ready to build with the team.",
+                )
+                client = DiscordApiClient(bot_token=bot_token)
+                dm_channel_id = client.create_dm_channel(user_id=discord_user_id)
+                client.post_message_with_attachment(
+                    channel_id=dm_channel_id,
+                    content=f"Welcome to {tenant.name}.",
+                    filename=audio.filename,
+                    file_bytes=audio.audio_bytes,
+                    content_type=audio.content_type,
+                    flags=_VOICE_MESSAGE_FLAG,
+                )
+                discord_state["welcome_status"] = "sent"
+                discord_state["welcome_sent_at"] = datetime.now(UTC).isoformat()
+                discord_state["last_failure_reason"] = None
+            except (DiscordApiError, VoiceReplyError, ValueError) as exc:
+                discord_state["welcome_status"] = "failed"
+                discord_state["last_failure_reason"] = str(exc)
+                logger.exception(
+                    "discord_gateway_welcome_dm_failed tenant_id=%s user_id=%s discord_user_id=%s error=%s",
+                    tenant.tenant_id,
+                    identity.user_id,
+                    discord_user_id,
+                    exc,
+                )
+
+            membership.discord_state = discord_state
+            membership.updated_at = datetime.now(UTC)
+            session.commit()
+
     def _transcribe_room_audio_attachment(
         self,
         *,
@@ -608,7 +744,7 @@ class DiscordGatewayListener:
         project_id: str | None = None,
     ) -> tuple[str | None, str | None]:
         if self._transcribe_audio_attachment is None:
-            provider = str(getattr(self._settings, "voice_transcription_provider", "disabled") or "").strip().lower()
+            provider = str(getattr(self._settings, "voice_stt_provider", "disabled") or "").strip().lower()
             if provider in {"", "disabled"}:
                 return (
                     None,
@@ -654,10 +790,10 @@ class DiscordGatewayListener:
         return transcript, None
 
     def _room_voice_reply_enabled(self) -> bool:
-        provider = str(getattr(self._settings, "voice_reply_provider", "disabled") or "").strip().lower()
+        provider = str(getattr(self._settings, "voice_tts_provider", "disabled") or "").strip().lower()
         if provider in {"", "disabled"}:
             return False
-        return bool(getattr(self._settings, "voice_reply_enabled_default", False))
+        return True
 
     def _build_room_voice_reply_action(
         self,

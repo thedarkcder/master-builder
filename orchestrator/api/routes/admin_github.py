@@ -20,9 +20,16 @@ from orchestrator.api.schemas import (
     IntegrationTestResult,
 )
 from orchestrator.core.config import get_settings
-from orchestrator.core.platform_secret_service import resolve_platform_secret_ref
-from orchestrator.core.security import require_admin
-from orchestrator.core.tenant_secret_service import resolve_scoped_secret_ref
+from orchestrator.core.security import (
+    AuthenticatedPrincipal,
+    require_admin,
+    require_any_tenant_permission,
+    require_authenticated_principal,
+    require_tenant_permission,
+)
+from orchestrator.core.platform.access import PERMISSION_PROJECTS_MANAGE, PERMISSION_WORKSPACE_MANAGE
+from orchestrator.core.platform.secret_service import resolve_platform_secret_ref
+from orchestrator.core.platform.tenant_secret_service import resolve_scoped_secret_ref
 from orchestrator.storage.models import Tenant
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
@@ -32,9 +39,13 @@ router = APIRouter(prefix="/api/admin", tags=["admin"])
 def start_github_install(
     tenant_id: str,
     return_to: str = Query(default="edit", pattern="^(edit|wizard)$"),
-    _: str = Depends(require_admin),
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
     session: Session = Depends(get_session),
 ) -> GitHubInstallStart:
+    if principal.is_platform_super_admin:
+        require_admin(principal=principal)
+    else:
+        require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_WORKSPACE_MANAGE)
     return start_github_install_impl(
         tenant=session.get(Tenant, tenant_id),
         tenant_id=tenant_id,
@@ -69,9 +80,17 @@ def github_install_callback(
 @router.get("/tenants/{tenant_id}/github/repositories", response_model=list[GitHubRepositoryRead])
 def list_tenant_github_repositories(
     tenant_id: str,
-    _: str = Depends(require_admin),
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
     session: Session = Depends(get_session),
 ) -> list[GitHubRepositoryRead]:
+    if principal.is_platform_super_admin:
+        require_admin(principal=principal)
+    else:
+        require_any_tenant_permission(
+            principal=principal,
+            tenant_id=tenant_id,
+            permission_keys=(PERMISSION_WORKSPACE_MANAGE, PERMISSION_PROJECTS_MANAGE),
+        )
     return list_tenant_github_repositories_impl(
         tenant=session.get(Tenant, tenant_id),
         tenant_id=tenant_id,
@@ -87,9 +106,13 @@ def list_tenant_github_repositories(
 @router.post("/tenants/{tenant_id}/test-github", response_model=IntegrationTestResult)
 def test_github_connection(
     tenant_id: str,
-    _: str = Depends(require_admin),
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
     session: Session = Depends(get_session),
 ) -> IntegrationTestResult:
+    if principal.is_platform_super_admin:
+        require_admin(principal=principal)
+    else:
+        require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_WORKSPACE_MANAGE)
     return test_github_connection_impl(
         session=session,
         tenant_id=tenant_id,

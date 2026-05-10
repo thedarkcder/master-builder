@@ -6,19 +6,19 @@ from orchestrator.api.discord.ask.context import (
     fetch_jira_issue_detail_for_tenant,
     fetch_jira_issue_preview_for_tenant,
 )
-from orchestrator.api.jira_oauth.connection_service import resolve_tenant_jira_connection
-from orchestrator.api.jira_oauth.service import jira_oauth_client, refresh_jira_connection_tokens
-from orchestrator.tools.jira_oauth import JiraIssuePreview
+from orchestrator.api.atlassian_oauth.connection_service import resolve_tenant_atlassian_connection
+from orchestrator.api.atlassian_oauth.service import atlassian_oauth_client, refresh_atlassian_connection_tokens
+from orchestrator.tools.atlassian_oauth import JiraIssuePreview
 
 
-def tenant_jira_oauth_context(*, session: Session, tenant, settings):  # noqa: ANN001
-    connection = resolve_tenant_jira_connection(session=session, tenant=tenant)
-    access_token = refresh_jira_connection_tokens(
+def tenant_atlassian_oauth_context(*, session: Session, tenant, settings):  # noqa: ANN001
+    connection = resolve_tenant_atlassian_connection(session=session, tenant=tenant)
+    access_token = refresh_atlassian_connection_tokens(
         session,
         connection=connection,
         settings=settings,
     )
-    client = jira_oauth_client(session=session, settings=settings)
+    client = atlassian_oauth_client(session=session, settings=settings)
     return {"connection": connection, "access_token": access_token, "client": client}
 
 

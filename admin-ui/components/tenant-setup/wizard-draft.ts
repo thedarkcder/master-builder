@@ -31,6 +31,13 @@ export function persistWizardDraft(draft: WizardDraft): void {
   window.sessionStorage.setItem(WIZARD_DRAFT_KEY, JSON.stringify(draft));
 }
 
+export function clearWizardDraft(): void {
+  if (typeof window === "undefined") {
+    return;
+  }
+  window.sessionStorage.removeItem(WIZARD_DRAFT_KEY);
+}
+
 export function previewTenantId(name: string): string {
   return name
     .trim()

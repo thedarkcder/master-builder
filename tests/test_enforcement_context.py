@@ -4,7 +4,7 @@ import unittest
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
-from orchestrator.core.enforcement_context import (
+from orchestrator.core.platform.enforcement_context import (
     EnforcementAssetsError,
     build_agent_enforcement_context,
     validate_enforcement_assets,

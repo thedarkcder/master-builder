@@ -1,0 +1,1248 @@
+import { encode } from "next-auth/jwt";
+import type { Page, Route } from "@playwright/test";
+
+import {
+  AUTH_COOKIE_TTL_SECONDS,
+  DEFAULT_API_BASE_URL,
+} from "../../../lib/auth-constants";
+import type {
+  ProjectAutomationExecutionRecord,
+  ProjectAutomationRecord,
+  ProjectRecord,
+  RunEventRecord,
+  RuntimeLogEventRecord,
+  RunRecord,
+  RunStatus,
+  WorkflowOperationRetryResponseRecord,
+  WorkflowOperationAttemptRecord,
+  WorkflowRecord,
+  WorkflowAttemptCreatePayload,
+  AuthenticatedPrincipalRecord,
+  DeliverySummaryRecord,
+  MembershipRecord,
+  TenantDiscordIdentityRecord,
+  TenantInviteRecord,
+  TenantMemberRecord,
+  TenantRecord,
+  TenantTeamRecord,
+  TokenTimelineRecord,
+} from "../../../lib/api";
+
+export const ADMIN_ACCESS_TOKEN = "playwright-admin-token";
+export const TENANT_ACCESS_TOKEN = "playwright-tenant-token";
+
+export const APP_BASE_URL = process.env.PLAYWRIGHT_BASE_URL ?? `http://localhost:${process.env.PLAYWRIGHT_APP_PORT ?? "4101"}`;
+const BACKEND_BASE_URL = DEFAULT_API_BASE_URL;
+const AUTH_SECRET = process.env.AUTH_SECRET ?? process.env.NEXTAUTH_SECRET ?? "local-dev-authjs-secret";
+const AUTH_SESSION_COOKIE_NAME = "authjs.session-token";
+const AUTH_SESSION_COOKIE_SALT = "authjs.session-token";
+
+type AdminRouteHandler = {
+  method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+  pathname: string | RegExp;
+  handler: (route: Route, url: URL) => Promise<void> | void;
+};
+
+type AppRouteHandler = AdminRouteHandler;
+
+type TenantSessionSeed = {
+  principal: AuthenticatedPrincipalRecord;
+  accessToken?: string;
+  userName?: string | null;
+  userEmail?: string | null;
+};
+
+type SnapshotStageSeed = {
+  attempt?: number;
+  status: string;
+  completed_at: string;
+  summary: string;
+  artifact?: Record<string, unknown>;
+};
+
+type SnapshotPlanSeed = {
+  stages?: Partial<Record<"pm" | "dev" | "test" | "review", SnapshotStageSeed>>;
+  execution_context?: Record<string, unknown>;
+  stage_updates?: Array<Record<string, unknown>>;
+  live_stage_updates?: Array<Record<string, unknown>>;
+  stage_trace?: Array<Record<string, unknown>>;
+  workstream_trace?: Array<Record<string, unknown>>;
+  workflow?: Record<string, unknown>;
+};
+
+export function makeExecutionSnapshotPlan(seed: SnapshotPlanSeed = {}): Record<string, unknown> {
+  const stagePayload: Record<string, unknown> = {};
+  for (const stage of ["pm", "dev", "test", "review"] as const) {
+    const value = seed.stages?.[stage];
+    if (!value) {
+      continue;
+    }
+    stagePayload[stage] = {
+      attempt: value.attempt ?? 1,
+      status: value.status,
+      completed_at: value.completed_at,
+      summary: value.summary,
+      ...(value.artifact ? { artifact: value.artifact } : {}),
+    };
+  }
+  return {
+    version: 1,
+    context: {
+      trigger_context: {},
+      execution_context: seed.execution_context ?? {},
+    },
+    workflow: {
+      outcome: null,
+      attempts: 0,
+      summary: [],
+      blocker_message: null,
+      requeue_target: null,
+      requeue_reason: null,
+      ...(seed.workflow ?? {}),
+    },
+    events: {
+      stage_updates: seed.stage_updates ?? [],
+      live_stage_updates: seed.live_stage_updates ?? [],
+      stage_trace: seed.stage_trace ?? [],
+      workstream_trace: seed.workstream_trace ?? [],
+    },
+    stages: stagePayload,
+  };
+}
+
+export async function seedAdminSession(page: Page, accessToken = ADMIN_ACCESS_TOKEN): Promise<void> {
+  await seedAuthenticatedSession(page, {
+    principal: makePlatformAdminPrincipal(),
+    accessToken,
+    userName: "admin",
+    userEmail: null,
+  });
+}
+
+export async function installAdminApiMocks(page: Page, handlers: AdminRouteHandler[]): Promise<void> {
+  await page.route(`${DEFAULT_API_BASE_URL}/api/admin/**`, async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    const method = request.method().toUpperCase();
+    for (const candidate of handlers) {
+      if (candidate.method && candidate.method !== method) {
+        continue;
+      }
+      if (typeof candidate.pathname === "string") {
+        if (candidate.pathname !== url.pathname) {
+          continue;
+        }
+      } else if (!candidate.pathname.test(url.pathname)) {
+        continue;
+      }
+      await candidate.handler(route, url);
+      return;
+    }
+    await route.fulfill({
+      status: 404,
+      contentType: "application/json",
+      body: JSON.stringify({
+        detail: `Unhandled admin API request: ${method} ${url.pathname}`,
+      }),
+    });
+  });
+}
+
+export async function installBffApiMocks(page: Page, handlers: AppRouteHandler[]): Promise<void> {
+  await installApiMocks(page, APP_BASE_URL, handlers);
+}
+
+export async function installAppApiMocks(page: Page, handlers: AppRouteHandler[]): Promise<void> {
+  await installApiMocks(page, APP_BASE_URL, handlers);
+}
+
+export async function installBackendApiMocks(page: Page, handlers: AppRouteHandler[]): Promise<void> {
+  await installApiMocks(page, BACKEND_BASE_URL, handlers);
+}
+
+export async function seedTenantSession(
+  page: Page,
+  { principal, accessToken = TENANT_ACCESS_TOKEN, userEmail, userName }: TenantSessionSeed,
+): Promise<void> {
+  await seedAuthenticatedSession(page, { principal, accessToken, userEmail, userName });
+}
+
+async function seedAuthenticatedSession(
+  page: Page,
+  { principal, accessToken, userEmail, userName }: TenantSessionSeed,
+): Promise<void> {
+  const token = await encode({
+    secret: AUTH_SECRET,
+    salt: AUTH_SESSION_COOKIE_SALT,
+    token: {
+      sub: principal.user_id ?? principal.email ?? principal.username ?? "playwright-user",
+      name: userName ?? principal.full_name ?? principal.username ?? principal.email ?? "Playwright User",
+      email: userEmail ?? principal.email ?? null,
+      accessToken,
+      principal,
+    },
+    maxAge: AUTH_COOKIE_TTL_SECONDS,
+  });
+
+  await page.context().addCookies([
+    {
+      name: AUTH_SESSION_COOKIE_NAME,
+      value: token,
+      url: APP_BASE_URL,
+      httpOnly: true,
+      sameSite: "Lax",
+    },
+  ]);
+
+  await installAuthSessionMock(page, { principal, userEmail, userName });
+  await installBffApiMocks(page, [
+    {
+      method: "GET",
+      pathname: "/api/bff/api/app/auth/me",
+      handler: (route) => fulfillJson(route, principal),
+    },
+  ]);
+}
+
+export async function mockCredentialSignIn(
+  page: Page,
+  seed: TenantSessionSeed,
+): Promise<void> {
+  await page.route(`${APP_BASE_URL}/api/auth/csrf**`, async (route) => {
+    await fulfillJson(route, { csrfToken: "playwright-csrf-token" });
+  });
+
+  const handleCredentialSignIn = async (route: Route) => {
+    await seedTenantSession(page, seed);
+    const principal = seed.principal;
+    const redirectUrl =
+      principal.principal_type === "platform_super_admin"
+        ? `${APP_BASE_URL}/platform/dashboard`
+        : principal.memberships[0]
+          ? `${APP_BASE_URL}/${encodeURIComponent(principal.memberships[0].tenant_id)}/dashboard`
+          : `${APP_BASE_URL}/tenants/select`;
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        status: 200,
+        url: redirectUrl,
+      }),
+    });
+  };
+  await page.route(`${APP_BASE_URL}/api/auth/callback/credentials**`, handleCredentialSignIn);
+  await page.route(`${APP_BASE_URL}/api/auth/signin/credentials**`, handleCredentialSignIn);
+}
+
+export async function fulfillJson(route: Route, body: unknown, status = 200): Promise<void> {
+  await route.fulfill({
+    status,
+    contentType: "application/json",
+    body: JSON.stringify(body),
+  });
+}
+
+export function makeTenant(overrides: Partial<TenantRecord> = {}): TenantRecord {
+  return {
+    tenant_id: "route25",
+    name: "Route 25",
+    is_enabled: true,
+    archived_at: null,
+    purge_after_at: null,
+    jira: {
+      connection_id: null,
+      project_keys: ["ROUTE"],
+      ready_statuses: ["Ready"],
+      ready_jql: null,
+      ready_label: "ready",
+      in_progress_label: "in-progress",
+      blocked_label: "blocked",
+      done_label: "done",
+      webhook_secret_ref: null,
+    },
+    github: {
+      webhook_secret_ref: null,
+      installation_id: null,
+    },
+    repos: {
+      github_repository: "thedarkcder/girl-power",
+    },
+    policy: {
+      allow_jira_transitions: true,
+      allow_pr_creation: true,
+      allow_code_reviews: true,
+      allow_pr_remediation: true,
+      allow_manual_pr_fix_requests: true,
+      allow_label_mutations: true,
+      allow_auto_merge: false,
+      max_runtime_minutes: 120,
+      max_dev_test_review_loops: 3,
+      max_pr_auto_remediation_loops: 2,
+      max_concurrent_runs: 2,
+      allowed_commands: [],
+      require_agents_md: false,
+      knowledge_base_enabled: false,
+      knowledge_auto_answer_mode: "safe",
+      codex_model: "gpt-5.4",
+      codex_reasoning_effort: "medium",
+      observability: {
+        audit_retention_days: 365,
+        audit_export_enabled: true,
+        legal_hold_enabled: false,
+        legal_hold_reason: null,
+      },
+    },
+    discord: null,
+    experience: {
+      default_mode: "technical",
+    },
+    setup_state: {},
+    created_at: "2026-03-27T16:00:00Z",
+    updated_at: "2026-03-27T16:00:00Z",
+    ...overrides,
+  };
+}
+
+export function makeProject(overrides: Partial<ProjectRecord> = {}): ProjectRecord {
+  return {
+    project_id: "route25-default",
+    tenant_id: "route25",
+    name: "Route 25 Default",
+    github_repository: "thedarkcder/girl-power",
+    jira_project_key: "GP",
+    policy_overrides: {},
+    environment: {},
+    secret_refs: {},
+    discord: null,
+    effective_policy: makeTenant().policy,
+    is_archived: false,
+    created_at: "2026-03-27T16:00:00Z",
+    updated_at: "2026-03-27T16:00:00Z",
+    ...overrides,
+  };
+}
+
+export function makeProjectAutomationExecution(
+  overrides: Partial<ProjectAutomationExecutionRecord> = {},
+): ProjectAutomationExecutionRecord {
+  return {
+    execution_id: "exec-1",
+    automation_id: "automation-1",
+    scheduled_for: "2026-03-28T09:00:00Z",
+    window_start_at: "2026-03-28T08:00:00Z",
+    window_end_at: "2026-03-28T09:00:00Z",
+    status: "succeeded",
+    dedupe_key: "dedupe-1",
+    started_at: "2026-03-28T08:01:00Z",
+    completed_at: "2026-03-28T08:05:00Z",
+    discord_message_id: "9876543210",
+    last_error: null,
+    created_at: "2026-03-28T08:00:00Z",
+    updated_at: "2026-03-28T08:05:00Z",
+    ...overrides,
+  };
+}
+
+export function makeProjectAutomation(overrides: Partial<ProjectAutomationRecord> = {}): ProjectAutomationRecord {
+  return {
+    automation_id: "automation-1",
+    project_id: "route25-default",
+    tenant_id: "route25",
+    kind: "standup_voice_brief",
+    enabled: true,
+    timezone: "UTC",
+    days_of_week: [0, 1, 2, 3, 4],
+    local_time: "09:30",
+    fallback_lookback_hours: 24,
+    last_successful_window_end_at: "2026-03-28T09:00:00Z",
+    next_run_at: "2026-03-29T09:30:00Z",
+    executions: [makeProjectAutomationExecution()],
+    created_at: "2026-03-27T16:00:00Z",
+    updated_at: "2026-03-28T08:05:00Z",
+    ...overrides,
+  };
+}
+
+export function makeRun(overrides: Partial<RunRecord> = {}): RunRecord {
+  return {
+    run_id: "5de2cedf-b7ae-400c-a53c-3beecf078a51",
+    workflow_id: "workflow-gp-124",
+    attempt_number: 1,
+    parent_run_id: null,
+    entry_mode: "fresh",
+    entry_stage: "orchestrated",
+    entry_checkpoint_id: "checkpoint-orchestrated-gp-124",
+    tenant_id: "route25",
+    project_id: "route25-default",
+    issue_key: "GP-124",
+    issue_summary: "Fix rerun lifecycle regressions",
+    issue_url: "https://jira.example.test/browse/GP-124",
+    repo_url: "https://github.com/thedarkcder/girl-power",
+    branch: "feature/GP-124",
+    pr_url: "https://github.com/thedarkcder/girl-power/pull/21",
+    status: "failed",
+    waiting_for_input: false,
+    pending_input_request_id: null,
+    last_error: "Recovered stale running run after heartbeat timeout.",
+    created_at: "2026-03-27T16:50:00Z",
+    started_at: "2026-03-27T16:50:10Z",
+    finished_at: "2026-03-27T17:08:27Z",
+    plan: makeExecutionSnapshotPlan({
+      stages: {
+        pm: {
+          status: "completed",
+          completed_at: "2026-03-27T16:55:00Z",
+          summary: "PM plan captured.",
+        },
+        dev: {
+          status: "completed",
+          completed_at: "2026-03-27T17:02:57Z",
+          summary: "PR created and code pushed.",
+        },
+      },
+      execution_context: {
+        integration_branch: "feature/GP-124",
+        execution_branch: "run/gp-124/5de2cedf-b7ae-400c-a53c-3beecf078a51",
+        base_branch: "main",
+        execution_repo_dir: "/tmp/worktree",
+      },
+    }),
+    ...overrides,
+  };
+}
+
+export function makeWorkflow(overrides: Partial<WorkflowRecord> = {}): WorkflowRecord {
+  const baselineRun = makeRun();
+  return {
+    execution_id: `exec-${baselineRun.workflow_id}`,
+    workflow_id: baselineRun.workflow_id,
+    tenant_id: baselineRun.tenant_id,
+    project_id: baselineRun.project_id,
+    source_system: "jira",
+    source_ref: baselineRun.issue_key,
+    display_name: baselineRun.issue_summary,
+    repo_url: baselineRun.repo_url,
+    branch: baselineRun.branch,
+    pr_url: baselineRun.pr_url,
+    orchestration_backend: "legacy",
+    dedupe_scope: "issue_execution",
+    status: baselineRun.status,
+    workflow_type: {
+      key: "issue_execution",
+      label: "Issue Execution",
+      description: "Central development-team execution workflow.",
+      retry_policy: {
+        manual_retry_enabled: true,
+        max_attempts: 5,
+        initial_interval_seconds: 30,
+        max_interval_seconds: 900,
+        backoff_coefficient: 2,
+      },
+      operations: [
+        {
+          operation_type: "run_attempt_execution",
+          label: "Execute run attempt",
+          description: "Dispatch the current run attempt through the central execution engine.",
+          completion_required: true,
+          kind: "business",
+          after: [],
+          supports: [],
+          required: true,
+          retryable: true,
+          graph_index: 0,
+          status: baselineRun.status,
+        },
+      ],
+      orchestration_backend: "temporal",
+      capabilities: {
+        state_path_kind: "run",
+      },
+      lifecycle: {
+        state_path_kind: "run",
+        execution_modes: ["fresh", "restart", "resume"],
+        conditional_paths: ["Human input resume", "Retry failed operation"],
+        states: [
+          { key: "queued", label: "Queued", terminal: false, waits_for_input: false },
+          { key: "running", label: "Running", terminal: false, waits_for_input: false },
+          { key: "waiting_for_input", label: "Waiting for input", terminal: false, waits_for_input: true },
+          { key: "completed", label: "Completed", terminal: true, waits_for_input: false },
+          { key: "failed", label: "Failed", terminal: true, waits_for_input: false },
+        ],
+        transitions: [
+          { from_state: "queued", to_state: "running", label: "Dispatch execution" },
+          { from_state: "running", to_state: "waiting_for_input", label: "Request human input" },
+          { from_state: "waiting_for_input", to_state: "running", label: "Resume from answer" },
+          { from_state: "running", to_state: "completed", label: "Complete run" },
+          { from_state: "running", to_state: "failed", label: "Fail execution" },
+        ],
+      },
+    },
+    current_state: baselineRun.status,
+    waiting_on: null,
+    next_step: null,
+    active_run_id: baselineRun.run_id,
+    latest_checkpoint_id: baselineRun.entry_checkpoint_id,
+    source_workflow_id: null,
+    source_run_id: null,
+    failure_reason: null,
+    pending_input_request_id: null,
+    latest_checkpoint_kind: "execution",
+    state_path: [],
+    completed_steps: [],
+    failed_steps: [],
+    pending_steps: [],
+    retrying_steps: [],
+    conditional_branches_taken: ["fresh"],
+    conditional_branches_available: ["fresh", "restart", "resume"],
+    can_resume: false,
+    resume_unavailable_reason: "Completed executions cannot be restarted.",
+    links: [],
+    operations: [
+      {
+        operation_id: `${baselineRun.workflow_id}:run_attempt_execution`,
+        run_id: baselineRun.run_id,
+        operation_type: "run_attempt_execution",
+        status: baselineRun.status,
+        label: "Execute run attempt",
+        description: "Dispatch the current run attempt through the central execution engine.",
+        required: true,
+        kind: "business",
+        after: [],
+        supports: [],
+        definition_only: false,
+        target_system: null,
+        target_ref: null,
+        summary: null,
+        can_retry: false,
+        retry_unavailable_reason: "Latest attempt is not in a failed state.",
+        attempts: [],
+        events: [],
+      },
+    ],
+    runs: [baselineRun],
+    created_at: baselineRun.created_at,
+    started_at: baselineRun.started_at,
+    finished_at: baselineRun.finished_at,
+    ...overrides,
+  };
+}
+
+export function makeTokenTimeline(run: RunRecord): TokenTimelineRecord {
+  return {
+    run_id: run.run_id,
+    issue_key: run.issue_key,
+    model: "gpt-5.4",
+    status: run.status,
+    totals: {
+      input: 1_000,
+      uncached_input: 500,
+      output: 250,
+      cached_input: 500,
+      cache_ratio: 0.5,
+      total_io: 1_250,
+      avg_runtime_ms: 5_000,
+      p95_runtime_ms: 6_000,
+    },
+    turns: [],
+  };
+}
+
+export function makeMembership(overrides: Partial<MembershipRecord> = {}): MembershipRecord {
+  return {
+    membership_id: "membership-route25",
+    tenant_id: "route25",
+    role: "technical_member",
+    permission_keys: ["technical.access"],
+    effective_mode: "technical",
+    mode_override: null,
+    onboarding_kind: "member_join",
+    first_signed_in_at: "2026-03-27T16:00:00Z",
+    onboarding_completed_at: "2026-03-27T16:30:00Z",
+    onboarding_version: "v1",
+    team_ids: [],
+    discord_state: {},
+    ...overrides,
+  };
+}
+
+export function makeTenantUserPrincipal(
+  overrides: Partial<AuthenticatedPrincipalRecord> = {},
+): AuthenticatedPrincipalRecord {
+  return {
+    principal_type: "tenant_user",
+    user_id: "user-route25",
+    email: "person@example.com",
+    full_name: "Person Example",
+    memberships: [makeMembership()],
+    ...overrides,
+  };
+}
+
+export function makePlatformAdminPrincipal(
+  overrides: Partial<AuthenticatedPrincipalRecord> = {},
+): AuthenticatedPrincipalRecord {
+  return {
+    principal_type: "platform_super_admin",
+    username: "admin",
+    user_id: null,
+    email: null,
+    full_name: null,
+    memberships: [],
+    ...overrides,
+  };
+}
+
+export function makeDiscordIdentity(
+  overrides: Partial<TenantDiscordIdentityRecord> = {},
+): TenantDiscordIdentityRecord {
+  return {
+    oauth_configured: true,
+    linked: false,
+    discord_user_id: null,
+    discord_username: null,
+    discord_global_name: null,
+    discord_avatar_hash: null,
+    linked_at: null,
+    ...overrides,
+  };
+}
+
+export function makeTeam(overrides: Partial<TenantTeamRecord> = {}): TenantTeamRecord {
+  return {
+    team_id: "delivery",
+    tenant_id: "route25",
+    name: "Delivery",
+    description: "Delivery team",
+    permission_keys: [],
+    created_at: "2026-03-27T16:00:00Z",
+    updated_at: "2026-03-27T16:00:00Z",
+    ...overrides,
+  };
+}
+
+export function makeInvite(overrides: Partial<TenantInviteRecord> = {}): TenantInviteRecord {
+  return {
+    invite_id: "invite-route25",
+    tenant_id: "route25",
+    email: "newperson@example.com",
+    full_name: "New Person",
+    role: "business_member",
+    team_ids: [],
+    mode_override: null,
+    status: "pending",
+    invite_url: `${APP_BASE_URL}/invite/accept?token=invite-token`,
+    expires_at: "2026-03-29T16:00:00Z",
+    accepted_at: null,
+    revoked_at: null,
+    created_at: "2026-03-27T16:00:00Z",
+    updated_at: "2026-03-27T16:00:00Z",
+    ...overrides,
+  };
+}
+
+export function makeMember(overrides: Partial<TenantMemberRecord> = {}): TenantMemberRecord {
+  return {
+    membership_id: "membership-route25",
+    tenant_id: "route25",
+    user_id: "user-route25",
+    email: "person@example.com",
+    full_name: "Person Example",
+    is_active: true,
+    role: "technical_member",
+    permission_keys: ["technical.access"],
+    effective_mode: "technical",
+    mode_override: null,
+    onboarding_kind: "member_join",
+    first_signed_in_at: "2026-03-27T16:00:00Z",
+    onboarding_completed_at: "2026-03-27T16:30:00Z",
+    onboarding_version: "v1",
+    team_ids: [],
+    discord_state: {},
+    created_at: "2026-03-27T16:00:00Z",
+    updated_at: "2026-03-27T16:00:00Z",
+    ...overrides,
+  };
+}
+
+export function makeDeliverySummary(
+  overrides: Partial<DeliverySummaryRecord> = {},
+): DeliverySummaryRecord {
+  return {
+    summary: {
+      completed_count: 4,
+      in_review_count: 1,
+      blocked_count: 1,
+      failed_count: 0,
+      queued_count: 2,
+      median_cycle_time_hours: 6,
+      average_cycle_time_hours: 8,
+    },
+    timeline: [
+      {
+        run_id: "run-1",
+        project_id: "route25-default",
+        issue_key: "GP-125",
+        issue_summary: "Ship onboarding checklist",
+        status: "completed",
+        completed_at: "2026-03-27T15:00:00Z",
+        started_at: "2026-03-27T12:00:00Z",
+        pr_url: "https://github.com/thedarkcder/master-builder/pull/173",
+      },
+    ],
+    ...overrides,
+  };
+}
+
+export function makeStageInvocationLogs(options: {
+  runId?: string;
+  stage: "pm" | "dev" | "test" | "review";
+  invocationId: string;
+  command: string;
+  startedAt: string;
+  finishedAt?: string;
+  codexSessionId?: string;
+}): RuntimeLogEventRecord[] {
+  const runId = options.runId ?? "5de2cedf-b7ae-400c-a53c-3beecf078a51";
+  const startedMessage = JSON.stringify({
+    event_kind: "stage_invocation_started",
+    codex_session_id: options.codexSessionId,
+  });
+  const rows: RuntimeLogEventRecord[] = [
+    {
+      event_id: `${options.invocationId}:started`,
+      run_id: runId,
+      issue_key: "GP-124",
+      project_id: "route25-default",
+      agent_id: options.stage,
+      invocation_id: options.invocationId,
+      channel: null,
+      command: options.command,
+      working_dir: "/tmp/worktree",
+      stage: "telemetry",
+      attempt: 1,
+      stream: "system",
+      message: startedMessage,
+      recorded_at: options.startedAt,
+    },
+  ];
+  if (options.finishedAt) {
+    rows.push({
+      event_id: `${options.invocationId}:finished`,
+      run_id: runId,
+      issue_key: "GP-124",
+      project_id: "route25-default",
+      agent_id: options.stage,
+      invocation_id: options.invocationId,
+      channel: null,
+      command: options.command,
+      working_dir: "/tmp/worktree",
+      stage: "telemetry",
+      attempt: 1,
+      stream: "system",
+      message: JSON.stringify({
+        event_kind: "stage_invocation_finished",
+        status: "completed",
+        duration_ms: 60_000,
+        codex_session_id: options.codexSessionId,
+      }),
+      recorded_at: options.finishedAt,
+    });
+  }
+  return rows;
+}
+
+export async function mockRunDetailApis(
+  page: Page,
+  options: {
+    run: RunRecord;
+    workflow?: WorkflowRecord;
+    events?: RunEventRecord[];
+    logs?: RuntimeLogEventRecord[];
+    tokenTimeline?: TokenTimelineRecord;
+    tenant?: TenantRecord;
+    projects?: ProjectRecord[];
+    nextAttemptResponse?: RunRecord;
+    streamEvents?: Array<RunEventRecord | RuntimeLogEventRecord>;
+    onRunEventStreamRequest?: () => void;
+    onCreateAttempt?: (payload: WorkflowAttemptCreatePayload) => void;
+    onCancelRun?: () => void;
+  },
+): Promise<void> {
+  const tenant = options.tenant ?? makeTenant({ tenant_id: options.run.tenant_id });
+  const projects = options.projects ?? [makeProject({ tenant_id: options.run.tenant_id, project_id: options.run.project_id ?? "route25-default" })];
+  const nextRun =
+    options.nextAttemptResponse ??
+    makeRun({
+      run_id: "8e8957f2-79f8-4dc8-8deb-786b2c93828d",
+      workflow_id: "workflow-gp-124-restart",
+      status: "queued",
+      created_at: "2026-03-27T17:10:00Z",
+      started_at: null,
+      finished_at: null,
+      plan: makeExecutionSnapshotPlan({
+        execution_context: { pre_check_outcome: "ready_for_agent" },
+      }),
+      pr_url: null,
+    });
+  const workflow =
+    options.workflow ??
+    makeWorkflow({
+      workflow_id: options.run.workflow_id,
+      tenant_id: options.run.tenant_id,
+      project_id: options.run.project_id,
+      source_system: "jira",
+      source_ref: options.run.issue_key,
+      display_name: options.run.issue_summary,
+      repo_url: options.run.repo_url,
+      branch: options.run.branch,
+      pr_url: options.run.pr_url,
+      status: options.run.status,
+      active_run_id: options.run.run_id,
+      latest_checkpoint_kind: "execution",
+      runs: [options.run],
+      created_at: options.run.created_at,
+      started_at: options.run.started_at,
+      finished_at: options.run.finished_at,
+    });
+  await installBffApiMocks(page, [
+    {
+      method: "GET",
+      pathname: "/api/bff/api/app/auth/me",
+      handler: (route) => fulfillJson(route, makePlatformAdminPrincipal()),
+    },
+    {
+      method: "GET",
+      pathname: /^\/api\/bff\/api\/admin\/runs\/[^/]+$/,
+      handler: (route, url) => {
+        const runId = decodeURIComponent(url.pathname.split("/").at(-1) ?? "");
+        if (runId === options.run.run_id) {
+          return fulfillJson(route, options.run);
+        }
+        if (runId === nextRun.run_id) {
+          return fulfillJson(route, nextRun);
+        }
+        return route.fulfill({
+          status: 404,
+          contentType: "application/json",
+          body: JSON.stringify({ detail: `Unknown run ${runId}` }),
+        });
+      },
+    },
+    {
+      method: "GET",
+      pathname: /^\/api\/bff\/api\/admin\/workflows\/[^/]+$/,
+      handler: (route, url) => {
+        const workflowId = decodeURIComponent(url.pathname.split("/").at(-1) ?? "");
+        if (workflowId === workflow.workflow_id) {
+          return fulfillJson(route, workflow);
+        }
+        if (workflowId === nextRun.workflow_id) {
+          return fulfillJson(route, {
+            ...workflow,
+            workflow_id: nextRun.workflow_id,
+            status: nextRun.status,
+            active_run_id: nextRun.run_id,
+            latest_checkpoint_kind: null,
+            runs: [nextRun],
+            created_at: nextRun.created_at,
+            started_at: nextRun.started_at,
+            finished_at: nextRun.finished_at,
+          } satisfies WorkflowRecord);
+        }
+        return route.fulfill({
+          status: 404,
+          contentType: "application/json",
+          body: JSON.stringify({ detail: `Unknown workflow ${workflowId}` }),
+        });
+      },
+    },
+    {
+      method: "GET",
+      pathname: /^\/api\/bff\/api\/admin\/runs\/[^/]+\/events$/,
+      handler: (route) => fulfillJson(route, options.events ?? []),
+    },
+    {
+      method: "GET",
+      pathname: /^\/api\/bff\/api\/admin\/runs\/[^/]+\/logs$/,
+      handler: (route) => fulfillJson(route, options.logs ?? []),
+    },
+    {
+      method: "GET",
+      pathname: /^\/api\/bff\/api\/admin\/runs\/[^/]+\/events\/stream$/,
+      handler: (route) => {
+        options.onRunEventStreamRequest?.();
+        const lines = (options.streamEvents ?? [])
+          .map((event) => JSON.stringify(event))
+          .join("\n");
+        return route.fulfill({
+          status: 200,
+          contentType: "application/x-ndjson",
+          body: lines ? `${lines}\n` : "",
+        });
+      },
+    },
+    {
+      method: "GET",
+      pathname: new RegExp(`^/api/bff/api/admin/tenants/${encodeURIComponent(options.run.tenant_id)}/runs/[^/]+/token-timeline$`),
+      handler: (route, url) => {
+        const runId = decodeURIComponent(url.pathname.split("/").at(-2) ?? "");
+        if (runId === nextRun.run_id) {
+          return fulfillJson(route, makeTokenTimeline(nextRun));
+        }
+        return fulfillJson(route, options.tokenTimeline ?? makeTokenTimeline(options.run));
+      },
+    },
+    {
+      method: "GET",
+      pathname: `/api/bff/api/admin/tenants/${encodeURIComponent(options.run.tenant_id)}`,
+      handler: (route) => fulfillJson(route, tenant),
+    },
+    {
+      method: "GET",
+      pathname: `/api/bff/api/admin/tenants/${encodeURIComponent(options.run.tenant_id)}/projects`,
+      handler: (route) => fulfillJson(route, projects),
+    },
+    {
+      method: "POST",
+      pathname: `/api/bff/api/admin/runs/${encodeURIComponent(options.run.run_id)}/cancel`,
+      handler: async (route) => {
+        options.onCancelRun?.();
+        await fulfillJson(route, { ...options.run, status: "cancelled" satisfies RunStatus });
+      },
+    },
+    {
+      method: "POST",
+      pathname: `/api/bff/api/admin/workflows/${encodeURIComponent(options.run.workflow_id)}/attempts`,
+      handler: async (route) => {
+        const payload = JSON.parse(route.request().postData() ?? "{}") as WorkflowAttemptCreatePayload;
+        options.onCreateAttempt?.(payload);
+        await fulfillJson(route, nextRun);
+      },
+    },
+  ]);
+}
+
+export async function mockTenantWorkflowApis(
+  page: Page,
+  options: {
+    tenant?: TenantRecord;
+    projects?: ProjectRecord[];
+    workflows: WorkflowRecord[];
+    nextAttemptResponse?: RunRecord;
+    onResumeExecution?: () => void;
+    onRetryOperation?: (payload: { workflowId: string; operationId: string }) => void;
+    retriedWorkflowResponse?: WorkflowRecord;
+    retriedOperationStartedAttempt?: WorkflowOperationAttemptRecord | null;
+    telemetryEventsByOperationId?: Record<string, unknown[]>;
+    onTelemetrySnapshotRequest?: (payload: { operationId: string; attemptId?: string }) => void;
+    auditEventsByOperationId?: Record<string, unknown[]>;
+    telemetryTranscriptByOperationId?: Record<string, unknown>;
+    auditTranscriptByOperationId?: Record<string, unknown>;
+  },
+): Promise<void> {
+  const tenantId = options.workflows[0]?.tenant_id ?? options.tenant?.tenant_id ?? "route25";
+  const tenant = options.tenant ?? makeTenant({ tenant_id: tenantId });
+  const projects =
+    options.projects ??
+    [makeProject({ tenant_id: tenantId, project_id: options.workflows[0]?.project_id ?? "route25-default" })];
+  const primaryWorkflow = options.workflows[0] ?? makeWorkflow({ tenant_id: tenantId });
+  const workflowTypeSummary = {
+    key: primaryWorkflow.workflow_type.key,
+    label: primaryWorkflow.workflow_type.label,
+    description: primaryWorkflow.workflow_type.description,
+    operation_count: primaryWorkflow.workflow_type.operations.length,
+    execution_count: options.workflows.length,
+    latest_execution_at: options.workflows[0]?.created_at ?? primaryWorkflow.created_at,
+  };
+  const workflowTypeDetail = {
+    ...workflowTypeSummary,
+    orchestration_backend: primaryWorkflow.workflow_type.orchestration_backend,
+    retry_policy: primaryWorkflow.workflow_type.retry_policy,
+    capabilities: primaryWorkflow.workflow_type.capabilities,
+    lifecycle: primaryWorkflow.workflow_type.lifecycle,
+    operations: primaryWorkflow.workflow_type.operations,
+    recent_executions: options.workflows.map((workflow) => ({
+      execution_id: workflow.execution_id,
+      workflow_id: workflow.workflow_id,
+      source_system: workflow.source_system,
+      source_ref: workflow.source_ref,
+      display_name: workflow.display_name,
+      status: workflow.status,
+      waiting_on: workflow.waiting_on,
+      next_step: workflow.next_step,
+      failure_reason: workflow.failure_reason,
+      created_at: workflow.created_at,
+      finished_at: workflow.finished_at,
+    })),
+  };
+  const nextRun =
+    options.nextAttemptResponse ??
+    makeRun({
+      run_id: "workflow-retry-run-1",
+      workflow_id: `${primaryWorkflow.workflow_id}-retry`,
+      tenant_id: tenantId,
+      project_id: primaryWorkflow.project_id,
+      issue_key: primaryWorkflow.source_ref,
+      issue_summary: primaryWorkflow.display_name ?? primaryWorkflow.source_ref,
+      created_at: "2026-04-17T12:40:00Z",
+      started_at: null,
+      finished_at: null,
+      status: "queued",
+      pr_url: null,
+      plan: makeExecutionSnapshotPlan({
+        execution_context: { pre_check_outcome: "ready_for_agent" },
+      }),
+    });
+  let currentWorkflow = primaryWorkflow;
+
+  await installBffApiMocks(page, [
+    {
+      method: "GET",
+      pathname: "/api/bff/api/app/auth/me",
+      handler: (route) => fulfillJson(route, makePlatformAdminPrincipal()),
+    },
+    {
+      method: "GET",
+      pathname: `/api/bff/api/admin/tenants/${encodeURIComponent(tenantId)}`,
+      handler: (route) => fulfillJson(route, tenant),
+    },
+    {
+      method: "GET",
+      pathname: `/api/bff/api/admin/tenants/${encodeURIComponent(tenantId)}/projects`,
+      handler: (route) => fulfillJson(route, projects),
+    },
+    {
+      method: "GET",
+      pathname: /^\/api\/bff\/api\/admin\/workflow-types(?:\?.*)?$/,
+      handler: (route) => fulfillJson(route, [workflowTypeSummary]),
+    },
+    {
+      method: "GET",
+      pathname: /^\/api\/bff\/api\/admin\/workflow-types\/[^/]+(?:\?.*)?$/,
+      handler: (route) => fulfillJson(route, workflowTypeDetail),
+    },
+    {
+      method: "GET",
+      pathname: /^\/api\/bff\/api\/admin\/workflows(?:\?.*)?$/,
+      handler: (route) => fulfillJson(route, options.workflows),
+    },
+    {
+      method: "GET",
+      pathname: /^\/api\/bff\/api\/admin\/workflows\/[^/]+$/,
+      handler: (route, url) => {
+        const executionId = decodeURIComponent(url.pathname.split("/").at(-1) ?? "");
+        if (executionId === currentWorkflow.execution_id) {
+          return fulfillJson(route, currentWorkflow);
+        }
+        if (executionId === `exec-${nextRun.workflow_id}`) {
+          return fulfillJson(route, {
+            ...primaryWorkflow,
+            execution_id: `exec-${nextRun.workflow_id}`,
+            workflow_id: nextRun.workflow_id,
+            status: nextRun.status,
+            active_run_id: nextRun.run_id,
+            latest_checkpoint_kind: null,
+            failure_reason: null,
+            operations: [],
+            runs: [nextRun],
+            created_at: nextRun.created_at,
+            started_at: nextRun.started_at,
+            finished_at: nextRun.finished_at,
+          } satisfies WorkflowRecord);
+        }
+        const match = options.workflows.find((workflow) => workflow.execution_id === executionId);
+        if (match) {
+          return fulfillJson(route, match);
+        }
+        return route.fulfill({
+          status: 404,
+          contentType: "application/json",
+          body: JSON.stringify({ detail: `Unknown workflow ${executionId}` }),
+        });
+      },
+    },
+    {
+      method: "POST",
+      pathname: /^\/api\/bff\/api\/admin\/workflows\/[^/]+\/operations\/[^/]+\/retry$/,
+      handler: async (route, url) => {
+        const segments = url.pathname.split("/");
+        const executionId = decodeURIComponent(segments.at(-4) ?? "");
+        const operationId = decodeURIComponent(segments.at(-2) ?? "");
+        options.onRetryOperation?.({ workflowId: executionId, operationId });
+        currentWorkflow = options.retriedWorkflowResponse ?? currentWorkflow;
+        const retriedOperation = currentWorkflow.operations.find((candidate) => candidate.operation_id === operationId);
+        const startedAttempt =
+          options.retriedOperationStartedAttempt !== undefined
+            ? options.retriedOperationStartedAttempt
+            : [...(retriedOperation?.attempts ?? [])].sort((left, right) => right.attempt_number - left.attempt_number)[0] ?? null;
+        await fulfillJson(route, {
+          workflow: currentWorkflow,
+          started_attempt: startedAttempt,
+        } satisfies WorkflowOperationRetryResponseRecord);
+      },
+    },
+    {
+      method: "POST",
+      pathname: /^\/api\/bff\/api\/admin\/workflows\/[^/]+\/resume$/,
+      handler: async (route) => {
+        options.onResumeExecution?.();
+        await fulfillJson(route, nextRun);
+      },
+    },
+    {
+      method: "GET",
+      pathname: /^\/api\/bff\/api\/admin\/workflows\/[^/]+\/operations\/[^/]+\/transcript(?:\?.*)?$/,
+      handler: (route, url) => {
+        const operationId = decodeURIComponent(url.pathname.split("/").at(-2) ?? "");
+        const source = url.searchParams.get("source") ?? "telemetry";
+        const transcript =
+          source === "audit"
+            ? options.auditTranscriptByOperationId?.[operationId]
+            : options.telemetryTranscriptByOperationId?.[operationId];
+        return fulfillJson(route, transcript ?? { operation_id: operationId, current_status: "pending", source, attempts: [] });
+      },
+    },
+    {
+      method: "GET",
+      pathname: /^\/api\/bff\/api\/admin\/workflows\/[^/]+\/operations\/[^/]+\/attempts\/[^/]+\/telemetry(?:\?.*)?$/,
+      handler: (route, url) => {
+        const segments = url.pathname.split("/");
+        const operationId = decodeURIComponent(segments.at(-4) ?? "");
+        const attemptId = decodeURIComponent(segments.at(-2) ?? "");
+        options.onTelemetrySnapshotRequest?.({ operationId, attemptId });
+        return fulfillJson(route, options.telemetryEventsByOperationId?.[operationId] ?? []);
+      },
+    },
+    {
+      method: "GET",
+      pathname: /^\/api\/bff\/api\/admin\/workflows\/[^/]+\/operations\/[^/]+\/telemetry(?:\?.*)?$/,
+      handler: (route, url) => {
+        const operationId = decodeURIComponent(url.pathname.split("/").at(-2) ?? "");
+        options.onTelemetrySnapshotRequest?.({ operationId });
+        return fulfillJson(route, options.telemetryEventsByOperationId?.[operationId] ?? []);
+      },
+    },
+    {
+      method: "GET",
+      pathname: /^\/api\/bff\/api\/admin\/workflows\/[^/]+\/operations\/[^/]+\/telemetry\/stream(?:\?.*)?$/,
+      handler: (route, url) => {
+        const operationId = decodeURIComponent(url.pathname.split("/").at(-3) ?? "");
+        const lines = (options.telemetryEventsByOperationId?.[operationId] ?? [])
+          .map((event) => JSON.stringify(event))
+          .join("\n");
+        return route.fulfill({
+          status: 200,
+          contentType: "application/x-ndjson",
+          body: lines ? `${lines}\n` : "",
+        });
+      },
+    },
+    {
+      method: "GET",
+      pathname: /^\/api\/bff\/api\/admin\/workflows\/[^/]+\/operations\/[^/]+\/attempts\/[^/]+\/audit(?:\?.*)?$/,
+      handler: (route, url) => {
+        const segments = url.pathname.split("/");
+        const operationId = decodeURIComponent(segments.at(-4) ?? "");
+        const attemptId = decodeURIComponent(segments.at(-2) ?? "");
+        const configured = options.auditTranscriptByOperationId?.[operationId];
+        if (configured && typeof configured === "object" && "attempts" in (configured as Record<string, unknown>)) {
+          const transcript = configured as { attempts?: Array<Record<string, unknown>> };
+          const attempt = transcript.attempts?.find((candidate) => candidate.attempt_id === attemptId) ?? null;
+          return fulfillJson(route, attempt ?? { attempt_id: attemptId, attempt_number: 0, status: "pending", sections: [] });
+        }
+        return fulfillJson(route, configured ?? { attempt_id: attemptId, attempt_number: 0, status: "pending", sections: [] });
+      },
+    },
+    {
+      method: "GET",
+      pathname: /^\/api\/bff\/api\/admin\/workflows\/[^/]+\/operations\/[^/]+\/audit(?:\?.*)?$/,
+      handler: (route, url) => {
+        const operationId = decodeURIComponent(url.pathname.split("/").at(-2) ?? "");
+        const operation = currentWorkflow.operations.find((candidate) => candidate.operation_id === operationId);
+        return fulfillJson(route, options.auditEventsByOperationId?.[operationId] ?? operation?.events ?? []);
+      },
+    },
+    {
+      method: "GET",
+      pathname: /^\/api\/bff\/api\/admin\/runs\/[^/]+$/,
+      handler: (route, url) => {
+        const runId = decodeURIComponent(url.pathname.split("/").at(-1) ?? "");
+        if (runId === nextRun.run_id) {
+          return fulfillJson(route, nextRun);
+        }
+        return route.fulfill({
+          status: 404,
+          contentType: "application/json",
+          body: JSON.stringify({ detail: `Unknown run ${runId}` }),
+        });
+      },
+    },
+    {
+      method: "GET",
+      pathname: /^\/api\/bff\/api\/admin\/runs\/[^/]+\/events$/,
+      handler: (route) => fulfillJson(route, []),
+    },
+    {
+      method: "GET",
+      pathname: /^\/api\/bff\/api\/admin\/runs\/[^/]+\/logs$/,
+      handler: (route) => fulfillJson(route, []),
+    },
+    {
+      method: "GET",
+      pathname: new RegExp(`^/api/bff/api/admin/tenants/${encodeURIComponent(tenantId)}/runs/[^/]+/token-timeline$`),
+      handler: (route) => fulfillJson(route, makeTokenTimeline(nextRun)),
+    },
+  ]);
+}
+
+async function installAuthSessionMock(
+  page: Page,
+  { principal, userEmail, userName }: TenantSessionSeed,
+): Promise<void> {
+  let sessionActive = true;
+  await page.route(`${APP_BASE_URL}/api/auth/csrf**`, async (route) => {
+    await fulfillJson(route, { csrfToken: "playwright-csrf-token" });
+  });
+  await page.route(`${APP_BASE_URL}/api/auth/signout**`, async (route) => {
+    sessionActive = false;
+    await fulfillJson(route, { url: `${APP_BASE_URL}/login` });
+  });
+  await page.route(`${APP_BASE_URL}/api/auth/session**`, async (route) => {
+    if (!sessionActive) {
+      await fulfillJson(route, null);
+      return;
+    }
+    await fulfillJson(route, {
+      user: {
+        name: userName ?? principal.full_name ?? principal.username ?? principal.email ?? "Playwright User",
+        email: userEmail ?? principal.email ?? null,
+        principal,
+      },
+      expires: "2099-01-01T00:00:00.000Z",
+    });
+  });
+}
+
+async function installApiMocks(page: Page, baseUrl: string, handlers: AppRouteHandler[]): Promise<void> {
+  await page.route(`${baseUrl}/**`, async (route) => {
+    const request = route.request();
+    const url = new URL(request.url());
+    const method = request.method().toUpperCase();
+    for (const candidate of handlers) {
+      if (candidate.method && candidate.method !== method) {
+        continue;
+      }
+      if (typeof candidate.pathname === "string") {
+        if (candidate.pathname !== url.pathname) {
+          continue;
+        }
+      } else if (!candidate.pathname.test(url.pathname)) {
+        continue;
+      }
+      await candidate.handler(route, url);
+      return;
+    }
+    await route.fallback();
+  });
+}

@@ -5,7 +5,6 @@ from datetime import datetime, timezone
 from fastapi import HTTPException, status
 from sqlalchemy import select
 
-from orchestrator.api.admin.token_usage_backfill import materialize_token_usage_for_scope
 from orchestrator.api.schemas import (
     TokenCompareRead,
     TokenCompareRequest,
@@ -133,15 +132,6 @@ def compare_run_tokens(
         )
 
     rows = _load_run_rows(session=session, run_ids=run_ids)
-    if not rows:
-        materialize_token_usage_for_scope(
-            session=session,
-            tenant_id=tenant_id,
-            project_id=project_id,
-            run_ids=run_ids,
-        )
-        rows = _load_run_rows(session=session, run_ids=run_ids)
-
     totals_by_run: dict[str, dict[str, int]] = {
         run_id: {
             "input": 0,

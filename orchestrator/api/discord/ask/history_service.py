@@ -3,6 +3,8 @@ from __future__ import annotations
 from collections.abc import Callable
 from datetime import datetime, timezone
 
+from orchestrator.core.decision.types import JiraConfigKey, tenant_jira_config_text
+
 
 class DiscordAskHistoryService:
     def __init__(
@@ -203,7 +205,7 @@ class DiscordAskHistoryService:
         channel_id: str,
         existing_issue_keys_fn: Callable[..., set[str]],
     ) -> int:
-        connection_id = str((tenant.jira_config or {}).get("connection_id") or "").strip()
+        connection_id = tenant_jira_config_text(tenant=tenant, key=JiraConfigKey.CONNECTION_ID)
         if not connection_id:
             return 0
 
@@ -249,6 +251,7 @@ class DiscordAskHistoryService:
         scoped_issue_key: str | None,
         collect_ask_context_fn: Callable[..., tuple[str | None, str | None, list[dict], dict[str, int]]],
         existing_issue_keys_fn: Callable[..., set[str]],
+        prune_history: bool = True,
     ) -> tuple[str | None, str | None, list[dict], dict[str, int], list[dict]]:
         history_context = self.recent_ask_history(
             tenant=tenant,
@@ -256,7 +259,7 @@ class DiscordAskHistoryService:
             channel_id=channel_id,
             limit=self._max_history_context,
         )
-        if self.prune_missing_issue_keys_from_ask_history(
+        if prune_history and self.prune_missing_issue_keys_from_ask_history(
             session=session,
             tenant=tenant,
             user_id=user_id,

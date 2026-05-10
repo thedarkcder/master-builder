@@ -1,0 +1,8 @@
+Stage: discord-pm-seed-batch
+Allowed Jira project keys: {{ allowed_project_keys_json }}
+Jira issue types available for create by project key: {{ project_issue_types_json }}
+Markdown brief:
+{{ prompt_markdown }}
+
+Return JSON matching this domain model:
+{{ domain_model | tojson(indent=2) }}

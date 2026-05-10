@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from orchestrator.core.codex_invocation import CodexInvocationContext, invoke_codex_json
-from orchestrator.core.codex_runtime import CodexRuntimeError, build_codex_runtime
+from orchestrator.core.runtime.invocation import AgentInvocationContext, invoke_runtime_json
+from orchestrator.core.runtime.runtime import CodexRuntimeError, build_codex_runtime
 from orchestrator.core.config import get_settings
 from orchestrator.core.prompt_templates import render_prompt
 
@@ -15,13 +15,20 @@ class GoodToDoValidationResult:
     clarification_questions: tuple[str, ...]
 
 
-def _string_list(value: object) -> tuple[str, ...]:
+def _required_string_tuple(value: object, *, field: str) -> tuple[str, ...]:
     if not isinstance(value, list):
-        return ()
-    return tuple(str(item).strip() for item in value if str(item).strip())
+        raise RuntimeError(f"Runtime GTD evaluation returned invalid {field}")
+    normalized: list[str] = []
+    for item in value:
+        if not isinstance(item, str):
+            raise RuntimeError(f"Runtime GTD evaluation returned invalid {field} item")
+        stripped = item.strip()
+        if stripped:
+            normalized.append(stripped)
+    return tuple(normalized)
 
 
-def _validate_good_to_do_with_codex(
+def _validate_good_to_do_with_runtime(
     *,
     issue_summary: str,
     issue_description: str,
@@ -33,9 +40,9 @@ def _validate_good_to_do_with_codex(
     settings = get_settings()
     runtime = build_codex_runtime(session=None, settings=settings)
     try:
-        payload = invoke_codex_json(
+        payload = invoke_runtime_json(
             runtime=runtime,
-            context=CodexInvocationContext(
+            context=AgentInvocationContext(
                 channel="system",
                 tenant_id=tenant_id,
                 project_id=project_id,
@@ -55,13 +62,16 @@ def _validate_good_to_do_with_codex(
             ),
         )
     except CodexRuntimeError as exc:
-        raise RuntimeError(f"Codex GTD evaluation failed: {exc}") from exc
+        raise RuntimeError(f"Runtime GTD evaluation failed: {exc}") from exc
 
     valid = bool(payload.get("valid"))
-    missing_criteria = _string_list(payload.get("missing_criteria"))
-    clarification_questions = _string_list(payload.get("clarification_questions"))
+    missing_criteria = _required_string_tuple(payload.get("missing_criteria"), field="missing_criteria")
+    clarification_questions = _required_string_tuple(
+        payload.get("clarification_questions"),
+        field="clarification_questions",
+    )
     if not valid and not clarification_questions:
-        raise RuntimeError("Codex GTD evaluation returned invalid result without clarification questions")
+        raise RuntimeError("Runtime GTD evaluation returned invalid result without clarification questions")
     return GoodToDoValidationResult(
         valid=valid,
         missing_criteria=missing_criteria,
@@ -78,7 +88,7 @@ def validate_good_to_do(
     issue_key: str | None = None,
     run_id: str | None = None,
 ) -> GoodToDoValidationResult:
-    return _validate_good_to_do_with_codex(
+    return _validate_good_to_do_with_runtime(
         issue_summary=(issue_summary or "").strip(),
         issue_description=(issue_description or "").strip(),
         tenant_id=tenant_id,

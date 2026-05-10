@@ -18,11 +18,18 @@ Plan: {{ plan_json }}
 Acceptance criteria: {{ acceptance_criteria_json }}
 Resolved prerequisites: {{ resolved_prerequisites_json }}
 Unresolved prerequisites: {{ unresolved_prerequisites_json }}
-Confirmed external blockers: {{ confirmed_external_blockers_json }}
-Missing evidence sources: {{ missing_evidence_sources_json }}
+PM outcome: {{ pm_outcome }}
 Answered transient human inputs for this run: {{ human_inputs_json }}
-Allowed tools for this stage: {{ allowed_tools_json }}
-Agent tool command: {{ agent_tool_command }}
+Allowed governed tools for this stage: {{ governed_tools_json }}
+Native Codex tools available directly in this runtime: {{ native_tools_json }}
+
+Structured tool bridge:
+- Use native Codex tools directly when they are available in this runtime. Do not emit tool_request for native Codex tools.
+- To call an allowed governed tool, return JSON only:
+  {"type":"tool_request","tool_name":"<allowed tool>","tool_args":{...},"reason":"<optional short reason>"}
+- When implementation is complete, return JSON only:
+  {"type":"final_response","result":{...}}
+- Do not shell out to `python -m orchestrator agent-tool`.
 
 Required actions:
 1. Implement code changes that satisfy the acceptance criteria.
@@ -30,14 +37,16 @@ Required actions:
 3. Run relevant validation commands and use results to refine changes.
 4. An empty repository is valid; scaffold what is required when needed.
 5. Treat the PM evidence ledger as the current ticket prerequisite summary; do not re-classify external blockers from scratch unless you have new authoritative tool evidence.
+5a. When a command fails because install availability, binding presence, issue state, or external context may be missing, inspect the allowed tool list and use any relevant tool that can resolve that uncertainty before concluding the run is blocked.
 6. Treat only this run-owned worktree as authoritative local repo state. Do not adapt to unrelated in-flight changes, wrong branches, or shared dirty state.
-7. Use a blocker only for the allowed terminal categories from the system prompt, and include exact details in change_summary.
-8. Apply jira-feature-flow using allowed tools where side effects are required (Jira comments/transitions, branch/PR actions).
-9. If a one-time transient human input can unblock work, request it with `run.request_human_input` before using blocker_category="awaiting_human_input".
+7. If you can keep implementing, return outcome="continue" even when validation finds defects you can still address in this run.
+8. Apply jira-feature-flow using allowed tools where side effects are required (Jira comments/transitions, branch publication, PR actions).
+8a. If branch or PR actions are needed, treat the Integration branch as the only valid PR head branch. Never open or update a PR from the Execution branch (`run/...`).
+8b. Use `github.push_branch` for remote branch publication and `github.open_pr` for PR creation or update. Do not use raw `git push` or other ad hoc remote publication commands.
+8c. If PR creation required by policy is `true` and `pr_url` is currently missing, you must attempt `github.push_branch` then `github.open_pr` in this attempt before returning blocked or failed.
+9. If a one-time transient human input can unblock work, request it with `run.request_human_input` before returning outcome="waiting_for_input".
 10. If PR creation required by policy is `true`, do not treat implementation as complete until a PR exists and `pr_url` is set.
+11. If you return blocked or waiting_for_input, make `blocker_message` operator-friendly: keep the error concise, then add a short `Troubleshooting:` section with 1-3 concrete operator actions supported by the evidence you observed.
 
-Output contract:
-- change_summary: array of implemented changes (or concrete blocker facts).
-- pr_url: PR URL string or null.
-- blocker_category: terminal blocker category or null.
-- blocker_message: terminal blocker detail or null.
+Return JSON matching this domain model:
+{{ domain_model | tojson(indent=2) }}

@@ -1,5 +1,5 @@
 import { redirect } from "next/navigation";
 
 export default function TenantsPage() {
-  redirect("/tenants/select");
+  redirect("/platform/dashboard");
 }

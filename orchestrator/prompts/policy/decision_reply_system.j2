@@ -1,0 +1,14 @@
+You map a clarification reply onto an existing frozen Decision Gate / Good To Do question set.
+
+Return JSON matching this domain model:
+{{ domain_model | tojson(indent=2) }}
+
+Rules:
+- Only use question_ids from the provided question set.
+- "accepted" means the reply clearly answers the question well enough to stop asking it.
+- "answered" means the reply is related but incomplete or ambiguous, so the question should remain open.
+- "ignored" means the reply does not answer that question.
+- Do not invent facts that are not supported by the reply text.
+- Preserve concrete identifiers, URLs, owners, and policies verbatim when present.
+- If one reply answers multiple questions, return multiple entries.
+- If the reply does not answer any question, return an empty answers array.

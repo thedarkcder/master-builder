@@ -3,7 +3,8 @@
 import { useCallback, useRef, useState, type ChangeEvent } from "react";
 
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { useToast } from "@/components/ui/toast-provider";
+
 import { createProjectKnowledgeAsset, type Credentials } from "@/lib/api";
 
 type ProjectKnowledgeAddSectionProps = {
@@ -39,6 +40,7 @@ export function ProjectKnowledgeAddSection({
   tenantId,
   projectId,
 }: ProjectKnowledgeAddSectionProps) {
+  const { showToast } = useToast();
   const [uploadingFiles, setUploadingFiles] = useState(false);
   const [statusLine, setStatusLine] = useState("");
   const fileInputRef = useRef<HTMLInputElement | null>(null);
@@ -78,13 +80,14 @@ export function ProjectKnowledgeAddSection({
           failed += 1;
         }
       }
-      setStatusLine(
-        failed === 0
-          ? `Uploaded ${uploaded} file${uploaded === 1 ? "" : "s"}.`
-          : `Uploaded ${uploaded} file${uploaded === 1 ? "" : "s"}, failed ${failed}.`,
-      );
+      setStatusLine("");
+      showToast({
+        title: failed === 0 ? "Files uploaded" : "Upload completed with failures",
+        description: failed === 0 ? `${uploaded} file${uploaded === 1 ? "" : "s"}.` : `${uploaded} uploaded, ${failed} failed.`,
+        tone: failed === 0 ? "success" : "error",
+      });
     } catch (error) {
-      setStatusLine(`Unable to upload files: ${(error as Error).message}`);
+      showToast({ title: "Upload failed", description: (error as Error).message, tone: "error" });
     } finally {
       setUploadingFiles(false);
     }
@@ -96,14 +99,11 @@ export function ProjectKnowledgeAddSection({
   }
 
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>Add Knowledge</CardTitle>
-        <CardDescription>
-          Upload files directly into the project knowledge store. Managed connectors and sync controls live in the Sources tab.
-        </CardDescription>
-      </CardHeader>
-      <CardContent className="space-y-4">
+    <div className="overflow-hidden rounded-2xl border bg-background">
+      <div className="p-6">
+        <h2 className="text-base font-semibold">Add Knowledge</h2>
+      </div>
+      <div className="space-y-4 p-6 pt-0">
         <div className="rounded-md border p-4">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <div>
@@ -129,7 +129,7 @@ export function ProjectKnowledgeAddSection({
         </div>
 
         {statusLine ? <p className="rounded-md border px-3 py-2 text-sm text-muted-foreground">{statusLine}</p> : null}
-      </CardContent>
-    </Card>
+      </div>
+    </div>
   );
 }

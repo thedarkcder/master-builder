@@ -2,6 +2,13 @@
 
 Multi-tenant Jira-driven agent orchestrator service.
 
+## Deployment packaging
+- Deployment execution contract: `docs/deployment-packaging.md`
+- Provider package workspace: `deploy/README.md`
+- Shared deployment contracts:
+  - `deploy/common/env.required.md`
+  - `deploy/common/service-profile.md`
+
 ## Requirements
 - Python 3.11+
 - Atlassian OAuth app credentials for Jira connect flow
@@ -21,6 +28,14 @@ export ORCHESTRATOR_DATABASE_URL=postgresql+psycopg://orchestrator:orchestrator@
 export ORCHESTRATOR_CORS_ORIGINS=http://localhost:4100,http://127.0.0.1:4100
 export ORCHESTRATOR_ADMIN_UI_BASE_URL=http://localhost:4100
 export ORCHESTRATOR_PUBLIC_API_BASE_URL=http://localhost:4000
+export ORCHESTRATOR_EMAIL_DELIVERY_PROVIDER=smtp
+export ORCHESTRATOR_EMAIL_FROM_ADDRESS=no-reply@masterbuilder.local
+export ORCHESTRATOR_SMTP_HOST=localhost
+export ORCHESTRATOR_SMTP_PORT=4205
+# Production email via Resend (HTTPS API, no SMTP): set provider to `resend`, add a Resend API key,
+# and use ORCHESTRATOR_EMAIL_FROM_ADDRESS on a domain you verified in the Resend dashboard.
+# export ORCHESTRATOR_EMAIL_DELIVERY_PROVIDER=resend
+# export ORCHESTRATOR_RESEND_API_KEY=re_xxxxxxxx
 export ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET=change-me
 export ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET=change-me
 export ORCHESTRATOR_CODEX_CLI_COMMAND=codex
@@ -28,7 +43,9 @@ export ORCHESTRATOR_CODEX_MODEL=gpt-5-codex
 export ORCHESTRATOR_CODEX_STDERR_LOG_MODE=errors_only # all|errors_only|off
 export ORCHESTRATOR_CODEX_PERSIST_TURN_COMPLETED_USAGE=true
 export ORCHESTRATOR_WORKER_POLL_INTERVAL_SECONDS=5
-export ORCHESTRATOR_VOICE_REPLY_PROVIDER=pocket_tts
+export ORCHESTRATOR_DATABASE_URL=postgresql+psycopg://orchestrator:orchestrator@127.0.0.1:4402/orchestrator
+export ORCHESTRATOR_VOICE_STT_PROVIDER=whisper
+export ORCHESTRATOR_VOICE_TTS_PROVIDER=pocket_tts
 # Optional fallback voice if room/persona config does not supply one.
 export ORCHESTRATOR_POCKET_TTS_VOICE=alba
 export ORCHESTRATOR_SECRETS_ENCRYPTION_KEY=$(python - <<'PY'
@@ -46,7 +63,7 @@ PY
 Worker and Discord `/ask` now use native Codex CLI auth (not `OPENAI_API_KEY`).
 For containers, run one-time login and keep the shared Codex auth volume:
 ```bash
-docker compose run --rm worker-runtime codex login --device-auth
+docker compose run --rm run-worker codex login --device-auth
 ```
 
 ## Jira release-train automation (repo-level)
@@ -131,7 +148,8 @@ curl \
 ## CLI entrypoints
 ```bash
 python -m orchestrator migrate
-python -m orchestrator worker
+python -m orchestrator worker-runs
+python -m orchestrator worker-webhooks
 python -m orchestrator run --tenant TENANT_ID --issue MAB-123
 python -m orchestrator poll --tenant all
 python -m orchestrator poll --tenant TENANT_ID
@@ -148,9 +166,14 @@ Start API:
 uvicorn orchestrator.api.main:app --reload --port 4000
 ```
 
-Start worker (processes queued runs using Codex-backed PM/Dev/Test/Review agents):
+Start run worker (processes queued runs using Codex-backed PM/Dev/Test/Review agents):
 ```bash
-python -m orchestrator worker
+python -m orchestrator worker-runs
+```
+
+Start webhook worker (processes queued Jira/GitHub/Discord webhook jobs):
+```bash
+python -m orchestrator worker-webhooks
 ```
 
 ## Admin UI (Next.js + shadcn)
@@ -181,8 +204,16 @@ docker compose up --build
 
 API is exposed on `http://localhost:4000`.
 Postgres is exposed on `localhost:4402`.
+Mailpit SMTP is exposed on `localhost:4205`.
+Mailpit inbox UI is exposed on `http://localhost:4206`.
 Admin UI (if running locally) is exposed on `http://localhost:4100`.
 Tailscale sidecar uses `TS_AUTHKEY` from your environment (required for tailnet auth).
+
+For host-based API development, you can run only the local mail sink:
+```bash
+docker compose up -d mailpit
+```
+Then keep `ORCHESTRATOR_SMTP_HOST=localhost` and `ORCHESTRATOR_SMTP_PORT=4205` so invite and onboarding emails land in Mailpit instead of a real provider.
 
 ### Worker build toolchains
 The worker image now includes:
@@ -192,8 +223,8 @@ The worker image now includes:
 
 Quick checks:
 ```bash
-docker compose run --rm worker-runtime java -version
-docker compose run --rm worker-runtime sdkmanager --version
+docker compose run --rm run-worker java -version
+docker compose run --rm run-worker sdkmanager --version
 ```
 
 Swift/iOS note:

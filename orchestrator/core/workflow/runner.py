@@ -1,10 +1,15 @@
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass, field
 from collections.abc import Callable
-from typing import Protocol
+from typing import Literal, Protocol
 
-from orchestrator.core.followups import build_backlog_follow_up_draft
+from orchestrator.core.pm.followups import build_backlog_follow_up_draft
+from orchestrator.core.worker.capability_normalization import WorkerCapability
+
+StageOutcome = Literal["continue", "requeue", "waiting_for_input", "blocked", "failed"]
+WorkflowOutcome = Literal["success", "requeue", "waiting_for_input", "blocked", "failed"]
+
 
 @dataclass(frozen=True)
 class WorkflowRequest:
@@ -14,6 +19,8 @@ class WorkflowRequest:
     issue_summary: str
     issue_description: str
     max_dev_test_review_loops: int
+    workflow_id: str | None = None
+    attempt_number: int = 1
     allow_pr_creation: bool = False
     suggested_test_commands: list[str] = field(default_factory=list)
     execution_repo_dir: str | None = None
@@ -22,8 +29,8 @@ class WorkflowRequest:
     project_name: str | None = None
     github_repository: str | None = None
     jira_project_key: str | None = None
-    current_worker_capability: str = "linux"
-    available_worker_capabilities: list[str] = field(default_factory=list)
+    current_worker_capability: WorkerCapability = WorkerCapability.LINUX
+    available_worker_capabilities: tuple[WorkerCapability, ...] = field(default_factory=lambda: (WorkerCapability.LINUX,))
     base_branch: str | None = None
     integration_branch: str | None = None
     pr_target_branch: str | None = None
@@ -32,10 +39,12 @@ class WorkflowRequest:
     start_point_sha: str | None = None
     pr_number: int | None = None
     trigger_context: dict | None = None
-    resume_mode: str | None = None
-    resume_stage: str | None = None
-    resume_session_id: str | None = None
-    resume_source_plan: dict | None = None
+    entry_mode: str = "fresh"
+    entry_stage: str | None = None
+    checkpoint_kind: str | None = None
+    checkpoint_id: str | None = None
+    checkpoint_payload: dict | None = None
+    checkpoint_session_id: str | None = None
     human_inputs: list[dict[str, str]] = field(default_factory=list)
 
 
@@ -44,10 +53,12 @@ class PmPlan:
     plan_steps: list[str]
     acceptance_criteria: list[str]
     risks: list[str]
-    next_stage: str = "dev"
-    execution_worker_capability: str = "linux"
-    missing_evidence_sources: list[str] = field(default_factory=list)
-    confirmed_external_blockers: list[str] = field(default_factory=list)
+    outcome: StageOutcome = "continue"
+    next_stage: Literal["dev", "test"] = "dev"
+    execution_worker_capability: Literal["linux", "macos"] = "linux"
+    blocker_message: str | None = None
+    requeue_target: Literal["linux", "macos"] | None = None
+    requeue_reason: str | None = None
     resolved_prerequisites: list[str] = field(default_factory=list)
     unresolved_prerequisites: list[str] = field(default_factory=list)
 
@@ -56,16 +67,15 @@ class PmPlan:
 class DevResult:
     change_summary: list[str]
     pr_url: str | None
-    blocker_category: str | None = None
+    outcome: StageOutcome = "continue"
     blocker_message: str | None = None
 
 
 @dataclass(frozen=True)
 class TestResult:
-    passed: bool
     guidance: list[str]
+    outcome: StageOutcome = "continue"
     feedback: str | None = None
-    blocker_category: str | None = None
     blocker_message: str | None = None
 
 
@@ -75,12 +85,10 @@ TestResult.__test__ = False
 
 @dataclass(frozen=True)
 class ReviewResult:
-    approved: bool
     summary: list[str]
-    outcome: str = "needs_changes"
+    outcome: StageOutcome = "continue"
     feedback: str | None = None
     pr_url: str | None = None
-    blocker_category: str | None = None
     blocker_message: str | None = None
 
 
@@ -90,12 +98,23 @@ class WorkflowDiagnostics:
     message: str
     attempts: int
     history: list[dict[str, str]]
-    classification: str = "workflow_failure"
+
+
+@dataclass(frozen=True)
+class WorkflowStageCheckpoint:
+    stage: str
+    attempt: int
+    status: str
+    summary: str
+    plan: PmPlan | None = None
+    dev_result: DevResult | None = None
+    test_result: TestResult | None = None
+    review_result: ReviewResult | None = None
 
 
 @dataclass(frozen=True)
 class WorkflowResult:
-    succeeded: bool
+    outcome: WorkflowOutcome
     plan: PmPlan | None
     pr_url: str | None
     summary: list[str]
@@ -108,31 +127,9 @@ class WorkflowResult:
     orchestration_workstream_trace: list[dict[str, object]] = field(default_factory=list)
     follow_up_issue: dict | None = None
     diagnostics: WorkflowDiagnostics | None = None
-
-    def to_plan_payload(self) -> dict:
-        payload = {
-            "attempts": self.attempts,
-            "succeeded": self.succeeded,
-            "summary": self.summary,
-            "test_guidance": self.test_guidance,
-            "pr_url": self.pr_url,
-            "dev_rationale": self.dev_rationale,
-            "review_summary": self.review_summary,
-            "review_feedback": self.review_feedback,
-            "orchestration_stage_trace": self.orchestration_stage_trace,
-            "orchestration_workstream_trace": self.orchestration_workstream_trace,
-            "follow_up_issue": self.follow_up_issue,
-        }
-        if self.orchestration_stage_trace or self.orchestration_workstream_trace:
-            payload["orchestration_trace"] = {
-                "stage_events": self.orchestration_stage_trace,
-                "workstream_events": self.orchestration_workstream_trace,
-            }
-        if self.plan is not None:
-            payload["plan"] = asdict(self.plan)
-        if self.diagnostics is not None:
-            payload["diagnostics"] = asdict(self.diagnostics)
-        return payload
+    requeue_target: WorkerCapability | None = None
+    requeue_reason: str | None = None
+    blocker_message: str | None = None
 
 
 class WorkflowAgents(Protocol):
@@ -141,6 +138,7 @@ class WorkflowAgents(Protocol):
         request: WorkflowRequest,
         *,
         test_feedback_hook: Callable[[int, str], None] | None = None,
+        stage_checkpoint_hook: Callable[[WorkflowStageCheckpoint], None] | None = None,
     ) -> WorkflowResult:
         ...
 
@@ -157,9 +155,14 @@ class WorkflowRunner:
         request: WorkflowRequest,
         *,
         test_feedback_hook: Callable[[int, str], None] | None = None,
+        stage_checkpoint_hook: Callable[[WorkflowStageCheckpoint], None] | None = None,
     ) -> WorkflowResult:
         try:
-            return self._agents.execute(request, test_feedback_hook=test_feedback_hook)
+            return self._agents.execute(
+                request,
+                test_feedback_hook=test_feedback_hook,
+                stage_checkpoint_hook=stage_checkpoint_hook,
+            )
         except Exception as exc:  # pragma: no cover - exercised via tests
             return self._failure(
                 plan=None,
@@ -184,7 +187,6 @@ class WorkflowRunner:
         dev_rationale: list[str] | None = None,
         review_summary: list[str] | None = None,
         review_feedback: str | None = None,
-        classification: str = "workflow_failure",
     ) -> WorkflowResult:
         if follow_up_issue is None and request is not None and not skip_auto_follow_up:
             draft = build_backlog_follow_up_draft(
@@ -200,7 +202,7 @@ class WorkflowRunner:
             )
             follow_up_issue = draft.to_payload()
         return WorkflowResult(
-            succeeded=False,
+            outcome="blocked",
             plan=plan,
             pr_url=None,
             summary=[],
@@ -210,11 +212,11 @@ class WorkflowRunner:
             review_summary=list(review_summary or ()),
             review_feedback=review_feedback,
             follow_up_issue=follow_up_issue,
+            blocker_message=message,
             diagnostics=WorkflowDiagnostics(
                 stage=stage,
                 message=message,
                 attempts=attempts,
                 history=history,
-                classification=classification,
             ),
         )

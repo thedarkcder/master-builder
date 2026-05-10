@@ -55,7 +55,7 @@ def transcribe_audio_bytes(
     filename: str,
     content_type: str | None = None,
 ) -> str:
-    provider = str(settings.voice_transcription_provider or "").strip().lower()
+    provider = str(settings.voice_stt_provider or "").strip().lower()
     if provider in {"", "disabled"}:
         raise VoiceTranscriptionError("Voice transcription is disabled")
     if provider == "openai":
@@ -75,8 +75,8 @@ def transcribe_audio_bytes(
     raise VoiceTranscriptionError(f"Unsupported transcription provider '{provider}'")
 
 
-def ensure_transcription_provider_ready(*, settings: Settings) -> None:
-    provider = str(settings.voice_transcription_provider or "").strip().lower()
+def ensure_transcription_provider_ready(*, settings: Settings, allow_download: bool = False) -> None:
+    provider = str(settings.voice_stt_provider or "").strip().lower()
     if provider in {"", "disabled"}:
         raise VoiceTranscriptionError("Voice transcription is disabled")
     if provider == "openai":
@@ -85,7 +85,7 @@ def ensure_transcription_provider_ready(*, settings: Settings) -> None:
             raise VoiceTranscriptionError("OpenAI transcription API key is missing")
         return
     if provider == "whisper":
-        _get_whisper_model(settings=settings)
+        _get_whisper_model(settings=settings, allow_download=allow_download)
         return
     raise VoiceTranscriptionError(f"Unsupported transcription provider '{provider}'")
 
@@ -164,7 +164,7 @@ def _transcribe_with_whisper(
     if len(audio_bytes) > int(settings.voice_attachment_max_bytes):
         raise VoiceTranscriptionError("Audio payload exceeds configured maximum size")
 
-    model = _get_whisper_model(settings=settings)
+    model = _get_whisper_model(settings=settings, allow_download=False)
     audio_array = _decode_audio_to_float32_mono(
         audio_bytes=audio_bytes,
         filename=filename,
@@ -201,7 +201,7 @@ def _resolve_whisper_model_name(*, settings: Settings) -> str:
     return configured
 
 
-def _get_whisper_model(*, settings: Settings) -> object:
+def _get_whisper_model(*, settings: Settings, allow_download: bool = False) -> object:
     model_name = _resolve_whisper_model_name(settings=settings)
     device = str(settings.voice_transcription_device or "").strip() or "auto"
     compute_type = str(settings.voice_transcription_compute_type or "").strip() or "int8"
@@ -226,6 +226,7 @@ def _get_whisper_model(*, settings: Settings) -> object:
                 model_name=model_name,
                 device=device,
                 compute_type=compute_type,
+                allow_download=allow_download,
             )
         except Exception as exc:  # noqa: BLE001
             raise VoiceTranscriptionError(f"Whisper model load failed: {exc}") from exc
@@ -239,6 +240,7 @@ def _load_whisper_model(
     model_name: str,
     device: str,
     compute_type: str,
+    allow_download: bool,
 ) -> object:
     whisper_model_cls = getattr(faster_whisper, "WhisperModel")
     local_first_kwargs = {
@@ -249,6 +251,8 @@ def _load_whisper_model(
     try:
         return whisper_model_cls(model_name, **local_first_kwargs)
     except Exception:  # noqa: BLE001
+        if not allow_download:
+            raise
         return whisper_model_cls(
             model_name,
             device=device,

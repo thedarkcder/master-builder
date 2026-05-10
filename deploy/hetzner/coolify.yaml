@@ -1,0 +1,16 @@
+name: master-builder
+description: Master Builder full production profile for Hetzner non-HA deployment.
+compose_file: deploy/hetzner/docker-compose.prod.yml
+env_file: /opt/master-builder/.env
+services:
+  required:
+    - api
+    - admin-ui
+    - run-worker
+    - webhook-worker
+    - project-automation
+    - knowledge-sync
+    - discord-gateway
+    - discord-live-voice
+    - postgres
+    - clickhouse

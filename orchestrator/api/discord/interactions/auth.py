@@ -8,7 +8,7 @@ from fastapi import HTTPException, Request, status
 from fastapi.responses import JSONResponse
 from sqlalchemy.orm import Session
 
-from orchestrator.core.platform_secret_service import resolve_platform_secret_ref
+from orchestrator.core.platform.secret_service import resolve_platform_secret_ref
 
 DISCORD_INTERACTIONS_PUBLIC_KEY_SECRET_REF = "DISCORD_INTERACTIONS_PUBLIC_KEY"
 ASK_CONFIRM_CUSTOM_ID_PATTERN = re.compile(r"^ask\.(approve|reject)\.([0-9a-f]{32})$")

@@ -252,11 +252,16 @@ Plain language. If unclear → refine.
 - No forbidden concurrency
 - No speculative abstractions
 
-### Tests
-For each invariant:
-`Invariant → Test → Assertion`
 
-If any fail → refactor before feature work.
+### Test validity checks (non-negotiable)
+
+- Do not treat page render or navigation as proof of behavior.
+- Tests must exercise the state-changing action (save, submit, accept, confirm, finish).
+- Tests must validate the owned boundary where the behavior actually lives.
+- Do not mock the layer being validated.
+- Do not claim coverage if only early or adjacent steps are tested.
+- At least one test must prove the full state transition through the real system path.
+
 
 ---
 

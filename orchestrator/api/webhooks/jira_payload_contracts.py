@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi import HTTPException, status
 
-SUPPORTED_JIRA_COMMENT_COMMANDS = {"run", "retry", "ask"}
+SUPPORTED_JIRA_COMMENT_COMMANDS = {"run", "retry", "start", "ask", "clarify"}
 
 
 def normalize_jira_webhook_event(raw_value: object) -> str | None:
@@ -125,12 +125,12 @@ def parse_jira_comment_command(payload: dict) -> tuple[str | None, str | None, s
     if command_name not in SUPPORTED_JIRA_COMMENT_COMMANDS:
         return None, None, "invalid_comment_command"
 
-    if command_name in {"run", "retry"}:
+    if command_name in {"run", "retry", "start"}:
         if len(parts) != 1:
             return None, None, "invalid_comment_command"
         return command_name, None, None
 
-    if command_name == "ask":
+    if command_name in {"ask", "clarify"}:
         inline_question = " ".join(parts[1:]).strip()
         full_question = "\n".join(part for part in [inline_question, *remaining_lines] if part).strip()
         if not full_question:
@@ -150,6 +150,18 @@ def extract_jira_comment_author_account_id(payload: dict) -> str | None:
     account_id = author.get("accountId")
     if isinstance(account_id, str) and account_id.strip():
         return account_id.strip()
+    return None
+
+
+def extract_jira_comment_id(payload: dict) -> str | None:
+    comment = payload.get("comment")
+    if not isinstance(comment, dict):
+        return None
+    comment_id = comment.get("id")
+    if isinstance(comment_id, str) and comment_id.strip():
+        return comment_id.strip()
+    if isinstance(comment_id, int):
+        return str(comment_id)
     return None
 
 
@@ -176,3 +188,24 @@ def extract_status_transition(payload: dict) -> tuple[str | None, str | None]:
         return normalized_from_status, normalized_to_status
 
     return None, None
+
+
+def extract_changed_fields(payload: dict) -> list[str]:
+    changelog = payload.get("changelog")
+    if not isinstance(changelog, dict):
+        return []
+    items = changelog.get("items")
+    if not isinstance(items, list):
+        return []
+    changed_fields: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        field = item.get("field")
+        normalized = field.strip().casefold() if isinstance(field, str) and field.strip() else ""
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        changed_fields.append(normalized)
+    return changed_fields
