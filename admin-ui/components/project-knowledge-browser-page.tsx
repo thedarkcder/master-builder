@@ -5,7 +5,6 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useAuth } from "@/components/auth-provider";
 import { ProjectKnowledgeAddSection } from "@/components/project-knowledge-add-section";
 import { ProjectKnowledgeSourcesSection } from "@/components/project-knowledge-sources-section";
-import { ProjectSectionTabs } from "@/components/project-section-tabs";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/components/ui/toast-provider";
 
@@ -25,7 +24,7 @@ import {
   type ProjectKnowledgeDebugMatchRecord,
   type ProjectKnowledgeStatsRecord
 } from "@/lib/api";
-import { canAccessPlatformAdmin, canManageProjects } from "@/lib/auth-routing";
+import { canManageProjects } from "@/lib/auth-routing";
 import { formatTimestamp } from "@/lib/datetime";
 
 type ProjectKnowledgeBrowserPageProps = {
@@ -88,7 +87,6 @@ export function ProjectKnowledgeBrowserPage({
 
   const actionsDisabled = !credentials || loadingPage;
   const allowProjectManagement = canManageProjects(principal, tenantId);
-  const isPlatformSuperAdmin = canAccessPlatformAdmin(principal);
 
   const ensureCredentials = useCallback((): boolean => {
     if (credentials) {
@@ -303,13 +301,6 @@ export function ProjectKnowledgeBrowserPage({
 
   return (
     <div className="space-y-6">
-      <ProjectSectionTabs
-        tenantId={tenantId}
-        projectId={projectId}
-        activeSection="knowledge"
-        allowProjectManagement={allowProjectManagement}
-        isPlatformSuperAdmin={isPlatformSuperAdmin}
-      />
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex flex-wrap gap-2">
           <Button
@@ -346,9 +337,6 @@ export function ProjectKnowledgeBrowserPage({
               </Button>
             </>
           ) : null}
-          <Button variant="outline" size="sm" onClick={() => void refreshAll()} disabled={actionsDisabled}>
-            {loadingPage ? "Refreshing..." : "Refresh"}
-          </Button>
         </div>
       </div>
 

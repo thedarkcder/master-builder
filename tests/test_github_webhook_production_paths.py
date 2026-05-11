@@ -291,3 +291,101 @@ class GitHubWebhookProductionPathTests(ProductionPathApiTestCase):
         )
         self.assertTrue(fake_client.issue_comments)
         self.assertTrue(any("Codex PR Review" in str(comment["body"]) for comment in fake_client.issue_comments))
+
+    def test_pull_request_closed_does_not_post_review_comment(self) -> None:
+        fake_client = _FakeGitHubClient()
+        payload = {
+            "action": "closed",
+            "installation": {"id": 12345},
+            "repository": {"full_name": "org/repo"},
+            "pull_request": {
+                "number": 17,
+                "title": "GP-123: example",
+                "body": "desc",
+                "html_url": "https://github.com/org/repo/pull/17",
+                "state": "closed",
+                "head": {"sha": "abc123", "ref": "feature/GP-123"},
+                "base": {"ref": "main"},
+            },
+        }
+
+        with patch(
+            "orchestrator.api.webhooks.github_webhook_context.github_client_from_tenant_config",
+            return_value=fake_client,
+        ):
+            response = self.client.post(
+                "/github/webhook",
+                json=payload,
+                headers={
+                    "X-GitHub-Event": "pull_request",
+                    "X-GitHub-Delivery": "delivery-pr-closed",
+                },
+            )
+            processed = self._process_one_webhook_job()
+
+        self.assertEqual(response.status_code, 202)
+        self.assertIsNotNone(processed)
+        assert processed is not None
+        self.assertEqual(processed.status, "done")
+        self.assertFalse(fake_client.pull_request_reactions)
+        self.assertFalse(fake_client.issue_comments)
+
+    def test_check_run_completed_refreshes_pr_review_comment(self) -> None:
+        fake_client = _FakeGitHubClient()
+        payload = {
+            "action": "completed",
+            "installation": {"id": 12345},
+            "repository": {"full_name": "org/repo"},
+            "check_run": {
+                "conclusion": "success",
+                "pull_requests": [{"number": 17}],
+            },
+        }
+
+        with (
+            patch(
+                "orchestrator.api.webhooks.github_webhook_context.github_client_from_tenant_config",
+                return_value=fake_client,
+            ),
+            patch(
+                "orchestrator.api.webhooks.github_webhook_context.ReviewAgentGate",
+                return_value=SimpleNamespace(
+                    evaluate_pr=lambda **kwargs: SimpleNamespace(ready=False, state="pending_checks", message="pending")
+                ),
+            ),
+            patch(
+                "orchestrator.api.webhooks.github_application.enqueue_pr_remediation_if_needed",
+                return_value=SimpleNamespace(
+                    triggered=False,
+                    issue_key=None,
+                    issue_created=False,
+                    enqueued=False,
+                    reason="not_needed",
+                    run=None,
+                    head_sha="abc123",
+                ),
+            ),
+        ):
+            response = self.client.post(
+                "/github/webhook",
+                json=payload,
+                headers={
+                    "X-GitHub-Event": "check_run",
+                    "X-GitHub-Delivery": "delivery-check-run-completed",
+                },
+            )
+            processed = self._process_one_webhook_job()
+
+        self.assertEqual(response.status_code, 202)
+        self.assertIsNotNone(processed)
+        assert processed is not None
+        self.assertEqual(processed.status, "done")
+        self.assertEqual(
+            fake_client.pull_request_reactions,
+            [
+                {"repo_full_name": "org/repo", "pr_number": 17, "content": "eyes"},
+                {"repo_full_name": "org/repo", "pr_number": 17, "content": "confused"},
+            ],
+        )
+        self.assertTrue(fake_client.issue_comments)
+        self.assertTrue(any("Codex PR Review" in str(comment["body"]) for comment in fake_client.issue_comments))

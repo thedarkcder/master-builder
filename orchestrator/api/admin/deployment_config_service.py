@@ -5,6 +5,8 @@ from sqlalchemy import select
 from orchestrator.api.schemas import (
     ProjectDeploymentConfigRead,
     ProjectDeploymentConfigWrite,
+    ProjectDeploymentPolicyRead,
+    ProjectDeploymentPolicyWrite,
     TenantDeploymentPlaneRead,
     TenantDeploymentPlaneWrite,
 )
@@ -31,6 +33,16 @@ def project_deployment_config_to_schema(project: Project | ProjectApp) -> Projec
 
 
 def normalize_project_deployment_config(payload: ProjectDeploymentConfigWrite) -> dict:
+    normalized = payload.model_dump(exclude_none=True)
+    normalized.pop("enabled", None)
+    return normalized
+
+
+def project_deployment_policy_to_schema(project: Project) -> ProjectDeploymentPolicyRead:
+    return ProjectDeploymentPolicyRead.model_validate(_coerce_dict(project.deployment_config))
+
+
+def normalize_project_deployment_policy(payload: ProjectDeploymentPolicyWrite) -> dict:
     return payload.model_dump(exclude_none=True)
 
 

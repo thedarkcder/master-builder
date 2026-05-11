@@ -234,9 +234,6 @@ export function ProjectKnowledgeSourcesSection({
             <div>
               <h2 className="text-base font-semibold">Managed Sources</h2>
             </div>
-            <Button variant="outline" size="sm" onClick={() => void loadSources()} disabled={!credentials || loading}>
-              {loading ? "Refreshing..." : "Refresh"}
-            </Button>
           </div>
         </div>
         <div className="space-y-3 p-6 pt-0">

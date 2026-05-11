@@ -184,7 +184,15 @@ def test_ensure_project_checkout_preserves_existing_gitignore() -> None:
 
         assert resolved == repo_dir
         assert (repo_dir / ".gitignore").read_text(encoding="utf-8") == "custom-ignore\n"
-        run_git_mock.assert_called_once_with(
+        assert run_git_mock.call_count == 2
+        fetch_call = run_git_mock.call_args_list[0]
+        assert fetch_call.args[0] == ["fetch", "origin", "--prune"]
+        assert fetch_call.kwargs["cwd"] == repo_dir
+        assert fetch_call.kwargs["env"]["GIT_CONFIG_VALUE_0"].startswith("AUTHORIZATION: basic ")
+        encoded_credential = fetch_call.kwargs["env"]["GIT_CONFIG_VALUE_0"].split(" ", 2)[2]
+        decoded_credential = base64.b64decode(encoded_credential).decode("utf-8")
+        assert decoded_credential == "x-access-token:token-123"
+        run_git_mock.assert_any_call(
             ["rev-parse", "--git-path", "info/exclude"],
             cwd=repo_dir,
         )
@@ -218,7 +226,8 @@ def test_ensure_project_checkout_seeds_stack_specific_gitignore_defaults() -> No
         assert "node_modules/" in gitignore
         assert "# Java" in gitignore
         assert "target/" in gitignore
-        run_git_mock.assert_called_once_with(
+        assert run_git_mock.call_count == 2
+        run_git_mock.assert_any_call(
             ["rev-parse", "--git-path", "info/exclude"],
             cwd=repo_dir,
         )

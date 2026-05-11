@@ -551,10 +551,6 @@ export default function TenantExecutionDetailPage() {
           </Link>
         </Button>
         <div className="flex items-center gap-2">
-          <Button variant="outline" size="sm" className="h-8" onClick={() => void loadWorkflow()} disabled={loading}>
-            <RefreshCw className={cn("mr-1.5 h-3.5 w-3.5", loading && "animate-spin")} />
-            Refresh
-          </Button>
           {workflow?.links?.length ? (
             <div className="relative">
               <Button
@@ -836,13 +832,6 @@ export default function TenantExecutionDetailPage() {
             }}
             activeView={observabilityView}
             onViewChange={setObservabilityView}
-            onRefresh={() => {
-              if (observabilityView === "audit") {
-                setAuditRefreshNonce((value) => value + 1);
-              } else {
-                setTelemetryRefreshNonce((value) => value + 1);
-              }
-            }}
             onClose={() => {
               setSelectedOperationId(null);
               setSelectedAttemptId(null);

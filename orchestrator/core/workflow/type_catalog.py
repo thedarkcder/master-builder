@@ -222,6 +222,7 @@ def _register_builtin_workflows() -> None:
     global _builtin_workflows_registered
     if _builtin_workflows_registered:
         return
+    from orchestrator.core.deployment_setup.workflow import ProjectDeploymentSetupWorkflowDefinition
     from orchestrator.core.jira_project_reconciliation.workflow import JiraProjectReconciliationWorkflow
     from orchestrator.core.parent_feature_workflow.planning import ParentFeaturePlanningWorkflow
 
@@ -261,6 +262,25 @@ def _register_builtin_workflows() -> None:
             ),
             steps=infer_workflow_steps(JiraProjectReconciliationWorkflow),
             work_units=infer_workflow_work_units(JiraProjectReconciliationWorkflow),
+        )
+    )
+    workflow_definition_registry.register(
+        WorkflowDefinition(
+            workflow_type_key="project_deployment_setup",
+            system_key="project_deployment_setup",
+            handler_key="project_deployment_setup",
+            label="Project deployment setup",
+            description="Durable project deployment setup, deployable-unit discovery, and initial release.",
+            orchestration_backend="temporal",
+            retry_policy=WorkflowRetryPolicyDefinition(
+                manual_retry_enabled=True,
+                max_attempts=3,
+                initial_interval_seconds=30,
+                max_interval_seconds=300,
+                backoff_coefficient=2.0,
+            ),
+            steps=infer_workflow_steps(ProjectDeploymentSetupWorkflowDefinition),
+            work_units=infer_workflow_work_units(ProjectDeploymentSetupWorkflowDefinition),
         )
     )
     workflow_definition_registry.register(

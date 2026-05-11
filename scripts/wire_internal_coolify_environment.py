@@ -42,6 +42,7 @@ class WireConfig:
     coolify_environment_name: str | None
     coolify_server_uuid: str | None
     coolify_destination_uuid: str | None
+    coolify_github_app_uuid: str | None
     deployment_state: str | None
     tenant_secret_values: dict[str, str]
     deployment_plane_secret_ref_updates: dict[str, str]
@@ -190,6 +191,7 @@ def merge_deployment_plane_payload(
     coolify_environment_name: str | None,
     coolify_server_uuid: str | None,
     coolify_destination_uuid: str | None,
+    coolify_github_app_uuid: str | None,
     secret_ref_updates: dict[str, str],
 ) -> dict[str, Any]:
     merged = dict(existing_plane or {})
@@ -214,6 +216,8 @@ def merge_deployment_plane_payload(
         merged["coolify_server_uuid"] = coolify_server_uuid
     if coolify_destination_uuid is not None:
         merged["coolify_destination_uuid"] = coolify_destination_uuid
+    if coolify_github_app_uuid is not None:
+        merged["coolify_github_app_uuid"] = coolify_github_app_uuid
 
     secret_refs = dict(merged.get("secret_refs") or {})
     secret_refs.update(secret_ref_updates)
@@ -245,6 +249,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--coolify-environment-name", default=None)
     parser.add_argument("--coolify-server-uuid", default=None)
     parser.add_argument("--coolify-destination-uuid", default=None)
+    parser.add_argument("--coolify-github-app-uuid", default=None)
     parser.add_argument("--deployment-state", choices=DEPLOYMENT_PLANE_STATES, default=None)
 
     parser.add_argument("--coolify-api-token-env", default="COOLIFY_API_TOKEN")
@@ -400,6 +405,7 @@ def build_wire_config(*, args: argparse.Namespace, environ: dict[str, str] | Non
         coolify_environment_name=_normalize_optional(args.coolify_environment_name),
         coolify_server_uuid=_normalize_optional(args.coolify_server_uuid),
         coolify_destination_uuid=_normalize_optional(args.coolify_destination_uuid),
+        coolify_github_app_uuid=_normalize_optional(args.coolify_github_app_uuid),
         deployment_state=_normalize_optional(args.deployment_state),
         tenant_secret_values=tenant_secret_values,
         deployment_plane_secret_ref_updates=secret_ref_updates,
@@ -442,6 +448,7 @@ def run(config: WireConfig) -> tuple[int, dict[str, Any]]:
         coolify_environment_name=config.coolify_environment_name,
         coolify_server_uuid=config.coolify_server_uuid,
         coolify_destination_uuid=config.coolify_destination_uuid,
+        coolify_github_app_uuid=config.coolify_github_app_uuid,
         secret_ref_updates=config.deployment_plane_secret_ref_updates,
     )
 
@@ -497,6 +504,7 @@ def run(config: WireConfig) -> tuple[int, dict[str, Any]]:
             "coolify_environment_name": updated_plane.get("coolify_environment_name"),
             "coolify_server_uuid": updated_plane.get("coolify_server_uuid"),
             "coolify_destination_uuid": updated_plane.get("coolify_destination_uuid"),
+            "coolify_github_app_uuid": updated_plane.get("coolify_github_app_uuid"),
             "state": updated_plane.get("state"),
             "secret_refs": dict(updated_plane.get("secret_refs") or {}),
         },

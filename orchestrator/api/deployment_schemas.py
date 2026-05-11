@@ -7,6 +7,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationInfo, field_validator, model_serializer, model_validator
 
+_DEPLOYMENT_VOLUME_KINDS = {"file", "persistent", "persistent_volume", "volume"}
+
 
 def _normalize_optional_string(value: object) -> str | None:
     normalized = str(value or "").strip()
@@ -105,11 +107,16 @@ def _assert_no_raw_secret_config(value: object, *, path: str = "config") -> None
 
 def _redact_secret_config(value: object) -> object:
     if isinstance(value, dict):
-        return {
-            str(key): _redact_secret_config(child)
-            for key, child in value.items()
-            if not _is_raw_secret_config_key(key)
-        }
+        redacted: dict[str, object] = {}
+        for key, child in value.items():
+            if _is_raw_secret_config_key(key):
+                continue
+            normalized_key = str(key or "").strip().lower()
+            if normalized_key == "secret_refs" or normalized_key.endswith("_secret_refs"):
+                redacted[str(key)] = child
+                continue
+            redacted[str(key)] = _redact_secret_config(child)
+        return redacted
     if isinstance(value, list):
         return [_redact_secret_config(child) for child in value]
     return value
@@ -223,6 +230,12 @@ class ProjectAppRead(BaseModel):
     secret_schema_json: dict[str, object] = Field(default_factory=dict)
     deployment_config: ProjectDeploymentConfigRead = Field(default_factory=lambda: ProjectDeploymentConfigRead())
     status: Literal["draft", "needs_pr_merge", "ready", "deploying", "live", "failed"]
+    latest_release_id: str | None = None
+    latest_release_status: str | None = None
+    latest_release_name: str | None = None
+    latest_release_git_ref: str | None = None
+    latest_release_commit_sha: str | None = None
+    last_error: str | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -317,6 +330,7 @@ class TenantDeploymentPlaneWrite(BaseModel):
     coolify_environment_name: str | None = None
     coolify_server_uuid: str | None = None
     coolify_destination_uuid: str | None = None
+    coolify_github_app_uuid: str | None = None
     managed_host_id: str | None = None
     secret_refs: dict[str, str] = Field(default_factory=dict)
     state: Literal["unconfigured", "provisioning", "active", "degraded", "paused", "failed"] = "unconfigured"
@@ -331,6 +345,7 @@ class TenantDeploymentPlaneWrite(BaseModel):
         "coolify_environment_name",
         "coolify_server_uuid",
         "coolify_destination_uuid",
+        "coolify_github_app_uuid",
         "managed_host_id",
         "last_error",
     )
@@ -506,9 +521,9 @@ class ProjectDeploymentDomainWrite(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     key: str
+    service_key: str
     host: str
     path: str | None = None
-    is_primary: bool = False
     tls_enabled: bool = True
     config: dict[str, object] = Field(default_factory=dict)
 
@@ -521,6 +536,11 @@ class ProjectDeploymentDomainWrite(BaseModel):
     @field_validator("key")
     @classmethod
     def normalize_key(cls, value: object) -> str:
+        return _normalize_lower_string(value)
+
+    @field_validator("service_key")
+    @classmethod
+    def normalize_service_key(cls, value: object) -> str:
         return _normalize_lower_string(value)
 
     @field_validator("path")
@@ -537,12 +557,11 @@ class ProjectDeploymentDomainWrite(BaseModel):
     def serialize_sparse(self) -> dict[str, object]:
         serialized = {
             "key": self.key,
+            "service_key": self.service_key,
             "host": self.host,
         }
         if self.path is not None:
             serialized["path"] = self.path
-        if self.is_primary:
-            serialized["is_primary"] = self.is_primary
         if self.tls_enabled is not True:
             serialized["tls_enabled"] = self.tls_enabled
         if self.config:
@@ -566,7 +585,12 @@ class ProjectDeploymentResourceWrite(BaseModel):
     @field_validator("kind")
     @classmethod
     def normalize_kind(cls, value: object) -> str:
-        return _normalize_lower_string(value)
+        normalized = _normalize_lower_string(value)
+        if normalized == "service":
+            raise ValueError("Deployable services must be declared in services, not resources")
+        if normalized in _DEPLOYMENT_VOLUME_KINDS:
+            raise ValueError("Persistent volumes must be declared in volumes, not resources")
+        return normalized
 
     @field_validator("name")
     @classmethod
@@ -585,6 +609,96 @@ class ProjectDeploymentResourceWrite(BaseModel):
         serialized = {
             "key": self.key,
             "kind": self.kind,
+        }
+        if self.name is not None:
+            serialized["name"] = self.name
+        if self.config:
+            serialized["config"] = self.config
+        return serialized
+
+
+class ProjectDeploymentServiceWrite(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    key: str
+    name: str | None = None
+    kind: Literal["api", "website"]
+    source_path: str | None = None
+    compose_service: str | None = None
+    build_strategy: str | None = None
+    container_port: int | None = Field(default=None, ge=1, le=65535)
+    public: bool = True
+    config: dict[str, object] = Field(default_factory=dict)
+
+    @field_validator("key")
+    @classmethod
+    def normalize_key(cls, value: object) -> str:
+        return _normalize_lower_string(value)
+
+    @field_validator("name", "source_path", "compose_service", "build_strategy")
+    @classmethod
+    def normalize_optional_strings(cls, value: object) -> str | None:
+        return _normalize_optional_string(value)
+
+    @field_validator("config")
+    @classmethod
+    def validate_config_has_no_raw_secrets(cls, value: object) -> dict[str, object]:
+        config = dict(value) if isinstance(value, dict) else {}
+        _assert_no_raw_secret_config(config)
+        return config
+
+    @model_serializer(mode="plain")
+    def serialize_sparse(self) -> dict[str, object]:
+        serialized: dict[str, object] = {
+            "key": self.key,
+            "kind": self.kind,
+            "public": self.public,
+        }
+        if self.name is not None:
+            serialized["name"] = self.name
+        if self.source_path is not None:
+            serialized["source_path"] = self.source_path
+        if self.compose_service is not None:
+            serialized["compose_service"] = self.compose_service
+        if self.build_strategy is not None:
+            serialized["build_strategy"] = self.build_strategy
+        if self.container_port is not None:
+            serialized["container_port"] = self.container_port
+        if self.config:
+            serialized["config"] = self.config
+        return serialized
+
+
+class ProjectDeploymentVolumeWrite(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    key: str
+    type: Literal["persistent", "file"] = "persistent"
+    name: str | None = None
+    config: dict[str, object] = Field(default_factory=dict)
+
+    @field_validator("key")
+    @classmethod
+    def normalize_key(cls, value: object) -> str:
+        return _normalize_lower_string(value)
+
+    @field_validator("name")
+    @classmethod
+    def normalize_name(cls, value: object) -> str | None:
+        return _normalize_optional_string(value)
+
+    @field_validator("config")
+    @classmethod
+    def validate_config_has_no_raw_secrets(cls, value: object) -> dict[str, object]:
+        config = dict(value) if isinstance(value, dict) else {}
+        _assert_no_raw_secret_config(config)
+        return config
+
+    @model_serializer(mode="plain")
+    def serialize_sparse(self) -> dict[str, object]:
+        serialized: dict[str, object] = {
+            "key": self.key,
+            "type": self.type,
         }
         if self.name is not None:
             serialized["name"] = self.name
@@ -640,12 +754,23 @@ class ProjectDeploymentBackupPolicyWrite(BaseModel):
 class ProjectDeploymentConfigWrite(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    enabled: bool = True
+    enabled: Literal[True] = True
     environment_name: str | None = None
     source_strategy: Literal["dockerfile", "docker_compose"] | None = None
+    source_branch: str | None = None
+    source_commit_sha: str | None = None
+    deployment_branch: str | None = None
+    deployment_commit_sha: str | None = None
+    deployment_compose_path: str | None = None
+    environment: dict[str, str] = Field(default_factory=dict)
+    secret_refs: dict[str, str] = Field(default_factory=dict)
     domains: list[ProjectDeploymentDomainWrite] = Field(default_factory=list)
+    services: list[ProjectDeploymentServiceWrite] = Field(default_factory=list)
     resources: list[ProjectDeploymentResourceWrite] = Field(default_factory=list)
+    volumes: list[ProjectDeploymentVolumeWrite] = Field(default_factory=list)
     backup_policies: list[ProjectDeploymentBackupPolicyWrite] = Field(default_factory=list)
+    generated_compose_raw: str | None = Field(default=None, exclude=True)
+    deployment_plan: dict[str, object] = Field(default_factory=dict, exclude=True)
 
     @field_validator("environment_name")
     @classmethod
@@ -663,8 +788,43 @@ class ProjectDeploymentConfigWrite(BaseModel):
             raise ValueError("source_strategy must be dockerfile or docker_compose")
         return lowered
 
+    @field_validator("source_branch", "deployment_branch", "deployment_compose_path")
+    @classmethod
+    def normalize_optional_deployment_strings(cls, value: object) -> str | None:
+        return _normalize_optional_string(value)
+
+    @field_validator("source_commit_sha", "deployment_commit_sha")
+    @classmethod
+    def normalize_optional_commit_sha(cls, value: object) -> str | None:
+        normalized = _normalize_optional_string(value)
+        if normalized is None:
+            return None
+        if not re.fullmatch(r"[0-9a-fA-F]{7,64}", normalized):
+            raise ValueError("commit sha must be a 7-64 character hexadecimal git commit")
+        return normalized
+
+    @field_validator("environment")
+    @classmethod
+    def normalize_environment(cls, value: object) -> dict[str, str]:
+        normalized = _normalize_string_map(value)
+        _assert_no_raw_secret_config(normalized, path="environment")
+        return normalized
+
+    @field_validator("secret_refs")
+    @classmethod
+    def normalize_secret_refs(cls, value: object) -> dict[str, str]:
+        return _normalize_string_map(value)
+
     @model_validator(mode="after")
     def validate_relationships(self) -> "ProjectDeploymentConfigWrite":
+        if self.source_strategy == "docker_compose":
+            if not self.deployment_branch:
+                raise ValueError("docker_compose deployment config requires deployment_branch")
+            if not self.deployment_commit_sha:
+                raise ValueError("docker_compose deployment config requires deployment_commit_sha")
+            if not self.deployment_compose_path:
+                raise ValueError("docker_compose deployment config requires deployment_compose_path")
+
         domain_keys: set[str] = set()
         hosts: set[str] = set()
         for domain in self.domains:
@@ -682,6 +842,24 @@ class ProjectDeploymentConfigWrite(BaseModel):
                 raise ValueError(f"Duplicate deployment resource key: {resource.key}")
             resource_keys.add(resource.key)
 
+        service_keys: set[str] = set()
+        for service in self.services:
+            if service.key in service_keys:
+                raise ValueError(f"Duplicate deployment service key: {service.key}")
+            if service.key in resource_keys:
+                raise ValueError(f"Deployment service key duplicates resource key: {service.key}")
+            service_keys.add(service.key)
+
+        volume_keys: set[str] = set()
+        for volume in self.volumes:
+            if volume.key in volume_keys:
+                raise ValueError(f"Duplicate deployment volume key: {volume.key}")
+            if volume.key in resource_keys:
+                raise ValueError(f"Deployment volume key duplicates resource key: {volume.key}")
+            if volume.key in service_keys:
+                raise ValueError(f"Deployment volume key duplicates service key: {volume.key}")
+            volume_keys.add(volume.key)
+
         backup_keys: set[str] = set()
         for backup_policy in self.backup_policies:
             if backup_policy.key in backup_keys:
@@ -694,34 +872,259 @@ class ProjectDeploymentConfigWrite(BaseModel):
         return self
 
 
+def _normalize_production_branch(value: object) -> str | None:
+    normalized = _normalize_optional_string(value)
+    if normalized is None:
+        return None
+    for prefix in ("refs/heads/", "origin/"):
+        if normalized.startswith(prefix):
+            normalized = normalized[len(prefix):].strip()
+            break
+    if not normalized:
+        raise ValueError("production_branch is required")
+    return normalized
+
+
+class ProjectDeploymentPolicyWrite(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    production_branch: str | None = None
+    preview_prs_enabled: bool = False
+    provider: Literal["internal_coolify"] = "internal_coolify"
+    deployment_host_id: str | None = None
+    generated_domain_policy: Literal["disabled", "production", "production_and_preview"] = "production"
+    branch_settings: dict[str, "ProjectDeploymentBranchSettings"] = Field(default_factory=dict)
+    services: list[ProjectDeploymentServiceWrite] = Field(default_factory=list)
+    resources: list[ProjectDeploymentResourceWrite] = Field(default_factory=list)
+    volumes: list[ProjectDeploymentVolumeWrite] = Field(default_factory=list)
+
+    @field_validator("production_branch")
+    @classmethod
+    def normalize_production_branch(cls, value: object) -> str | None:
+        return _normalize_production_branch(value)
+
+    @field_validator("deployment_host_id")
+    @classmethod
+    def normalize_optional_strings(cls, value: object) -> str | None:
+        return _normalize_optional_string(value)
+
+    @field_validator("branch_settings")
+    @classmethod
+    def normalize_branch_settings(cls, value: object) -> dict[str, "ProjectDeploymentBranchSettings"]:
+        if value is None:
+            return {}
+        if not isinstance(value, dict):
+            raise TypeError("branch_settings must be an object")
+        normalized: dict[str, ProjectDeploymentBranchSettings] = {}
+        for raw_branch, raw_settings in value.items():
+            branch = _normalize_production_branch(raw_branch)
+            if branch is None:
+                raise ValueError("branch_settings keys must be branch names")
+            if branch in normalized:
+                raise ValueError(f"Duplicate deployment branch settings for {branch}")
+            normalized[branch] = ProjectDeploymentBranchSettings.model_validate(raw_settings)
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_policy(self) -> "ProjectDeploymentPolicyWrite":
+        if self.enabled and not self.production_branch:
+            raise ValueError("production_branch is required when deployments are enabled")
+        if self.preview_prs_enabled:
+            raise ValueError("preview PR deployments are not supported by the GitHub deployment worker yet")
+        resource_keys: set[str] = set()
+        for resource in self.resources:
+            if resource.key in resource_keys:
+                raise ValueError(f"Duplicate deployment resource key: {resource.key}")
+            resource_keys.add(resource.key)
+        service_keys: set[str] = set()
+        for service in self.services:
+            if service.key in service_keys:
+                raise ValueError(f"Duplicate deployment service key: {service.key}")
+            if service.key in resource_keys:
+                raise ValueError(f"Deployment service key duplicates resource key: {service.key}")
+            service_keys.add(service.key)
+        volume_keys: set[str] = set()
+        for volume in self.volumes:
+            if volume.key in volume_keys:
+                raise ValueError(f"Duplicate deployment volume key: {volume.key}")
+            if volume.key in resource_keys:
+                raise ValueError(f"Deployment volume key duplicates resource key: {volume.key}")
+            if volume.key in service_keys:
+                raise ValueError(f"Deployment volume key duplicates service key: {volume.key}")
+            volume_keys.add(volume.key)
+        return self
+
+
+class ProjectDeploymentPolicyRead(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = False
+    production_branch: str | None = None
+    preview_prs_enabled: bool = False
+    provider: Literal["internal_coolify"] = "internal_coolify"
+    deployment_host_id: str | None = None
+    generated_domain_policy: Literal["disabled", "production", "production_and_preview"] = "production"
+    branch_settings: dict[str, "ProjectDeploymentBranchSettings"] = Field(default_factory=dict)
+    services: list[ProjectDeploymentServiceWrite] = Field(default_factory=list)
+    resources: list[ProjectDeploymentResourceWrite] = Field(default_factory=list)
+    volumes: list[ProjectDeploymentVolumeWrite] = Field(default_factory=list)
+
+    @field_validator("production_branch")
+    @classmethod
+    def normalize_production_branch(cls, value: object) -> str | None:
+        return _normalize_production_branch(value)
+
+    @field_validator("deployment_host_id")
+    @classmethod
+    def normalize_optional_strings(cls, value: object) -> str | None:
+        return _normalize_optional_string(value)
+
+    @field_validator("branch_settings")
+    @classmethod
+    def normalize_branch_settings(cls, value: object) -> dict[str, "ProjectDeploymentBranchSettings"]:
+        if value is None:
+            return {}
+        if not isinstance(value, dict):
+            raise TypeError("branch_settings must be an object")
+        normalized: dict[str, ProjectDeploymentBranchSettings] = {}
+        for raw_branch, raw_settings in value.items():
+            branch = _normalize_production_branch(raw_branch)
+            if branch is None:
+                raise ValueError("branch_settings keys must be branch names")
+            if branch in normalized:
+                raise ValueError(f"Duplicate deployment branch settings for {branch}")
+            normalized[branch] = ProjectDeploymentBranchSettings.model_validate(raw_settings)
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_policy(self) -> "ProjectDeploymentPolicyRead":
+        if self.enabled and not self.production_branch:
+            raise ValueError("production_branch is required when deployments are enabled")
+        if self.preview_prs_enabled:
+            raise ValueError("preview PR deployments are not supported by the GitHub deployment worker yet")
+        resource_keys: set[str] = set()
+        for resource in self.resources:
+            if resource.key in resource_keys:
+                raise ValueError(f"Duplicate deployment resource key: {resource.key}")
+            resource_keys.add(resource.key)
+        service_keys: set[str] = set()
+        for service in self.services:
+            if service.key in service_keys:
+                raise ValueError(f"Duplicate deployment service key: {service.key}")
+            if service.key in resource_keys:
+                raise ValueError(f"Deployment service key duplicates resource key: {service.key}")
+            service_keys.add(service.key)
+        volume_keys: set[str] = set()
+        for volume in self.volumes:
+            if volume.key in volume_keys:
+                raise ValueError(f"Duplicate deployment volume key: {volume.key}")
+            if volume.key in resource_keys:
+                raise ValueError(f"Deployment volume key duplicates resource key: {volume.key}")
+            if volume.key in service_keys:
+                raise ValueError(f"Deployment volume key duplicates service key: {volume.key}")
+            volume_keys.add(volume.key)
+        return self
+
+
+class ProjectDeploymentSetupStartRead(BaseModel):
+    workflow_id: str
+    status: Literal["started"]
+    policy: ProjectDeploymentPolicyRead
+
+
+class ProjectDeploymentBranchSettings(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    environment: dict[str, str] = Field(default_factory=dict)
+    secret_refs: dict[str, str] = Field(default_factory=dict)
+
+    @field_validator("environment", "secret_refs")
+    @classmethod
+    def normalize_string_maps(cls, value: object) -> dict[str, str]:
+        return _normalize_string_map(value)
+
+
 class ProjectDeploymentConfigRead(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    enabled: bool = True
+    enabled: Literal[True] = True
     environment_name: str | None = None
     source_strategy: Literal["dockerfile", "docker_compose"] | None = None
+    source_branch: str | None = None
+    source_commit_sha: str | None = None
+    deployment_branch: str | None = None
+    deployment_commit_sha: str | None = None
+    deployment_compose_path: str | None = None
+    environment: dict[str, str] = Field(default_factory=dict)
+    secret_refs: dict[str, str] = Field(default_factory=dict)
     domains: list[ProjectDeploymentDomainWrite] = Field(default_factory=list)
+    services: list[ProjectDeploymentServiceWrite] = Field(default_factory=list)
     resources: list[ProjectDeploymentResourceWrite] = Field(default_factory=list)
+    volumes: list[ProjectDeploymentVolumeWrite] = Field(default_factory=list)
     backup_policies: list[ProjectDeploymentBackupPolicyWrite] = Field(default_factory=list)
+    generated_compose_raw: str | None = Field(default=None, exclude=True)
+    deployment_plan: dict[str, object] = Field(default_factory=dict, exclude=True)
 
     @model_validator(mode="before")
     @classmethod
     def redact_raw_secret_config(cls, value: object) -> dict[str, object]:
-        return redact_deployment_config_secrets(value)
+        redacted = redact_deployment_config_secrets(value)
+        redacted["enabled"] = True
+        return redacted
+
+    @model_validator(mode="after")
+    def validate_relationships(self) -> "ProjectDeploymentConfigRead":
+        return self
 
 
 class ProjectDeploymentReleaseCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     app_id: str | None = None
-    git_ref: str | None = None
-    commit_sha: str | None = None
+    git_ref: str
+    commit_sha: str
     reason: str | None = None
 
-    @field_validator("app_id", "git_ref", "commit_sha", "reason")
+    @field_validator("git_ref", "commit_sha")
+    @classmethod
+    def normalize_required_git_source(cls, value: object, info: ValidationInfo) -> str:
+        normalized = _normalize_required_string(value)
+        if info.field_name == "commit_sha" and not re.fullmatch(r"[0-9a-fA-F]{7,64}", normalized):
+            raise ValueError("commit_sha must be a Git commit SHA")
+        return normalized
+
+    @field_validator("app_id", "reason")
     @classmethod
     def normalize_optional_strings(cls, value: object) -> str | None:
         return _normalize_optional_string(value)
+
+
+class ProjectDeploymentServiceUrlRead(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    service_key: str
+    service_name: str
+    service_kind: Literal["website", "api"]
+    url: str
+    url_kind: Literal["generated", "custom"]
+    internal_url: str | None = None
+    status: Literal["pending", "active", "failed"] = "active"
+    port: int | None = None
+    proxy_port: int | None = None
+    host: str | None = None
+    domain_key: str | None = None
+    release_id: str | None = None
+
+    @field_validator("service_key", "service_name", "url", "internal_url", "host", "domain_key", "release_id")
+    @classmethod
+    def normalize_optional_strings(cls, value: object, info: ValidationInfo) -> str | None:
+        normalized = _normalize_optional_string(value)
+        if info.field_name in {"service_key", "service_name", "url"}:
+            if normalized is None:
+                raise ValueError(f"{info.field_name} is required")
+            return normalized
+        return normalized
 
 
 class ProjectDeploymentReleaseRead(BaseModel):
@@ -733,11 +1136,13 @@ class ProjectDeploymentReleaseRead(BaseModel):
     status: str
     environment_name: str | None = None
     source_strategy: str | None = None
-    git_ref: str | None = None
-    commit_sha: str | None = None
+    git_ref: str
+    commit_sha: str
+    release_name: str
     requested_by_user_id: str | None = None
     deployment_snapshot: dict[str, object] = Field(default_factory=dict)
     provider_context: dict[str, object] = Field(default_factory=dict)
+    service_urls: list[ProjectDeploymentServiceUrlRead] = Field(default_factory=list)
     last_error: str | None = None
     requested_at: datetime
     started_at: datetime | None = None
@@ -749,7 +1154,7 @@ class ProjectDeploymentReleaseRead(BaseModel):
 class ProjectDeploymentReleaseStatusUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    status: Literal["queued", "provisioning", "deploying", "live", "failed", "rolled_back"]
+    status: Literal["queued", "provisioning", "deploying", "route_activating", "live", "failed", "rolled_back"]
     last_error: str | None = None
     deployment_uuid: str | None = None
 
@@ -767,6 +1172,17 @@ class ProjectDeploymentResourceApplyRequest(BaseModel):
     @field_validator("resource_keys")
     @classmethod
     def normalize_resource_keys(cls, value: object) -> list[str]:
+        return _normalize_unique_lower_key_list(value)
+
+
+class ProjectDeploymentVolumeApplyRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    volume_keys: list[str] = Field(default_factory=list)
+
+    @field_validator("volume_keys")
+    @classmethod
+    def normalize_volume_keys(cls, value: object) -> list[str]:
         return _normalize_unique_lower_key_list(value)
 
 
@@ -872,7 +1288,14 @@ class ProjectDeploymentOperationItemRead(BaseModel):
 
 
 class ProjectDeploymentOperationRead(BaseModel):
-    operation: Literal["apply_resources", "apply_domains", "apply_backups", "trigger_backups", "restore_backups"]
+    operation: Literal[
+        "apply_resources",
+        "apply_volumes",
+        "apply_domains",
+        "apply_backups",
+        "trigger_backups",
+        "restore_backups",
+    ]
     tenant_id: str
     project_id: str
     provider: str

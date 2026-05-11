@@ -1,7 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { Bot, Plus, RefreshCw, RotateCcw, Save, Trash2 } from "lucide-react";
+import { Bot, Plus, RotateCcw, Save, Trash2 } from "lucide-react";
 
 import { useAuth } from "@/components/auth-provider";
 import { CodexModelSelect } from "@/components/codex-model-select";
@@ -409,18 +409,6 @@ export default function AgentRuntimesPage() {
 
   return (
     <div className="w-full space-y-8">
-      <div className="flex flex-wrap items-center justify-end gap-3">
-        <Button
-          variant="outline"
-          size="sm"
-          onClick={() => void refreshAll()}
-          disabled={routingLoading || profilesLoading || toolsLoading || savingProfile || savingRouting}
-        >
-          <RefreshCw className={`mr-1.5 h-3.5 w-3.5 ${routingLoading || profilesLoading || toolsLoading ? "animate-spin" : ""}`} />
-          Refresh
-        </Button>
-      </div>
-
       <div className="flex gap-2">
         {TAB_OPTIONS.map((tab) => (
           <Button key={tab.id} variant={activeTab === tab.id ? "default" : "outline"} size="sm" onClick={() => setActiveTab(tab.id)}>

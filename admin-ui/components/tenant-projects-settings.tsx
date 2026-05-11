@@ -52,7 +52,7 @@ export function TenantProjectsSettings({ tenant }: TenantProjectsSettingsProps) 
     void loadProjects();
   }, [credentials, tenant.tenant_id]);
 
-  async function refreshProjectSources(): Promise<void> {
+  async function loadProjectSources(): Promise<void> {
     if (!credentials) {
       return;
     }
@@ -63,13 +63,16 @@ export function TenantProjectsSettings({ tenant }: TenantProjectsSettingsProps) 
       if (tenant.jira.connection_id) {
         setJiraProjects(await listJiraProjects(credentials, tenant.jira.connection_id));
       }
-      showToast({ title: "Project option sources refreshed", tone: "success" });
     } catch (error) {
-      showToast({ title: "Project option refresh failed", description: (error as Error).message, tone: "error" });
+      showToast({ title: "Project option load failed", description: (error as Error).message, tone: "error" });
     } finally {
       setRepositoriesLoading(false);
     }
   }
+
+  useEffect(() => {
+    void loadProjectSources();
+  }, [credentials, tenant.tenant_id, tenant.jira.connection_id]);
 
   async function handleCreateProject(payload: ProjectCreatePayload): Promise<void> {
     if (!credentials) {
@@ -140,7 +143,6 @@ export function TenantProjectsSettings({ tenant }: TenantProjectsSettingsProps) 
           repositories={repositories}
           jiraProjects={jiraProjects}
           busy={busy || repositoriesLoading}
-          onRefreshOptions={() => void refreshProjectSources()}
           onCreateProject={handleCreateProject}
           onUpdateProjectConfiguration={handleUpdateProjectConfiguration}
           onUpdateProjectArchiveState={handleUpdateProjectArchiveState}

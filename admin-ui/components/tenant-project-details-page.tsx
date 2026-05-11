@@ -8,7 +8,6 @@ import {
   ExternalLink,
   KeyRound,
   Pencil,
-  RefreshCw,
   Save,
   SlidersHorizontal,
   X,
@@ -17,8 +16,7 @@ import {
 
 import { useAuth } from "@/components/auth-provider";
 import { ProjectParentWorkBoard } from "@/components/project-parent-work-board";
-import { ProjectSectionTabs } from "@/components/project-section-tabs";
-import { TenantProjectAppsPage } from "@/components/tenant-project-apps-page";
+import { ProjectAppIndexPage } from "@/components/project-apps/project-app-index-page";
 import { ProjectAutomationsContent, ProjectNotificationsContent } from "@/components/tenant-project-discord-page";
 import { CodexModelSelect } from "@/components/codex-model-select";
 import { OverrideSegmentedControl } from "@/components/override-segmented-control";
@@ -238,7 +236,7 @@ export function TenantProjectDetailsPage() {
   const params = useParams<{ tenantId: string; projectId: string }>();
   const pathname = usePathname();
   const router = useRouter();
-  const { credentials, ready, principal } = useAuth();
+  const { credentials, ready, principal, principalReady } = useAuth();
   const { showToast } = useToast();
 
   // Project state
@@ -306,6 +304,9 @@ export function TenantProjectDetailsPage() {
       return "overview";
     }
     if (resolved === "runs" && !isPlatformSuperAdmin) {
+      return "overview";
+    }
+    if (resolved === "webhooks" && !isPlatformSuperAdmin) {
       return "overview";
     }
     if (allowProjectManagement) {
@@ -565,11 +566,19 @@ export function TenantProjectDetailsPage() {
   }, [activeTab, ready, credentials, isPlatformSuperAdmin, project, runFromDate, runIssueFilter, runPage, runPageSize, runPrFilter, runStatusFilter, runToDate]);
 
   useEffect(() => {
-    if (ready && credentials && project && activeTab === "webhooks") void loadWebhookJobs();
+    const resolved = resolveProjectSection(pathname);
+    if (ready && principalReady && resolved === "webhooks" && !isPlatformSuperAdmin) {
+      router.replace(`/${encodeURIComponent(params.tenantId)}/dashboard`);
+    }
+  }, [isPlatformSuperAdmin, params.tenantId, pathname, principalReady, ready, router]);
+
+  useEffect(() => {
+    if (ready && credentials && project && isPlatformSuperAdmin && activeTab === "webhooks") void loadWebhookJobs();
   }, [
     activeTab,
     ready,
     credentials,
+    isPlatformSuperAdmin,
     project,
     params.tenantId,
     params.projectId,
@@ -902,14 +911,6 @@ export function TenantProjectDetailsPage() {
         </div>
       </div>
 
-      <ProjectSectionTabs
-        tenantId={params.tenantId}
-        projectId={params.projectId}
-        activeSection={activeTab}
-        allowProjectManagement={allowProjectManagement}
-        isPlatformSuperAdmin={isPlatformSuperAdmin}
-      />
-
       {/* ── Overview tab ─────────────────────────────────────────────────── */}
       {activeTab === "overview" ? (
         <div className="space-y-4">
@@ -929,8 +930,8 @@ export function TenantProjectDetailsPage() {
         </div>
       ) : null}
 
-      {activeTab === "apps" ? (
-        <TenantProjectAppsPage tenantId={params.tenantId} projectId={params.projectId} credentials={credentials} />
+      {activeTab === "deployments" ? (
+        <ProjectAppIndexPage tenantId={params.tenantId} projectId={params.projectId} credentials={credentials} />
       ) : null}
 
       {/* ── Settings tab ─────────────────────────────────────────────────── */}
@@ -947,10 +948,6 @@ export function TenantProjectDetailsPage() {
                       <h2 className="text-base font-semibold">Settings</h2>
                     </div>
                     <div className="flex items-center gap-2">
-                      <Button variant="ghost" size="sm" onClick={() => void loadOptions()} disabled={busy}>
-                        <RefreshCw className={`mr-1.5 h-3.5 w-3.5 ${busy ? "animate-spin" : ""}`} />
-                        Refresh options
-                      </Button>
                       <Button size="sm" onClick={() => void saveDetails()} disabled={busy}>
                         Save settings
                       </Button>
@@ -1456,14 +1453,6 @@ export function TenantProjectDetailsPage() {
         <div className="overflow-hidden rounded-2xl border bg-background">
           <div className="flex items-center justify-between gap-2 border-b px-5 py-3">
             <h2 className="text-sm font-semibold">Project Runs</h2>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={() => void loadRuns()}
-              disabled={runsBusy}
-            >
-              <RefreshCw className={`h-3.5 w-3.5 ${runsBusy ? "animate-spin" : ""}`} />
-            </Button>
           </div>
 
           <div className="overflow-x-auto border-b px-5 py-3">
@@ -1701,9 +1690,6 @@ export function TenantProjectDetailsPage() {
           <div className="overflow-hidden rounded-2xl border bg-background">
             <div className="flex items-center justify-between border-b px-5 py-3">
               <h2 className="text-sm font-semibold">Webhook Queue</h2>
-              <Button variant="ghost" size="sm" onClick={() => void loadWebhookJobs()} disabled={webhookBusy}>
-                <RefreshCw className={`h-3.5 w-3.5 ${webhookBusy ? "animate-spin" : ""}`} />
-              </Button>
             </div>
 
             <div className="flex flex-col gap-3 border-b px-5 py-3 sm:flex-row sm:items-end">
@@ -2047,13 +2033,6 @@ export function TenantProjectDetailsPage() {
       {/* ── Secrets tab ──────────────────────────────────────────────────── */}
       {activeTab === "secrets" ? (
         <div className="space-y-4">
-          <div className="flex items-center justify-end">
-            <Button variant="outline" size="sm" onClick={() => void refreshSecrets()} disabled={secretsBusy}>
-              <RefreshCw className={`mr-1.5 h-3.5 w-3.5 ${secretsBusy ? "animate-spin" : ""}`} />
-              Refresh
-            </Button>
-          </div>
-
           {secretsStatusLine ? (
             <p className="rounded-lg border bg-muted/40 px-4 py-2.5 text-sm text-muted-foreground">{secretsStatusLine}</p>
           ) : null}

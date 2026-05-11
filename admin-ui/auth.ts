@@ -124,6 +124,8 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         pathname === "/reset-password" ||
         pathname === "/register" ||
         pathname === "/privacy" ||
+        pathname === "/blog" ||
+        pathname.startsWith("/blog/") ||
         pathname.startsWith("/invite/accept");
       return isPublicPath || Boolean(auth);
     },

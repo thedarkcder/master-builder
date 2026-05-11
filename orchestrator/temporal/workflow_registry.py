@@ -4,6 +4,8 @@ from dataclasses import dataclass
 
 from orchestrator.temporal.workflows.development_team_run import DevelopmentTeamRunWorkflow
 from orchestrator.temporal.workflows.handler_backed_workflow import HandlerBackedWorkflow
+from orchestrator.temporal.workflows.project_deployment_setup import ProjectDeploymentSetupWorkflow
+
 
 @dataclass(frozen=True)
 class TemporalWorkflowBinding:
@@ -35,6 +37,12 @@ _TEMPORAL_BINDINGS = (
         workflow_name="HandlerBackedWorkflow",
         workflow_defn=HandlerBackedWorkflow,
         execution_mode="handler",
+    ),
+    TemporalWorkflowBinding(
+        handler_key="project_deployment_setup",
+        workflow_name="ProjectDeploymentSetupWorkflow",
+        workflow_defn=ProjectDeploymentSetupWorkflow,
+        execution_mode="setup",
     ),
     TemporalWorkflowBinding(
         handler_key="pr_remediation",

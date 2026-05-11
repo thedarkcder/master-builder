@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from orchestrator.api.admin import integration_dependencies as deps
 from orchestrator.api.admin.github_helpers import (
     github_install_callback as github_install_callback_impl,
+    list_project_github_branches as list_project_github_branches_impl,
     list_tenant_github_repositories as list_tenant_github_repositories_impl,
     start_github_install as start_github_install_impl,
 )
@@ -15,6 +16,7 @@ from orchestrator.api.admin.integration_checks import (
 )
 from orchestrator.api.dependencies import get_session
 from orchestrator.api.schemas import (
+    GitHubBranchRead,
     GitHubInstallStart,
     GitHubRepositoryRead,
     IntegrationTestResult,
@@ -30,7 +32,7 @@ from orchestrator.core.security import (
 from orchestrator.core.platform.access import PERMISSION_PROJECTS_MANAGE, PERMISSION_WORKSPACE_MANAGE
 from orchestrator.core.platform.secret_service import resolve_platform_secret_ref
 from orchestrator.core.platform.tenant_secret_service import resolve_scoped_secret_ref
-from orchestrator.storage.models import Tenant
+from orchestrator.storage.models import Project, Tenant
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
@@ -93,6 +95,34 @@ def list_tenant_github_repositories(
         )
     return list_tenant_github_repositories_impl(
         tenant=session.get(Tenant, tenant_id),
+        tenant_id=tenant_id,
+        session=session,
+        settings=get_settings(),
+        with_managed_github_refs_fn=deps.with_managed_github_refs,
+        resolve_scoped_secret_ref_fn=resolve_scoped_secret_ref,
+        resolve_platform_secret_ref_fn=resolve_platform_secret_ref,
+        github_client_from_tenant_config_fn=deps.github_client_from_tenant_config,
+    )
+
+
+@router.get("/tenants/{tenant_id}/projects/{project_id}/github/branches", response_model=list[GitHubBranchRead])
+def list_project_github_branches(
+    tenant_id: str,
+    project_id: str,
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
+    session: Session = Depends(get_session),
+) -> list[GitHubBranchRead]:
+    if principal.is_platform_super_admin:
+        require_admin(principal=principal)
+    else:
+        require_any_tenant_permission(
+            principal=principal,
+            tenant_id=tenant_id,
+            permission_keys=(PERMISSION_WORKSPACE_MANAGE, PERMISSION_PROJECTS_MANAGE),
+        )
+    return list_project_github_branches_impl(
+        tenant=session.get(Tenant, tenant_id),
+        project=session.get(Project, project_id),
         tenant_id=tenant_id,
         session=session,
         settings=get_settings(),

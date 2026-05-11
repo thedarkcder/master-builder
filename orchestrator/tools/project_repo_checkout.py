@@ -731,18 +731,19 @@ def ensure_project_checkout(
     repo_root = repo_dir.parent
     repo_root.mkdir(parents=True, exist_ok=True)
     git_dir = repo_dir / ".git"
-    if git_dir.exists():
-        _sync_agent_workspace_files(repo_dir=repo_dir)
-        return repo_dir
-
-    repo_full_name = _repo_full_name(project.github_repository)
-    clone_url = f"https://github.com/{repo_full_name}.git"
     clone_env = {
         **os.environ,
         "GIT_CONFIG_COUNT": "1",
         "GIT_CONFIG_KEY_0": "http.https://github.com/.extraheader",
         "GIT_CONFIG_VALUE_0": _github_git_extraheader(github_installation_token),
     }
+    if git_dir.exists():
+        _run_git(["fetch", "origin", "--prune"], cwd=repo_dir, env=clone_env)
+        _sync_agent_workspace_files(repo_dir=repo_dir)
+        return repo_dir
+
+    repo_full_name = _repo_full_name(project.github_repository)
+    clone_url = f"https://github.com/{repo_full_name}.git"
     try:
         _run_git(["clone", "--origin", "origin", clone_url, str(repo_dir)], cwd=repo_root, env=clone_env)
     except ProjectRepoCheckoutError:

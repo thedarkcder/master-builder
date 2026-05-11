@@ -204,7 +204,6 @@ export function ExecutionObservabilityDrawer({
   onSelectAttemptId,
   activeView,
   onViewChange,
-  onRefresh,
   onClose,
   currentStatus,
   telemetryAttempt,
@@ -221,7 +220,6 @@ export function ExecutionObservabilityDrawer({
   onSelectAttemptId: (attemptId: string | null) => void;
   activeView: ExecutionObservabilityView;
   onViewChange: (view: ExecutionObservabilityView) => void;
-  onRefresh: () => void;
   onClose: () => void;
   currentStatus: string;
   telemetryAttempt: WorkflowStepAttemptTranscriptRecord | null;
@@ -311,9 +309,6 @@ export function ExecutionObservabilityDrawer({
                   {autoScrollTelemetry ? "Auto-scroll on" : "Auto-scroll off"}
                 </Button>
               ) : null}
-              <Button variant="outline" size="sm" onClick={onRefresh} disabled={loading}>
-                Refresh
-              </Button>
               <Button variant="outline" size="sm" onClick={onClose}>
                 Close
               </Button>

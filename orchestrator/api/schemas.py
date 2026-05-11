@@ -33,12 +33,18 @@ from orchestrator.api.deployment_schemas import (  # noqa: F401
     ProjectDeploymentDomainWrite,
     ProjectDeploymentOperationItemRead,
     ProjectDeploymentOperationRead,
+    ProjectDeploymentPolicyRead,
+    ProjectDeploymentPolicyWrite,
+    ProjectDeploymentSetupStartRead,
     ProjectDeploymentReleaseCreate,
     ProjectDeploymentReleaseRead,
     ProjectDeploymentReleaseStatusUpdate,
     ProjectDeploymentResourceApplyRequest,
     ProjectDeploymentResourceWrite,
     ProjectDeploymentRestoreRunRead,
+    ProjectDeploymentServiceWrite,
+    ProjectDeploymentVolumeApplyRequest,
+    ProjectDeploymentVolumeWrite,
     TenantDeploymentPlaneRead,
     TenantDeploymentPlaneWrite,
     TenantDeploymentsOverviewAppRead,
@@ -1053,6 +1059,11 @@ class GitHubRepositoryRead(BaseModel):
     html_url: str
     default_branch: str
     private: bool
+
+
+class GitHubBranchRead(BaseModel):
+    name: str
+    protected: bool = False
 
 
 class RepoBootstrapStateRead(BaseModel):

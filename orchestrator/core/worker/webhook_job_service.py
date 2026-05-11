@@ -36,6 +36,10 @@ from orchestrator.core.communications import (
     TransportEnvelope,
 )
 from orchestrator.core.deployment_runtime import ingest_coolify_deployment_event
+from orchestrator.core.deployment_github_events import (
+    GitHubDeploymentReleaseRequest,
+    create_deployment_releases_for_github_push,
+)
 from orchestrator.core.github.transport_executor import GitHubTransportExecutor
 from orchestrator.core.project_app_analysis_runtime import run_project_app_analysis
 from orchestrator.core.project_app_artifact_pr_runtime import create_project_app_artifact_pr
@@ -57,6 +61,7 @@ from orchestrator.core.webhooks.job_queue import (
     WEBHOOK_TRANSPORT_DISCORD_COMMAND,
     WEBHOOK_TRANSPORT_DISCORD_INTERACTION,
     WEBHOOK_TRANSPORT_GITHUB,
+    WEBHOOK_TRANSPORT_GITHUB_DEPLOYMENT,
     WEBHOOK_TRANSPORT_JIRA,
     WEBHOOK_TRANSPORT_PROJECT_AUTOMATION,
     WEBHOOK_TRANSPORT_PROJECT_APP_ANALYSIS,
@@ -496,6 +501,38 @@ def _process_github_subject_jobs(
     return mark_webhook_jobs_done(session, jobs=jobs, owner_id=owner_id)
 
 
+def _process_github_deployment_job(
+    *,
+    session: Session,
+    owner_id: str,
+    claimed_job: WebhookJob,
+) -> tuple[WebhookJob, ...]:
+    if not claimed_job.tenant_id or not claimed_job.project_id:
+        return mark_webhook_jobs_failed(
+            session,
+            jobs=(claimed_job,),
+            owner_id=owner_id,
+            error="GitHub deployment webhook job is missing tenant_id or project_id",
+        )
+    tenant = session.get(Tenant, claimed_job.tenant_id)
+    project = session.get(Project, claimed_job.project_id)
+    if tenant is None or project is None or not tenant.is_enabled or bool(getattr(project, "is_archived", False)):
+        return mark_webhook_jobs_done(session, jobs=(claimed_job,), owner_id=owner_id)
+
+    context_json = dict(claimed_job.context_json or {})
+    create_deployment_releases_for_github_push(
+        session=session,
+        tenant=tenant,
+        project=project,
+        request=GitHubDeploymentReleaseRequest(
+            branch=str(context_json.get("branch") or ""),
+            commit_sha=str(context_json.get("commit_sha") or ""),
+            delivery_id=str(context_json.get("delivery_id") or claimed_job.dedupe_key or "").strip() or None,
+        ),
+    )
+    return mark_webhook_jobs_done(session, jobs=(claimed_job,), owner_id=owner_id)
+
+
 def _process_project_automation_job(
     *,
     session: Session,
@@ -675,6 +712,12 @@ def process_next_webhook_job(
                 owner_id=owner_id,
                 claimed_job=job,
                 related_jobs=batch.related_jobs,
+            )
+        elif job.transport == WEBHOOK_TRANSPORT_GITHUB_DEPLOYMENT:
+            processed = _process_github_deployment_job(
+                session=session,
+                owner_id=owner_id,
+                claimed_job=job,
             )
         elif job.transport == WEBHOOK_TRANSPORT_PROJECT_AUTOMATION:
             processed = _process_project_automation_job(

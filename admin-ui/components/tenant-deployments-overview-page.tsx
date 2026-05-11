@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
-import { AlertCircle, Copy, ExternalLink, RefreshCw, Server } from "lucide-react";
+import { AlertCircle, Copy, ExternalLink, Server } from "lucide-react";
 
 import { useAuth } from "@/components/auth-provider";
 import { Badge } from "@/components/ui/badge";
@@ -268,13 +268,6 @@ export function TenantDeploymentsOverviewPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-end gap-2">
-        <Button variant="outline" size="sm" onClick={() => void loadOverview()} disabled={busy}>
-          <RefreshCw className={`mr-1.5 h-3.5 w-3.5 ${busy ? "animate-spin" : ""}`} />
-          Refresh
-        </Button>
-      </div>
-
       {isPlatformAdmin ? (
         <Card>
           <CardHeader>
@@ -531,7 +524,7 @@ export function TenantDeploymentsOverviewPage() {
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5">
         {[
-          { label: "Apps", value: overview?.summary.total_apps ?? 0, note: "Across projects" },
+          { label: "Deployments", value: overview?.summary.total_apps ?? 0, note: "Across projects" },
           { label: "Live", value: overview?.summary.live_count ?? 0, note: "Healthy and deployed" },
           { label: "Deploying", value: overview?.summary.deploying_count ?? 0, note: "In progress" },
           { label: "Needs PR", value: overview?.summary.needs_pr_merge_count ?? 0, note: "Waiting on merge" },
@@ -562,7 +555,7 @@ export function TenantDeploymentsOverviewPage() {
               <TableHeader>
                 <TableRow>
                   <TableHead>Project</TableHead>
-                  <TableHead>App</TableHead>
+                  <TableHead>Deployment</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead>Failure</TableHead>
                   <TableHead>Updated</TableHead>
@@ -573,7 +566,7 @@ export function TenantDeploymentsOverviewPage() {
                   <TableRow key={`${failure.project_id}-${failure.app_id}-${failure.updated_at}`}>
                     <TableCell>
                       <Link
-                        href={`/${encodeURIComponent(params.tenantId)}/projects/${encodeURIComponent(failure.project_id)}/apps`}
+                        href={`/${encodeURIComponent(params.tenantId)}/projects/${encodeURIComponent(failure.project_id)}/deployments`}
                         className="inline-flex items-center gap-1 text-primary hover:underline"
                       >
                         {failure.project_name}
@@ -612,7 +605,7 @@ export function TenantDeploymentsOverviewPage() {
 
       <Card>
         <CardHeader>
-          <CardTitle className="text-base">All apps</CardTitle>
+          <CardTitle className="text-base">All deployments</CardTitle>
           <CardDescription>Cross-project managed deployment status across the tenant.</CardDescription>
         </CardHeader>
         <CardContent className="p-0">
@@ -621,9 +614,9 @@ export function TenantDeploymentsOverviewPage() {
               <div className="flex h-12 w-12 items-center justify-center rounded-full bg-muted">
                 <Server className="h-6 w-6 text-muted-foreground" />
               </div>
-              <p className="mt-4 text-sm font-medium">No deployed apps yet</p>
+              <p className="mt-4 text-sm font-medium">No deployments yet</p>
               <p className="mt-1 text-sm text-muted-foreground">
-                Run Analyze Repo from a project to create app candidates and managed deployment surfaces.
+                Enable a project deployment policy to let MB create releases from GitHub commits.
               </p>
             </div>
           ) : (
@@ -631,7 +624,7 @@ export function TenantDeploymentsOverviewPage() {
               <TableHeader>
                 <TableRow>
                   <TableHead>Project</TableHead>
-                  <TableHead>App</TableHead>
+                  <TableHead>Deployment</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead>Runtime</TableHead>
                   <TableHead>Build</TableHead>
@@ -644,7 +637,7 @@ export function TenantDeploymentsOverviewPage() {
                   <TableRow key={app.app_id} className={cn(String(app.status || "").toLowerCase() === "failed" && "border-l-2 border-l-destructive")}>
                     <TableCell>
                       <Link
-                        href={`/${encodeURIComponent(params.tenantId)}/projects/${encodeURIComponent(app.project_id)}/apps`}
+                        href={`/${encodeURIComponent(params.tenantId)}/projects/${encodeURIComponent(app.project_id)}/deployments`}
                         className="inline-flex items-center gap-1 text-primary hover:underline"
                       >
                         {app.project_name}

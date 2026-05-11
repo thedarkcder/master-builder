@@ -1,5 +1,5 @@
 import { TenantProjectDetailsPage } from "@/components/tenant-project-details-page";
 
-export default function TenantProjectAppsRoute() {
+export default function TenantProjectDeploymentsRoute() {
   return <TenantProjectDetailsPage />;
 }

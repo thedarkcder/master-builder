@@ -1,6 +1,8 @@
 export type ProjectSection =
   | "overview"
-  | "apps"
+  | "architecture"
+  | "deployments"
+  | "installs"
   | "knowledge"
   | "settings"
   | "runs"
@@ -70,7 +72,9 @@ export function resolveProjectSection(pathname: string): ProjectSection | null {
   }
   if (
     rawSection === "settings" ||
-    rawSection === "apps" ||
+    rawSection === "architecture" ||
+    rawSection === "deployments" ||
+    rawSection === "installs" ||
     rawSection === "knowledge" ||
     rawSection === "runs" ||
     rawSection === "webhooks" ||
@@ -85,7 +89,7 @@ export function resolveProjectSection(pathname: string): ProjectSection | null {
     return "notifications";
   }
   if (rawSection === "deployment") {
-    return "apps";
+    return "deployments";
   }
   return null;
 }

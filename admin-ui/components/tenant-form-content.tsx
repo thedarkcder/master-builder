@@ -30,7 +30,6 @@ type TenantFormContentProps = {
   globalCodexModel: string;
   globalCodexReasoningEffort: string;
   repositoriesLoading: boolean;
-  onRefreshRepositoryOptions?: () => void;
   onSubmit: () => void;
 };
 
@@ -49,7 +48,6 @@ export function TenantFormContent({
   globalCodexModel,
   globalCodexReasoningEffort,
   repositoriesLoading,
-  onRefreshRepositoryOptions,
   onSubmit
 }: TenantFormContentProps) {
   function toggleDiscordNotifyEvent(eventValue: string, enabled: boolean): void {
@@ -96,7 +94,6 @@ export function TenantFormContent({
           repositoryOptions={repositoryOptions}
           repositoriesLoading={repositoriesLoading}
           onGithubRepositoryTextChange={(value) => setTextFields((prev) => ({ ...prev, githubRepositoryText: value }))}
-          onRefreshRepositoryOptions={onRefreshRepositoryOptions}
         />
       ) : null}
 

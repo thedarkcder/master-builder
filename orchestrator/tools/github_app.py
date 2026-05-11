@@ -141,6 +141,13 @@ class InstallationRepository:
     private: bool
 
 
+@dataclass(frozen=True)
+class GitHubBranch:
+    name: str
+    protected: bool = False
+    head_sha: str | None = None
+
+
 @dataclass
 class _InstallationToken:
     token: str
@@ -630,6 +637,67 @@ class GitHubAppClient:
 
         parsed.sort(key=lambda repo: repo.full_name.lower())
         return parsed
+
+    def list_repository_branches(
+        self,
+        *,
+        repo_full_name: str,
+        github_repository: str,
+        limit: int = 100,
+    ) -> list[GitHubBranch]:
+        enforce_repo_match(f"https://github.com/{repo_full_name}", github_repository)
+        installation_token = self.get_installation_token()
+        safe_limit = min(max(1, int(limit)), 100)
+        response = self._request_json(
+            method="GET",
+            path=f"/repos/{repo_full_name}/branches?per_page={safe_limit}",
+            bearer_token=installation_token,
+        )
+        if not isinstance(response, list):
+            raise GitHubApiError("GitHub branch list response was not a list")
+
+        parsed: list[GitHubBranch] = []
+        for item in response:
+            if not isinstance(item, dict):
+                continue
+            name = item.get("name")
+            protected = item.get("protected")
+            if not isinstance(name, str) or not name.strip():
+                continue
+            commit = item.get("commit")
+            head_sha = commit.get("sha") if isinstance(commit, dict) else None
+            parsed.append(
+                GitHubBranch(
+                    name=name.strip(),
+                    protected=protected if isinstance(protected, bool) else False,
+                    head_sha=head_sha.strip() if isinstance(head_sha, str) and head_sha.strip() else None,
+                )
+            )
+        parsed.sort(key=lambda branch: branch.name.lower())
+        return parsed
+
+    def get_repository_branch_head_sha(
+        self,
+        *,
+        repo_full_name: str,
+        github_repository: str,
+        branch: str,
+    ) -> str:
+        enforce_repo_match(f"https://github.com/{repo_full_name}", github_repository)
+        normalized_branch = str(branch or "").strip()
+        if not normalized_branch:
+            raise GitHubApiError("GitHub branch is required")
+        installation_token = self.get_installation_token()
+        response = self._request_json(
+            method="GET",
+            path=f"/repos/{repo_full_name}/branches/{quote(normalized_branch, safe='')}",
+            bearer_token=installation_token,
+        )
+        commit = response.get("commit") if isinstance(response, dict) else None
+        head_sha = commit.get("sha") if isinstance(commit, dict) else None
+        if not isinstance(head_sha, str) or not head_sha.strip():
+            raise GitHubApiError("GitHub branch response did not include commit sha")
+        return head_sha.strip()
 
     def list_pull_request_reviews(self, *, repo_full_name: str, pr_number: int) -> list[PullRequestReview]:
         installation_token = self.get_installation_token()

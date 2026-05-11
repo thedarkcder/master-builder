@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from orchestrator.api.admin.deployment_config_service import tenant_deployment_plane_to_schema
 from orchestrator.api.admin.deployment_release_service import (
     update_project_deployment_release_status,
+    verify_release_route_bindings,
 )
 from orchestrator.api.schemas import ProjectDeploymentReleaseStatusUpdate, TenantDeploymentPlaneRead
 from orchestrator.core.config import Settings, get_settings
@@ -23,10 +24,10 @@ from orchestrator.tools.coolify_api import CoolifyApiClient, CoolifyApiConfig, C
 
 logger = logging.getLogger(__name__)
 
-_DEPLOYMENT_PROGRESS_ORDER = ("queued", "provisioning", "deploying", "live")
+_DEPLOYMENT_PROGRESS_ORDER = ("queued", "provisioning", "deploying", "route_activating", "live")
 _DEPLOYMENT_FAILURE_STATUSES = {"failed", "error", "crashed", "failure", "timeout", "unhealthy"}
 _DEPLOYMENT_CANCELLED_STATUSES = {"cancelled", "canceled", "rollback", "rolled_back"}
-_DEPLOYMENT_SUCCESS_STATUSES = {"success", "succeeded", "complete", "completed", "done", "healthy"}
+_DEPLOYMENT_SUCCESS_STATUSES = {"success", "succeeded", "complete", "completed", "done", "finished", "healthy"}
 _DEPLOYMENT_PROGRESS_STATUSES = {"queued", "provisioning", "deploying", "building", "running", "starting", "started", "pending", "preparing"}
 
 
@@ -35,6 +36,7 @@ class CoolifyDeploymentObservation:
     deployment_uuid: str | None
     application_uuid: str | None
     status: str
+    application_status: str | None = None
     last_error: str | None = None
 
 
@@ -164,6 +166,7 @@ def _coolify_observation_for_release(
     provider_context = _coerce_dict(release.provider_context)
     deployment_uuid = _normalize_optional_string(provider_context.get("deployment_uuid"))
     application_uuid = _normalize_optional_string(provider_context.get("application_uuid"))
+    service_uuid = _normalize_optional_string(provider_context.get("service_uuid"))
 
     payload: dict[str, object] | None = None
     if deployment_uuid is not None:
@@ -172,19 +175,33 @@ def _coolify_observation_for_release(
         deployments = client.list_application_deployments(application_uuid=application_uuid)
         if deployments:
             payload = deployments[0]
+    elif service_uuid is not None:
+        payload = client.get_service(service_uuid=service_uuid)
     if not payload:
         return None
 
     observed_status = _normalize_optional_string(payload.get("status"))
     if observed_status is None:
         return None
+    application_payload = _coerce_dict(payload.get("application"))
+    application_status = _normalize_optional_string(application_payload.get("status"))
     observed_deployment_uuid = _normalize_optional_string(payload.get("deployment_uuid")) or deployment_uuid
-    observed_application_uuid = _normalize_optional_string(payload.get("application_id")) or application_uuid
-    last_error = _normalize_optional_string(payload.get("logs"))
+    observed_application_uuid = (
+        _normalize_optional_string(payload.get("application_id"))
+        or _normalize_optional_string(application_payload.get("uuid"))
+        or application_uuid
+    )
+    normalized_observed_status = _normalize_release_status(observed_status)
+    last_error = (
+        _normalize_optional_string(payload.get("logs"))
+        if normalized_observed_status in _DEPLOYMENT_FAILURE_STATUSES
+        else None
+    )
     return CoolifyDeploymentObservation(
         deployment_uuid=observed_deployment_uuid,
         application_uuid=observed_application_uuid,
         status=observed_status,
+        application_status=application_status,
         last_error=last_error,
     )
 
@@ -224,12 +241,19 @@ def reconcile_deployment_release(
         return False
 
     current_status = str(release.status or "").strip()
-    next_status = _resolve_release_status_transition(
+    next_status = _resolve_release_observation_transition(
         current_status=current_status,
         observed_status=observation.status,
+        observed_application_status=observation.application_status,
     )
     if next_status is None:
         return False
+    last_error = observation.last_error
+    if next_status == "live":
+        verification = verify_release_route_bindings(release)
+        if not verification.ok:
+            next_status = "route_activating"
+            last_error = verification.error
 
     updated = update_project_deployment_release_status(
         session=session,
@@ -239,7 +263,7 @@ def reconcile_deployment_release(
         app_id=release.app_id,
         payload=ProjectDeploymentReleaseStatusUpdate(
             status=next_status,
-            last_error=observation.last_error,
+            last_error=last_error,
             deployment_uuid=observation.deployment_uuid,
         ),
     )
@@ -391,6 +415,41 @@ def _next_progress_status(current_status: str) -> str | None:
     return "provisioning"
 
 
+def _resolve_release_observation_transition(
+    *,
+    current_status: str,
+    observed_status: object | None,
+    observed_application_status: object | None = None,
+) -> str | None:
+    current = _normalize_release_status(current_status)
+    if current in {"failed", "rolled_back"}:
+        return None
+
+    observed = _normalize_release_status(observed_status)
+    application = _normalize_release_status(observed_application_status)
+    if observed is None:
+        return None
+
+    if observed in _DEPLOYMENT_PROGRESS_STATUSES or "deploy" in observed or "progress" in observed or observed == "in_progress":
+        if current in {"queued", "provisioning", "deploying", "route_activating", "live"}:
+            return "deploying" if current != "live" else None
+        return "provisioning"
+
+    if observed in _DEPLOYMENT_SUCCESS_STATUSES or "success" in observed:
+        if application is None or application in _DEPLOYMENT_SUCCESS_STATUSES or application == "running" or application.startswith("running:"):
+            return "live"
+        if application in _DEPLOYMENT_FAILURE_STATUSES or "unhealthy" in application:
+            return "rolled_back" if current == "live" else "failed"
+        return "deploying"
+
+    if observed in _DEPLOYMENT_FAILURE_STATUSES or "unhealthy" in observed:
+        return "rolled_back" if current == "live" else "failed"
+    if observed in _DEPLOYMENT_CANCELLED_STATUSES:
+        return "rolled_back"
+
+    return None
+
+
 def _resolve_release_status_transition(
     *,
     current_status: str,
@@ -407,11 +466,15 @@ def _resolve_release_status_transition(
     if signal is None:
         return None
 
-    if signal in _DEPLOYMENT_FAILURE_STATUSES:
+    if signal in _DEPLOYMENT_FAILURE_STATUSES or "unhealthy" in signal:
         return "rolled_back" if current == "live" else "failed"
     if signal in _DEPLOYMENT_CANCELLED_STATUSES:
         return "rolled_back"
     if signal in _DEPLOYMENT_SUCCESS_STATUSES or "success" in signal or "healthy" in signal:
+        if current == "deploying":
+            return "live"
+        return _next_progress_status(current or "queued")
+    if signal == "running" or signal.startswith("running:"):
         if current == "deploying":
             return "live"
         return _next_progress_status(current or "queued")
@@ -514,6 +577,12 @@ def ingest_coolify_deployment_event(
             "release_id": release.release_id,
             "status": release.status,
         }
+    last_error = _extract_event_error(payload)
+    if next_status == "live":
+        verification = verify_release_route_bindings(release)
+        if not verification.ok:
+            next_status = "route_activating"
+            last_error = verification.error
 
     updated = update_project_deployment_release_status(
         session=session,
@@ -524,7 +593,7 @@ def ingest_coolify_deployment_event(
         payload=ProjectDeploymentReleaseStatusUpdate(
             status=next_status,
             deployment_uuid=deployment_uuid,
-            last_error=_extract_event_error(payload),
+            last_error=last_error,
         ),
     )
     return {

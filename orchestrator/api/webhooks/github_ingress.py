@@ -8,9 +8,11 @@ from sqlalchemy.orm import Session
 
 from orchestrator.api.transport_runtime import http_json_response_action, json_response_to_action, execute_http_ingress_result
 from orchestrator.api.webhooks.github_webhook_context import resolve_github_webhook_context
+from orchestrator.api.webhooks.github_payload_contracts import extract_push_deployment_source
 from orchestrator.core.communications import IngressResult
 from orchestrator.core.communications import TransportEnvelope
 from orchestrator.core.webhooks.job_queue import (
+    WEBHOOK_TRANSPORT_GITHUB_DEPLOYMENT,
     WEBHOOK_TRANSPORT_GITHUB,
     WebhookJobEnqueueRequest,
     enqueue_webhook_job,
@@ -44,6 +46,69 @@ async def ingest_github_webhook_event(
     if isinstance(resolved_context, JSONResponse):
         return execute_http_ingress_result(
             result=IngressResult(actions=(json_response_to_action(resolved_context),)),
+            envelope=envelope,
+        )
+    if resolved_context.github_event == "push":
+        push_source = extract_push_deployment_source(resolved_context.payload)
+        if push_source is None:
+            raise RuntimeError("GitHub push deployment context was accepted without a push source")
+        enqueue_result = enqueue_webhook_job(
+            session,
+            request=WebhookJobEnqueueRequest(
+                transport=WEBHOOK_TRANSPORT_GITHUB_DEPLOYMENT,
+                request_id=envelope.request_id,
+                tenant_id=resolved_context.tenant.tenant_id,
+                project_id=resolved_context.project.project_id,
+                subject_key=(
+                    f"github_deployment:{resolved_context.tenant.tenant_id}:"
+                    f"{resolved_context.repo_full_name}:{push_source.branch}"
+                ),
+                dedupe_key=resolved_context.delivery_id,
+                event_type=resolved_context.github_event,
+                payload_json=dict(resolved_context.payload),
+                context_json={
+                    "delivery_id": resolved_context.delivery_id,
+                    "github_event": resolved_context.github_event,
+                    "installation_id": resolved_context.installation_id,
+                    "tenant_id": resolved_context.tenant.tenant_id,
+                    "project_id": resolved_context.project.project_id,
+                    "repo_full_name": resolved_context.repo_full_name,
+                    "branch": push_source.branch,
+                    "commit_sha": push_source.commit_sha,
+                },
+            ),
+        )
+        notify_webhook_job_enqueued(
+            session=session,
+            transport=WEBHOOK_TRANSPORT_GITHUB_DEPLOYMENT,
+            tenant_id=resolved_context.tenant.tenant_id,
+            project_id=resolved_context.project.project_id,
+            subject_key=enqueue_result.job.subject_key,
+            job_id=enqueue_result.job.job_id,
+            dedupe_key=enqueue_result.job.dedupe_key,
+        )
+        session.commit()
+        return execute_http_ingress_result(
+            result=IngressResult(
+                actions=(
+                    http_json_response_action(
+                        status_code=202,
+                        content={
+                            "request_id": envelope.request_id,
+                            "delivery_id": resolved_context.delivery_id,
+                            "tenant_id": resolved_context.tenant.tenant_id,
+                            "project_id": resolved_context.project.project_id,
+                            "event": resolved_context.github_event,
+                            "accepted": True,
+                            "queued": bool(enqueue_result.created),
+                            "queued_job_count": 1 if enqueue_result.created else 0,
+                            "repository": resolved_context.repo_full_name,
+                            "branch": push_source.branch,
+                            "commit_sha": push_source.commit_sha,
+                        },
+                    ),
+                ),
+            ),
             envelope=envelope,
         )
     queued_jobs = []

@@ -15,7 +15,7 @@ const manrope = Manrope({
 
 export const metadata: Metadata = {
   title: "Master Builder",
-  description: "Master Builder admin dashboard"
+  description: "Governed AI software delivery for enterprise teams"
 };
 
 export const viewport: Viewport = {

@@ -90,3 +90,24 @@ class WorkflowOperationRetryResult:
     workflow_status: str
     active_run_id: str | None = None
     last_error: str | None = None
+
+
+@dataclass(frozen=True)
+class ProjectDeploymentSetupWorkflowInput:
+    workflow_id: str
+    tenant_id: str
+    project_id: str
+    requested_by_user_id: str | None
+    activity_start_to_close_timeout_seconds: int = 7200
+
+
+@dataclass(frozen=True)
+class ProjectDeploymentSetupActivityResult:
+    workflow_id: str
+    tenant_id: str
+    project_id: str
+    status: str
+    app_ids: tuple[str, ...] = ()
+    release_ids: tuple[str, ...] = ()
+    analysis_run_id: str | None = None
+    last_error: str | None = None

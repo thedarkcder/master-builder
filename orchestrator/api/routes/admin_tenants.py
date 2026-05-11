@@ -75,10 +75,14 @@ from orchestrator.api.schemas import (
     ProjectDeploymentConfigWrite,
     ProjectDeploymentDomainApplyRequest,
     ProjectDeploymentOperationRead,
+    ProjectDeploymentPolicyRead,
+    ProjectDeploymentPolicyWrite,
+    ProjectDeploymentSetupStartRead,
     ProjectDeploymentReleaseCreate,
     ProjectDeploymentReleaseRead,
     ProjectDeploymentReleaseStatusUpdate,
     ProjectDeploymentResourceApplyRequest,
+    ProjectDeploymentVolumeApplyRequest,
     ProjectDeploymentRestoreRunRead,
     ProjectInstallRead,
     ProjectInstallRequestRead,
@@ -1339,6 +1343,8 @@ def update_tenant_deployment_plane(
 def list_project_apps(
     tenant_id: str,
     project_id: str,
+    limit: int | None = Query(default=None, ge=1, le=101),
+    offset: int = Query(default=0, ge=0),
     principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
     session: Session = Depends(get_session),
 ) -> list[ProjectAppRead]:
@@ -1347,6 +1353,8 @@ def list_project_apps(
         session=session,
         tenant_id=tenant_id,
         project_id=project_id,
+        limit=limit,
+        offset=offset,
     )  # type: ignore[return-value]
 
 
@@ -1464,6 +1472,83 @@ def update_project_app(
     )  # type: ignore[return-value]
 
 
+@router.delete("/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_project_app(
+    tenant_id: str,
+    project_id: str,
+    app_id: str,
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
+    session: Session = Depends(get_session),
+) -> None:
+    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
+    admin_project_service().delete_project_app(
+        session=session,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        app_id=app_id,
+    )
+
+
+@router.get(
+    "/tenants/{tenant_id}/projects/{project_id}/deployment-policy",
+    response_model=ProjectDeploymentPolicyRead,
+)
+def get_project_deployment_policy(
+    tenant_id: str,
+    project_id: str,
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
+    session: Session = Depends(get_session),
+) -> ProjectDeploymentPolicyRead:
+    require_tenant_membership(principal=principal, tenant_id=tenant_id)
+    return admin_project_service().get_project_deployment_policy(
+        session=session,
+        tenant_id=tenant_id,
+        project_id=project_id,
+    )  # type: ignore[return-value]
+
+
+@router.put(
+    "/tenants/{tenant_id}/projects/{project_id}/deployment-policy",
+    response_model=ProjectDeploymentPolicyRead,
+)
+def update_project_deployment_policy(
+    tenant_id: str,
+    project_id: str,
+    payload: ProjectDeploymentPolicyWrite,
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
+    session: Session = Depends(get_session),
+) -> ProjectDeploymentPolicyRead:
+    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
+    return admin_project_service().update_project_deployment_policy(
+        session=session,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        payload=payload,
+    )  # type: ignore[return-value]
+
+
+@router.post(
+    "/tenants/{tenant_id}/projects/{project_id}/deployment-setup",
+    response_model=ProjectDeploymentSetupStartRead,
+    status_code=status.HTTP_202_ACCEPTED,
+)
+def complete_project_deployment_setup(
+    tenant_id: str,
+    project_id: str,
+    payload: ProjectDeploymentPolicyWrite,
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
+    session: Session = Depends(get_session),
+) -> ProjectDeploymentSetupStartRead:
+    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
+    return admin_project_service().complete_project_deployment_setup(
+        session=session,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        payload=payload,
+        requested_by_user_id=principal.user_id,
+    )  # type: ignore[return-value]
+
+
 @router.get(
     "/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}/deployment-config",
     response_model=ProjectDeploymentConfigRead,
@@ -1529,7 +1614,6 @@ def list_project_app_deployment_releases(
 @router.post(
     "/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}/deployment-releases",
     response_model=ProjectDeploymentReleaseRead,
-    status_code=status.HTTP_201_CREATED,
 )
 def create_project_app_deployment_release(
     tenant_id: str,
@@ -1610,6 +1694,28 @@ def apply_project_app_deployment_resources(
 ) -> ProjectDeploymentOperationRead:
     require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
     return admin_project_service().apply_project_app_deployment_resources(
+        session=session,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        app_id=app_id,
+        payload=payload,
+    )
+
+
+@router.post(
+    "/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}/deployment-volumes/apply",
+    response_model=ProjectDeploymentOperationRead,
+)
+def apply_project_app_deployment_volumes(
+    tenant_id: str,
+    project_id: str,
+    app_id: str,
+    payload: ProjectDeploymentVolumeApplyRequest,
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
+    session: Session = Depends(get_session),
+) -> ProjectDeploymentOperationRead:
+    require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
+    return admin_project_service().apply_project_app_deployment_volumes(
         session=session,
         tenant_id=tenant_id,
         project_id=project_id,

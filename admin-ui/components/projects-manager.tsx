@@ -1,7 +1,6 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { RefreshCcw } from "lucide-react";
 
 import type {
   GitHubRepositoryRecord,
@@ -21,7 +20,6 @@ type Props = {
   repositories: GitHubRepositoryRecord[];
   jiraProjects: JiraProjectRecord[];
   busy: boolean;
-  onRefreshOptions: () => void;
   onCreateProject: (payload: ProjectCreatePayload) => Promise<void>;
   onUpdateProjectConfiguration: (projectId: string, payload: ProjectConfigurationUpdatePayload) => Promise<void>;
   onUpdateProjectArchiveState: (projectId: string, payload: ProjectArchiveUpdatePayload) => Promise<void>;
@@ -42,7 +40,6 @@ export function ProjectsManager({
   repositories,
   jiraProjects,
   busy,
-  onRefreshOptions,
   onCreateProject,
   onUpdateProjectConfiguration,
   onUpdateProjectArchiveState
@@ -100,10 +97,6 @@ export function ProjectsManager({
       <div className="rounded-md border p-3 text-sm">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <p className="font-medium">Projects ({activeCount} active / {projects.length} total)</p>
-          <Button variant="outline" size="sm" disabled={busy} onClick={onRefreshOptions}>
-            <RefreshCcw className="mr-2 h-4 w-4" />
-            Refresh options
-          </Button>
         </div>
         <p className="mt-1 text-muted-foreground">Each project maps exactly one repository and one Jira project key.</p>
       </div>

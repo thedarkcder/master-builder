@@ -826,11 +826,22 @@ test("keeps the public home page available without redirecting to login", async 
   await page.goto("/");
 
   await expect(page).toHaveURL(/\/$/);
-  await expect(page.getByRole("heading", { name: "Master Builder" })).toBeVisible();
-  await expect(page.getByText("Build with agent teams")).toBeVisible();
-  await expect(page.getByText("Deploy, manage, and observe AI agent teams.")).toBeVisible();
-  await expect(page.locator('meta[name="description"]')).toHaveAttribute("content", "Master Builder admin dashboard");
+  await expect(page.getByRole("heading", { name: "AI scales code faster than organisations scale control." })).toBeVisible();
+  await expect(page.getByText("Master Builder turns AI coding into governed software delivery.")).toBeVisible();
+  await expect(page.getByRole("link", { name: "Read the blog" })).toBeVisible();
+  await expect(page.locator('meta[name="description"]')).toHaveAttribute("content", "Governed AI software delivery for enterprise teams");
   await expect(page.locator('a[href="/login"]').first()).toBeVisible();
+});
+
+test("keeps the public blog available for category education", async ({ page }) => {
+  await page.goto("/blog");
+
+  await expect(page.getByRole("heading", { name: "Thinking for teams scaling AI-assisted engineering responsibly." })).toBeVisible();
+  await expect(page.getByRole("link", { name: /AI scales code faster than organisations scale control/ })).toBeVisible();
+
+  await page.getByRole("link", { name: /AI scales code faster than organisations scale control/ }).click();
+  await expect(page).toHaveURL(/\/blog\/ai-scales-code-faster-than-organisations-scale-control$/);
+  await expect(page.getByRole("heading", { name: "AI scales code faster than organisations scale control" })).toBeVisible();
 });
 
 test("keeps auth pages linked back to the public home page", async ({ page }) => {

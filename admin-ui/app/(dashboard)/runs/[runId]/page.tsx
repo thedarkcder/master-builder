@@ -1435,9 +1435,6 @@ export default function RunDetailPage() {
           ) : null}
           </div>
           <div className="flex min-h-9 flex-wrap items-center gap-1.5 sm:ml-auto">
-            <Button variant="outline" size="sm" className="h-9 min-h-9 text-xs sm:h-7 sm:min-h-0" onClick={() => void loadRun()} disabled={busy}>
-              {busy ? "Refreshing..." : "Refresh"}
-            </Button>
             {isRerunnable ? (
               <details className="relative" data-testid="run-rerun-menu">
                 <summary data-testid="run-rerun-trigger" className="flex h-9 min-h-9 cursor-pointer list-none items-center rounded-md border border-input bg-background px-3 text-xs text-foreground sm:h-7 sm:min-h-0">

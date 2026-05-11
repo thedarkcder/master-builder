@@ -68,6 +68,17 @@ class CoolifyApiClient:
             raise CoolifyApiError("Coolify create application response did not include uuid")
         return application_uuid.strip()
 
+    def create_private_github_app_application(self, *, payload: dict) -> str:
+        response = self._request_json(
+            method="POST",
+            path="/applications/private-github-app",
+            payload=payload,
+        )
+        application_uuid = response.get("uuid") or response.get("application_uuid")
+        if not isinstance(application_uuid, str) or not application_uuid.strip():
+            raise CoolifyApiError("Coolify create private GitHub application response did not include uuid")
+        return application_uuid.strip()
+
     def update_application(self, *, application_uuid: str, payload: dict) -> dict:
         return self._request_json(
             method="PATCH",
@@ -75,10 +86,23 @@ class CoolifyApiClient:
             payload=payload,
         )
 
+    def get_application(self, *, application_uuid: str) -> dict:
+        return self._request_json(
+            method="GET",
+            path=f"/applications/{application_uuid}",
+        )
+
     def bulk_update_application_envs(self, *, application_uuid: str, payload: dict) -> dict:
         return self._request_json(
             method="PATCH",
             path=f"/applications/{application_uuid}/envs/bulk",
+            payload=payload,
+        )
+
+    def bulk_update_service_envs(self, *, service_uuid: str, payload: dict) -> dict:
+        return self._request_json(
+            method="PATCH",
+            path=f"/services/{service_uuid}/envs/bulk",
             payload=payload,
         )
 
@@ -202,6 +226,24 @@ class CoolifyApiClient:
             method="PATCH",
             path=f"/services/{service_uuid}",
             payload=payload,
+        )
+
+    def get_service(self, *, service_uuid: str) -> dict:
+        return self._request_json(
+            method="GET",
+            path=f"/services/{service_uuid}",
+        )
+
+    def start_service(self, *, service_uuid: str) -> None:
+        self._request_json(
+            method="POST",
+            path=f"/services/{service_uuid}/start",
+        )
+
+    def restart_service(self, *, service_uuid: str) -> None:
+        self._request_json(
+            method="POST",
+            path=f"/services/{service_uuid}/restart",
         )
 
     def get_deployment(self, *, deployment_uuid: str) -> dict:

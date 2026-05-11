@@ -7,8 +7,7 @@ import {
   AlertCircle,
   Building2,
   KeyRound,
-  Plus,
-  RefreshCw
+  Plus
 } from "lucide-react";
 
 import { useAuth } from "@/components/auth-provider";
@@ -157,10 +156,6 @@ export default function DashboardPage() {
             <Plus className="mr-1.5 h-3.5 w-3.5" />
             New Tenant
           </Link>
-        </Button>
-        <Button variant="outline" size="sm" onClick={() => void loadDashboard()} disabled={loading}>
-          <RefreshCw className={`mr-1.5 h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
-          Refresh
         </Button>
       </div>
 

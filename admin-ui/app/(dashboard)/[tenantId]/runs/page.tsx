@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useState } from "react";
 import { useParams } from "next/navigation";
-import { ExternalLink, RefreshCw, SlidersHorizontal, X } from "lucide-react";
+import { ExternalLink, SlidersHorizontal, X } from "lucide-react";
 
 import { useAuth } from "@/components/auth-provider";
 import { StatusBadge } from "@/components/ui/status-badge";
@@ -154,10 +154,6 @@ export default function TenantRunsPage() {
                     Clear
                   </Button>
                 ) : null}
-                <Button variant="outline" size="sm" className="h-8" onClick={() => void loadRuns()} disabled={loading}>
-                  <RefreshCw className={cn("mr-1.5 h-3.5 w-3.5", loading && "animate-spin")} />
-                  Refresh
-                </Button>
                 <select
                   className="h-8 rounded-md border border-input bg-background px-2 text-xs"
                   value={String(pageSize)}

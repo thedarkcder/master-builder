@@ -34,18 +34,20 @@ def _restore_command() -> dict[str, object]:
         "claim_id": "claim-1",
         "kind": "restore_database",
         "restore_run_id": "restore-run-1",
-        "resource_key": "db",
-        "execution_context": {
-            "database_type": "postgres",
-            "container_name": "coolify-db-container",
-            "database_name": "app",
-            "username": "app",
-            "password": "secret",
-            "host": "127.0.0.1",
-            "port": 5432,
-            "artifact_path": "/var/lib/coolify/backups/restore.dump",
+        "payload": {
+            "resource_key": "db",
+            "execution_context": {
+                "database_type": "postgres",
+                "container_name": "coolify-db-container",
+                "database_name": "app",
+                "username": "app",
+                "password": "secret",
+                "host": "127.0.0.1",
+                "port": 5432,
+                "artifact_path": "/var/lib/coolify/backups/restore.dump",
+            },
+            "container_candidates": ["coolify-db-container", "db-uuid-1"],
         },
-        "container_candidates": ["coolify-db-container", "db-uuid-1"],
     }
 
 
@@ -259,3 +261,56 @@ def test_agent_process_once_reports_failed_restore_when_all_candidates_fail() ->
         assert completions[0][0] == "failed"
         assert completions[0][2] == "Restore command failed for every container candidate"
         assert len(completions[0][1]["attempts"]) == 2
+
+
+def test_agent_process_once_rejects_app_deployment_commands() -> None:
+    with TemporaryDirectory() as tmp_dir:
+        token_path = Path(tmp_dir) / "agent-token"
+        token_path.write_text("access-token-1", encoding="utf-8")
+        completions: list[tuple[str, dict[str, object], str | None]] = []
+        starts: list[tuple[str, str]] = []
+
+        class _FakeClient:
+            def __init__(self, *, api_base_url: str, access_token: str | None = None) -> None:
+                self.access_token = access_token
+
+            def heartbeat(self, *, agent_version: str, advertised_capabilities: tuple[str, ...], state: str) -> dict[str, object]:
+                return {"host_id": "host-1"}
+
+            def claim_command(self) -> dict[str, object] | None:
+                return {
+                    "command_id": "command-1",
+                    "claim_id": "claim-1",
+                    "kind": "deploy_docker_compose",
+                    "payload": {"source_path": "api/docker"},
+                }
+
+            def start_command(self, *, command_id: str, claim_id: str) -> dict[str, object]:
+                starts.append((command_id, claim_id))
+                return {"command_id": command_id}
+
+            def complete_command(
+                self,
+                *,
+                command_id: str,
+                claim_id: str,
+                status: str,
+                result: dict[str, object],
+                last_error: str | None,
+            ) -> dict[str, object]:
+                completions.append((status, result, last_error))
+                return {"command_id": command_id, "status": status}
+
+        agent = DeploymentHostAgent(
+            config=_agent_config(access_token_path=token_path),
+            client_factory=_FakeClient,
+        )
+
+        result = agent.process_once()
+
+        assert result.processed is True
+        assert result.command_id == "command-1"
+        assert starts == [("command-1", "claim-1")]
+        assert completions[0][0] == "failed"
+        assert completions[0][1] == {"kind": "deploy_docker_compose"}
+        assert completions[0][2] == "Unsupported deployment host command kind 'deploy_docker_compose'"

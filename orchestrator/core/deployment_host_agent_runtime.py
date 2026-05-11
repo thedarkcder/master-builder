@@ -486,6 +486,9 @@ class DeploymentHostAgent:
         kind = _normalize_optional_string(command.get("kind"))
         if command_id is None or claim_id is None or kind is None:
             raise DeploymentHostAgentError("Claimed deployment host command is missing identifiers")
+        command_payload = command.get("payload")
+        if not isinstance(command_payload, dict):
+            raise DeploymentHostAgentError("Claimed deployment host command is missing payload")
 
         self._call_control_plane(lambda active_client: active_client.start_command(command_id=command_id, claim_id=claim_id))
         if kind != "restore_database":
@@ -503,7 +506,7 @@ class DeploymentHostAgent:
             return DeploymentHostAgentResult(processed=True, command_id=command_id)
 
         status, result, last_error = execute_restore_command(
-            payload=command,
+            payload=command_payload,
             container_runtime_command=self._config.container_runtime_command,
             timeout_seconds=self._config.command_timeout_seconds,
             subprocess_run_fn=self._subprocess_run_fn,

@@ -4,15 +4,34 @@ export type { Credentials } from "@/lib/api/http";
 
 export type ProjectDeploymentDomainRecord = {
   key: string;
+  service_key: string;
   host: string;
   path?: string | null;
-  is_primary?: boolean;
   tls_enabled?: boolean;
 };
 
 export type ProjectDeploymentResourceRecord = {
   key: string;
   kind: string;
+  name?: string | null;
+  config?: Record<string, unknown>;
+};
+
+export type ProjectDeploymentServiceRecord = {
+  key: string;
+  kind: "api" | "website";
+  name?: string | null;
+  source_path?: string | null;
+  compose_service?: string | null;
+  build_strategy?: string | null;
+  container_port?: number | null;
+  public?: boolean;
+  config?: Record<string, unknown>;
+};
+
+export type ProjectDeploymentVolumeRecord = {
+  key: string;
+  type: "persistent" | "file";
   name?: string | null;
   config?: Record<string, unknown>;
 };
@@ -30,21 +49,56 @@ export type ProjectDeploymentConfigRecord = {
   enabled: boolean;
   environment_name: string | null;
   source_strategy: "dockerfile" | "docker_compose" | null;
+  environment: Record<string, string>;
+  secret_refs: Record<string, string>;
   domains: ProjectDeploymentDomainRecord[];
+  services: ProjectDeploymentServiceRecord[];
   resources: ProjectDeploymentResourceRecord[];
+  volumes: ProjectDeploymentVolumeRecord[];
   backup_policies: ProjectDeploymentBackupPolicyRecord[];
 };
 
-export type ProjectDeploymentReleaseCreatePayload = {
-  git_ref?: string | null;
-  commit_sha?: string | null;
-  reason?: string | null;
+export type ProjectDeploymentPolicyRecord = {
+  enabled: boolean;
+  production_branch: string | null;
+  preview_prs_enabled: boolean;
+  provider: "internal_coolify";
+  deployment_host_id: string | null;
+  generated_domain_policy: "disabled" | "production" | "production_and_preview";
+  branch_settings: Record<string, ProjectDeploymentBranchSettingsRecord>;
+  services: ProjectDeploymentServiceRecord[];
+  resources: ProjectDeploymentResourceRecord[];
+  volumes: ProjectDeploymentVolumeRecord[];
+};
+
+export type ProjectDeploymentPolicyUpdatePayload = ProjectDeploymentPolicyRecord;
+
+export type ProjectDeploymentSetupStartRecord = {
+  workflow_id: string;
+  status: "started";
+  policy: ProjectDeploymentPolicyRecord;
+};
+
+export type ProjectDeploymentBranchSettingsRecord = {
+  environment: Record<string, string>;
+  secret_refs: Record<string, string>;
+};
+
+export type ProjectGitHubBranchRecord = {
+  name: string;
+  protected: boolean;
 };
 
 export type ProjectDeploymentReleaseStatusUpdatePayload = {
-  status: "queued" | "provisioning" | "deploying" | "live" | "failed" | "rolled_back";
+  status: "queued" | "provisioning" | "deploying" | "route_activating" | "live" | "failed" | "rolled_back";
   last_error?: string | null;
   deployment_uuid?: string | null;
+};
+
+export type ProjectDeploymentReleaseCreatePayload = {
+  git_ref: string;
+  commit_sha: string;
+  reason?: string | null;
 };
 
 export type ProjectDeploymentReleaseRecord = {
@@ -56,17 +110,34 @@ export type ProjectDeploymentReleaseRecord = {
   status: string;
   environment_name: string | null;
   source_strategy: string | null;
-  git_ref: string | null;
-  commit_sha: string | null;
+  git_ref: string;
+  commit_sha: string;
+  release_name: string;
   requested_by_user_id: string | null;
   deployment_snapshot: Record<string, unknown>;
   provider_context: Record<string, unknown>;
+  service_urls: ProjectDeploymentServiceUrlRecord[];
   last_error: string | null;
   requested_at: string;
   started_at: string | null;
   completed_at: string | null;
   created_at: string;
   updated_at: string;
+};
+
+export type ProjectDeploymentServiceUrlRecord = {
+  service_key: string;
+  service_name: string;
+  service_kind: "website" | "api";
+  url: string;
+  url_kind: "generated" | "custom";
+  internal_url?: string | null;
+  status: "pending" | "active" | "failed";
+  port?: number | null;
+  proxy_port?: number | null;
+  host?: string | null;
+  domain_key?: string | null;
+  release_id?: string | null;
 };
 
 export const PROJECT_APP_STATUSES = [
@@ -102,7 +173,12 @@ export type ProjectAppRecord = {
   env_schema_json: Record<string, unknown> | null;
   secret_schema_json: Record<string, unknown> | null;
   status: ProjectAppStatus | string;
+  latest_release_id?: string | null;
   last_release_status?: string | null;
+  latest_release_status?: string | null;
+  latest_release_name?: string | null;
+  latest_release_git_ref?: string | null;
+  latest_release_commit_sha?: string | null;
   last_release_id?: string | null;
   last_error?: string | null;
   created_at: string;
@@ -110,12 +186,16 @@ export type ProjectAppRecord = {
 };
 
 export type ProjectAppAnalysisRunRecord = {
-  analysis_run_id: string;
+  run_id: string;
+  analysis_run_id?: string;
   tenant_id: string;
   project_id: string;
   status: ProjectAppAnalysisRunStatus | string;
-  raw_result: Record<string, unknown> | null;
-  last_error: string | null;
+  request_payload: Record<string, unknown>;
+  result_payload: Record<string, unknown>;
+  error: string | null;
+  raw_result?: Record<string, unknown> | null;
+  last_error?: string | null;
   requested_by_user_id: string | null;
   created_at: string;
   started_at: string | null;
@@ -137,14 +217,12 @@ export type ProjectAppDeploymentConfigUpdatePayload = {
   enabled: boolean;
   environment_name: string | null;
   source_strategy: "dockerfile" | "docker_compose" | null;
-  build_strategy: "dockerfile" | "docker_compose" | "nixpacks" | null;
-  exposed_port: number | null;
-  healthcheck: string | Record<string, unknown> | null;
-  start_command: string | null;
-  env_schema_json: Record<string, unknown> | null;
-  secret_schema_json: Record<string, unknown> | null;
+  environment: Record<string, string>;
+  secret_refs: Record<string, string>;
   domains: ProjectDeploymentDomainRecord[];
+  services: ProjectDeploymentServiceRecord[];
   resources: ProjectDeploymentResourceRecord[];
+  volumes: ProjectDeploymentVolumeRecord[];
   backup_policies: ProjectDeploymentBackupPolicyRecord[];
 };
 
@@ -290,6 +368,10 @@ export type ProjectDeploymentApplyResourcesPayload = {
   resources: ProjectDeploymentResourceRecord[];
 };
 
+export type ProjectDeploymentApplyVolumesPayload = {
+  volumes: ProjectDeploymentVolumeRecord[];
+};
+
 export type ProjectDeploymentApplyDomainsPayload = {
   domains: ProjectDeploymentDomainRecord[];
 };
@@ -358,10 +440,19 @@ export function listProjectApps(
   credentials: Credentials,
   tenantId: string,
   projectId: string,
+  options: { limit?: number; offset?: number } = {},
 ): Promise<ProjectAppRecord[]> {
+  const query = new URLSearchParams();
+  if (typeof options.limit === "number") {
+    query.set("limit", String(options.limit));
+  }
+  if (typeof options.offset === "number") {
+    query.set("offset", String(options.offset));
+  }
+  const suffix = query.size > 0 ? `?${query.toString()}` : "";
   return request<ProjectAppRecord[]>(
     credentials,
-    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/apps`
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/apps${suffix}`
   );
 }
 
@@ -410,6 +501,21 @@ export function updateProjectApp(
   );
 }
 
+export function deleteProjectApp(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string,
+  appId: string,
+): Promise<null> {
+  return request<null>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/apps/${encodeURIComponent(appId)}`,
+    {
+      method: "DELETE",
+    }
+  );
+}
+
 export function createProjectAppAnalysisRun(
   credentials: Credentials,
   tenantId: string,
@@ -446,6 +552,60 @@ export function getProjectAppAnalysisRun(
   return request<ProjectAppAnalysisRunRecord>(
     credentials,
     `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/apps/analysis-runs/${encodeURIComponent(analysisRunId)}`
+  );
+}
+
+export function getProjectDeploymentPolicy(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string,
+): Promise<ProjectDeploymentPolicyRecord> {
+  return request<ProjectDeploymentPolicyRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/deployment-policy`
+  );
+}
+
+export function updateProjectDeploymentPolicy(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string,
+  payload: ProjectDeploymentPolicyUpdatePayload,
+): Promise<ProjectDeploymentPolicyRecord> {
+  return request<ProjectDeploymentPolicyRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/deployment-policy`,
+    {
+      method: "PUT",
+      body: JSON.stringify(payload),
+    }
+  );
+}
+
+export function completeProjectDeploymentSetup(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string,
+  payload: ProjectDeploymentPolicyUpdatePayload,
+): Promise<ProjectDeploymentSetupStartRecord> {
+  return request<ProjectDeploymentSetupStartRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/deployment-setup`,
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+    }
+  );
+}
+
+export function listProjectGitHubBranches(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string,
+): Promise<ProjectGitHubBranchRecord[]> {
+  return request<ProjectGitHubBranchRecord[]>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/github/branches`
   );
 }
 
@@ -490,7 +650,7 @@ export function listProjectAppReleases(
   );
 }
 
-export function createProjectAppRelease(
+export function createProjectAppDeploymentRelease(
   credentials: Credentials,
   tenantId: string,
   projectId: string,
@@ -554,6 +714,26 @@ export function applyProjectAppDeploymentResources(
     {
       method: "POST",
       body: JSON.stringify({ resource_keys: resourceKeys }),
+    }
+  ).then(toDeploymentOperationResult);
+}
+
+export function applyProjectAppDeploymentVolumes(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string,
+  appId: string,
+  payload: ProjectDeploymentApplyVolumesPayload,
+): Promise<ProjectDeploymentOperationResultRecord> {
+  const volumeKeys = payload.volumes
+    .map((volume) => normalizeDeploymentItemKey(volume.key))
+    .filter((key): key is string => Boolean(key));
+  return request<ProjectDeploymentOperationApiRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/apps/${encodeURIComponent(appId)}/deployment-volumes/apply`,
+    {
+      method: "POST",
+      body: JSON.stringify({ volume_keys: volumeKeys }),
     }
   ).then(toDeploymentOperationResult);
 }
@@ -786,4 +966,3 @@ function toDeploymentOperationResult(payload: ProjectDeploymentOperationApiRecor
     },
   };
 }
-

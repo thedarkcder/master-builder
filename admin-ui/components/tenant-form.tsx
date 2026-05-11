@@ -38,7 +38,6 @@ type TenantFormProps = {
   globalCodexModel?: string;
   globalCodexReasoningEffort?: string;
   repositoriesLoading?: boolean;
-  onRefreshRepositoryOptions?: () => void;
   visibleSections?: TenantFormVisibleSections;
   submitLabel?: string;
   submitScope?: TenantEditSubmitScope;
@@ -85,7 +84,6 @@ export function TenantForm({
   globalCodexModel = "",
   globalCodexReasoningEffort = "",
   repositoriesLoading = false,
-  onRefreshRepositoryOptions,
   visibleSections,
   submitLabel: submitLabelOverride,
   submitScope
@@ -137,7 +135,6 @@ export function TenantForm({
       globalCodexModel={globalCodexModel}
       globalCodexReasoningEffort={globalCodexReasoningEffort}
       repositoriesLoading={repositoriesLoading}
-      onRefreshRepositoryOptions={onRefreshRepositoryOptions}
       onSubmit={() => void handleSubmit()}
     />
   );

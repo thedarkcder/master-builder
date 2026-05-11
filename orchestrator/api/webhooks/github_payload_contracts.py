@@ -1,9 +1,17 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from orchestrator.storage.models import Tenant
+
+
+@dataclass(frozen=True)
+class GitHubPushDeploymentSource:
+    branch: str
+    commit_sha: str
 
 
 def extract_installation_id(payload: dict) -> str | None:
@@ -39,6 +47,22 @@ def extract_repository_full_name(payload: dict) -> str | None:
         if isinstance(full_name, str) and full_name.strip():
             return full_name.strip()
     return None
+
+
+def extract_push_deployment_source(payload: dict) -> GitHubPushDeploymentSource | None:
+    ref = payload.get("ref")
+    after = payload.get("after")
+    if not isinstance(ref, str) or not ref.startswith("refs/heads/"):
+        return None
+    if not isinstance(after, str) or not after.strip():
+        return None
+    commit_sha = after.strip()
+    if set(commit_sha) == {"0"}:
+        return None
+    branch = ref[len("refs/heads/"):].strip()
+    if not branch:
+        return None
+    return GitHubPushDeploymentSource(branch=branch, commit_sha=commit_sha)
 
 
 def extract_pull_request_targets(payload: dict) -> list[tuple[int, bool]]:

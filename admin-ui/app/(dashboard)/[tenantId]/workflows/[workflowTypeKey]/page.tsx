@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
-import { ArrowLeft, RefreshCw } from "lucide-react";
+import { ArrowLeft } from "lucide-react";
 
 import { WorkflowFlowDiagram } from "@/components/workflow-flow-diagram";
 import { useAuth } from "@/components/auth-provider";
@@ -75,10 +75,6 @@ export default function TenantWorkflowTypeDetailPage() {
             <ArrowLeft className="mr-1.5 h-3.5 w-3.5" />
             Back to workflows
           </Link>
-        </Button>
-        <Button variant="outline" size="sm" className="h-8" onClick={() => void loadWorkflowType()} disabled={loading}>
-          <RefreshCw className={cn("mr-1.5 h-3.5 w-3.5", loading && "animate-spin")} />
-          Refresh
         </Button>
       </div>
 

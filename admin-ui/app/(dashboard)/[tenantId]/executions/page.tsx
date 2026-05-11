@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
-import { RefreshCw, SlidersHorizontal, X } from "lucide-react";
+import { SlidersHorizontal, X } from "lucide-react";
 
 import { useAuth } from "@/components/auth-provider";
 import { Button } from "@/components/ui/button";
@@ -140,10 +140,6 @@ export default function TenantExecutionsPage() {
                     Clear
                   </Button>
                 ) : null}
-                <Button variant="outline" size="sm" className="h-8" onClick={() => void loadWorkflows()} disabled={loading}>
-                  <RefreshCw className={cn("mr-1.5 h-3.5 w-3.5", loading && "animate-spin")} />
-                  Refresh
-                </Button>
                 <select
                   className="h-8 rounded-md border border-input bg-background px-2 text-xs"
                   value={String(pageSize)}
