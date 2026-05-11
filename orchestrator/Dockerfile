@@ -68,6 +68,8 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     apt-get install -y --no-install-recommends \
       ca-certificates \
       curl \
+      docker-cli \
+      docker-compose \
       gh \
       git \
       nodejs \

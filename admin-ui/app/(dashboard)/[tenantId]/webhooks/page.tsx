@@ -3,11 +3,10 @@
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import { useCallback, useEffect, useMemo, useState } from "react";
-import { ArrowLeft, Check, CheckCircle2, Circle, Copy, RefreshCcw, XCircle } from "lucide-react";
+import { ArrowLeft, Check, CheckCircle2, Circle, Copy, XCircle } from "lucide-react";
 
 import { useAuth } from "@/components/auth-provider";
 import { DEFAULT_API_BASE_URL } from "@/lib/auth-constants";
-import { formatTimestamp } from "@/lib/datetime";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/components/ui/toast-provider";
 import {
@@ -42,8 +41,6 @@ export default function TenantWebhooksPage() {
   const [diagnostics, setDiagnostics] = useState<JiraWebhookDiagnosticsRecord | null>(null);
   const [jiraHealth, setJiraHealth] = useState<HealthStatus | null>(null);
   const [githubHealth, setGithubHealth] = useState<HealthStatus | null>(null);
-  const [loading, setLoading] = useState(false);
-  const [lastRefreshedAt, setLastRefreshedAt] = useState<string | null>(null);
 
   const apiBaseUrl = (credentials?.apiBaseUrl || DEFAULT_API_BASE_URL).replace(/\/$/, "");
   const docs: WebhookDoc[] = useMemo(
@@ -79,8 +76,7 @@ export default function TenantWebhooksPage() {
 
   const refreshDiagnostics = useCallback(async () => {
     if (!credentials) return;
-    setLoading(true);
-    setStatusLine("Refreshing...");
+    setStatusLine("");
     try {
       const [tenantResult, diagnosticsResult, jiraHealthResult, githubHealthResult] =
         await Promise.allSettled([
@@ -101,7 +97,6 @@ export default function TenantWebhooksPage() {
           ? githubHealthResult.value
           : { ok: false, details: githubHealthResult.reason instanceof Error ? githubHealthResult.reason.message : "GitHub health check failed" }
       );
-      setLastRefreshedAt(new Date().toISOString());
       const failed = [
         tenantResult.status !== "fulfilled" ? "tenant config" : null,
         diagnosticsResult.status !== "fulfilled" ? "jira diagnostics" : null,
@@ -110,9 +105,7 @@ export default function TenantWebhooksPage() {
       ].filter(Boolean);
       setStatusLine(failed.length > 0 ? `Completed with warnings: ${failed.join(", ")} failed.` : "");
     } catch (error) {
-      setStatusLine(`Refresh failed: ${(error as Error).message}`);
-    } finally {
-      setLoading(false);
+      setStatusLine(`Diagnostics failed: ${(error as Error).message}`);
     }
   }, [credentials, tenantId]);
 
@@ -147,18 +140,8 @@ export default function TenantWebhooksPage() {
   return (
     <div className="space-y-6">
       <div className="flex flex-wrap items-start justify-between gap-3">
-        <div className="min-w-0">
-          {lastRefreshedAt ? (
-            <p className="text-sm text-muted-foreground">
-              Last refreshed {formatTimestamp(lastRefreshedAt)}.
-            </p>
-          ) : null}
-        </div>
+        <div className="min-w-0" />
         <div className="ml-auto flex shrink-0 items-center gap-2">
-          <Button variant="outline" size="sm" onClick={() => void refreshDiagnostics()} disabled={loading}>
-            <RefreshCcw className={`mr-1.5 h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
-            {loading ? "Refreshing" : "Refresh"}
-          </Button>
           <Button variant="outline" size="sm" asChild>
             <Link href={`/${encodeURIComponent(tenantId)}/settings/config`}>
               <ArrowLeft className="mr-1.5 h-3.5 w-3.5" />
@@ -192,7 +175,7 @@ export default function TenantWebhooksPage() {
             detail: diagnostics
               ? diagnostics.recent_delivery_ok
                 ? `Last issue: ${diagnostics.last_issue_key || "n/a"}`
-                : "Trigger a Jira status change and refresh."
+                : "Trigger a Jira status change and return to this page."
               : "Checking..."
           }
         ].map((item) => {
@@ -303,7 +286,7 @@ export default function TenantWebhooksPage() {
               <li className="flex items-center gap-2.5 text-sm">
                 <Circle className="h-4 w-4 flex-shrink-0 text-muted-foreground/50" />
                 <span className="text-muted-foreground">
-                  Trigger a Jira status change to a ready status and refresh to verify delivery.
+                  Trigger a Jira status change to a ready status and return to this page to verify delivery.
                 </span>
               </li>
             </ul>

@@ -18,12 +18,14 @@ from orchestrator.temporal.payloads import (
     HandlerWorkflowAdvanceInput,
     HandlerWorkflowAdvanceResult,
     HumanInputResumeInput,
+    ProjectDeploymentSetupWorkflowInput,
     WorkflowOperationRetryInput,
     WorkflowOperationRetryResult,
 )
 from orchestrator.temporal.workflow_engine import TemporalWorkflowConfig, TemporalWorkflowEngine
 from orchestrator.temporal.workflows.development_team_run import DevelopmentTeamRunWorkflow
 from orchestrator.temporal.workflows.handler_backed_workflow import HandlerBackedWorkflow
+from orchestrator.temporal.workflows.project_deployment_setup import ProjectDeploymentSetupWorkflow
 
 
 def _workflow_input(**overrides) -> DevelopmentTeamRunWorkflowInput:
@@ -808,6 +810,45 @@ def test_temporal_registry_includes_parent_planning_and_pr_remediation():
 
     assert resolve_temporal_binding_for_handler(handler_key="jira_parent_feature").handler_key == "jira_parent_feature"
     assert resolve_temporal_binding_for_handler(handler_key="pr_remediation").handler_key == "pr_remediation"
+
+
+def test_project_deployment_setup_workflow_accepts_temporal_dict_activity_result(monkeypatch):
+    workflow_defn = ProjectDeploymentSetupWorkflow()
+
+    async def _fake_execute_activity(_name, _payload, *, start_to_close_timeout, retry_policy=None):  # noqa: ANN001
+        assert start_to_close_timeout == timedelta(seconds=321)
+        assert retry_policy is not None
+        return {
+            "workflow_id": "deploy-setup:abc123",
+            "tenant_id": "tenant-1",
+            "project_id": "project-1",
+            "status": "completed",
+            "app_ids": ["app-1"],
+            "release_ids": ["release-1"],
+            "analysis_run_id": "deploy-setup:abc123",
+            "last_error": None,
+        }
+
+    monkeypatch.setattr(
+        "orchestrator.temporal.workflows.project_deployment_setup.workflow.execute_activity",
+        _fake_execute_activity,
+    )
+
+    state = asyncio.run(
+        workflow_defn.run(
+            ProjectDeploymentSetupWorkflowInput(
+                workflow_id="deploy-setup:abc123",
+                tenant_id="tenant-1",
+                project_id="project-1",
+                requested_by_user_id="admin",
+                activity_start_to_close_timeout_seconds=321,
+            )
+        )
+    )
+
+    assert state.workflow_id == "deploy-setup:abc123"
+    assert state.backend == "temporal"
+    assert state.status == "completed"
 
 
 class _FakeSession:

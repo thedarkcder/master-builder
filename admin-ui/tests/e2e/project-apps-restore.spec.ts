@@ -43,6 +43,9 @@ test("gates managed restore until an execution is selected and queues an async r
     if (pathname === "/api/bff/api/admin/tenants/route25/projects/route25-default/apps") {
       return fulfillJson(route, [app]);
     }
+    if (pathname === "/api/bff/api/admin/tenants/route25/projects/route25-default/apps/app-1") {
+      return fulfillJson(route, app);
+    }
     if (pathname === "/api/bff/api/admin/tenants/route25/projects/route25-default/apps/analysis-runs") {
       return fulfillJson(route, []);
     }
@@ -133,19 +136,19 @@ test("gates managed restore until an execution is selected and queues an async r
     return route.fallback();
   });
 
-  await page.goto("/route25/projects/route25-default/apps", { waitUntil: "domcontentloaded" });
-  await page.getByRole("button", { name: "Advanced tools" }).click();
+  await page.goto("/route25/projects/route25-default/deployments/app-1", { waitUntil: "domcontentloaded" });
   await page.getByRole("button", { name: "Backups" }).click();
+  await page.getByRole("button", { name: /Restore/ }).click();
 
   const restoreButton = page.getByRole("button", { name: "Run restore" });
-  await expect(page.getByText("Restore execution list")).toBeVisible();
-  await expect(page.getByLabel("Restore execution")).toBeEnabled();
+  await expect(page.getByText("Available executions")).toBeVisible();
+  await expect(page.getByLabel("Execution")).toBeEnabled();
   await expect(restoreButton).toBeDisabled();
 
-  await page.getByLabel("Restore execution").selectOption("execution-1");
+  await page.getByLabel("Execution").selectOption("execution-1");
   await expect(restoreButton).toBeDisabled();
 
-  await page.getByLabel("Confirm restore by typing the app slug").fill("payments-api");
+  await page.getByLabel("Confirm deployment slug").fill("payments-api");
   await expect(restoreButton).toBeEnabled();
 
   await restoreButton.click();

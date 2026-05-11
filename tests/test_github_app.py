@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 from jwt.exceptions import InvalidKeyError
 
 from orchestrator.tools.github_app import (
+    GitHubBranch,
     GitHubApiError,
     GitHubAppClient,
     GitHubAppConfig,
@@ -479,6 +480,45 @@ class GitHubAppClientTests(unittest.TestCase):
                 )
             ],
         )
+
+    def test_list_repository_branches_parses_branch_names(self) -> None:
+        config = GitHubAppConfig(app_id="12345", installation_id="999", private_key_pem="unused")
+        client = GitHubAppClient(config)
+        with patch.object(client, "get_installation_token", return_value="token"), patch.object(
+            client,
+            "_request_json",
+            return_value=[
+                {"name": "main", "protected": True},
+                {"name": "develop", "protected": False},
+                {"name": "", "protected": True},
+            ],
+        ):
+            branches = client.list_repository_branches(
+                repo_full_name="example/repo",
+                github_repository="https://github.com/example/repo",
+            )
+
+        self.assertEqual(
+            branches,
+            [
+                GitHubBranch(name="develop", protected=False),
+                GitHubBranch(name="main", protected=True),
+            ],
+        )
+
+    def test_list_repository_branches_validates_response_type(self) -> None:
+        config = GitHubAppConfig(app_id="12345", installation_id="999", private_key_pem="unused")
+        client = GitHubAppClient(config)
+        with patch.object(client, "get_installation_token", return_value="token"), patch.object(
+            client,
+            "_request_json",
+            return_value={},
+        ):
+            with self.assertRaisesRegex(GitHubApiError, "branch list response was not a list"):
+                client.list_repository_branches(
+                    repo_full_name="example/repo",
+                    github_repository="https://github.com/example/repo",
+                )
 
     def test_get_pull_request_details_extracts_head_sha(self) -> None:
         config = GitHubAppConfig(

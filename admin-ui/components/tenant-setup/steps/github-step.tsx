@@ -1,4 +1,4 @@
-import { CheckCircle2, Link2, RefreshCw } from "lucide-react";
+import { CheckCircle2, Link2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 
@@ -33,7 +33,6 @@ export function GitHubStep({
               Install GitHub App
             </Button>
             <Button variant="outline" onClick={onLoadRepositories} disabled={!installationId}>
-              <RefreshCw className="mr-2 h-4 w-4" />
               Load repositories
             </Button>
           </div>

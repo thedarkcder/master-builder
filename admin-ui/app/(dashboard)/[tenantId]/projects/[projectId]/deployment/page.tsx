@@ -1,10 +1,11 @@
-import { redirect } from "next/navigation";
+"use client";
 
-export default async function TenantProjectDeploymentRoute({
-  params,
-}: {
-  params: Promise<{ tenantId: string; projectId: string }>;
-}) {
-  const resolved = await params;
-  redirect(`/${encodeURIComponent(resolved.tenantId)}/projects/${encodeURIComponent(resolved.projectId)}/apps`);
+import { useParams } from "next/navigation";
+
+import { ProjectDeploymentPolicyPage } from "@/components/project-deployment-policy-page";
+
+export default function TenantProjectDeploymentRoute() {
+  const params = useParams<{ tenantId: string; projectId: string }>();
+
+  return <ProjectDeploymentPolicyPage tenantId={params.tenantId} projectId={params.projectId} />;
 }

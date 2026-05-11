@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-DEPLOYMENT_RELEASE_ACTIVE_STATUSES = frozenset({"queued", "provisioning", "deploying"})
+DEPLOYMENT_RELEASE_ACTIVE_STATUSES = frozenset({"queued", "provisioning", "deploying", "route_activating"})
 DEPLOYMENT_RELEASE_TERMINAL_STATUSES = frozenset({"live", "failed", "rolled_back"})
 
 _COOLIFY_SUCCESS_STATUSES = {

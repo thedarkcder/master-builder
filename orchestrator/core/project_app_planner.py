@@ -11,7 +11,7 @@ from typing import Literal, Sequence
 
 import yaml
 from fastapi import HTTPException, status
-from pydantic import BaseModel, ConfigDict, Field, field_validator
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -50,6 +50,8 @@ _NODE_HINTS = (
     ("vite", "vite", "javascript", 4173, "npm run preview"),
     ("@sveltejs/kit", "sveltekit", "javascript", 3000, "npm run start"),
 )
+_JAVA_DEFAULT_PORT = 8080
+_DEPLOYMENT_OWNED_APP_STATUSES = frozenset({"deploying", "live", "failed"})
 
 
 class ProjectAppPlannerRuntimeApp(BaseModel):
@@ -61,6 +63,7 @@ class ProjectAppPlannerRuntimeApp(BaseModel):
     port: int | None = Field(default=None, ge=1, le=65535)
     healthcheck: str | None = None
     resources: list[dict[str, object]] = Field(default_factory=list)
+    volumes: list[dict[str, object]] = Field(default_factory=list)
     env: dict[str, object] = Field(default_factory=dict)
     secrets: dict[str, object] = Field(default_factory=dict)
     needs_generated_files: bool = False
@@ -85,6 +88,18 @@ class ProjectAppPlannerRuntimeApp(BaseModel):
         if value is None:
             raise ValueError("source_path is required")
         return _normalize_repo_relative_path(value)
+
+    @model_validator(mode="after")
+    def validate_deployment_resource_contract(self) -> "ProjectAppPlannerRuntimeApp":
+        for index, resource in enumerate(self.resources):
+            if not isinstance(resource, dict):
+                continue
+            kind = str(resource.get("kind") or "").strip().lower()
+            if kind == "service":
+                raise ValueError(f"apps.resources[{index}] is a service; use apps.services instead")
+            if kind in {"file", "persistent", "persistent_volume", "volume"}:
+                raise ValueError(f"apps.resources[{index}] is a volume; use apps.volumes instead")
+        return self
 
     @field_validator("build_strategy")
     @classmethod
@@ -117,7 +132,9 @@ class ProjectAppPreScanCandidate:
     deployment_config: dict[str, object]
     analysis_source: str | None
     needs_generated_files: bool
+    services_json: tuple[dict[str, object], ...] = ()
     resources_json: tuple[dict[str, object], ...] = ()
+    volumes_json: tuple[dict[str, object], ...] = ()
     env_json: dict[str, object] = field(default_factory=dict)
     secret_json: dict[str, object] = field(default_factory=dict)
 
@@ -132,7 +149,9 @@ class ProjectAppPreScanCandidate:
             "build_strategy": self.build_strategy,
             "port": self.exposed_port,
             "healthcheck": self.healthcheck,
+            "services": [dict(service) for service in self.services_json],
             "resources": [dict(resource) for resource in self.resources_json],
+            "volumes": [dict(volume) for volume in self.volumes_json],
             "env": dict(self.env_json or {}),
             "secrets": dict(self.secret_json or {}),
             "needs_generated_files": self.needs_generated_files,
@@ -228,6 +247,21 @@ def _source_path_suffix(source_path: str) -> str:
     return hashlib.sha1(source_path.encode("utf-8")).hexdigest()[:8]
 
 
+def _deployment_candidate_name(*, repo_root: Path, directory: Path, evidence: dict[str, object]) -> str:
+    explicit_name = _normalize_optional_string(evidence.get("name"))
+    if explicit_name is not None:
+        return explicit_name
+    package_name = evidence.get("package_name") if isinstance(evidence.get("package_name"), str) else None
+    normalized_package_name = _normalize_optional_string(package_name)
+    if normalized_package_name is not None:
+        return normalized_package_name
+    if directory == repo_root:
+        return repo_root.name
+    if directory.name.lower() in {"docker", "compose", "deployment", "deploy"} and directory.parent != repo_root.parent:
+        return directory.parent.name
+    return directory.name or repo_root.name
+
+
 def _unique_slug(*, base_slug: str, source_path: str, used_slugs: set[str]) -> str:
     candidate = base_slug
     if candidate not in used_slugs:
@@ -250,7 +284,7 @@ def _iter_repo_files(repo_root: Path) -> Sequence[Path]:
     files: list[Path] = []
     for current_root, dirnames, filenames in os.walk(repo_root):
         dirnames[:] = sorted(
-            dirname for dirname in dirnames if dirname not in _IGNORE_DIR_NAMES and not dirname.startswith(".git")
+            dirname for dirname in dirnames if dirname not in _IGNORE_DIR_NAMES and not dirname.startswith(".")
         )
         current_path = Path(current_root)
         for filename in sorted(filenames):
@@ -268,23 +302,254 @@ def _extract_port_from_text(text: str) -> int | None:
     return port
 
 
-def _extract_compose_port(service: dict[str, object]) -> int | None:
+def _extract_compose_port_mappings(service: dict[str, object]) -> tuple[dict[str, object], ...]:
     ports = service.get("ports")
     if not isinstance(ports, list):
-        return None
+        return ()
+    mappings: list[dict[str, object]] = []
     for item in ports:
         raw = str(item or "").strip()
         if not raw:
             continue
-        if ":" in raw:
-            raw = raw.split(":")[-1]
+        protocol = "tcp"
         if "/" in raw:
-            raw = raw.split("/")[0]
-        if raw.isdigit():
-            port = int(raw)
-            if 1 <= port <= 65535:
-                return port
+            raw, protocol = raw.split("/", 1)
+            protocol = protocol.strip() or "tcp"
+        parts = [part.strip() for part in raw.split(":") if part.strip()]
+        if not parts:
+            continue
+        container_raw = parts[-1]
+        host_raw = parts[-2] if len(parts) >= 2 else parts[-1]
+        if not container_raw.isdigit() or not host_raw.isdigit():
+            continue
+        container_port = int(container_raw)
+        host_port = int(host_raw)
+        if 1 <= container_port <= 65535 and 1 <= host_port <= 65535:
+            mappings.append(
+                {
+                    "host_port": host_port,
+                    "container_port": container_port,
+                    "protocol": protocol,
+                }
+            )
+    return tuple(mappings)
+
+
+def _extract_compose_port(service: dict[str, object]) -> int | None:
+    for mapping in _extract_compose_port_mappings(service):
+        port = mapping.get("container_port")
+        if isinstance(port, int) and 1 <= port <= 65535:
+            return port
     return None
+
+
+def _compose_public_port(compose_payload: dict[str, object]) -> int | None:
+    services = compose_payload.get("services") if isinstance(compose_payload.get("services"), dict) else {}
+    if not isinstance(services, dict):
+        return None
+    preferred_markers = ("web", "ui", "frontend", "app", "admin", "temporal-ui", "console")
+    candidates: list[tuple[int, int]] = []
+    for service_name, raw_service in services.items():
+        if not isinstance(raw_service, dict):
+            continue
+        normalized_name = str(service_name or "").strip().lower()
+        image = str(raw_service.get("image") or "").strip().lower()
+        marker_rank = 100
+        for index, marker in enumerate(preferred_markers):
+            if marker in normalized_name or marker in image:
+                marker_rank = index
+                break
+        for mapping in _extract_compose_port_mappings(raw_service):
+            host_port = mapping.get("host_port")
+            container_port = mapping.get("container_port")
+            if not isinstance(host_port, int) or not isinstance(container_port, int):
+                continue
+            http_rank = 0 if container_port in {80, 3000, 4200, 4173, 5000, 8000, 8080, 8088, 9001, 1358} else 50
+            candidates.append((marker_rank + http_rank, host_port))
+    if not candidates:
+        return None
+    candidates.sort(key=lambda item: (item[0], item[1]))
+    return candidates[0][1]
+
+
+def _normalize_resource_key(value: object) -> str:
+    normalized = re.sub(r"[^a-z0-9]+", "-", str(value or "").strip().lower()).strip("-")
+    return normalized or "resource"
+
+
+def _infer_compose_service_resource(service_name: object, service: dict[str, object]) -> tuple[str | None, str | None]:
+    normalized_service_name = str(service_name or "").strip().lower()
+    image = str(service.get("image") or "").strip().lower()
+    admin_helper_markers = {
+        "dejavu",
+        "temporal",
+        "temporal-ui",
+        "pgadmin",
+        "adminer",
+        "kibana",
+        "swagger-ui",
+    }
+    if any(marker in image or marker in normalized_service_name for marker in admin_helper_markers):
+        return None, None
+    if "postgres" in image or "postgis" in image:
+        return "postgres", None
+    if "mysql" in image:
+        return "mysql", None
+    if "mariadb" in image:
+        return "mariadb", None
+    if "redis" in image:
+        return "redis", None
+    if "clickhouse" in image:
+        return "clickhouse", None
+    if "mongo" in image:
+        return "mongodb", None
+    if "minio" in image:
+        return "object_storage", "minio"
+    resource_type_markers = {
+        "activemq": "activemq",
+        "kafka": "kafka",
+        "elasticsearch": "elasticsearch",
+        "mailpit": "smtp",
+    }
+    for marker, resource_type in resource_type_markers.items():
+        if marker in image or marker in normalized_service_name:
+            return resource_type, marker
+
+    service_type_markers = {
+        "rabbitmq": "rabbitmq",
+        "nats": "nats",
+    }
+    for marker, service_type in service_type_markers.items():
+        if marker in image or marker in normalized_service_name:
+            return "service", service_type
+    return "service", None
+
+
+def _compose_volume_mount_path(service: dict[str, object], volume_name: str) -> str | None:
+    volumes = service.get("volumes")
+    if not isinstance(volumes, list):
+        return None
+    for item in volumes:
+        if not isinstance(item, str):
+            continue
+        parts = item.split(":")
+        if len(parts) < 2:
+            continue
+        if parts[0].strip() == volume_name:
+            return parts[1].strip() or None
+    return None
+
+
+def _extract_compose_resources(compose_payload: dict[str, object]) -> tuple[tuple[dict[str, object], ...], tuple[dict[str, object], ...]]:
+    resources: list[dict[str, object]] = []
+    volumes_json: list[dict[str, object]] = []
+    resource_keys: set[str] = set()
+    volume_keys: set[str] = set()
+    services = compose_payload.get("services") if isinstance(compose_payload.get("services"), dict) else {}
+    if isinstance(services, dict):
+        for service_name, raw_service in sorted(services.items()):
+            if not isinstance(raw_service, dict):
+                continue
+            kind, service_type = _infer_compose_service_resource(service_name, raw_service)
+            if kind is None:
+                continue
+            port_mappings = _extract_compose_port_mappings(raw_service)
+            if kind == "service" and service_type is None:
+                has_http_port = any(
+                    mapping.get("container_port") in {80, 3000, 4200, 4173, 5000, 8000, 8080, 8088, 9001, 1358}
+                    for mapping in port_mappings
+                )
+                if not has_http_port:
+                    continue
+                service_type = "website"
+            key = _normalize_resource_key(service_name)
+            if key in resource_keys:
+                continue
+            resource_keys.add(key)
+            config: dict[str, object] = {
+                "compose_service": str(service_name),
+                "source": "docker_compose",
+            }
+            image = _normalize_optional_string(raw_service.get("image"))
+            if image is not None:
+                config["image"] = image
+            if service_type is not None:
+                config["service_type"] = service_type
+            if port_mappings:
+                config["ports"] = [dict(mapping) for mapping in port_mappings]
+            resources.append(
+                {
+                    "key": key,
+                    "kind": kind,
+                    "name": str(service_name),
+                    "config": config,
+                }
+            )
+    volumes = compose_payload.get("volumes") if isinstance(compose_payload.get("volumes"), dict) else {}
+    if isinstance(volumes, dict):
+        for volume_name in sorted(volumes):
+            key = _normalize_resource_key(volume_name)
+            if key in resource_keys or key in volume_keys:
+                continue
+            volume_keys.add(key)
+            mount_path = None
+            if isinstance(services, dict):
+                for raw_service in services.values():
+                    if isinstance(raw_service, dict):
+                        mount_path = _compose_volume_mount_path(raw_service, str(volume_name))
+                        if mount_path:
+                            break
+            config: dict[str, object] = {
+                "compose_volume": str(volume_name),
+                "source": "docker_compose",
+            }
+            if mount_path is not None:
+                config["mount_path"] = mount_path
+            volumes_json.append(
+                {
+                    "key": key,
+                    "type": "persistent",
+                    "name": str(volume_name),
+                    "config": config,
+                }
+            )
+    return tuple(resources), tuple(volumes_json)
+
+
+def _service_record_from_resource(resource: dict[str, object]) -> dict[str, object]:
+    config = dict(resource.get("config")) if isinstance(resource.get("config"), dict) else {}
+    raw_service_type = str(config.get("service_type") or "").strip().lower()
+    service_kind = "api" if raw_service_type == "api" else "website"
+    service_record: dict[str, object] = {
+        "key": resource.get("key"),
+        "kind": service_kind,
+        "name": resource.get("name"),
+        "source_path": config.get("source_path"),
+        "compose_service": config.get("compose_service") or resource.get("key"),
+        "build_strategy": config.get("build_strategy"),
+        "container_port": config.get("container_port")
+        or config.get("target_port")
+        or config.get("exposed_port")
+        or config.get("port"),
+        "public": config.get("public") is not False,
+        "config": {
+            key: value
+            for key, value in config.items()
+            if key
+            not in {
+                "service_type",
+                "source_path",
+                "compose_service",
+                "build_strategy",
+                "container_port",
+                "target_port",
+                "exposed_port",
+                "port",
+                "public",
+            }
+        },
+    }
+    return {key: value for key, value in service_record.items() if value is not None}
 
 
 def _framework_hint_from_text(text: str) -> tuple[str | None, str | None, int | None, str | None, float]:
@@ -350,7 +615,17 @@ def _normalize_requirements_text(text: str) -> tuple[str | None, str | None, int
                 return "python", "python", port, "flask run --host 0.0.0.0 --port 5000", 0.7
             if framework == "streamlit":
                 return "python", "python", port, "streamlit run app.py --server.address 0.0.0.0", 0.7
-    return "python", "python", None, None, 0.3 if lowered.strip() else 0.0
+    return None, None, None, None, 0.0
+
+
+def _normalize_pom_text(text: str) -> tuple[str | None, str | None, int | None, str | None, float]:
+    lowered = text.lower()
+    if "<project" not in lowered:
+        return None, None, None, None, 0.0
+    runtime = "java"
+    if "spring-boot" in lowered or "springframework.boot" in lowered:
+        runtime = "spring_boot"
+    return runtime, "java", _JAVA_DEFAULT_PORT, "java -jar target/*.jar", 0.8
 
 
 def _compose_healthcheck(healthcheck: object) -> str | None:
@@ -389,10 +664,7 @@ def _merge_schema(target: dict[str, object], source: dict[str, object]) -> dict[
 def _build_candidate_from_directory(*, repo_root: Path, directory: Path, evidence: dict[str, object]) -> ProjectAppPreScanCandidate | None:
     rel_dir = directory.relative_to(repo_root).as_posix() if directory != repo_root else "."
     rel_dir = _normalize_repo_relative_path(rel_dir)
-    name = _normalize_optional_string(evidence.get("name")) or directory.name or repo_root.name
-    package_name = evidence.get("package_name") if isinstance(evidence.get("package_name"), str) else None
-    if package_name:
-        name = package_name
+    name = _deployment_candidate_name(repo_root=repo_root, directory=directory, evidence=evidence)
 
     build_strategy = "nixpacks"
     detected_runtime = None
@@ -404,13 +676,17 @@ def _build_candidate_from_directory(*, repo_root: Path, directory: Path, evidenc
     env_schema_json: dict[str, object] = {}
     secret_schema_json: dict[str, object] = {}
     deployment_config: dict[str, object] = {}
+    services_json: tuple[dict[str, object], ...] = ()
     resources_json: tuple[dict[str, object], ...] = ()
+    volumes_json: tuple[dict[str, object], ...] = ()
     env_json: dict[str, object] = {}
     secret_json: dict[str, object] = {}
     needs_generated_files = True
+    has_deployable_evidence = False
 
     dockerfile_text = evidence.get("dockerfile_text")
     if isinstance(dockerfile_text, str):
+        has_deployable_evidence = True
         build_strategy = "dockerfile"
         detected_runtime, detected_language, default_port, default_start, confidence = _framework_hint_from_text(dockerfile_text)
         detection_confidence = max(detection_confidence, 0.9)
@@ -421,6 +697,7 @@ def _build_candidate_from_directory(*, repo_root: Path, directory: Path, evidenc
         needs_generated_files = False
     compose_payload = evidence.get("compose_payload")
     if isinstance(compose_payload, dict):
+        has_deployable_evidence = True
         build_strategy = "docker_compose"
         services = compose_payload.get("services") if isinstance(compose_payload.get("services"), dict) else {}
         first_service = next(iter(services.values()), {}) if isinstance(services, dict) else {}
@@ -429,12 +706,34 @@ def _build_candidate_from_directory(*, repo_root: Path, directory: Path, evidenc
             healthcheck = healthcheck or _compose_healthcheck(first_service.get("healthcheck"))
             start_command = start_command or _normalize_optional_string(first_service.get("command"))
             env_schema_json = _merge_schema(env_schema_json, _extract_env_schema_from_compose(first_service))
+        exposed_port = _compose_public_port(compose_payload) or exposed_port
+        compose_resources, volumes_json = _extract_compose_resources(compose_payload)
+        services_json = tuple(
+            _service_record_from_resource(resource)
+            for resource in compose_resources
+            if str(resource.get("kind") or "").strip().lower() == "service"
+        )
+        resources_json = tuple(
+            resource
+            for resource in compose_resources
+            if str(resource.get("kind") or "").strip().lower() != "service"
+        )
+        deployment_config = {
+            **deployment_config,
+            "source_strategy": "docker_compose",
+            "services": [dict(service) for service in services_json],
+            "resources": [dict(resource) for resource in resources_json],
+            "volumes": [dict(volume) for volume in volumes_json],
+            "backup_policies": [],
+        }
         needs_generated_files = False
         detection_confidence = max(detection_confidence, 0.95)
 
     package_json_text = evidence.get("package_json_text")
     if isinstance(package_json_text, str):
         package_name, runtime, language, default_port, default_start, confidence = _normalize_package_json(package_json_text)
+        if runtime is not None or default_start is not None:
+            has_deployable_evidence = True
         if package_name:
             name = package_name
         if runtime is not None:
@@ -449,6 +748,8 @@ def _build_candidate_from_directory(*, repo_root: Path, directory: Path, evidenc
     pyproject_text = evidence.get("pyproject_text")
     if isinstance(pyproject_text, str):
         runtime, language, default_port, default_start, confidence = _normalize_requirements_text(pyproject_text)
+        if runtime is not None or default_start is not None:
+            has_deployable_evidence = True
         if runtime is not None:
             detected_runtime = detected_runtime or runtime
         if language is not None:
@@ -461,6 +762,8 @@ def _build_candidate_from_directory(*, repo_root: Path, directory: Path, evidenc
     requirements_text = evidence.get("requirements_text")
     if isinstance(requirements_text, str):
         runtime, language, default_port, default_start, confidence = _normalize_requirements_text(requirements_text)
+        if runtime is not None or default_start is not None:
+            has_deployable_evidence = True
         if runtime is not None:
             detected_runtime = detected_runtime or runtime
         if language is not None:
@@ -472,6 +775,7 @@ def _build_candidate_from_directory(*, repo_root: Path, directory: Path, evidenc
         detection_confidence = max(detection_confidence, confidence)
     go_mod_text = evidence.get("go_mod_text")
     if isinstance(go_mod_text, str):
+        has_deployable_evidence = True
         detected_runtime = detected_runtime or "go"
         detected_language = detected_language or "go"
         exposed_port = exposed_port or 8080
@@ -479,6 +783,7 @@ def _build_candidate_from_directory(*, repo_root: Path, directory: Path, evidenc
         detection_confidence = max(detection_confidence, 0.7)
     cargo_text = evidence.get("cargo_text")
     if isinstance(cargo_text, str):
+        has_deployable_evidence = True
         detected_runtime = detected_runtime or "rust"
         detected_language = detected_language or "rust"
         exposed_port = exposed_port or 8080
@@ -486,17 +791,35 @@ def _build_candidate_from_directory(*, repo_root: Path, directory: Path, evidenc
         detection_confidence = max(detection_confidence, 0.7)
     gemfile_text = evidence.get("gemfile_text")
     if isinstance(gemfile_text, str):
+        has_deployable_evidence = True
         detected_runtime = detected_runtime or "ruby"
         detected_language = detected_language or "ruby"
         exposed_port = exposed_port or 3000
         start_command = start_command or "bin/rails server -b 0.0.0.0 -p 3000"
         detection_confidence = max(detection_confidence, 0.7)
+    pom_text = evidence.get("pom_text")
+    if isinstance(pom_text, str):
+        runtime, language, default_port, default_start, confidence = _normalize_pom_text(pom_text)
+        if runtime is not None or default_start is not None:
+            has_deployable_evidence = True
+        if runtime is not None:
+            detected_runtime = detected_runtime or runtime
+        if language is not None:
+            detected_language = detected_language or language
+        if default_port is not None and exposed_port is None:
+            exposed_port = default_port
+        if default_start is not None and start_command is None:
+            start_command = default_start
+        detection_confidence = max(detection_confidence, confidence)
 
     env_example_text = evidence.get("env_example_text")
     if isinstance(env_example_text, str):
         env_schema_json = _merge_schema(env_schema_json, _build_env_schema_from_env_file(env_example_text))
         secret_schema_json = _merge_schema(secret_schema_json, _build_secret_schema_from_env_file(env_example_text))
         detection_confidence = max(detection_confidence, 0.55)
+
+    if not has_deployable_evidence:
+        return None
 
     return ProjectAppPreScanCandidate(
         name=name,
@@ -513,7 +836,9 @@ def _build_candidate_from_directory(*, repo_root: Path, directory: Path, evidenc
         deployment_config=deployment_config,
         analysis_source=_normalize_optional_string(evidence.get("analysis_source")),
         needs_generated_files=needs_generated_files,
+        services_json=services_json,
         resources_json=resources_json,
+        volumes_json=volumes_json,
         env_json=env_json,
         secret_json=secret_json,
     )
@@ -611,6 +936,10 @@ def _scan_repo_for_evidence(repo_root: Path) -> dict[str, dict[str, object]]:
             evidence["requirements_text"] = content
             if not evidence.get("name"):
                 evidence["name"] = file_path.parent.name or repo_root.name
+        elif lowered == "pom.xml":
+            evidence["pom_text"] = content
+            if not evidence.get("name"):
+                evidence["name"] = file_path.parent.name or repo_root.name
         elif lowered == "go.mod":
             evidence["go_mod_text"] = content
             if not evidence.get("name"):
@@ -683,6 +1012,7 @@ def normalize_project_app_planner_output(
 ) -> tuple[ProjectAppNormalizedCandidate, ...]:
     contract = ProjectAppPlannerResponse.model_validate(runtime_payload or {})
     pre_scan_by_source = {candidate.source_path: candidate for candidate in pre_scan_candidates}
+    _validate_runtime_app_sources(contract=contract, pre_scan_by_source=pre_scan_by_source)
     merged: dict[str, ProjectAppNormalizedCandidate] = {}
 
     for runtime_app in contract.apps:
@@ -720,6 +1050,24 @@ def normalize_project_app_planner_output(
     return tuple(normalized)
 
 
+def _validate_runtime_app_sources(
+    *,
+    contract: ProjectAppPlannerResponse,
+    pre_scan_by_source: dict[str, ProjectAppPreScanCandidate],
+) -> None:
+    unknown_sources = sorted(
+        {runtime_app.source_path for runtime_app in contract.apps if runtime_app.source_path not in pre_scan_by_source}
+    )
+    if not unknown_sources:
+        return
+    allowed_sources = sorted(pre_scan_by_source)
+    raise ValueError(
+        "Project app planner returned undeclared source_path(s): "
+        f"{', '.join(unknown_sources)}. Runtime app source_path must match deterministic pre-scan candidates: "
+        f"{', '.join(allowed_sources) if allowed_sources else '<none>'}"
+    )
+
+
 def _merge_candidate(
     *,
     runtime_app: ProjectAppPlannerRuntimeApp,
@@ -738,7 +1086,42 @@ def _merge_candidate(
     detected_language = pre_scan.detected_language if pre_scan is not None else None
     detection_confidence = pre_scan.detection_confidence if pre_scan is not None else 0.5
     needs_generated_files = runtime_app.needs_generated_files or (pre_scan.needs_generated_files if pre_scan is not None else False)
-    resources_json = tuple(dict(resource) for resource in runtime_app.resources if isinstance(resource, dict))
+    runtime_resources = tuple(dict(resource) for resource in runtime_app.resources if isinstance(resource, dict))
+    runtime_volumes = tuple(dict(volume) for volume in runtime_app.volumes if isinstance(volume, dict))
+    if runtime_resources:
+        runtime_services = tuple(
+            _service_record_from_resource(resource)
+            for resource in runtime_resources
+            if str(resource.get("kind") or "").strip().lower() == "service"
+        )
+        runtime_resources = tuple(
+            resource
+            for resource in runtime_resources
+            if str(resource.get("kind") or "").strip().lower() != "service"
+        )
+        services_json = runtime_services
+        resources_json = runtime_resources
+        volumes_json = runtime_volumes
+    elif runtime_volumes:
+        services_json = ()
+        resources_json = ()
+        volumes_json = runtime_volumes
+    elif pre_scan is not None:
+        services_json = tuple(dict(service) for service in getattr(pre_scan, "services_json", ()))
+        resources_json = tuple(dict(resource) for resource in pre_scan.resources_json)
+        volumes_json = tuple(dict(volume) for volume in getattr(pre_scan, "volumes_json", ()))
+    else:
+        services_json = ()
+        resources_json = ()
+        volumes_json = ()
+
+    if services_json or resources_json or volumes_json:
+        deployment_config = {
+            **deployment_config,
+            "services": [dict(service) for service in services_json],
+            "resources": [dict(resource) for resource in resources_json],
+            "volumes": [dict(volume) for volume in volumes_json],
+        }
     env_json = {str(key): value for key, value in runtime_app.env.items()}
     secret_json = {str(key): value for key, value in runtime_app.secrets.items()}
 
@@ -762,7 +1145,9 @@ def _merge_candidate(
         deployment_config=deployment_config,
         analysis_source=analysis_source or (pre_scan.analysis_source if pre_scan is not None else None),
         needs_generated_files=needs_generated_files,
+        services_json=services_json,
         resources_json=resources_json,
+        volumes_json=volumes_json,
         env_json=env_json,
         secret_json=secret_json,
     )
@@ -820,8 +1205,6 @@ def ensure_project_app(session: Session, *, tenant_id: str, project_id: str, can
         session.add(app)
         return app
 
-    existing.name = candidate.name
-    existing.slug = candidate.slug
     existing.detection_confidence = candidate.detection_confidence
     existing.detected_runtime = candidate.detected_runtime
     existing.detected_language = candidate.detected_language
@@ -834,7 +1217,8 @@ def ensure_project_app(session: Session, *, tenant_id: str, project_id: str, can
     existing.secret_schema_json = dict(candidate.secret_schema_json or {})
     if candidate.deployment_config:
         existing.deployment_config = dict(candidate.deployment_config)
-    existing.status = candidate.status
+    if str(existing.status or "").strip().lower() not in _DEPLOYMENT_OWNED_APP_STATUSES:
+        existing.status = candidate.status
     existing.updated_at = now
     return existing
 

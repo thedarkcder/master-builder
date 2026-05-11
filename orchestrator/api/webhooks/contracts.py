@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session
 from orchestrator.api.atlassian_oauth.connection_service import tenant_atlassian_oauth_context
 from orchestrator.api.webhooks.github_payload_contracts import (
     extract_installation_id,
+    extract_push_deployment_source,
     extract_pull_request_targets,
     extract_repository_full_name,
     find_tenant_by_installation_id,
@@ -54,6 +55,7 @@ __all__ = [
     "extract_issue_payload",
     "extract_jira_comment_author_account_id",
     "extract_jira_comment_text",
+    "extract_push_deployment_source",
     "extract_pull_request_targets",
     "extract_repository_full_name",
     "extract_status_transition",

@@ -17,6 +17,7 @@ from orchestrator.core.workflow.definition import (
 )
 from orchestrator.core.workflow.handler_composition import installed_operation_retry_capabilities
 from orchestrator.core.workflow.type_catalog import get_workflow_type
+from orchestrator.temporal.workflow_registry import resolve_temporal_binding_for_handler
 
 
 def test_workflow_step_decorator_infers_ordered_graph() -> None:
@@ -79,6 +80,27 @@ def test_registered_jira_project_reconciliation_workflow_has_expected_steps_and_
         "jira_label_reconciliation",
         "parent_workflow_reconciliation",
         "reconciliation_summary",
+    }
+
+
+def test_registered_project_deployment_setup_uses_dedicated_temporal_workflow() -> None:
+    workflow_type = get_workflow_type(workflow_type_key="project_deployment_setup")
+    binding = resolve_temporal_binding_for_handler(handler_key=workflow_type.handler_key)
+
+    assert workflow_type.orchestration_backend == "temporal"
+    assert workflow_type.handler_key == "project_deployment_setup"
+    assert binding.workflow_name == "ProjectDeploymentSetupWorkflow"
+    assert binding.execution_mode == "setup"
+    assert [step.key for step in workflow_type.steps] == [
+        "repo_deployment_analysis",
+        "deployment_configuration",
+        "initial_release",
+    ]
+    assert {unit.key for unit in workflow_type.work_units} == {
+        "repo_deployment_analysis.checkout",
+        "repo_deployment_analysis.analyze",
+        "deployment_configuration.prepare_apps",
+        "initial_release.create",
     }
 
 

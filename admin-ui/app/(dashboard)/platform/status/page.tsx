@@ -606,13 +606,6 @@ export default function PlatformStatusPage() {
 
   return (
     <div className="w-full space-y-6">
-      <div className="flex flex-wrap items-center justify-end gap-3">
-        <Button variant="outline" size="sm" onClick={() => void loadStatus()} disabled={loading}>
-          <RefreshCw className={cn("mr-1.5 h-3.5 w-3.5", loading && "animate-spin")} />
-          Refresh
-        </Button>
-      </div>
-
       <div className="grid gap-3 sm:grid-cols-4">
         {[
           { label: "Healthy", value: counts.healthy },

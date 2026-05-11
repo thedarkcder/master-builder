@@ -617,9 +617,6 @@ export default function TenantStageDiagnosticsPage() {
                   />
                   Normalize per stage
                 </label>
-                <Button onClick={() => void loadCompare()} disabled={compareBusy}>
-                  {compareBusy ? "Loading..." : "Refresh compare"}
-                </Button>
               </div>
             </div>
             {(compareResults?.projects.length ?? 0) < 2 ? (
@@ -667,9 +664,6 @@ export default function TenantStageDiagnosticsPage() {
           </div>
         </section>
         <div className="flex flex-wrap items-center gap-2">
-          <Button onClick={() => void load()} disabled={busy}>
-            {busy ? "Loading..." : "Refresh"}
-          </Button>
           <Button
             variant="outline"
             onClick={() => {

@@ -25,6 +25,8 @@ export default auth((request: NextRequest & { auth: Session | null }) => {
     pathname === "/forgot-password" ||
     pathname === "/reset-password" ||
     pathname === "/privacy" ||
+    pathname === "/blog" ||
+    pathname.startsWith("/blog/") ||
     pathname.startsWith("/invite/accept") ||
     tenantScopedSurface === "start" ||
     tenantScopedSurface === "start-engineering";

@@ -12,7 +12,9 @@ from orchestrator.api.admin.deployment_config_service import (
     get_project_default_app,
     get_project_app,
     normalize_project_deployment_config,
+    normalize_project_deployment_policy,
     project_deployment_config_to_schema,
+    project_deployment_policy_to_schema,
     tenant_deployment_plane_to_schema,
 )
 from orchestrator.api.admin.deployment_restore_service import (
@@ -44,10 +46,14 @@ from orchestrator.api.schemas import (
     ProjectDeploymentDomainApplyRequest,
     ProjectDeploymentOperationItemRead,
     ProjectDeploymentOperationRead,
+    ProjectDeploymentPolicyWrite,
     ProjectDeploymentReleaseCreate,
+    ProjectDeploymentSetupStartRead,
     ProjectDeploymentResourceApplyRequest,
     ProjectDeploymentResourceWrite,
     ProjectDeploymentRestoreRunRead,
+    ProjectDeploymentVolumeApplyRequest,
+    ProjectDeploymentVolumeWrite,
     ProjectNavigationRead,
     TenantDeploymentPlaneRead,
     TenantDeploymentsOverviewAppRead,
@@ -56,6 +62,10 @@ from orchestrator.api.schemas import (
     TenantDeploymentsOverviewSummaryRead,
 )
 from orchestrator.core.config import get_settings
+from orchestrator.core.deployment_setup.start import (
+    project_deployment_setup_execution_key,
+    start_project_deployment_setup_workflow,
+)
 from orchestrator.core.platform.secret_manager import normalize_secret_ref
 from orchestrator.core.platform.tenant_secret_service import tenant_secret_service
 from orchestrator.core.webhooks.job_queue import (
@@ -63,7 +73,7 @@ from orchestrator.core.webhooks.job_queue import (
     WebhookJobEnqueueRequest,
     enqueue_webhook_job,
 )
-from orchestrator.storage.models import Project, ProjectApp, ProjectAppAnalysisRun, ProjectDeploymentRelease, Tenant
+from orchestrator.storage.models import DeploymentHostCommand, Project, ProjectApp, ProjectAppAnalysisRun, ProjectDeploymentRelease, Tenant
 from orchestrator.storage.run_queue_events import notify_webhook_job_enqueued
 from orchestrator.tools.coolify_api import CoolifyApiClient, CoolifyApiConfig, CoolifyApiError
 from orchestrator.tools.discord_api import DiscordApiError
@@ -83,8 +93,7 @@ _DATABASE_RESOURCE_KINDS = {
     "clickhouse",
     "dragonfly",
 }
-_SERVICE_RESOURCE_KINDS = {"service", "one_click_service", "object_storage", "s3", "minio_s3"}
-_STORAGE_RESOURCE_KINDS = {"persistent", "persistent_volume", "volume", "file"}
+_SERVICE_RESOURCE_KINDS = {"one_click_service", "object_storage", "s3", "minio_s3"}
 _UNSUPPORTED_RESOURCE_KINDS: set[str] = set()
 
 class AdminProjectService:
@@ -374,6 +383,82 @@ class AdminProjectService:
         session.refresh(project)
         return self._project_to_schema(project, tenant_policy=tenant.policy_config)
 
+    def get_project_deployment_policy(self, *, session, tenant_id: str, project_id: str) -> object:
+        tenant = session.get(Tenant, tenant_id)
+        if tenant is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+        project = session.get(Project, project_id)
+        if project is None or project.tenant_id != tenant_id:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+        return project_deployment_policy_to_schema(project)
+
+    def update_project_deployment_policy(
+        self,
+        *,
+        session,
+        tenant_id: str,
+        project_id: str,
+        payload: ProjectDeploymentPolicyWrite,
+    ) -> object:
+        tenant = session.get(Tenant, tenant_id)
+        if tenant is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+        project = session.get(Project, project_id)
+        if project is None or project.tenant_id != tenant_id:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+        project.deployment_config = normalize_project_deployment_policy(payload)
+        project.updated_at = datetime.now(timezone.utc)
+        session.commit()
+        session.refresh(project)
+        return project_deployment_policy_to_schema(project)
+
+    def complete_project_deployment_setup(
+        self,
+        *,
+        session,
+        tenant_id: str,
+        project_id: str,
+        payload: ProjectDeploymentPolicyWrite,
+        requested_by_user_id: str | None,
+    ) -> object:
+        tenant = session.get(Tenant, tenant_id)
+        if tenant is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+        project = session.get(Project, project_id)
+        if project is None or project.tenant_id != tenant_id:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+        if not payload.enabled:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Deployment setup completion requires deployments to be enabled",
+            )
+        project.deployment_config = normalize_project_deployment_policy(payload)
+        project.updated_at = datetime.now(timezone.utc)
+        session.commit()
+        session.refresh(project)
+        policy = project_deployment_policy_to_schema(project)
+        try:
+            start_result = start_project_deployment_setup_workflow(
+                session=session,
+                settings=self._settings_factory(),
+                tenant_id=tenant_id,
+                project_id=project_id,
+                project_name=str(project.name or project_id),
+                execution_key=project_deployment_setup_execution_key(tenant_id=tenant_id, project_id=project_id),
+                production_branch=str(policy.production_branch or ""),
+                requested_by_user_id=requested_by_user_id,
+            )
+        except Exception as exc:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"Failed to start deployment setup workflow: {exc}",
+            ) from exc
+        return ProjectDeploymentSetupStartRead(
+            workflow_id=start_result.workflow_id,
+            status=start_result.status,
+            policy=policy,
+        )
+
     def get_project_app_deployment_config(self, *, session, tenant_id: str, project_id: str, app_id: str) -> object:
         tenant = session.get(Tenant, tenant_id)
         if tenant is None:
@@ -407,9 +492,7 @@ class AdminProjectService:
         normalized_config = normalize_project_deployment_config(payload)
         app.deployment_config = normalized_config
         app.updated_at = datetime.now(timezone.utc)
-        if app.source_path == ".":
-            project.deployment_config = normalized_config
-            project.updated_at = app.updated_at
+        project.updated_at = app.updated_at
         session.commit()
         session.refresh(app)
         return project_deployment_config_to_schema(app)
@@ -436,19 +519,14 @@ class AdminProjectService:
         tenant_id: str,
         project_id: str,
         app_id: str,
-        payload,
+        payload: ProjectDeploymentReleaseCreate,
         requested_by_user_id: str | None,
-    ) -> object:  # noqa: ANN001
+    ) -> object:
         return create_project_deployment_release(
             session=session,
             tenant_id=tenant_id,
             project_id=project_id,
-            payload=ProjectDeploymentReleaseCreate(
-                app_id=app_id,
-                git_ref=payload.git_ref,
-                commit_sha=payload.commit_sha,
-                reason=payload.reason,
-            ),
+            payload=payload.model_copy(update={"app_id": app_id}),
             requested_by_user_id=requested_by_user_id,
         )
 
@@ -488,19 +566,51 @@ class AdminProjectService:
             app_id=app_id,
         )
 
-    def list_project_apps(self, *, session, tenant_id: str, project_id: str) -> list[object]:
+    def list_project_apps(
+        self,
+        *,
+        session,
+        tenant_id: str,
+        project_id: str,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> list[object]:
         tenant = session.get(Tenant, tenant_id)
         if tenant is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
         project = session.get(Project, project_id)
         if project is None or project.tenant_id != tenant_id:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
-        apps = session.execute(
+        if limit is not None and limit < 1:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="limit must be greater than 0")
+        if offset < 0:
+            raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="offset must be greater than or equal to 0")
+        query = (
             select(ProjectApp)
-            .where(ProjectApp.tenant_id == tenant_id, ProjectApp.project_id == project_id)
-            .order_by(ProjectApp.created_at.asc())
-        ).scalars().all()
-        return [_project_app_to_schema(app) for app in apps]
+            .where(
+                ProjectApp.tenant_id == tenant_id,
+                ProjectApp.project_id == project_id,
+                ProjectApp.source_path == ".",
+            )
+            .order_by(ProjectApp.created_at.asc(), ProjectApp.app_id.asc())
+            .offset(offset)
+        )
+        if limit is not None:
+            query = query.limit(limit)
+        apps = session.execute(query).scalars().all()
+        return [
+            _project_app_to_schema(
+                app,
+                latest_release=_latest_deployment_release(
+                    session=session,
+                    tenant_id=tenant_id,
+                    project_id=project_id,
+                    app_id=app.app_id,
+                    include_legacy_default_release=app.source_path == ".",
+                ),
+            )
+            for app in apps
+        ]
 
     def create_project_app(self, *, session, tenant_id: str, project_id: str, payload: ProjectAppCreate) -> object:  # noqa: ANN001
         tenant = session.get(Tenant, tenant_id)
@@ -543,7 +653,16 @@ class AdminProjectService:
                 detail="An app with the same slug or source path already exists for this project",
             ) from exc
         session.refresh(app)
-        return _project_app_to_schema(app)
+        return _project_app_to_schema(
+            app,
+            latest_release=_latest_deployment_release(
+                session=session,
+                tenant_id=tenant_id,
+                project_id=project_id,
+                app_id=app.app_id,
+                include_legacy_default_release=app.source_path == ".",
+            ),
+        )
 
     def get_project_app(self, *, session, tenant_id: str, project_id: str, app_id: str) -> object:
         tenant = session.get(Tenant, tenant_id)
@@ -555,6 +674,7 @@ class AdminProjectService:
         app = get_project_app(session=session, tenant_id=tenant_id, project_id=project_id, app_id=app_id)
         if app is None:
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project app not found")
+        _require_project_level_deployment(app)
         return _project_app_to_schema(app)
 
     def update_project_app(
@@ -590,8 +710,6 @@ class AdminProjectService:
             updates["name"] = str(updates["name"]).strip()
         for field_name, value in updates.items():
             setattr(app, field_name, value)
-        if app.source_path == ".":
-            project.deployment_config = dict(app.deployment_config)
         app.updated_at = datetime.now(timezone.utc)
         project.updated_at = app.updated_at
         try:
@@ -604,6 +722,53 @@ class AdminProjectService:
             ) from exc
         session.refresh(app)
         return _project_app_to_schema(app)
+
+    def delete_project_app(self, *, session, tenant_id: str, project_id: str, app_id: str) -> None:  # noqa: ANN001
+        tenant = session.get(Tenant, tenant_id)
+        if tenant is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+        project = session.get(Project, project_id)
+        if project is None or project.tenant_id != tenant_id:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+        app = get_project_app(session=session, tenant_id=tenant_id, project_id=project_id, app_id=app_id)
+        if app is None:
+            raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project app not found")
+
+        active_release = session.execute(
+            select(ProjectDeploymentRelease.release_id)
+            .where(
+                ProjectDeploymentRelease.tenant_id == tenant_id,
+                ProjectDeploymentRelease.project_id == project_id,
+                ProjectDeploymentRelease.app_id == app_id,
+                ProjectDeploymentRelease.status.in_(("queued", "provisioning", "deploying")),
+            )
+            .limit(1)
+        ).scalar_one_or_none()
+        if active_release is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="App has an active deployment. Wait for it to finish before removing the app.",
+            )
+
+        active_command = session.execute(
+            select(DeploymentHostCommand.command_id)
+            .where(
+                DeploymentHostCommand.tenant_id == tenant_id,
+                DeploymentHostCommand.project_id == project_id,
+                DeploymentHostCommand.app_id == app_id,
+                DeploymentHostCommand.status.in_(("queued", "claimed", "running")),
+            )
+            .limit(1)
+        ).scalar_one_or_none()
+        if active_command is not None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="App has an active deployment host command. Wait for it to finish before removing the app.",
+            )
+
+        project.updated_at = datetime.now(timezone.utc)
+        session.delete(app)
+        session.commit()
 
     def list_project_app_analysis_runs(self, *, session, tenant_id: str, project_id: str) -> list[object]:
         tenant = session.get(Tenant, tenant_id)
@@ -845,6 +1010,23 @@ class AdminProjectService:
         payload: ProjectDeploymentResourceApplyRequest,
     ) -> ProjectDeploymentOperationRead:
         return apply_project_deployment_resources(
+            session=session,
+            tenant_id=tenant_id,
+            project_id=project_id,
+            payload=payload,
+            app_id=app_id,
+        )
+
+    def apply_project_app_deployment_volumes(
+        self,
+        *,
+        session,
+        tenant_id: str,
+        project_id: str,
+        app_id: str,
+        payload: ProjectDeploymentVolumeApplyRequest,
+    ) -> ProjectDeploymentOperationRead:
+        return apply_project_deployment_volumes(
             session=session,
             tenant_id=tenant_id,
             project_id=project_id,
@@ -1104,7 +1286,7 @@ def _normalize_optional_string(value: object) -> str | None:
     return normalized or None
 
 
-def _project_app_to_schema(app: ProjectApp) -> ProjectAppRead:
+def _project_app_to_schema(app: ProjectApp, *, latest_release: ProjectDeploymentRelease | None = None) -> ProjectAppRead:
     return ProjectAppRead(
         app_id=app.app_id,
         tenant_id=app.tenant_id,
@@ -1124,6 +1306,14 @@ def _project_app_to_schema(app: ProjectApp) -> ProjectAppRead:
         secret_schema_json=_coerce_dict(app.secret_schema_json),
         deployment_config=project_deployment_config_to_schema(app),
         status=app.status,
+        latest_release_id=latest_release.release_id if latest_release is not None else None,
+        latest_release_status=latest_release.status if latest_release is not None else None,
+        latest_release_name=(
+            f"{latest_release.git_ref} @ {latest_release.commit_sha[:8]}" if latest_release is not None else None
+        ),
+        latest_release_git_ref=latest_release.git_ref if latest_release is not None else None,
+        latest_release_commit_sha=latest_release.commit_sha if latest_release is not None else None,
+        last_error=_normalize_optional_string(latest_release.last_error) if latest_release is not None else None,
         created_at=app.created_at,
         updated_at=app.updated_at,
     )
@@ -1232,6 +1422,19 @@ def _latest_application_uuid(release: ProjectDeploymentRelease | None) -> str | 
     return _normalize_optional_string(provider_context.get("application_uuid"))
 
 
+def _is_project_level_deployment(app: ProjectApp) -> bool:
+    return str(app.source_path or "").strip() == "."
+
+
+def _require_project_level_deployment(app: ProjectApp) -> None:
+    if _is_project_level_deployment(app):
+        return
+    raise HTTPException(
+        status_code=status.HTTP_404_NOT_FOUND,
+        detail="Deployment not found",
+    )
+
+
 def _build_internal_coolify_client(
     *,
     session,
@@ -1284,6 +1487,7 @@ def _deployment_context(
     )
     if selected_app is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project app not found")
+    _require_project_level_deployment(selected_app)
     return (
         tenant,
         project,
@@ -1408,15 +1612,15 @@ def _build_database_payload(
     return _compact_payload(payload)
 
 
-def _build_storage_payload(resource: ProjectDeploymentResourceWrite) -> dict[str, object] | None:
-    config = _coerce_dict(resource.config)
+def _build_storage_payload(volume: ProjectDeploymentVolumeWrite) -> dict[str, object] | None:
+    config = _coerce_dict(volume.config)
     mount_path = _normalize_optional_string(config.get("mount_path"))
     if mount_path is None:
         return None
     payload: dict[str, object] = {
-        "type": "file" if str(resource.kind or "").strip().lower() == "file" else "persistent",
+        "type": volume.type,
         "mount_path": mount_path,
-        "name": _normalize_optional_string(resource.name) or resource.key,
+        "name": _normalize_optional_string(volume.name) or volume.key,
     }
     for key in ("host_path", "content", "fs_path", "is_directory"):
         value = config.get(key)
@@ -1520,9 +1724,10 @@ def _store_deployment_config(
     deployment_config: ProjectDeploymentConfigRead,
 ) -> None:  # noqa: ANN001
     _ = tenant_id
-    project_app.deployment_config = deployment_config.model_dump(exclude_none=True)
-    if project_app.source_path == ".":
-        project.deployment_config = deployment_config.model_dump(exclude_none=True)
+    _ = project
+    serialized = deployment_config.model_dump(exclude_none=True)
+    serialized.pop("enabled", None)
+    project_app.deployment_config = serialized
 
 
 def apply_project_deployment_resources(
@@ -1605,82 +1810,6 @@ def apply_project_deployment_resources(
                         status="applied",
                         provider_uuid=provider_uuid,
                         details={"database_type": database_type},
-                    )
-                )
-            except CoolifyApiError as exc:
-                items.append(
-                    _item_result(
-                        key=resource.key,
-                        kind=resource.kind,
-                        status="failed",
-                        message=str(exc),
-                    )
-                )
-            continue
-
-        if resource_kind in _STORAGE_RESOURCE_KINDS:
-            if client is None:
-                items.append(
-                    _item_result(
-                        key=resource.key,
-                        kind=resource.kind,
-                        status="failed",
-                        message=client_error,
-                    )
-                )
-                continue
-            if application_uuid is None:
-                items.append(
-                    _item_result(
-                        key=resource.key,
-                        kind=resource.kind,
-                        status="skipped",
-                        message="No Coolify application UUID is available yet for storage resources",
-                    )
-                )
-                continue
-            payload_data = _build_storage_payload(resource)
-            if payload_data is None:
-                items.append(
-                    _item_result(
-                        key=resource.key,
-                        kind=resource.kind,
-                        status="failed",
-                        message="Storage resources require mount_path",
-                    )
-                )
-                continue
-            try:
-                existing_uuid = _normalize_optional_string(_coerce_dict(resource.config).get("coolify_uuid"))
-                if existing_uuid is None:
-                    provider_uuid = client.create_application_storage(
-                        application_uuid=application_uuid,
-                        payload=payload_data,
-                    )
-                else:
-                    payload_with_uuid = dict(payload_data)
-                    payload_with_uuid["uuid"] = existing_uuid
-                    client.update_application_storage(
-                        application_uuid=application_uuid,
-                        payload=payload_with_uuid,
-                    )
-                    provider_uuid = existing_uuid
-                if provider_uuid is not None:
-                    _merge_item_config(
-                        resource,
-                        {
-                            "coolify_uuid": provider_uuid,
-                            "coolify_application_uuid": application_uuid,
-                        },
-                    )
-                    updated = True
-                items.append(
-                    _item_result(
-                        key=resource.key,
-                        kind=resource.kind,
-                        status="applied",
-                        provider_uuid=provider_uuid,
-                        details={"application_uuid": application_uuid},
                     )
                 )
             except CoolifyApiError as exc:
@@ -1778,6 +1907,127 @@ def apply_project_deployment_resources(
 
     return _deployment_operation_from_items(
         operation="apply_resources",
+        tenant_id=tenant_id,
+        project_id=project_id,
+        provider=_INTERNAL_COOLIFY_PROVIDER,
+        items=items,
+        application_uuid=_latest_application_uuid(latest_release) or application_uuid,
+    )
+
+
+def apply_project_deployment_volumes(
+    *,
+    session,
+    tenant_id: str,
+    project_id: str,
+    payload: ProjectDeploymentVolumeApplyRequest,
+    app_id: str | None = None,
+) -> ProjectDeploymentOperationRead:  # noqa: ANN001
+    tenant, project, project_app, tenant_plane, project_deployment, latest_release = _deployment_context(
+        session=session,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        app_id=app_id,
+    )
+    selected_volumes = _selected_items_by_key(list(project_deployment.volumes), payload.volume_keys)
+    client, client_error = _build_internal_coolify_client(
+        session=session,
+        tenant=tenant,
+        tenant_plane=tenant_plane,
+        project=project,
+    )
+    application_uuid = _latest_application_uuid(latest_release)
+    updated = False
+    items: list[ProjectDeploymentOperationItemRead] = []
+    for volume in selected_volumes:
+        if client is None:
+            items.append(
+                _item_result(
+                    key=volume.key,
+                    kind=volume.type,
+                    status="failed",
+                    message=client_error,
+                )
+            )
+            continue
+        if application_uuid is None:
+            items.append(
+                _item_result(
+                    key=volume.key,
+                    kind=volume.type,
+                    status="skipped",
+                    message="No Coolify application UUID is available yet for deployment volumes",
+                )
+            )
+            continue
+        payload_data = _build_storage_payload(volume)
+        if payload_data is None:
+            items.append(
+                _item_result(
+                    key=volume.key,
+                    kind=volume.type,
+                    status="failed",
+                    message="Deployment volumes require mount_path",
+                )
+            )
+            continue
+        try:
+            existing_uuid = _normalize_optional_string(_coerce_dict(volume.config).get("coolify_uuid"))
+            if existing_uuid is None:
+                provider_uuid = client.create_application_storage(
+                    application_uuid=application_uuid,
+                    payload=payload_data,
+                )
+            else:
+                payload_with_uuid = dict(payload_data)
+                payload_with_uuid["uuid"] = existing_uuid
+                client.update_application_storage(
+                    application_uuid=application_uuid,
+                    payload=payload_with_uuid,
+                )
+                provider_uuid = existing_uuid
+            if provider_uuid is not None:
+                _merge_item_config(
+                    volume,
+                    {
+                        "coolify_uuid": provider_uuid,
+                        "coolify_application_uuid": application_uuid,
+                    },
+                )
+                updated = True
+            items.append(
+                _item_result(
+                    key=volume.key,
+                    kind=volume.type,
+                    status="applied",
+                    provider_uuid=provider_uuid,
+                    details={"application_uuid": application_uuid},
+                )
+            )
+        except CoolifyApiError as exc:
+            items.append(
+                _item_result(
+                    key=volume.key,
+                    kind=volume.type,
+                    status="failed",
+                    message=str(exc),
+                )
+            )
+
+    if updated:
+        _store_deployment_config(
+            session=session,
+            tenant_id=tenant_id,
+            project=project,
+            project_app=project_app,
+            deployment_config=project_deployment,
+        )
+        project.updated_at = datetime.now(timezone.utc)
+        session.commit()
+        session.refresh(project)
+
+    return _deployment_operation_from_items(
+        operation="apply_volumes",
         tenant_id=tenant_id,
         project_id=project_id,
         provider=_INTERNAL_COOLIFY_PROVIDER,

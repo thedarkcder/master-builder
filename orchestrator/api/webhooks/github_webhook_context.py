@@ -11,6 +11,7 @@ from orchestrator.api.webhooks.payload_utils import read_json_payload
 from orchestrator.api.webhooks.contracts import (
     extract_delivery_id,
     extract_installation_id,
+    extract_push_deployment_source,
     extract_pull_request_targets,
     extract_repository_full_name,
     find_tenant_by_installation_id,
@@ -171,7 +172,8 @@ async def resolve_github_webhook_context(*, request: Request, session, settings,
         "check_suite",
         "check_run",
     }
-    if github_event not in review_events:
+    deployment_events = {"push"}
+    if github_event not in review_events | deployment_events:
         return github_response(
             status_code=status.HTTP_202_ACCEPTED,
             request_id=request_id,
@@ -185,7 +187,8 @@ async def resolve_github_webhook_context(*, request: Request, session, settings,
 
     repo_full_name = extract_repository_full_name(payload)
     pr_targets = extract_pull_request_targets(payload)
-    if repo_full_name is None or not pr_targets:
+    push_source = extract_push_deployment_source(payload) if github_event == "push" else None
+    if repo_full_name is None or (github_event in review_events and not pr_targets):
         return github_response(
             status_code=status.HTTP_202_ACCEPTED,
             request_id=request_id,
@@ -195,6 +198,17 @@ async def resolve_github_webhook_context(*, request: Request, session, settings,
             action=normalized_action,
             accepted=False,
             reason="missing_pr_context",
+        )
+    if github_event == "push" and push_source is None:
+        return github_response(
+            status_code=status.HTTP_202_ACCEPTED,
+            request_id=request_id,
+            delivery_id=delivery_id,
+            tenant_id=tenant.tenant_id,
+            event=github_event,
+            action=normalized_action,
+            accepted=False,
+            reason="missing_push_deployment_source",
         )
 
     project = resolve_active_project_for_repo(

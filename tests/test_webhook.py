@@ -856,6 +856,33 @@ class JiraWebhookTests(JiraWebhookTestsHarness):
         self.assertEqual(response.json()["tenant_id"], "tenant-webhook")
         self.assertEqual(response.json()["reason"], "missing_pr_context")
 
+    def test_github_push_webhook_enqueues_deployment_event(self) -> None:
+        response = self.client.post(
+            "/github/webhook",
+            json={
+                "ref": "refs/heads/main",
+                "after": "abcdef1234567890",
+                "installation": {"id": 12345},
+                "repository": {"full_name": "example/repo"},
+            },
+            headers={
+                "X-GitHub-Event": "push",
+                "X-GitHub-Delivery": "gh-deploy-1",
+            },
+        )
+
+        self.assertEqual(response.status_code, 202)
+        body = response.json()
+        self.assertTrue(body["accepted"])
+        self.assertTrue(body["queued"])
+        self.assertEqual(body["branch"], "main")
+        self.assertEqual(body["commit_sha"], "abcdef1234567890")
+        with self.session_factory() as session:
+            job = session.execute(select(WebhookJob)).scalar_one()
+        self.assertEqual(job.transport, "github_deployment_webhook")
+        self.assertEqual(job.context_json["branch"], "main")
+        self.assertEqual(job.context_json["commit_sha"], "abcdef1234567890")
+
     def test_github_webhook_rejects_invalid_signature_when_global_secret_configured(self) -> None:
         self.client.put(
             "/api/admin/secrets/platform%2FGITHUB_WEBHOOK_SECRET",

@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
+from fastapi import HTTPException
 from sqlalchemy import select
 
 from orchestrator.core.workflow.execution_projection import WorkflowExecutionReference, WorkflowSourceReference
@@ -323,3 +324,45 @@ class WorkflowLifecycleTests(SqliteTemplateDbTestCase):
 
         assert recovered == 1
         assert restarted_operation_ids == [running_operation_id]
+
+    def test_stale_recovery_marks_unsupported_running_attempt_failed(self) -> None:
+        with self.session_factory() as session:
+            workflow_type = get_workflow_type(session, workflow_type_key="project_deployment_setup")
+            request = self._request(issue_key="PROJECT-DEPLOYMENT")
+            lifecycle = DurableWorkflowLifecycle(
+                session=session,
+                workflow_type=workflow_type,
+                tenant_id=request.tenant_id,
+                project_id=request.project_id,
+                execution=request.execution,
+            )
+            lifecycle.ensure_execution(display_name="Unsupported stale", description="Unsupported restart.")
+            operation, attempt = lifecycle.start_operation_attempt(operation_type="repo_deployment_analysis")
+            attempt_id = attempt.attempt_id
+            workflow_id = lifecycle._ensure_projection().workflow.workflow_id
+            attempt.last_heartbeat_at = datetime.now(timezone.utc) - timedelta(minutes=20)
+            attempt.lease_expires_at = datetime.now(timezone.utc) - timedelta(minutes=15)
+            session.commit()
+
+        def _restart_use_case(**_kwargs):  # noqa: ANN001
+            raise HTTPException(status_code=409, detail="No executable restart handler is registered for this operation")
+
+        recovered = recover_stale_workflow_operation_attempts(
+            session_factory=self.session_factory,
+            stale_timeout_seconds=300,
+            actor="test-sweeper",
+            restart_workflow_operation_fn=_restart_use_case,
+        )
+
+        assert recovered == 0
+        with self.session_factory() as session:
+            persisted_attempt = session.get(WorkflowOperationAttempt, attempt_id)
+            persisted_workflow = session.get(WorkflowExecution, workflow_id)
+
+        assert persisted_attempt is not None
+        assert persisted_attempt.status == "failed"
+        assert persisted_attempt.error_category == "stale_recovery_unsupported"
+        assert persisted_attempt.retryable is False
+        assert persisted_workflow is not None
+        assert persisted_workflow.status == "failed"
+        assert "No executable restart handler" in str(persisted_workflow.last_error)

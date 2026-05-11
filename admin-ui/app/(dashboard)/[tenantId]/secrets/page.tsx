@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { useParams } from "next/navigation";
-import { KeyRound, Pencil, RefreshCw, Save, SearchCheck, Trash2, X } from "lucide-react";
+import { KeyRound, Pencil, Save, SearchCheck, Trash2, X } from "lucide-react";
 
 import { useAuth } from "@/components/auth-provider";
 import { Badge } from "@/components/ui/badge";
@@ -142,13 +142,6 @@ export default function TenantSecretsPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-end">
-        <Button variant="outline" size="sm" onClick={() => void refresh()} disabled={loading}>
-          <RefreshCw className={`mr-1.5 h-3.5 w-3.5 ${loading ? "animate-spin" : ""}`} />
-          Refresh
-        </Button>
-      </div>
-
       {statusLine ? (
         <div className={`rounded-xl border px-4 py-3 text-sm ${statusClasses}`}>{statusLine}</div>
       ) : null}

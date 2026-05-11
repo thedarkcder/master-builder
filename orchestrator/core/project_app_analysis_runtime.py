@@ -40,7 +40,9 @@ def _candidate_prompt_json(candidate) -> dict[str, object]:  # noqa: ANN001
         "secret_schema_json": candidate.secret_schema_json,
         "analysis_source": candidate.analysis_source,
         "needs_generated_files": candidate.needs_generated_files,
+        "services": [dict(service) for service in getattr(candidate, "services_json", ())],
         "resources": [dict(resource) for resource in candidate.resources_json],
+        "volumes": [dict(volume) for volume in getattr(candidate, "volumes_json", ())],
     }
 
 

@@ -13,7 +13,7 @@ from orchestrator.core.workflow.engine import WorkflowEngineState
 from orchestrator.core.workflow.operation_service import WorkflowOperationHandle
 from orchestrator.core.workflow.handler_registry import WorkflowHandlerRegistry
 from orchestrator.core.workflow.operation_retry_use_case import retry_workflow_operation_with_registered_handler
-from orchestrator.core.workflow.execution_projection import workflow_execution_id
+from orchestrator.core.workflow.execution_projection import ensure_workflow_execution, workflow_execution_id
 from orchestrator.core.workflow.type_catalog import get_workflow_type, normalize_workflow_retry_policy_config
 from orchestrator.storage.models import Run, RunHumanInputRequest, WorkflowExecution, WorkflowOperation
 from orchestrator.temporal.client import connect_temporal_client
@@ -23,6 +23,7 @@ from orchestrator.temporal.payloads import (
     HandlerWorkflowRunInput,
     HandlerWorkflowAdvanceResult,
     HumanInputResumeInput,
+    ProjectDeploymentSetupWorkflowInput,
     WorkflowOperationRetryInput,
 )
 from orchestrator.temporal.workflow_registry import resolve_temporal_binding_for_handler
@@ -281,6 +282,52 @@ class TemporalWorkflowEngine:
             workflow_type=workflow_type,
             settings=settings,
         )
+        if config.execution_mode == "setup":
+            workflow_id = _handler_backed_workflow_id(
+                workflow_type_key=workflow_type.workflow_type_key,
+                execution_key=request.execution.key,
+            )
+            projection = ensure_workflow_execution(
+                session=session,
+                workflow_type=workflow_type,
+                tenant_id=request.tenant_id,
+                project_id=request.project_id,
+                execution=request.execution,
+                display_name=request.execution.source.display_name,
+                description=request.execution.source.description,
+            )
+            projection.workflow.status = "queued"
+            projection.workflow.started_at = None
+            session.commit()
+
+            async def _start_setup() -> None:
+                client = await connect_temporal_client(settings)
+                try:
+                    await client.start_workflow(
+                        config.workflow_defn.run,
+                        ProjectDeploymentSetupWorkflowInput(
+                            workflow_id=workflow_id,
+                            tenant_id=request.tenant_id,
+                            project_id=str(request.project_id or "").strip(),
+                            requested_by_user_id=str(request.payload.get("requested_by_user_id") or "").strip() or None,
+                            activity_start_to_close_timeout_seconds=config.activity_start_to_close_timeout_seconds,
+                        ),
+                        id=_temporal_workflow_handle_id(workflow_id=workflow_id),
+                        task_queue=config.task_queue,
+                        execution_timeout=timedelta(seconds=config.workflow_execution_timeout_seconds),
+                        run_timeout=timedelta(seconds=config.workflow_run_timeout_seconds),
+                    )
+                except WorkflowAlreadyStartedError:
+                    return
+
+            _run_sync(_start_setup())
+            return WorkflowAdvanceOutcome(
+                handled=True,
+                extra={
+                    "workflow_id": workflow_id,
+                    "execution_id": projection.workflow.execution_id,
+                },
+            )
         if config.execution_mode != "handler":
             raise RuntimeError(
                 f"Temporal advance is not available for workflow handler {workflow_type.handler_key}"

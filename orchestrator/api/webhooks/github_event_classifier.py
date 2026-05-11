@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from orchestrator.api.webhooks.github_payload_contracts import extract_pull_request_targets
 from orchestrator.api.webhooks.pr_remediation_policy import parse_manual_pr_fix_request
 from orchestrator.core.projects.policy import resolve_effective_policy
 
@@ -64,11 +65,16 @@ def classify_github_trigger_state(
     payload: dict,
 ) -> GitHubTriggerState:
     normalized_event = str(github_event or "").strip().lower()
+    normalized_action_value = str(normalized_action or "").strip().lower()
     return GitHubTriggerState(
-        full_review_trigger=normalized_event == "pull_request",
+        full_review_trigger=_is_full_review_trigger(
+            github_event=normalized_event,
+            normalized_action=normalized_action_value,
+            payload=payload,
+        ),
         remediation_trigger=_is_remediation_trigger(
             github_event=normalized_event,
-            normalized_action=normalized_action,
+            normalized_action=normalized_action_value,
             payload=payload,
         ),
         manual_fix_requested=(
@@ -167,6 +173,19 @@ def _resolve_ignored_review_reason(
     ):
         return "bot_authored"
     return None
+
+
+def _is_full_review_trigger(
+    *,
+    github_event: str,
+    normalized_action: str,
+    payload: dict,
+) -> bool:
+    if github_event == "pull_request":
+        return normalized_action != "closed"
+    if github_event in {"check_run", "check_suite"}:
+        return normalized_action == "completed" and bool(extract_pull_request_targets(payload))
+    return False
 
 
 def _is_remediation_trigger(

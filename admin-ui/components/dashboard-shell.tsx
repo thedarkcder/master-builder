@@ -6,15 +6,22 @@ import { useEffect, useState } from "react";
 import type { ComponentType } from "react";
 import {
   Activity,
+  ArrowLeft,
   BarChart3,
+  Bell,
+  BookOpen,
   Building2,
+  ChevronDown,
   Cpu,
   FolderKanban,
   KeyRound,
   LayoutDashboard,
   LogOut,
   Menu,
+  PlugZap,
+  Rocket,
   Settings2,
+  ShieldAlert,
   SwitchCamera,
   User,
   Users,
@@ -36,11 +43,12 @@ import {
 import {
   canAccessPlatformAdmin,
   canAccessTechnicalSurface,
+  canManageProjects,
   canManageTeam,
   getMembershipForTenant,
   getTenantWorkspaceRoute,
 } from "@/lib/auth-routing";
-import { buildProjectSectionPath, resolveRunRouteContext } from "@/lib/dashboard-paths";
+import { buildProjectSectionPath, resolveProjectSection, resolveRunRouteContext, type ProjectSection } from "@/lib/dashboard-paths";
 import { persistLastWorkspaceTenantId } from "@/lib/workspace-preference";
 import {
   Sidebar,
@@ -97,16 +105,200 @@ type DashboardNavPanelProps = {
   tenantDisplayName: string;
   tenantBaseRoute: string | null;
   navItems: NavItem[];
-  troubleshootingNavItems: NavItem[];
+  developmentNavItems: NavItem[];
   showProjectNavigation: boolean;
   tenantProjects: ProjectNavigationRecord[];
   pathname: string;
   runContext: RunRouteCtx;
   projectContextId: string | null;
+  currentProjectSection: ProjectSection | null;
+  allowProjectManagement: boolean;
+  isPlatformSuperAdmin: boolean;
   router: ReturnType<typeof useRouter>;
   logout: () => void;
   onNavigate?: () => void;
 };
+
+type ProjectNavItem = {
+  href: string;
+  label: string;
+  icon: ComponentType<{ className?: string }>;
+  matchPrefix?: string;
+  danger?: boolean;
+};
+
+type ProjectNavGroup = {
+  label: string;
+  items: ProjectNavItem[];
+  defaultOpen?: boolean;
+};
+
+function projectNavItemIsActive(pathname: string, item: ProjectNavItem): boolean {
+  if (item.matchPrefix) {
+    return pathname === item.matchPrefix || pathname.startsWith(`${item.matchPrefix}/`);
+  }
+  return pathname === item.href;
+}
+
+function ProjectWorkspaceNav({
+  tenantId,
+  tenantDisplayName,
+  tenantBaseRoute,
+  tenantProjects,
+  projectContextId,
+  currentProjectSection,
+  pathname,
+  allowProjectManagement,
+  isPlatformSuperAdmin,
+  router,
+  onNavigate,
+}: {
+  tenantId: string;
+  tenantDisplayName: string;
+  tenantBaseRoute: string;
+  tenantProjects: ProjectNavigationRecord[];
+  projectContextId: string;
+  currentProjectSection: ProjectSection | null;
+  pathname: string;
+  allowProjectManagement: boolean;
+  isPlatformSuperAdmin: boolean;
+  router: ReturnType<typeof useRouter>;
+  onNavigate?: () => void;
+}) {
+  const close = () => onNavigate?.();
+  const selectedProject = tenantProjects.find((project) => project.project_id === projectContextId) ?? null;
+  const selectedProjectName = selectedProject?.name ?? projectContextId;
+  const projectBase = `/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectContextId)}`;
+  const groups: ProjectNavGroup[] = [
+    {
+      label: "Work",
+      defaultOpen: true,
+      items: [
+        { href: projectBase, label: "Board", icon: FolderKanban },
+        { href: `${projectBase}/knowledge`, label: "Knowledge", icon: BookOpen, matchPrefix: `${projectBase}/knowledge` },
+        { href: `${projectBase}/architecture`, label: "Architecture", icon: BookOpen, matchPrefix: `${projectBase}/architecture` },
+      ],
+    },
+    ...(allowProjectManagement
+      ? [
+          {
+            label: "Deployments",
+            defaultOpen: pathname.startsWith(`${projectBase}/deployment`) || pathname.startsWith(`${projectBase}/deployments`),
+            items: [
+              { href: `${projectBase}/deployments`, label: "Releases", icon: Rocket, matchPrefix: `${projectBase}/deployments` },
+              { href: `${projectBase}/deployment`, label: "Policy", icon: Settings2, matchPrefix: `${projectBase}/deployment` },
+            ],
+          },
+          {
+            label: "Project",
+            items: [
+              { href: `${projectBase}/settings`, label: "Settings", icon: Settings2, matchPrefix: `${projectBase}/settings` },
+              { href: `${projectBase}/secrets`, label: "Secrets", icon: KeyRound, matchPrefix: `${projectBase}/secrets` },
+              { href: `${projectBase}/notifications`, label: "Notifications", icon: Bell, matchPrefix: `${projectBase}/notifications` },
+              { href: `${projectBase}/automations`, label: "Automations", icon: Workflow, matchPrefix: `${projectBase}/automations` },
+              { href: `${projectBase}/installs`, label: "Installs", icon: PlugZap, matchPrefix: `${projectBase}/installs` },
+              { href: `${projectBase}/danger`, label: "Danger", icon: ShieldAlert, matchPrefix: `${projectBase}/danger`, danger: true },
+            ],
+          },
+        ]
+      : []),
+    ...(isPlatformSuperAdmin
+      ? [
+          {
+            label: "Development",
+            items: [
+              { href: `${projectBase}/runs`, label: "Runs", icon: Activity, matchPrefix: `${projectBase}/runs` },
+              { href: `${projectBase}/webhooks`, label: "Webhooks", icon: PlugZap, matchPrefix: `${projectBase}/webhooks` },
+            ],
+          },
+        ]
+      : []),
+  ];
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="mb-3 space-y-2 rounded-lg bg-sidebar-accent/35 p-2">
+        <Link
+          href={`${tenantBaseRoute}/dashboard`}
+          onClick={close}
+          aria-label={`Back to ${tenantDisplayName} workspace`}
+          className="group flex min-h-14 items-center gap-2.5 rounded-lg border border-sidebar-border/80 bg-sidebar px-2.5 py-2.5 text-sidebar-foreground shadow-sm transition-colors hover:border-primary/70 hover:bg-sidebar-accent focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/70"
+        >
+          <span className="flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-md bg-sidebar-accent text-sidebar-foreground transition-colors group-hover:bg-primary group-hover:text-primary-foreground" aria-hidden="true">
+            <ArrowLeft className="h-4 w-4" />
+          </span>
+          <span className="min-w-0 flex-1">
+            <span className="block text-[10px] font-semibold uppercase tracking-[0.14em] text-sidebar-muted-foreground">
+              Back to workspace
+            </span>
+            <span className="block truncate text-sm font-semibold group-hover:text-sidebar-foreground">
+              {tenantDisplayName}
+            </span>
+          </span>
+          <span
+            className={`flex h-8 w-8 flex-shrink-0 items-center justify-center rounded-md text-[11px] font-bold text-white ${tenantAvatarColor(tenantId)}`}
+            aria-hidden="true"
+          >
+            {tenantInitials(tenantDisplayName)}
+          </span>
+        </Link>
+        <label className="sr-only" htmlFor="project-picker">Project</label>
+        <select
+          id="project-picker"
+          value={projectContextId}
+          onChange={(event) => {
+            const nextProjectId = event.target.value;
+            close();
+            router.push(buildProjectSectionPath(tenantId, nextProjectId, currentProjectSection ?? "overview"));
+          }}
+          className="h-9 w-full rounded-md border border-sidebar-border bg-sidebar px-2 text-sm font-semibold text-sidebar-foreground outline-none transition-colors focus:border-primary"
+        >
+          {tenantProjects.some((project) => project.project_id === projectContextId) ? null : (
+            <option value={projectContextId}>{selectedProjectName}</option>
+          )}
+          {tenantProjects.map((project) => (
+            <option key={project.project_id} value={project.project_id}>
+              {project.name}
+            </option>
+          ))}
+        </select>
+      </div>
+
+      <div className="min-h-0 flex-1 space-y-2 overflow-y-auto pr-1">
+        {groups.map((group) => {
+          const groupActive = group.items.some((item) => projectNavItemIsActive(pathname, item));
+          return (
+            <details key={group.label} className="group" open={group.defaultOpen || groupActive}>
+              <summary className="flex min-h-9 cursor-pointer list-none items-center justify-between rounded-md px-2 text-xs font-semibold uppercase tracking-[0.14em] text-sidebar-muted-foreground hover:bg-sidebar-accent/40">
+                {group.label}
+                <ChevronDown className="h-3.5 w-3.5 transition-transform group-open:rotate-180" />
+              </summary>
+              <SidebarMenu className="mt-1">
+                {group.items.map((item) => {
+                  const active = projectNavItemIsActive(pathname, item);
+                  return (
+                    <SidebarMenuItem key={item.href}>
+                      <SidebarMenuButton asChild isActive={active}>
+                        <Link
+                          href={item.href}
+                          onClick={close}
+                          className={item.danger ? "text-destructive hover:text-destructive" : undefined}
+                        >
+                          <item.icon className="h-4 w-4 flex-shrink-0" />
+                          {item.label}
+                        </Link>
+                      </SidebarMenuButton>
+                    </SidebarMenuItem>
+                  );
+                })}
+              </SidebarMenu>
+            </details>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
 
 /** Shared nav body for desktop sidebar and mobile drawer */
 function DashboardNavPanel({
@@ -114,12 +306,15 @@ function DashboardNavPanel({
   tenantDisplayName,
   tenantBaseRoute,
   navItems,
-  troubleshootingNavItems,
+  developmentNavItems,
   showProjectNavigation,
   tenantProjects,
   pathname,
   runContext,
   projectContextId,
+  currentProjectSection,
+  allowProjectManagement,
+  isPlatformSuperAdmin,
   router,
   logout,
   onNavigate
@@ -176,7 +371,21 @@ function DashboardNavPanel({
       </SidebarHeader>
 
       <SidebarContent className="flex min-h-0 flex-1 flex-col overflow-hidden">
-        {decodedTenantId ? (
+        {decodedTenantId && tenantBaseRoute && projectContextId ? (
+          <ProjectWorkspaceNav
+            tenantId={decodedTenantId}
+            tenantDisplayName={tenantDisplayName}
+            tenantBaseRoute={tenantBaseRoute}
+            tenantProjects={tenantProjects}
+            projectContextId={projectContextId}
+            currentProjectSection={currentProjectSection}
+            pathname={pathname}
+            allowProjectManagement={allowProjectManagement}
+            isPlatformSuperAdmin={isPlatformSuperAdmin}
+            router={router}
+            onNavigate={onNavigate}
+          />
+        ) : decodedTenantId ? (
           <div className="flex min-h-0 flex-1 flex-col">
             <div className="mb-3 flex items-center gap-2 rounded-md px-3 py-2 bg-sidebar-accent/40">
               <div
@@ -208,11 +417,11 @@ function DashboardNavPanel({
               })}
             </SidebarMenu>
 
-            {troubleshootingNavItems.length > 0 ? (
+            {developmentNavItems.length > 0 ? (
               <div className="mt-4">
-                <SidebarMenuLabel className="px-0">Troubleshooting</SidebarMenuLabel>
+                <SidebarMenuLabel className="px-0">Development</SidebarMenuLabel>
                 <SidebarMenu>
-                  {troubleshootingNavItems.map((item) => {
+                  {developmentNavItems.map((item) => {
                     const active = item.activePathname
                       ? pathname === item.activePathname
                       : item.matchPrefix
@@ -320,14 +529,16 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
   const projectContextId = projectMatch?.[2] ? decodeURIComponent(projectMatch[2]) : runContext.projectId || null;
   const decodedTenantId = tenantId ? decodeURIComponent(tenantId) : null;
   const tenantBaseRoute = decodedTenantId ? getTenantWorkspaceRoute(decodedTenantId) : null;
+  const currentProjectSection = projectContextId ? resolveProjectSection(pathname) ?? "overview" : null;
   const showProjectNavigation = Boolean(decodedTenantId && !isWizardRoute);
   const isPlatformSuperAdmin = canAccessPlatformAdmin(principal);
-  const isTenantTroubleshootingRoute =
+  const isTenantDevelopmentRoute =
     Boolean(tenantBaseRoute) &&
     (
       pathname === `${tenantBaseRoute}/runs` ||
       pathname.startsWith(`${tenantBaseRoute}/runs/`) ||
       /^\/(?!tenants(?:\/|$)|runs(?:\/|$)|platform(?:\/|$)|login(?:\/|$)|register(?:\/|$)|invite(?:\/|$)|get-started(?:\/|$)|forgot-password(?:\/|$)|reset-password(?:\/|$)|api(?:\/|$))[^/]+\/projects\/[^/]+\/runs(?:\/|$)/.test(pathname) ||
+      /^\/(?!tenants(?:\/|$)|runs(?:\/|$)|platform(?:\/|$)|login(?:\/|$)|register(?:\/|$)|invite(?:\/|$)|get-started(?:\/|$)|forgot-password(?:\/|$)|reset-password(?:\/|$)|api(?:\/|$))[^/]+\/projects\/[^/]+\/webhooks(?:\/|$)/.test(pathname) ||
       pathname === `${tenantBaseRoute}/workflows` ||
       pathname.startsWith(`${tenantBaseRoute}/workflows/`) ||
       pathname === `${tenantBaseRoute}/executions` ||
@@ -432,10 +643,10 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
   }, [credentials, showProjectNavigation, tenantId]);
 
   useEffect(() => {
-    if (ready && principalReady && decodedTenantId && !isPlatformSuperAdmin && isTenantTroubleshootingRoute) {
+    if (ready && principalReady && decodedTenantId && !isPlatformSuperAdmin && isTenantDevelopmentRoute) {
       router.replace(`${getTenantWorkspaceRoute(decodedTenantId)}/dashboard`);
     }
-  }, [decodedTenantId, isPlatformSuperAdmin, isTenantTroubleshootingRoute, principalReady, ready, router]);
+  }, [decodedTenantId, isPlatformSuperAdmin, isTenantDevelopmentRoute, principalReady, ready, router]);
 
   if (!ready) {
     return <main className="p-8 text-sm text-muted-foreground">Loading session...</main>;
@@ -467,7 +678,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
     return <div className="min-h-screen bg-background">{children}</div>;
   }
 
-  if (ready && principalReady && decodedTenantId && !isPlatformSuperAdmin && isTenantTroubleshootingRoute) {
+  if (ready && principalReady && decodedTenantId && !isPlatformSuperAdmin && isTenantDevelopmentRoute) {
     return <main className="p-8 text-sm text-muted-foreground">Redirecting to workspace dashboard...</main>;
   }
 
@@ -479,6 +690,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
     { href: "/platform/secrets", label: "Secrets", icon: KeyRound }
   ];
   const canManageWorkspaceTeam = decodedTenantId ? canManageTeam(principal, decodedTenantId) : false;
+  const allowProjectManagement = decodedTenantId ? canManageProjects(principal, decodedTenantId) : false;
   const showSecretsNav = !decodedTenantId || canAccessPlatformAdmin(principal) || canAccessTechnicalSurface(principal, decodedTenantId);
 
   const tenantNavItems: NavItem[] = decodedTenantId
@@ -523,7 +735,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
           : [])
       ]
     : [];
-  const troubleshootingNavItems: NavItem[] = decodedTenantId && isPlatformSuperAdmin
+  const developmentNavItems: NavItem[] = decodedTenantId && isPlatformSuperAdmin
     ? [
         {
           href: `${tenantBaseRoute}/runs`,
@@ -560,12 +772,15 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
     tenantDisplayName,
     tenantBaseRoute,
     navItems,
-    troubleshootingNavItems,
+    developmentNavItems,
     showProjectNavigation,
     tenantProjects,
     pathname,
     runContext,
     projectContextId,
+    currentProjectSection,
+    allowProjectManagement,
+    isPlatformSuperAdmin,
     router,
     logout
   };

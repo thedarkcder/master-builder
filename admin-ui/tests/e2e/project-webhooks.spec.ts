@@ -3,9 +3,12 @@ import { expect, test } from "@playwright/test";
 import {
   fulfillJson,
   installBffApiMocks,
+  makeMembership,
   makeProject,
   makeTenant,
+  makeTenantUserPrincipal,
   seedAdminSession,
+  seedTenantSession,
 } from "./support/admin-ui";
 
 test("project webhooks allow retrying failed jobs from the queue", async ({ page }) => {
@@ -161,4 +164,49 @@ test("project webhooks allow retrying failed jobs from the queue", async ({ page
   await expect(page.getByTestId("webhook-job-row-job-failed-1")).toContainText("pending");
   await expect(page.getByText("Workflow Task in failed state.")).toHaveCount(0);
   expect(retryRequestSeen).toBe(true);
+});
+
+test("project webhooks are hidden from non-platform admins", async ({ page }) => {
+  const tenant = makeTenant({
+    tenant_id: "route25",
+    name: "Route 25",
+  });
+  const project = makeProject({
+    project_id: "route25-default",
+    tenant_id: "route25",
+    name: "Route 25 Default",
+  });
+  const principal = makeTenantUserPrincipal({
+    memberships: [
+      makeMembership({
+        tenant_id: "route25",
+        role: "tenant_admin",
+        permission_keys: ["projects.manage", "technical.access"],
+      }),
+    ],
+  });
+
+  await seedTenantSession(page, { principal });
+  await installBffApiMocks(page, [
+    {
+      method: "GET",
+      pathname: "/api/bff/api/app/auth/me",
+      handler: (route) => fulfillJson(route, principal),
+    },
+    {
+      method: "GET",
+      pathname: "/api/bff/api/admin/tenants/route25",
+      handler: (route) => fulfillJson(route, tenant),
+    },
+    {
+      method: "GET",
+      pathname: "/api/bff/api/admin/tenants/route25/project-navigation",
+      handler: (route) => fulfillJson(route, [project]),
+    },
+  ]);
+
+  await page.goto("/route25/projects/route25-default/webhooks");
+
+  await expect(page.getByRole("heading", { name: "Webhook Queue" })).toHaveCount(0);
+  await expect(page.getByText("Capacity used today")).toBeVisible();
 });

@@ -1,0 +1,2081 @@
+from __future__ import annotations
+
+import json
+import re
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Callable, Literal
+
+import yaml
+from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+
+from orchestrator.core.config import get_settings
+from orchestrator.core.project_app_planner import (
+    ProjectAppNormalizedCandidate,
+    ProjectAppPreScanCandidate,
+    scan_repo_for_project_apps,
+)
+from orchestrator.core.runtime.invocation import AgentInvocationContext, invoke_runtime_json
+from orchestrator.core.runtime.runtime import CodexRuntimeError, build_codex_runtime
+from orchestrator.storage.models import Project, Tenant
+
+
+class DeploymentPlanService(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    key: str
+    name: str
+    kind: Literal["api", "website"]
+    source_path: str
+    build_strategy: Literal["dockerfile", "maven", "npm", "docker_compose"]
+    compose_service: str
+    container_port: int = Field(ge=1, le=65535)
+    healthcheck: str | None = None
+    depends_on: list[str] = Field(default_factory=list)
+
+    @field_validator("key", "name", "source_path", "compose_service")
+    @classmethod
+    def normalize_required_string(cls, value: object) -> str:
+        normalized = str(value or "").strip()
+        if not normalized:
+            raise ValueError("value is required")
+        return normalized
+
+
+class DeploymentPlanRoute(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    service_key: str
+    visibility: Literal["public", "internal"]
+
+    @field_validator("service_key")
+    @classmethod
+    def normalize_required_string(cls, value: object) -> str:
+        normalized = str(value or "").strip()
+        if not normalized:
+            raise ValueError("value is required")
+        return normalized
+
+
+class DeploymentPlanResource(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    key: str
+    kind: Literal["postgres", "mysql", "redis", "object_storage", "elasticsearch", "activemq", "kafka", "smtp"]
+    name: str
+    config: dict[str, object] = Field(default_factory=dict)
+
+    @field_validator("key", "kind", "name")
+    @classmethod
+    def normalize_required_string(cls, value: object) -> str:
+        normalized = str(value or "").strip()
+        if not normalized:
+            raise ValueError("value is required")
+        return normalized
+
+
+class DeploymentPlanVolume(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    key: str
+    type: Literal["persistent", "file"] = "persistent"
+    name: str
+    config: dict[str, object] = Field(default_factory=dict)
+
+    @field_validator("key", "name")
+    @classmethod
+    def normalize_required_string(cls, value: object) -> str:
+        normalized = str(value or "").strip()
+        if not normalized:
+            raise ValueError("value is required")
+        return normalized
+
+
+class DeploymentPlan(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    name: str
+    services: list[DeploymentPlanService]
+    routes: list[DeploymentPlanRoute]
+    resources: list[DeploymentPlanResource] = Field(default_factory=list)
+    volumes: list[DeploymentPlanVolume] = Field(default_factory=list)
+    compose_raw: str
+
+    @field_validator("name")
+    @classmethod
+    def normalize_required_string(cls, value: object) -> str:
+        normalized = str(value or "").strip()
+        if not normalized:
+            raise ValueError("value is required")
+        return normalized
+
+    @field_validator("compose_raw")
+    @classmethod
+    def normalize_compose_raw(cls, value: object) -> str:
+        normalized = str(value or "").strip()
+        if not normalized:
+            raise ValueError("value is required")
+        if "\\n" in normalized and "\n" not in normalized:
+            normalized = normalized.replace("\\n", "\n").strip()
+        return normalized
+
+    @model_validator(mode="after")
+    def validate_plan(self) -> "DeploymentPlan":
+        service_keys = {service.key for service in self.services}
+        resource_keys = {resource.key for resource in self.resources}
+        volume_keys = {volume.key for volume in self.volumes}
+        duplicate_resource_keys = sorted(service_keys.intersection(resource_keys | volume_keys))
+        if duplicate_resource_keys:
+            raise ValueError(
+                "deployment plan has resource/volume key(s) that duplicate service key(s): "
+                f"{', '.join(duplicate_resource_keys)}"
+            )
+        duplicate_volume_resource_keys = sorted(resource_keys.intersection(volume_keys))
+        if duplicate_volume_resource_keys:
+            raise ValueError(
+                "deployment plan has volume key(s) that duplicate resource key(s): "
+                f"{', '.join(duplicate_volume_resource_keys)}"
+            )
+        dependency_keys = service_keys | resource_keys | volume_keys
+        if not service_keys:
+            raise ValueError("deployment plan requires at least one service")
+        route_keys = [route.service_key for route in self.routes]
+        duplicate_route_keys = sorted({key for key in route_keys if route_keys.count(key) > 1})
+        if duplicate_route_keys:
+            raise ValueError(f"deployment plan has duplicate route(s): {', '.join(duplicate_route_keys)}")
+        missing_route_keys = sorted(service_keys.difference(route_keys))
+        if missing_route_keys:
+            raise ValueError(f"deployment plan is missing route(s): {', '.join(missing_route_keys)}")
+        unknown_route_keys = sorted(set(route_keys).difference(service_keys))
+        if unknown_route_keys:
+            raise ValueError(f"deployment plan routes unknown service(s): {', '.join(unknown_route_keys)}")
+        for service in self.services:
+            unknown_dependencies = sorted({dependency for dependency in service.depends_on if dependency not in dependency_keys})
+            if unknown_dependencies:
+                raise ValueError(
+                    f"service {service.key} depends on unknown service(s): {', '.join(unknown_dependencies)}"
+                )
+        try:
+            compose_payload = yaml.safe_load(self.compose_raw) or {}
+        except yaml.YAMLError as exc:
+            raise ValueError(f"compose_raw is not valid YAML: {exc}") from exc
+        if not isinstance(compose_payload, dict):
+            raise ValueError("compose_raw must be a Docker Compose object")
+        compose_services = compose_payload.get("services")
+        if not isinstance(compose_services, dict) or not compose_services:
+            raise ValueError("compose_raw must define services")
+        missing_compose_services = sorted(
+            {service.compose_service for service in self.services if service.compose_service not in compose_services}
+        )
+        if missing_compose_services:
+            raise ValueError(
+                "compose_raw is missing planned service(s): "
+                f"{', '.join(missing_compose_services)}"
+            )
+        resource_compose_services = {
+            str(resource.config.get("compose_service") or "").strip()
+            for resource in self.resources
+            if str(resource.config.get("compose_service") or "").strip()
+        }
+        allowed_compose_services = {service.compose_service for service in self.services} | resource_compose_services
+        undeclared_compose_services = sorted(set(compose_services).difference(allowed_compose_services))
+        if undeclared_compose_services:
+            raise ValueError(
+                "compose_raw contains undeclared service(s): "
+                f"{', '.join(undeclared_compose_services)}"
+            )
+        for service_name, service_config in compose_services.items():
+            if not isinstance(service_config, dict):
+                continue
+            _validate_deployable_build_context(service_name=str(service_name), build_config=service_config.get("build"))
+            _validate_no_host_source_mounts(service_name=str(service_name), volumes=service_config.get("volumes"))
+        return self
+
+
+class DeploymentPlannerResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    deployment: DeploymentPlan
+
+
+@dataclass(frozen=True)
+class DeploymentPlanningResult:
+    app: ProjectAppNormalizedCandidate
+    plan: DeploymentPlan
+    raw_planner_result_json: dict[str, object]
+
+
+_DEPLOYMENT_PLANNER_SYSTEM_PROMPT = """\
+You are the Master Builder deployment planner.
+Return JSON only.
+
+Your job is to produce one repo-level deployment plan for the selected branch/commit.
+Do not treat infrastructure folders or Docker Compose folders as deployable products.
+Identify application services across the repo, identify supporting resources from Docker Compose, and generate one Docker Compose file that runs the full system.
+
+Return this strict JSON shape:
+{
+  "deployment": {
+    "name": "production",
+        "services": [
+      {
+        "key": "stable-dns-safe-service-key",
+        "name": "Human service name",
+        "kind": "api | website",
+        "source_path": "repo-relative path",
+        "build_strategy": "dockerfile | maven | npm | docker_compose",
+        "compose_service": "docker-compose service name",
+        "container_port": 8080,
+        "healthcheck": "/health",
+        "depends_on": ["resource-or-service-key"],
+      }
+    ],
+    "routes": [
+      {"service_key": "identity-api", "visibility": "public"},
+      {"service_key": "worker-api", "visibility": "internal"}
+    ],
+    "resources": [
+      {
+        "key": "postgres",
+        "kind": "postgres | mysql | redis | object_storage | elasticsearch | activemq | kafka | smtp",
+        "name": "postgres",
+        "config": {"compose_service": "postgres", "service_type": "postgres", "source": "deployment_planner"}
+      }
+    ],
+    "volumes": [
+      {
+        "key": "postgres-data",
+        "type": "persistent",
+        "name": "postgres-data",
+        "config": {"compose_volume": "postgres-data", "mount_path": "/var/lib/postgresql/data", "source": "deployment_planner"}
+      }
+    ],
+    "compose_raw": "version: '3.9'\\nservices:\\n  ..."
+  }
+}
+
+Rules:
+- For Java Maven services, use build_strategy "maven" and generate a compose service that builds/runs that module.
+- For React/Vite/Next services, use build_strategy "npm" and generate a compose service that builds/runs that module.
+- The compose_raw artifact is committed to a Master Builder deployment branch and deployed by Coolify from Git.
+- Do not use host-source bind mounts such as ./api:/workspace/api, ../web:/app, or /tmp/source:/app.
+- Do not use remote Git build contexts. Use repository-relative build contexts such as ./api/service because Coolify clones the private repository through its GitHub App before building.
+- If a service has no Dockerfile, use dockerfile_inline with a repository-relative build context. Do not mount source code into runtime containers.
+- Do not reuse Dockerfiles whose FROM image is in a private registry or registry that requires authentication. Generate dockerfile_inline from public base images instead.
+- Docker Compose interpolates dollar variables inside dockerfile_inline. Escape shell variables as $$VAR or $${VAR}; never emit raw $VAR or ${VAR} in dockerfile_inline.
+- Do not wire generated runtime containers to cloud secret managers or external cloud backing services. The generated compose must run against the compose resources it declares.
+- Existing Docker Compose services that are databases, queues, search, SMTP/mail capture, or object storage are resources, not application services.
+- Existing Docker Compose named volumes are volumes, not resources.
+- Admin/helper/diagnostic UI services such as database browsers, Elasticsearch browsers, dashboards, sample tools, or local developer utilities are not deployment resources and must not appear in services, resources, routes, or compose_raw.
+- Deployment resources are infrastructure services only: databases, caches, queues, search, SMTP/mail capture, and object storage.
+- Deployment volumes are persistent mounts only and must appear in "volumes", not "resources".
+- Infrastructure resources are not public routes.
+- Every service must have one route. Use "public" only for user/API-facing services; use "internal" for service-to-service only traffic.
+- Public URLs are generated later from service keys; do not hard-code host ports as the product contract.
+- Use internal Docker service names for dependencies.
+"""
+
+
+def _is_forbidden_build_context(value: object) -> bool:
+    if not isinstance(value, str):
+        return False
+    normalized = value.strip()
+    if not normalized:
+        return False
+    return "://" in normalized or normalized.startswith(("../", "/", "~"))
+
+
+def _is_host_source_path(value: object) -> bool:
+    if not isinstance(value, str):
+        return False
+    normalized = value.strip()
+    if not normalized:
+        return False
+    return normalized.startswith(("./", "../", "/", "~"))
+
+
+def _validate_deployable_build_context(*, service_name: str, build_config: object) -> None:
+    if build_config is None:
+        return
+    context: object
+    if isinstance(build_config, str):
+        context = build_config
+    elif isinstance(build_config, dict):
+        context = build_config.get("context")
+    else:
+        raise ValueError(f"compose service {service_name} has invalid build config")
+    if _is_forbidden_build_context(context):
+        raise ValueError(
+            f"compose service {service_name} uses a non-repository build context; "
+            "use a repository-relative context because Coolify clones the private repository before building"
+        )
+    if isinstance(build_config, dict):
+        dockerfile_inline = build_config.get("dockerfile_inline")
+        if isinstance(dockerfile_inline, str):
+            _validate_no_unescaped_compose_variables(
+                service_name=service_name,
+                dockerfile_text=dockerfile_inline,
+            )
+
+
+_UNESCAPED_COMPOSE_VARIABLE_PATTERN = re.compile(r"(?<!\$)\$(?:[A-Za-z_][A-Za-z0-9_]*|\{[A-Za-z_][A-Za-z0-9_]*[^}]*\})")
+
+
+def _validate_no_unescaped_compose_variables(*, service_name: str, dockerfile_text: str) -> None:
+    if _UNESCAPED_COMPOSE_VARIABLE_PATTERN.search(dockerfile_text):
+        raise ValueError(
+            f"compose service {service_name} dockerfile_inline contains unescaped shell variables; "
+            "escape variables as $$VAR or $${VAR} so Docker Compose does not interpolate them"
+        )
+
+
+_PUBLIC_BASE_IMAGE_REGISTRIES = {
+    "docker.io",
+    "ghcr.io",
+    "quay.io",
+    "mcr.microsoft.com",
+    "public.ecr.aws",
+    "registry.k8s.io",
+    "docker.elastic.co",
+}
+
+
+_VITE_RUNTIME_DOCKERFILE_TEMPLATE = """\
+FROM node:22-alpine AS build
+WORKDIR /app
+COPY package*.json ./
+RUN npm ci
+COPY . .
+RUN npx vite build
+
+FROM node:22-alpine
+WORKDIR /app
+RUN npm install -g serve
+COPY --from=build /app/dist ./dist
+EXPOSE {container_port}
+CMD ["serve", "-s", "dist", "-l", "{container_port}"]
+"""
+
+
+def _registry_host_from_image(image: str) -> str | None:
+    if "/" not in image:
+        return None
+    first_segment = image.split("/", maxsplit=1)[0].strip().lower()
+    if not first_segment or "." not in first_segment and ":" not in first_segment:
+        return None
+    return first_segment
+
+
+def _validate_public_base_images(
+    *,
+    service_name: str,
+    dockerfile_text: str,
+) -> None:
+    for line in dockerfile_text.splitlines():
+        stripped = line.strip()
+        if not stripped.lower().startswith("from "):
+            continue
+        image = stripped.split()[1]
+        registry_host = _registry_host_from_image(image)
+        if registry_host is not None and registry_host not in _PUBLIC_BASE_IMAGE_REGISTRIES:
+            raise ValueError(
+                f"compose service {service_name} uses base image {image!r} from unsupported/private registry "
+                f"{registry_host!r}; generate a Dockerfile from public base images or configure registry credentials"
+            )
+
+
+def _dockerfile_path_for_build(*, checkout_path: Path, build_config: object) -> Path | None:
+    if not isinstance(build_config, dict):
+        return None
+    dockerfile_inline = build_config.get("dockerfile_inline")
+    if isinstance(dockerfile_inline, str) and dockerfile_inline.strip():
+        return None
+    context = str(build_config.get("context") or ".").strip() or "."
+    dockerfile = str(build_config.get("dockerfile") or "Dockerfile").strip() or "Dockerfile"
+    return (checkout_path / context / dockerfile).resolve()
+
+
+def _validate_build_dockerfiles(*, plan: DeploymentPlan, checkout_path: str) -> None:
+    root = Path(checkout_path).resolve()
+    compose_payload = yaml.safe_load(plan.compose_raw) or {}
+    compose_services = compose_payload.get("services")
+    if not isinstance(compose_services, dict):
+        return
+    for service_name, service_config in compose_services.items():
+        if not isinstance(service_config, dict):
+            continue
+        build_config = service_config.get("build")
+        if isinstance(build_config, dict):
+            dockerfile_inline = build_config.get("dockerfile_inline")
+            if isinstance(dockerfile_inline, str) and dockerfile_inline.strip():
+                _validate_public_base_images(
+                    service_name=str(service_name),
+                    dockerfile_text=dockerfile_inline,
+                )
+                continue
+        dockerfile_path = _dockerfile_path_for_build(checkout_path=root, build_config=build_config)
+        if dockerfile_path is None:
+            continue
+        try:
+            dockerfile_path.relative_to(root)
+        except ValueError as exc:
+            raise ValueError(f"compose service {service_name} Dockerfile path escapes the repository") from exc
+        if not dockerfile_path.exists():
+            continue
+        _validate_public_base_images(
+            service_name=str(service_name),
+            dockerfile_text=dockerfile_path.read_text(encoding="utf-8"),
+        )
+
+
+def _package_json_for_service(*, checkout_path: Path, service: DeploymentPlanService) -> dict[str, object] | None:
+    package_json_path = (checkout_path / service.source_path / "package.json").resolve()
+    try:
+        package_json_path.relative_to(checkout_path)
+    except ValueError as exc:
+        raise ValueError(f"service {service.key} source_path escapes the repository") from exc
+    if not package_json_path.exists():
+        return None
+    try:
+        payload = json.loads(package_json_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"service {service.key} package.json is not valid JSON") from exc
+    if not isinstance(payload, dict):
+        raise ValueError(f"service {service.key} package.json must contain an object")
+    return payload
+
+
+def _is_vite_service_package(package_json: dict[str, object]) -> bool:
+    for dependency_bucket in ("dependencies", "devDependencies"):
+        dependencies = package_json.get(dependency_bucket)
+        if isinstance(dependencies, dict) and "vite" in dependencies:
+            return True
+    return False
+
+
+def _normalize_vite_service_builds(*, plan: DeploymentPlan, checkout_path: str) -> DeploymentPlan:
+    root = Path(checkout_path).resolve()
+    compose_payload = yaml.safe_load(plan.compose_raw) or {}
+    compose_services = compose_payload.get("services")
+    if not isinstance(compose_services, dict):
+        return plan
+
+    changed = False
+    for service in plan.services:
+        if service.build_strategy != "npm" or service.kind != "website":
+            continue
+        package_json = _package_json_for_service(checkout_path=root, service=service)
+        if package_json is None or not _is_vite_service_package(package_json):
+            continue
+        service_config = compose_services.get(service.compose_service)
+        if not isinstance(service_config, dict):
+            continue
+        build_config = service_config.get("build")
+        if isinstance(build_config, str):
+            build_config = {"context": build_config}
+        elif isinstance(build_config, dict):
+            build_config = dict(build_config)
+        else:
+            build_config = {}
+        build_config["context"] = f"./{service.source_path}"
+        build_config.pop("dockerfile", None)
+        build_config["dockerfile_inline"] = _VITE_RUNTIME_DOCKERFILE_TEMPLATE.format(
+            container_port=service.container_port
+        )
+        service_config["build"] = build_config
+        changed = True
+
+    if not changed:
+        return plan
+    normalized_payload = plan.model_dump()
+    normalized_payload["compose_raw"] = yaml.safe_dump(compose_payload, sort_keys=False)
+    return DeploymentPlan.model_validate(normalized_payload)
+
+
+def _normalize_python_service_builds(*, plan: DeploymentPlan, checkout_path: str) -> DeploymentPlan:
+    root = Path(checkout_path).resolve()
+    compose_payload = yaml.safe_load(plan.compose_raw) or {}
+    compose_services = compose_payload.get("services")
+    if not isinstance(compose_services, dict):
+        return plan
+
+    changed = False
+    for service in plan.services:
+        service_config = compose_services.get(service.compose_service)
+        if not isinstance(service_config, dict):
+            continue
+        build_config = service_config.get("build")
+        if not isinstance(build_config, dict):
+            continue
+        dockerfile_inline = build_config.get("dockerfile_inline")
+        if not isinstance(dockerfile_inline, str) or not dockerfile_inline.strip():
+            continue
+        if not any(line.strip().lower().startswith("from python:") for line in dockerfile_inline.splitlines()):
+            continue
+        service_root = (root / service.source_path).resolve()
+        try:
+            service_root.relative_to(root)
+        except ValueError as exc:
+            raise ValueError(f"service {service.key} source_path escapes the repository") from exc
+
+        normalized = dockerfile_inline
+        if (service_root / ".projectroot").exists() and "COPY .projectroot " not in normalized:
+            copy_anchor = "COPY src/ /app/"
+            if copy_anchor not in normalized:
+                raise ValueError(
+                    f"python service {service.key} requires .projectroot but generated Dockerfile "
+                    "does not copy src/ into /app/"
+            )
+            normalized = normalized.replace(copy_anchor, "COPY .projectroot /app/.projectroot\n" + copy_anchor)
+        if _python_service_uses_legacy_langchain_imports(service_root=service_root):
+            normalized = _ensure_legacy_langchain_dependencies(dockerfile_inline=normalized)
+        sklearn_model_version = _python_service_sklearn_model_version(service_root=service_root)
+        if sklearn_model_version:
+            normalized = _ensure_sklearn_model_runtime_dependencies(
+                dockerfile_inline=normalized,
+                sklearn_version=sklearn_model_version,
+            )
+        if "curl -fsS" in yaml.safe_dump(service_config.get("healthcheck")) and " apt-get install " in normalized:
+            normalized = re.sub(
+                r"(apt-get install -y(?: --no-install-recommends)?)(?![^\n]*\bcurl\b)([^\n]*)",
+                r"\1 curl\2",
+                normalized,
+                count=1,
+            )
+        if normalized != dockerfile_inline:
+            build_config["dockerfile_inline"] = normalized
+            changed = True
+
+    if not changed:
+        return plan
+    normalized_payload = plan.model_dump()
+    normalized_payload["compose_raw"] = yaml.safe_dump(compose_payload, sort_keys=False)
+    return DeploymentPlan.model_validate(normalized_payload)
+
+
+def _python_service_uses_legacy_langchain_imports(*, service_root: Path) -> bool:
+    source_root = service_root / "src"
+    if not source_root.exists():
+        return False
+    legacy_patterns = (
+        "from langchain.utilities import",
+        "from langchain.agents.agent_toolkits import",
+        "from langchain.chains import",
+        "from langchain.prompts import",
+    )
+    for path in source_root.rglob("*.py"):
+        try:
+            source = path.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            continue
+        if any(pattern in source for pattern in legacy_patterns):
+            return True
+    return False
+
+
+_PYTHON_PACKAGE_PIN_PATTERN = re.compile(r"(?P<name>[A-Za-z0-9_.-]+)==(?P<version>\d+(?:\.\d+){1,3})")
+_SKLEARN_PICKLE_VERSION_PATTERN = re.compile(rb"_sklearn_version.{0,32}?(\d+\.\d+\.\d+)", re.DOTALL)
+
+
+def _version_tuple(version: str) -> tuple[int, ...]:
+    return tuple(int(part) for part in version.split("."))
+
+
+def _python_requirements_pin(*, service_root: Path, package_name: str) -> str | None:
+    requirements_path = service_root / "requirements.txt"
+    if not requirements_path.exists():
+        return None
+    try:
+        requirements = requirements_path.read_text(encoding="utf-8")
+    except UnicodeDecodeError:
+        return None
+    normalized_name = package_name.lower()
+    for match in _PYTHON_PACKAGE_PIN_PATTERN.finditer(requirements):
+        if match.group("name").lower() == normalized_name:
+            return match.group("version")
+    return None
+
+
+def _python_service_sklearn_model_version(*, service_root: Path) -> str | None:
+    requirements_version = _python_requirements_pin(service_root=service_root, package_name="scikit-learn")
+    if not requirements_version:
+        return None
+
+    model_versions: set[str] = set()
+    for path in service_root.rglob("*.sav"):
+        try:
+            sample = path.read_bytes()
+        except OSError:
+            continue
+        for match in _SKLEARN_PICKLE_VERSION_PATTERN.finditer(sample):
+            model_versions.add(match.group(1).decode("ascii"))
+    if not model_versions:
+        return None
+
+    newest_model_version = max(model_versions, key=_version_tuple)
+    if _version_tuple(newest_model_version) >= _version_tuple(requirements_version):
+        return None
+    return newest_model_version
+
+
+def _ensure_python_package_override(
+    *,
+    dockerfile_inline: str,
+    package_name: str,
+    package_version: str,
+) -> str:
+    pinned_package = f"{package_name}=={package_version}"
+    if pinned_package in dockerfile_inline:
+        return dockerfile_inline
+    install_command = f"RUN pip install --no-cache-dir --force-reinstall {pinned_package}\n"
+    return _insert_after_last_pip_install(dockerfile_inline=dockerfile_inline, install_command=install_command)
+
+
+def _ensure_sklearn_model_runtime_dependencies(*, dockerfile_inline: str, sklearn_version: str) -> str:
+    pinned_sklearn = f"scikit-learn=={sklearn_version}"
+    if pinned_sklearn in dockerfile_inline and "numpy==1.26.4" in dockerfile_inline:
+        return dockerfile_inline
+    install_command = (
+        "RUN pip install --no-cache-dir --force-reinstall "
+        "numpy==1.26.4 "
+        "scipy==1.11.4 "
+        f"{pinned_sklearn}\n"
+    )
+    return _insert_after_last_pip_install(dockerfile_inline=dockerfile_inline, install_command=install_command)
+
+
+def _insert_after_last_pip_install(*, dockerfile_inline: str, install_command: str) -> str:
+    lines = dockerfile_inline.splitlines()
+    insert_index = None
+    for index, line in enumerate(lines):
+        if line.strip().startswith("RUN pip install"):
+            insert_index = index + 1
+    if insert_index is None:
+        raise ValueError("python service requires package normalization but generated Dockerfile has no pip install step")
+    lines.insert(insert_index, install_command.rstrip())
+    normalized = "\n".join(lines)
+    if dockerfile_inline.endswith("\n"):
+        normalized += "\n"
+    return normalized
+
+
+def _ensure_legacy_langchain_dependencies(*, dockerfile_inline: str) -> str:
+    if "langchain==0.2.17" in dockerfile_inline:
+        return dockerfile_inline
+    install_command = (
+        "RUN pip install --no-cache-dir "
+        "langchain==0.2.17 "
+        "langchain-community==0.2.19 "
+        "langchain-core==0.2.43 "
+        "langchain-openai==0.1.25\n"
+    )
+    return _insert_after_last_pip_install(dockerfile_inline=dockerfile_inline, install_command=install_command)
+
+
+_CLOUD_SECRET_PROFILE_ARG_PATTERN = re.compile(
+    r"\s+--spring\.profiles\.active=(?:aws|google|gcp)[A-Za-z0-9_.-]*",
+    re.IGNORECASE,
+)
+_CLOUD_SECRET_PROFILE_PATTERN = re.compile(
+    r"(?:aws|google|gcp)[A-Za-z0-9_.-]*",
+    re.IGNORECASE,
+)
+_MAVEN_TARGET_APP_JAR_COPY_PATTERN = re.compile(
+    r"^(?P<indent>\s*)COPY\s+--from=build\s+(?P<target_dir>\S+/target)/(?:app\.jar|\*\.jar)\s+(?P<dest>/app/app\.jar)\s*$"
+)
+_JAVA_IMPORT_PATTERN = re.compile(
+    r"^\s*import\s+(?P<fqn>[A-Za-z_][\w]*(?:\.[A-Za-z_][\w]*)+)\s*;",
+    re.MULTILINE,
+)
+_JAVA_PACKAGE_PATTERN = re.compile(
+    r"^\s*package\s+(?P<package>[A-Za-z_][\w]*(?:\.[A-Za-z_][\w]*)*)\s*;",
+    re.MULTILINE,
+)
+_JAVA_TYPE_PATTERN = re.compile(
+    r"\b(?:class|interface|record|enum)\s+(?P<name>[A-Za-z_][\w]*)\b"
+)
+_JAVA_STRING_LITERAL_PATTERN = re.compile(r'"([^"]+)"')
+_SPRING_COMPONENT_ANNOTATION_PATTERN = re.compile(
+    r"^\s*@(Component|Configuration|Repository|Service)\b",
+    re.MULTILINE,
+)
+_SPRING_SCAN_BASE_PACKAGES_PATTERN = re.compile(
+    r"scanBasePackages\s*=\s*(?P<value>\{[^}]*\}|\"[^\"]+\")",
+    re.DOTALL,
+)
+_LOCALHOST_PORT_PATTERN = re.compile(r"localhost:(?P<port>\d{1,5})")
+_COMPOSE_HEALTHCHECK_COMMANDS = {"CMD", "CMD-SHELL", "NONE"}
+_GENERIC_VOLUME_KEYS = {"data", "db", "storage", "volume"}
+_ELASTICSEARCH_RUNTIME_IMAGE = "bitnamilegacy/elasticsearch:8"
+_POSTGIS_RUNTIME_IMAGE = "postgis/postgis:16-3.4"
+_MAVEN_RUNTIME_PROFILE = "aws-sandbox"
+_MAVEN_RUNTIME_CONFIG_DIR = "/app/master-builder-config"
+_MAVEN_RUNTIME_LOGGING_CONFIG_PATH = "/app/master-builder-logback.xml"
+_MAVEN_RUNTIME_LOGGING_CONFIG = """\
+<configuration>
+  <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+    <encoder>
+      <pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} %-5level [%thread] %logger{36} - %msg%n</pattern>
+    </encoder>
+  </appender>
+  <root level="INFO">
+    <appender-ref ref="CONSOLE" />
+  </root>
+</configuration>
+"""
+_MAVEN_RUNTIME_DEFAULT_ENVIRONMENT = {
+    "SPRING_CLOUD_GCP_ENABLED": "false",
+    "SPRING_CLOUD_GCP_CORE_ENABLED": "false",
+    "SPRING_CLOUD_GCP_FIRESTORE_ENABLED": "false",
+    "SPRING_CLOUD_GCP_PUBSUB_ENABLED": "false",
+    "SPRING_CLOUD_GCP_SECRETMANAGER_ENABLED": "false",
+    "SPRING_CLOUD_GCP_SQL_ENABLED": "false",
+    "SPRING_CLOUD_GCP_STORAGE_ENABLED": "false",
+    "SPRING_CLOUD_GCP_TRACE_ENABLED": "false",
+    "TWILIO_ENABLE": "false",
+    "TWILIO_SERVICE_ID": "",
+    "TWILIO_AUTHENTICATION_TOKEN": "",
+    "TWILIO_FROM_NUMBER": "",
+    "TWILIO_SMS_SERVICE_ID": "",
+    "TWILIO_VERIFY_SERVICE_ID": "",
+    "TWILIO_PROXY_SERVICE_ID": "",
+    "APPLE_PUSH_IS_PRODUCTION": "false",
+    "APPLE_PUSH_FILE_PATH": "",
+    "APPLE_PUSH_KEY_ID": "",
+    "APPLE_TEAM_ID": "",
+    "AUTH_AUDIENCE": "",
+    "AUTH_MANAGEMENT_AUDIENCE": "",
+    "AUTH_DOMAIN": "",
+    "AUTH_API_CLIENT_ID": "",
+    "AUTH_API_CLIENT_SECRET": "",
+    "AUTH_CLIENT_CUSTOMER_ID": "",
+    "AUTH_CLIENT_MANAGEMENT_ID": "",
+    "AUTH_CLIENT_MERCHANT_ID": "",
+    "AUTH0_AUDIENCE": "",
+    "AUTH0_MANAGEMENT_AUDIENCE": "",
+    "AUTH0_DOMAIN": "",
+    "AUTH0_API_ID": "",
+    "AUTH0_API_SECRET": "",
+    "AUTH0_CLIENT_CUSTOMER_ID": "",
+    "AUTH0_CLIENT_MANAGEMENT_ID": "",
+    "AUTH0_CLIENT_MERCHANT_ID": "",
+    "BASE_OSRM_URL": "http://localhost:5000",
+    "BASE_MAIL_LOCATION": "pickup",
+    "BASE_MAIL_REDIRECT": "false",
+    "BASE_MAIL_REDIRECT_TO": "",
+    "BASE_MAIL_FROM": "noreply@localhost",
+    "BASE_MAIL_ERROR_TO": "errors@localhost",
+    "BASE_MAIL_ERROR_SUBJECT": "Deployment runtime warning",
+    "BASE_SECRET_KEY": "development-secret",
+    "BASE_SECURITY_SALT_KEY": "development-salt",
+    "BASE_SECURITY_KEY_PASSWORD": "development-password",
+    "BASE_TENANT": "bsktpay",
+    "AWS_S3_DEFAULT_REGION": "us-east-1",
+    "AWS_S3_SECURE_REGION": "us-east-1",
+    "AWS_S3_SECURE_BUCKET_NAME": "secure-bucket",
+    "AWS_S3_SECURE_HTTP_URL": "http://minio:9000/secure-bucket/",
+    "AWS_S3_PUBLIC_REGION": "us-east-1",
+    "AWS_S3_PUBLIC_BUCKET_NAME": "public-bucket",
+    "AWS_S3_PUBLIC_HTTP_URL": "http://minio:9000/public-bucket/",
+    "STRIPE_API_KEY": "",
+    "STRIPE_ENDPOINT_SECRET": "",
+    "STRIPE_CONNECT_ENDPOINT_SECRET": "",
+    "PLAID_CLIENT_ID": "",
+    "PLAID_SECRET": "",
+    "MODULR_API_URL": "",
+    "MODULR_API_TOKEN": "",
+    "MODULR_API_SECRET": "",
+    "MODULR_API_secret": "",
+    "MAILER_API_TOKEN": "",
+    "MAILCHIMP_API_TOKEN": "",
+    "MAILCHIMP_SIGNUP_AUDIENCE_ID": "",
+    "MAILCHIMP_STORE_ID": "",
+    "MAILCHIMP_API_URL": "",
+    "GOOGLE_MAPS_API_TOKEN": "",
+    "ADDRESSIAN_API_TOKEN": "",
+    "GOOGLE_RECAPTCHA_KEY_SITE": "",
+    "GOOGLE_RECAPTCHA_KEY_SECRET": "",
+    "GOOGLE_RECAPTCHA_KEY_THRESHOLD": "0.5",
+    "WOOCOMMERCE_API_KEY": "",
+    "WOOCOMMERCE_API_SECRET": "",
+    "WOOCOMMERCE_API_URL": "",
+    "WOOCOMMERCE_COCART_API_SECRET": "",
+    "BASE_ANALYTICS_API": "",
+    "ZENDESK_SECRET_KEY": "",
+    "ZENDESK_API_TOKEN": "",
+    "NOVU_API_KEY": "",
+    "VERIFF_API_PRIVATEKEY": "",
+    "VERIFF_API_PUBLICKEY": "",
+    "WEBSOCKET_ALLOWED_ORIGINS": "http://localhost:3000",
+    "WORKFLOW_SECURITY_ALLOWED_ORIGINS": "http://localhost:3000",
+    "SPRING_ACTIVEMQ_USER": "",
+    "SPRING_ACTIVEMQ_PASSWORD": "",
+    "SPRING_ELASTICSEARCH_USERNAME": "",
+    "SPRING_ELASTICSEARCH_PASSWORD": "",
+    "SPRING_ELASTICSEARCH_CLUSTER_NAME": "",
+    "SPRING_ELASTICSEARCH_CLUSTER_NODES": "",
+}
+
+
+def _normalize_compose_scalar_token(value: object) -> str:
+    normalized = str(value or "").strip().replace('\\"', '"')
+    while len(normalized) >= 2 and normalized[0] == normalized[-1] and normalized[0] in {"'", '"'}:
+        normalized = normalized[1:-1].strip()
+    return normalized
+
+
+def _normalize_compose_healthchecks(*, plan: DeploymentPlan) -> DeploymentPlan:
+    compose_payload = yaml.safe_load(plan.compose_raw) or {}
+    compose_services = compose_payload.get("services")
+    if not isinstance(compose_services, dict):
+        return plan
+
+    changed = False
+    for service_name, service_config in compose_services.items():
+        if not isinstance(service_config, dict):
+            continue
+        healthcheck = service_config.get("healthcheck")
+        if not isinstance(healthcheck, dict):
+            continue
+        test = healthcheck.get("test")
+        if isinstance(test, list):
+            normalized_test = [_normalize_compose_scalar_token(part) for part in test]
+            if not normalized_test:
+                raise ValueError(f"compose service {service_name} healthcheck.test must not be empty")
+            command = normalized_test[0]
+            if command not in _COMPOSE_HEALTHCHECK_COMMANDS:
+                raise ValueError(
+                    f"compose service {service_name} healthcheck.test must start with "
+                    "CMD, CMD-SHELL, or NONE"
+                )
+            if normalized_test != test:
+                healthcheck["test"] = normalized_test
+                changed = True
+
+    if not changed:
+        return plan
+    normalized_payload = plan.model_dump()
+    normalized_payload["compose_raw"] = yaml.safe_dump(compose_payload, sort_keys=False)
+    return DeploymentPlan.model_validate(normalized_payload)
+
+
+def _compose_volume_sources(volumes: object) -> list[str]:
+    if not isinstance(volumes, list):
+        return []
+    sources: list[str] = []
+    for volume in volumes:
+        if isinstance(volume, str):
+            source = volume.split(":", maxsplit=1)[0].strip()
+            if source:
+                sources.append(source)
+        elif isinstance(volume, dict):
+            source = str(volume.get("source") or "").strip()
+            if source:
+                sources.append(source)
+    return sources
+
+
+def _replace_compose_volume_source(*, volumes: object, old_name: str, new_name: str) -> bool:
+    if not isinstance(volumes, list):
+        return False
+    changed = False
+    for index, volume in enumerate(volumes):
+        if isinstance(volume, str):
+            parts = volume.split(":", maxsplit=1)
+            if parts[0].strip() == old_name:
+                volumes[index] = f"{new_name}:{parts[1]}" if len(parts) == 2 else new_name
+                changed = True
+        elif isinstance(volume, dict):
+            source = str(volume.get("source") or "").strip()
+            if source == old_name:
+                volume["source"] = new_name
+                changed = True
+    return changed
+
+
+def _normalize_plan_volume_names(*, plan: DeploymentPlan) -> DeploymentPlan:
+    compose_payload = yaml.safe_load(plan.compose_raw) or {}
+    compose_services = compose_payload.get("services")
+    compose_volumes = compose_payload.get("volumes")
+    if not isinstance(compose_services, dict) or not isinstance(compose_volumes, dict):
+        return plan
+
+    resource_service_by_name = {
+        _resource_compose_service(resource): resource.key
+        for resource in plan.resources
+    }
+    rename_map: dict[str, str] = {}
+    for volume in plan.volumes:
+        compose_volume = str(volume.config.get("compose_volume") or volume.name or volume.key).strip()
+        if not compose_volume:
+            raise ValueError(f"deployment volume {volume.key} must declare a compose_volume")
+        normalized_key = volume.key.strip().lower()
+        target_volume_name = volume.key
+        owning_resources = sorted(
+            resource_key
+            for service_name, resource_key in resource_service_by_name.items()
+            if compose_volume in _compose_volume_sources(
+                compose_services.get(service_name, {}).get("volumes")
+                if isinstance(compose_services.get(service_name), dict)
+                else None
+            )
+        )
+        if normalized_key in _GENERIC_VOLUME_KEYS and not owning_resources:
+            raise ValueError(
+                f"deployment volume {volume.key} uses a generic name but is not attached to a declared resource"
+            )
+        if len(owning_resources) > 1:
+            raise ValueError(
+                f"deployment volume {volume.key} is attached to multiple resources: {', '.join(owning_resources)}"
+            )
+        if normalized_key in _GENERIC_VOLUME_KEYS:
+            target_volume_name = f"{owning_resources[0]}-data"
+        if compose_volume != target_volume_name:
+            rename_map[compose_volume] = target_volume_name
+
+    if not rename_map:
+        return plan
+
+    target_names = set(compose_volumes)
+    for old_name, new_name in rename_map.items():
+        if old_name == new_name:
+            continue
+        if new_name in target_names:
+            raise ValueError(f"deployment volume rename target already exists: {new_name}")
+        compose_volumes[new_name] = compose_volumes.pop(old_name, {})
+        target_names.add(new_name)
+        target_names.discard(old_name)
+        for service_config in compose_services.values():
+            if isinstance(service_config, dict):
+                _replace_compose_volume_source(
+                    volumes=service_config.get("volumes"),
+                    old_name=old_name,
+                    new_name=new_name,
+                )
+
+    normalized_payload = plan.model_dump()
+    normalized_volumes: list[dict[str, object]] = []
+    for volume_payload in normalized_payload["volumes"]:
+        config = dict(volume_payload.get("config") or {})
+        compose_volume = str(config.get("compose_volume") or volume_payload.get("name") or volume_payload.get("key")).strip()
+        new_name = rename_map.get(compose_volume)
+        if new_name:
+            volume_payload = dict(volume_payload)
+            volume_payload["key"] = new_name
+            volume_payload["name"] = new_name
+            config["compose_volume"] = new_name
+            volume_payload["config"] = config
+        normalized_volumes.append(volume_payload)
+    normalized_payload["volumes"] = normalized_volumes
+    normalized_payload["compose_raw"] = yaml.safe_dump(compose_payload, sort_keys=False)
+    return DeploymentPlan.model_validate(normalized_payload)
+
+
+def _compose_environment_mapping(*, service_name: str, environment: object) -> dict[str, str]:
+    if environment is None:
+        return {}
+    if isinstance(environment, dict):
+        return {str(key): "" if value is None else str(value) for key, value in environment.items()}
+    if not isinstance(environment, list):
+        raise ValueError(f"compose service {service_name} environment must be a mapping or list")
+    parsed: dict[str, str] = {}
+    for entry in environment:
+        if not isinstance(entry, str) or "=" not in entry:
+            raise ValueError(f"compose service {service_name} environment entries must use KEY=VALUE")
+        key, value = entry.split("=", maxsplit=1)
+        normalized_key = key.strip()
+        if not normalized_key:
+            raise ValueError(f"compose service {service_name} environment contains an empty key")
+        parsed[normalized_key] = value
+    return parsed
+
+
+def _resource_compose_service(resource: DeploymentPlanResource) -> str:
+    configured_service = str(resource.config.get("compose_service") or "").strip()
+    return configured_service or resource.key
+
+
+def _required_resource_environment(
+    *,
+    resource: DeploymentPlanResource,
+    compose_services: dict[object, object],
+) -> dict[str, str]:
+    service_name = _resource_compose_service(resource)
+    service_config = compose_services.get(service_name)
+    if not isinstance(service_config, dict):
+        raise ValueError(f"resource {resource.key} references missing compose service {service_name}")
+    return _compose_environment_mapping(
+        service_name=service_name,
+        environment=service_config.get("environment"),
+    )
+
+
+def _maven_resource_environment(*, plan: DeploymentPlan, compose_services: dict[object, object]) -> dict[str, str]:
+    environment: dict[str, str] = {
+        "LOGGING_LEVEL": "INFO",
+    }
+    for resource in plan.resources:
+        service_name = _resource_compose_service(resource)
+        if resource.kind == "postgres":
+            resource_environment = _required_resource_environment(resource=resource, compose_services=compose_services)
+            required_keys = ("POSTGRES_DB", "POSTGRES_USER", "POSTGRES_PASSWORD")
+            missing_keys = [key for key in required_keys if not resource_environment.get(key)]
+            if missing_keys:
+                raise ValueError(
+                    f"postgres resource {resource.key} must declare {', '.join(missing_keys)} "
+                    "so Maven services can connect to the generated compose database"
+                )
+            jdbc_url = f"jdbc:postgresql://{service_name}:5432/{resource_environment['POSTGRES_DB']}"
+            environment.update(
+                {
+                    "POSTGRES_DB_URL": jdbc_url,
+                    "SPRING_DATASOURCE_URL": jdbc_url,
+                    "SPRING_DATASOURCE_USERNAME": resource_environment["POSTGRES_USER"],
+                    "SPRING_DATASOURCE_PASSWORD": resource_environment["POSTGRES_PASSWORD"],
+                    "TENANT_DATASOURCE_USERNAME": resource_environment["POSTGRES_USER"],
+                    "TENANT_DATASOURCE_PASSWORD": resource_environment["POSTGRES_PASSWORD"],
+                }
+            )
+        elif resource.kind == "activemq":
+            environment["SPRING_ACTIVEMQ_BROKER_URL"] = (
+                f"tcp://{service_name}:61616?wireFormat.maxInactivityDuration=0"
+            )
+        elif resource.kind == "kafka":
+            environment["SPRING_KAFKA_BOOTSTRAP_SERVERS"] = f"{service_name}:9092"
+        elif resource.kind == "elasticsearch":
+            environment.update(
+                {
+                    "SPRING_ELASTICSEARCH_URIS": f"http://{service_name}:9200",
+                    "SPRING_ELASTICSEARCH_HOST": service_name,
+                    "SPRING_ELASTICSEARCH_PORT": "9200",
+                    "SPRING_ELASTICSEARCH_PROTOCOL": "http",
+                }
+            )
+        elif resource.kind == "smtp":
+            resource_environment = _required_resource_environment(resource=resource, compose_services=compose_services)
+            smtp_port = resource_environment.get("MP_SMTP_BIND_ADDR", ":1025").rsplit(":", maxsplit=1)[-1] or "1025"
+            environment.update(
+                {
+                    "spring.mail.host": service_name,
+                    "spring.mail.port": smtp_port,
+                    "spring.mail.username": resource_environment.get("SPRING_MAIL_USERNAME", ""),
+                    "spring.mail.password": resource_environment.get("SPRING_MAIL_PASSWORD", ""),
+                    "spring.mail.properties.mail.smtp.auth": "false",
+                    "spring.mail.properties.mail.smtp.starttls.enable": "false",
+                    "base.email.errorTo": "errors@localhost",
+                    "base.email.emailFrom": "noreply@localhost",
+                    "base.email.errorSubject": "Deployment runtime warning",
+                    "SPRING_MAIL_HOST": service_name,
+                    "SPRING_MAIL_PORT": smtp_port,
+                    "SPRING_MAIL_USERNAME": resource_environment.get("SPRING_MAIL_USERNAME", ""),
+                    "SPRING_MAIL_PASSWORD": resource_environment.get("SPRING_MAIL_PASSWORD", ""),
+                    "SPRING_MAIL_PROPERTIES_MAIL_SMTP_AUTH": "false",
+                    "SPRING_MAIL_PROPERTIES_MAIL_SMTP_STARTTLS_ENABLE": "false",
+                    "BASE_EMAIL_ERRORTO": "errors@localhost",
+                    "BASE_EMAIL_ERROR_TO": "errors@localhost",
+                    "BASE_EMAIL_EMAILFROM": "noreply@localhost",
+                    "BASE_EMAIL_EMAIL_FROM": "noreply@localhost",
+                    "BASE_EMAIL_ERRORSUBJECT": "Deployment runtime warning",
+                    "BASE_EMAIL_ERROR_SUBJECT": "Deployment runtime warning",
+                }
+            )
+    return environment
+
+
+def _maven_service_database_environment(
+    *,
+    plan: DeploymentPlan,
+    compose_services: dict[object, object],
+) -> dict[str, str]:
+    for resource in plan.resources:
+        if resource.kind != "postgres":
+            continue
+        service_name = _resource_compose_service(resource)
+        resource_environment = _required_resource_environment(resource=resource, compose_services=compose_services)
+        postgres_db = resource_environment.get("POSTGRES_DB")
+        if not postgres_db:
+            raise ValueError(f"postgres resource {resource.key} must declare POSTGRES_DB")
+        jdbc_url = f"jdbc:postgresql://{service_name}:5432/{postgres_db}"
+        return {
+            "POSTGRES_DB_URL": jdbc_url,
+            "SPRING_DATASOURCE_URL": jdbc_url,
+        }
+    return {}
+
+
+def _public_website_internal_url(*, plan: DeploymentPlan) -> str:
+    services_by_key = {service.key: service for service in plan.services}
+    for route in plan.routes:
+        if route.visibility != "public":
+            continue
+        service = services_by_key.get(route.service_key)
+        if service is not None and service.kind == "website":
+            return f"http://{service.compose_service}:{service.container_port}"
+    else:
+        raise ValueError("Maven services require at least one public website route for BASE_WEB_PUBLIC_IMAGE_URL")
+
+
+def _maven_runtime_default_environment(
+    *,
+    plan: DeploymentPlan,
+    service: DeploymentPlanService,
+) -> dict[str, str]:
+    public_website_url = _public_website_internal_url(plan=plan)
+    service_url = f"http://{service.compose_service}:{service.container_port}"
+    environment = {
+        **_MAVEN_RUNTIME_DEFAULT_ENVIRONMENT,
+        "SPRING_PROFILES_ACTIVE": _MAVEN_RUNTIME_PROFILE,
+        "SPRING_CONFIG_LOCATION": f"file:{_MAVEN_RUNTIME_CONFIG_DIR}/",
+        "LOGGING_CONFIG": f"file:{_MAVEN_RUNTIME_LOGGING_CONFIG_PATH}",
+        "BASE_ENVIRONMENT": "sandbox",
+        "BASE_WEB_HOME_URL": public_website_url,
+        "BASE_WEB_ADMIN_URL": public_website_url,
+        "BASE_WEB_PARTNERS_URL": public_website_url,
+        "BASE_WEB_STORE_URL": public_website_url,
+        "BASE_WEB_MOBILE_URL": public_website_url,
+        "BASE_WEB_SECURE_IMAGE_URL": public_website_url,
+        "BASE_WEB_PUBLIC_IMAGE_URL": public_website_url,
+        "BASE_WEB_ANDROID_URL": public_website_url,
+        "BASE_WEB_IOS_URL": public_website_url,
+        "BASE_WEB_API_URL": service_url,
+        "WEBSOCKET_ALLOWED_ORIGINS": f"http://localhost:3000,{public_website_url}",
+        "WORKFLOW_SECURITY_ALLOWED_ORIGINS": f"http://localhost:3000,{public_website_url}",
+    }
+    return {key: str(value) for key, value in environment.items()}
+
+
+def _spring_scan_base_packages(*, service_root: Path) -> tuple[str, ...]:
+    packages: set[str] = set()
+    for java_file in service_root.rglob("*.java"):
+        try:
+            java_text = java_file.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            continue
+        if "@SpringBootApplication" not in java_text:
+            continue
+        for match in _SPRING_SCAN_BASE_PACKAGES_PATTERN.finditer(java_text):
+            packages.update(
+                package.strip()
+                for package in _JAVA_STRING_LITERAL_PATTERN.findall(match.group("value"))
+                if package.strip()
+            )
+    return tuple(sorted(packages))
+
+
+def _package_name_for_fqn(fqn: str) -> str:
+    return fqn.rsplit(".", maxsplit=1)[0] if "." in fqn else ""
+
+
+def _fqn_is_in_scan_base(*, fqn: str, scan_base_packages: tuple[str, ...]) -> bool:
+    package_name = _package_name_for_fqn(fqn)
+    return any(package_name == base or package_name.startswith(f"{base}.") for base in scan_base_packages)
+
+
+def _spring_component_fqns(*, checkout_path: Path) -> frozenset[str]:
+    components: set[str] = set()
+    for java_file in checkout_path.rglob("*.java"):
+        try:
+            java_text = java_file.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            continue
+        if not _SPRING_COMPONENT_ANNOTATION_PATTERN.search(java_text):
+            continue
+        package_match = _JAVA_PACKAGE_PATTERN.search(java_text)
+        type_match = _JAVA_TYPE_PATTERN.search(java_text)
+        if package_match is None or type_match is None:
+            continue
+        components.add(f"{package_match.group('package')}.{type_match.group('name')}")
+    return frozenset(components)
+
+
+def _maven_additional_spring_sources(*, checkout_path: Path, service: DeploymentPlanService) -> tuple[str, ...]:
+    service_root = (checkout_path / service.source_path).resolve()
+    try:
+        service_root.relative_to(checkout_path)
+    except ValueError as exc:
+        raise ValueError(f"service {service.key} source_path escapes the repository") from exc
+    if not service_root.exists():
+        return ()
+
+    scan_base_packages = _spring_scan_base_packages(service_root=service_root)
+    if not scan_base_packages:
+        return ()
+
+    imported_classes: set[str] = set()
+    for java_file in service_root.rglob("*.java"):
+        try:
+            java_text = java_file.read_text(encoding="utf-8")
+        except UnicodeDecodeError:
+            continue
+        imported_classes.update(match.group("fqn") for match in _JAVA_IMPORT_PATTERN.finditer(java_text))
+
+    repo_spring_components = _spring_component_fqns(checkout_path=checkout_path)
+    additional_sources = [
+        fqn
+        for fqn in sorted(imported_classes)
+        if not _fqn_is_in_scan_base(fqn=fqn, scan_base_packages=scan_base_packages)
+        and fqn in repo_spring_components
+    ]
+    return tuple(additional_sources)
+
+
+def _is_postgres_managed_maven_repo(*, plan: DeploymentPlan) -> bool:
+    has_postgres = any(resource.kind == "postgres" for resource in plan.resources)
+    has_maven = any(service.build_strategy == "maven" for service in plan.services)
+    return has_postgres and has_maven
+
+
+def _postgres_bootstrap_dockerfile() -> str:
+    return f"""FROM {_POSTGIS_RUNTIME_IMAGE}
+RUN cat > /docker-entrypoint-initdb.d/20-master-builder-app-roles.sh <<'SCRIPT'
+#!/bin/bash
+set -e
+create_role_if_missing() {{
+  local role_name="$1"
+  if ! psql -v ON_ERROR_STOP=1 --username "$$POSTGRES_USER" --dbname "$$POSTGRES_DB" -tAc "SELECT 1 FROM pg_catalog.pg_roles WHERE rolname = '$$role_name'" | grep -q 1; then
+    psql -v ON_ERROR_STOP=1 --username "$$POSTGRES_USER" --dbname "$$POSTGRES_DB" -c "CREATE ROLE \"$$role_name\" LOGIN PASSWORD 'postgres'"
+  fi
+}}
+
+create_role_if_missing postgres
+create_role_if_missing postgres_customer
+create_role_if_missing postgres_tenant
+
+psql -v ON_ERROR_STOP=1 --username "$$POSTGRES_USER" --dbname "$$POSTGRES_DB" -c "GRANT CONNECT ON DATABASE \"$$POSTGRES_DB\" TO postgres"
+psql -v ON_ERROR_STOP=1 --username "$$POSTGRES_USER" --dbname "$$POSTGRES_DB" -c "GRANT CONNECT ON DATABASE \"$$POSTGRES_DB\" TO postgres_customer"
+psql -v ON_ERROR_STOP=1 --username "$$POSTGRES_USER" --dbname "$$POSTGRES_DB" -c "GRANT CONNECT ON DATABASE \"$$POSTGRES_DB\" TO postgres_tenant"
+SCRIPT
+RUN chmod +x /docker-entrypoint-initdb.d/20-master-builder-app-roles.sh
+"""
+
+
+def _normalize_postgres_resource_bootstrap(*, plan: DeploymentPlan) -> DeploymentPlan:
+    if not _is_postgres_managed_maven_repo(plan=plan):
+        return plan
+    compose_payload = yaml.safe_load(plan.compose_raw) or {}
+    compose_services = compose_payload.get("services")
+    if not isinstance(compose_services, dict):
+        return plan
+
+    changed = False
+    for resource in plan.resources:
+        if resource.kind != "postgres":
+            continue
+        service_name = _resource_compose_service(resource)
+        service_config = compose_services.get(service_name)
+        if not isinstance(service_config, dict):
+            raise ValueError(f"postgres resource {resource.key} references missing compose service {service_name}")
+        expected_build = {
+            "context": ".",
+            "dockerfile_inline": _postgres_bootstrap_dockerfile(),
+        }
+        if service_config.get("build") != expected_build or service_config.get("image") is not None:
+            service_config["build"] = expected_build
+            service_config.pop("image", None)
+            changed = True
+        expected_healthcheck = {
+            "test": [
+                "CMD-SHELL",
+                "pg_isready -h localhost -U $$POSTGRES_USER -d $$POSTGRES_DB",
+            ],
+            "interval": "10s",
+            "timeout": "5s",
+            "retries": 20,
+            "start_period": "30s",
+        }
+        if service_config.get("healthcheck") != expected_healthcheck:
+            service_config["healthcheck"] = expected_healthcheck
+            changed = True
+
+    if not changed:
+        return plan
+    normalized_payload = plan.model_dump()
+    normalized_payload["compose_raw"] = yaml.safe_dump(compose_payload, sort_keys=False)
+    return DeploymentPlan.model_validate(normalized_payload)
+
+
+def _maven_service_has_flyway_enabled(*, checkout_path: Path, service: DeploymentPlanService) -> bool:
+    properties_path = checkout_path / service.source_path / "src" / "main" / "resources" / "application.properties"
+    if not properties_path.exists():
+        return False
+    properties_text = properties_path.read_text(encoding="utf-8")
+    return bool(re.search(r"(?m)^\s*spring\.flyway\.enabled\s*=\s*true\s*$", properties_text))
+
+
+def _depends_on_mapping(depends_on: object) -> dict[str, dict[str, str]]:
+    if depends_on is None:
+        return {}
+    if isinstance(depends_on, list):
+        return {
+            str(item).strip(): {"condition": "service_started"}
+            for item in depends_on
+            if str(item).strip()
+        }
+    if isinstance(depends_on, dict):
+        normalized: dict[str, dict[str, str]] = {}
+        for key, value in depends_on.items():
+            dependency_key = str(key).strip()
+            if not dependency_key:
+                continue
+            if isinstance(value, dict):
+                condition = str(value.get("condition") or "service_started").strip()
+            else:
+                condition = "service_started"
+            normalized[dependency_key] = {"condition": condition}
+        return normalized
+    raise ValueError("compose service depends_on must be a list or mapping")
+
+
+def _normalize_maven_service_dependencies(*, plan: DeploymentPlan, checkout_path: str) -> DeploymentPlan:
+    compose_payload = yaml.safe_load(plan.compose_raw) or {}
+    compose_services = compose_payload.get("services")
+    if not isinstance(compose_services, dict):
+        return plan
+
+    root = Path(checkout_path).resolve()
+    maven_services = [service for service in plan.services if service.build_strategy == "maven"]
+    health_gated_resource_services = {
+        _resource_compose_service(resource)
+        for resource in plan.resources
+        if resource.kind == "postgres"
+    }
+    migration_owners = [
+        service for service in maven_services if _maven_service_has_flyway_enabled(checkout_path=root, service=service)
+    ]
+    if len(migration_owners) > 1:
+        owner_keys = ", ".join(service.key for service in migration_owners)
+        raise ValueError(f"deployment plan has multiple Maven Flyway migration owners: {owner_keys}")
+    migration_owner = migration_owners[0] if migration_owners else None
+    maven_compose_services = {service.compose_service for service in maven_services}
+
+    changed = False
+    for service in plan.services:
+        service_config = compose_services.get(service.compose_service)
+        if not isinstance(service_config, dict):
+            continue
+        depends_on = _depends_on_mapping(service_config.get("depends_on"))
+        if migration_owner is not None and service.build_strategy == "maven" and service.key != migration_owner.key:
+            depends_on[migration_owner.compose_service] = {"condition": "service_healthy"}
+        if service.build_strategy == "maven":
+            for resource_service_name in health_gated_resource_services:
+                depends_on[resource_service_name] = {"condition": "service_healthy"}
+        for dependency_key in list(depends_on):
+            if dependency_key in maven_compose_services and dependency_key != service.compose_service:
+                depends_on[dependency_key] = {"condition": "service_healthy"}
+            if dependency_key in health_gated_resource_services:
+                depends_on[dependency_key] = {"condition": "service_healthy"}
+        original_depends_on = service_config.get("depends_on")
+        if depends_on != original_depends_on and (depends_on or original_depends_on is not None):
+            service_config["depends_on"] = depends_on
+            changed = True
+
+    if not changed:
+        return plan
+    normalized_payload = plan.model_dump()
+    normalized_payload["compose_raw"] = yaml.safe_dump(compose_payload, sort_keys=False)
+    return DeploymentPlan.model_validate(normalized_payload)
+
+
+def _normalize_elasticsearch_resource_images(*, plan: DeploymentPlan) -> DeploymentPlan:
+    elasticsearch_services = {
+        _resource_compose_service(resource)
+        for resource in plan.resources
+        if resource.kind == "elasticsearch"
+    }
+    if not elasticsearch_services:
+        return plan
+
+    compose_payload = yaml.safe_load(plan.compose_raw) or {}
+    compose_services = compose_payload.get("services")
+    if not isinstance(compose_services, dict):
+        return plan
+
+    changed = False
+    for service_name in elasticsearch_services:
+        service_config = compose_services.get(service_name)
+        if not isinstance(service_config, dict):
+            raise ValueError(f"elasticsearch resource references missing compose service {service_name}")
+        image = str(service_config.get("image") or "").strip()
+        if image.startswith("docker.elastic.co/"):
+            service_config["image"] = _ELASTICSEARCH_RUNTIME_IMAGE
+            changed = True
+        environment = _compose_environment_mapping(
+            service_name=service_name,
+            environment=service_config.get("environment"),
+        )
+        required_environment = {
+            "ELASTICSEARCH_ENABLE_SECURITY": "false",
+            "ELASTICSEARCH_CLUSTER_NAME": "master-builder",
+            "ELASTICSEARCH_NODE_NAME": service_name,
+            "ELASTICSEARCH_HEAP_SIZE": "512m",
+        }
+        merged_environment = {**environment, **required_environment}
+        if merged_environment != environment:
+            service_config["environment"] = merged_environment
+            changed = True
+        required_healthcheck = {
+            "test": [
+                "CMD-SHELL",
+                "curl -fsS http://localhost:9200/_cluster/health >/dev/null || exit 1",
+            ],
+            "interval": "20s",
+            "timeout": "5s",
+            "retries": 20,
+            "start_period": "60s",
+        }
+        if service_config.get("healthcheck") != required_healthcheck:
+            service_config["healthcheck"] = required_healthcheck
+            changed = True
+
+    if not changed:
+        return plan
+    normalized_payload = plan.model_dump()
+    normalized_payload["compose_raw"] = yaml.safe_dump(compose_payload, sort_keys=False)
+    return DeploymentPlan.model_validate(normalized_payload)
+
+
+def _management_port_for_service(*, service: DeploymentPlanService, service_config: dict[str, object]) -> int:
+    healthcheck = service_config.get("healthcheck")
+    if isinstance(healthcheck, dict):
+        test = healthcheck.get("test")
+        test_text = " ".join(str(part) for part in test) if isinstance(test, list) else str(test or "")
+        match = _LOCALHOST_PORT_PATTERN.search(test_text)
+        if match:
+            port = int(match.group("port"))
+            if 1 <= port <= 65535:
+                return port
+    exposed_ports = service_config.get("expose")
+    if isinstance(exposed_ports, list) and len(exposed_ports) > 1:
+        for exposed_port in exposed_ports[1:]:
+            try:
+                port = int(str(exposed_port).strip())
+            except ValueError:
+                continue
+            if 1 <= port <= 65535:
+                return port
+    return service.container_port
+
+
+_MAVEN_CP_APP_JAR_PATTERN = re.compile(
+    r"\bcp\s+(?P<target_dir>\S+/target)/(?:app\.jar|\*\.jar|\S+\.jar)\s+/tmp/app\.jar\b"
+)
+
+
+def _maven_runtime_config_build_step(*, dockerfile_inline: str, artifact_target_dir: str | None) -> str:
+    if "/tmp/master-builder-config" in dockerfile_inline:
+        return ""
+    app_root = None
+    if artifact_target_dir and artifact_target_dir.endswith("/target"):
+        app_root = artifact_target_dir[: -len("/target")]
+    if not app_root:
+        for line in dockerfile_inline.splitlines():
+            match = _MAVEN_CP_APP_JAR_PATTERN.search(line.strip())
+            if match:
+                app_root = match.group("target_dir")[: -len("/target")]
+                break
+    if not app_root:
+        app_root = "/workspace"
+    return (
+        "RUN mkdir -p /tmp/master-builder-config && "
+        f"if [ -d {app_root}/src/main/resources ]; then "
+        f"find {app_root}/src/main/resources -maxdepth 1 -type f -name 'application*.properties' "
+        "-exec cp {} /tmp/master-builder-config/ \\; ; "
+        "fi && "
+        "if ls /tmp/master-builder-config/application*.properties >/dev/null 2>&1; then "
+        "sed -i '/^[[:space:]]*spring[.]config[.]import[[:space:]]*=/d' "
+        "/tmp/master-builder-config/application*.properties; "
+        "fi"
+    )
+
+
+def _maven_runtime_config_final_steps(*, dockerfile_inline: str) -> list[str]:
+    if _MAVEN_RUNTIME_CONFIG_DIR in dockerfile_inline or _MAVEN_RUNTIME_LOGGING_CONFIG_PATH in dockerfile_inline:
+        return []
+    return [
+        f"COPY --from=build /tmp/master-builder-config {_MAVEN_RUNTIME_CONFIG_DIR}",
+        f"RUN cat > {_MAVEN_RUNTIME_LOGGING_CONFIG_PATH} <<'XML'\n{_MAVEN_RUNTIME_LOGGING_CONFIG.rstrip()}\nXML",
+    ]
+
+
+def _normalize_maven_entrypoint(*, service_name: str, dockerfile_inline: str) -> str:
+    artifact_target_dir: str | None = None
+    for line in dockerfile_inline.splitlines():
+        match = _MAVEN_TARGET_APP_JAR_COPY_PATTERN.match(line.strip())
+        if match:
+            artifact_target_dir = match.group("target_dir")
+            break
+    artifact_promoted = "/tmp/app.jar" in dockerfile_inline
+    has_curl_install = " apt-get install " in dockerfile_inline and re.search(r"\bcurl\b", dockerfile_inline)
+    runtime_config_build_step = _maven_runtime_config_build_step(
+        dockerfile_inline=dockerfile_inline,
+        artifact_target_dir=artifact_target_dir,
+    )
+    runtime_config_prepared = not runtime_config_build_step
+    runtime_config_final_steps = _maven_runtime_config_final_steps(dockerfile_inline=dockerfile_inline)
+    runtime_config_copied = not runtime_config_final_steps
+
+    normalized_lines: list[str] = []
+    for line in dockerfile_inline.splitlines():
+        stripped = line.strip()
+        install_curl_after_line = False
+        if stripped == "FROM eclipse-temurin:17-jre-alpine":
+            line = line.replace("eclipse-temurin:17-jre-alpine", "eclipse-temurin:17-jre")
+        elif stripped == "RUN apk add --no-cache curl":
+            if has_curl_install:
+                continue
+            line = "RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*"
+            has_curl_install = True
+        if stripped.startswith("FROM ") and "eclipse-temurin:" in line and "-jre" in line and not has_curl_install:
+            install_curl_after_line = True
+            has_curl_install = True
+        if (
+            artifact_target_dir
+            and not artifact_promoted
+            and stripped.startswith("FROM ")
+            and "eclipse-temurin:" in stripped
+        ):
+            normalized_lines.append(
+                f"RUN find {artifact_target_dir} -maxdepth 1 -type f -name '*.jar' "
+                f"! -name 'original-*.jar' -exec cp {{}} /tmp/app.jar \\; -quit"
+            )
+            artifact_promoted = True
+        if (
+            not runtime_config_prepared
+            and stripped.startswith("FROM ")
+            and "eclipse-temurin:" in stripped
+        ):
+            normalized_lines.append(runtime_config_build_step)
+            runtime_config_prepared = True
+        if _MAVEN_TARGET_APP_JAR_COPY_PATTERN.match(stripped):
+            line = "COPY --from=build /tmp/app.jar /app/app.jar"
+        if stripped.lower().startswith(("entrypoint ", "cmd ")):
+            line = _CLOUD_SECRET_PROFILE_ARG_PATTERN.sub("", line)
+            if _CLOUD_SECRET_PROFILE_PATTERN.search(line):
+                raise ValueError(
+                    f"compose service {service_name} starts with a cloud secret-manager Spring profile; "
+                    "generated deployment compose must run against declared compose resources"
+                )
+        normalized_lines.append(line)
+        if not runtime_config_copied and line.strip() == "COPY --from=build /tmp/app.jar /app/app.jar":
+            normalized_lines.extend(runtime_config_final_steps)
+            runtime_config_copied = True
+        if install_curl_after_line:
+            normalized_lines.append(
+                "RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*"
+            )
+    if not runtime_config_prepared:
+        raise ValueError(f"compose service {service_name} has no Java runtime stage for Maven config preparation")
+    if not runtime_config_copied:
+        raise ValueError(f"compose service {service_name} has no app.jar copy step for Maven config installation")
+    normalized_dockerfile = "\n".join(normalized_lines)
+    if dockerfile_inline.endswith("\n"):
+        normalized_dockerfile += "\n"
+    return normalized_dockerfile
+
+
+@dataclass(frozen=True)
+class _MavenBuildScope:
+    context_path: str
+    module_path: str
+
+
+_MAVEN_MODULE_PATTERN = re.compile(r"<module>\s*([^<]+?)\s*</module>")
+
+
+def _pom_modules(pom_path: Path) -> set[str]:
+    try:
+        pom_text = pom_path.read_text(encoding="utf-8")
+    except FileNotFoundError:
+        return set()
+    return {match.group(1).strip().replace("\\", "/") for match in _MAVEN_MODULE_PATTERN.finditer(pom_text)}
+
+
+def _maven_build_scope(*, checkout_path: Path, service: DeploymentPlanService) -> _MavenBuildScope:
+    root = checkout_path.resolve()
+    service_root = (root / service.source_path).resolve()
+    try:
+        service_root.relative_to(root)
+    except ValueError as exc:
+        raise ValueError(f"service {service.key} source_path escapes the repository") from exc
+    if not (service_root / "pom.xml").exists():
+        raise ValueError(f"maven service {service.key} is missing pom.xml at {service.source_path}")
+
+    for parent in [service_root.parent, *service_root.parents]:
+        if parent == service_root:
+            continue
+        try:
+            parent.relative_to(root)
+        except ValueError:
+            break
+        relative_module = service_root.relative_to(parent).as_posix()
+        if relative_module in _pom_modules(parent / "pom.xml"):
+            context_path = parent.relative_to(root).as_posix()
+            return _MavenBuildScope(
+                context_path="." if context_path == "." else context_path,
+                module_path=relative_module,
+            )
+        if parent == root:
+            break
+
+    return _MavenBuildScope(context_path=service.source_path, module_path=".")
+
+
+def _maven_runtime_dockerfile(*, service: DeploymentPlanService, scope: _MavenBuildScope) -> str:
+    module_path = scope.module_path
+    module_prefix = "" if module_path == "." else f"{module_path}/"
+    return f"""\
+FROM maven:3.9.9-eclipse-temurin-17 AS build
+WORKDIR /workspace
+COPY . .
+RUN mvn -pl {module_path} -am -DskipTests -DskipDocker=true -Dmaven.test.skip=true package
+RUN find /workspace/{module_prefix}target -maxdepth 1 -type f -name '*.jar' ! -name 'original-*.jar' -exec cp {{}} /tmp/app.jar \\; -quit
+RUN mkdir -p /tmp/master-builder-config && if [ -d /workspace/{module_prefix}src/main/resources ]; then find /workspace/{module_prefix}src/main/resources -maxdepth 1 -type f -name 'application*.properties' -exec cp {{}} /tmp/master-builder-config/ \\; ; fi && if ls /tmp/master-builder-config/application*.properties >/dev/null 2>&1; then sed -i '/^[[:space:]]*spring[.]config[.]import[[:space:]]*=/d' /tmp/master-builder-config/application*.properties; fi
+
+FROM eclipse-temurin:17-jre
+RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/*
+WORKDIR /app
+COPY --from=build /tmp/app.jar /app/app.jar
+COPY --from=build /tmp/master-builder-config /app/master-builder-config
+RUN cat > /app/master-builder-logback.xml <<'XML'
+{_MAVEN_RUNTIME_LOGGING_CONFIG.rstrip()}
+XML
+EXPOSE {service.container_port}
+ENTRYPOINT ["java","-jar","/app/app.jar"]
+"""
+
+
+def _normalize_maven_service_builds(*, plan: DeploymentPlan, checkout_path: str) -> DeploymentPlan:
+    root = Path(checkout_path).resolve()
+    compose_payload = yaml.safe_load(plan.compose_raw) or {}
+    compose_services = compose_payload.get("services")
+    if not isinstance(compose_services, dict):
+        return plan
+
+    changed = False
+    resource_environment = _maven_resource_environment(plan=plan, compose_services=compose_services)
+    for service in plan.services:
+        if service.build_strategy != "maven":
+            continue
+        service_config = compose_services.get(service.compose_service)
+        if not isinstance(service_config, dict):
+            continue
+        build_config = service_config.get("build")
+        if isinstance(build_config, str):
+            build_config = {"context": build_config}
+        elif isinstance(build_config, dict):
+            build_config = dict(build_config)
+        else:
+            build_config = {}
+
+        scope = _maven_build_scope(checkout_path=root, service=service)
+        expected_context = "." if scope.context_path == "." else f"./{scope.context_path}"
+        expected_dockerfile = _maven_runtime_dockerfile(service=service, scope=scope)
+        if build_config.get("context") != expected_context or build_config.get("dockerfile_inline") != expected_dockerfile:
+            build_config["context"] = expected_context
+            build_config.pop("dockerfile", None)
+            build_config["dockerfile_inline"] = expected_dockerfile
+            service_config["build"] = build_config
+            changed = True
+
+        existing_environment = _compose_environment_mapping(
+            service_name=service.compose_service,
+            environment=service_config.get("environment"),
+        )
+        service_database_environment = _maven_service_database_environment(
+            plan=plan,
+            compose_services=compose_services,
+        )
+        additional_spring_sources = _maven_additional_spring_sources(checkout_path=root, service=service)
+        management_port = _management_port_for_service(service=service, service_config=service_config)
+        maven_environment = {
+            **resource_environment,
+            **service_database_environment,
+            **_maven_runtime_default_environment(plan=plan, service=service),
+            "SPRING_DATASOURCE_USERNAME": resource_environment.get("SPRING_DATASOURCE_USERNAME", "postgres"),
+            "SPRING_DATASOURCE_PASSWORD": resource_environment.get("SPRING_DATASOURCE_PASSWORD", "postgres"),
+            "TENANT_DATASOURCE_USERNAME": resource_environment.get("TENANT_DATASOURCE_USERNAME", "postgres"),
+            "TENANT_DATASOURCE_PASSWORD": resource_environment.get("TENANT_DATASOURCE_PASSWORD", "postgres"),
+            "SPRING_JPA_HIBERNATE_DDL_AUTO": "none",
+            "SPRING_FLYWAY_POSTGRESQL_TRANSACTIONAL_LOCK": "false",
+            "SERVER_PORT": str(service.container_port),
+            "MANAGEMENT_SERVER_PORT": str(management_port),
+        }
+        if additional_spring_sources:
+            maven_environment["SPRING_MAIN_SOURCES"] = ",".join(additional_spring_sources)
+        merged_environment = {**existing_environment, **maven_environment}
+        if merged_environment != existing_environment:
+            service_config["environment"] = merged_environment
+            changed = True
+        if not isinstance(service_config.get("healthcheck"), dict):
+            service_config["healthcheck"] = {
+                "test": [
+                    "CMD-SHELL",
+                    f"curl -f http://localhost:{management_port}/actuator/health/ || exit 1",
+                ],
+                "interval": "30s",
+                "timeout": "10s",
+                "retries": 20,
+                "start_period": "120s",
+            }
+            changed = True
+
+    if not changed:
+        return plan
+    normalized_payload = plan.model_dump()
+    normalized_payload["compose_raw"] = yaml.safe_dump(compose_payload, sort_keys=False)
+    return DeploymentPlan.model_validate(normalized_payload)
+
+
+def _validate_no_host_source_mounts(*, service_name: str, volumes: object) -> None:
+    if volumes is None:
+        return
+    if not isinstance(volumes, list):
+        raise ValueError(f"compose service {service_name} volumes must be a list")
+    for volume in volumes:
+        if isinstance(volume, str):
+            source = volume.split(":", maxsplit=1)[0].strip()
+            if _is_host_source_path(source):
+                raise ValueError(
+                    f"compose service {service_name} uses a host-source bind mount; "
+                    "deployment compose must build immutable service images"
+                )
+        elif isinstance(volume, dict):
+            volume_type = str(volume.get("type") or "").strip().lower()
+            source = volume.get("source")
+            if volume_type == "bind" or _is_host_source_path(source):
+                raise ValueError(
+                    f"compose service {service_name} uses a host-source bind mount; "
+                    "deployment compose must build immutable service images"
+                )
+        else:
+            raise ValueError(f"compose service {service_name} has invalid volume entry")
+
+
+def _candidate_prompt_json(candidate) -> dict[str, object]:  # noqa: ANN001
+    return {
+        "name": candidate.name,
+        "source_path": candidate.source_path,
+        "build_strategy": candidate.build_strategy,
+        "detected_runtime": candidate.detected_runtime,
+        "detected_language": candidate.detected_language,
+        "detection_confidence": candidate.detection_confidence,
+        "exposed_port": candidate.exposed_port,
+        "healthcheck": candidate.healthcheck,
+        "start_command": candidate.start_command,
+        "services": [dict(service) for service in getattr(candidate, "services_json", ())],
+        "resources": [dict(resource) for resource in candidate.resources_json],
+        "volumes": [dict(volume) for volume in getattr(candidate, "volumes_json", ())],
+        "needs_generated_files": candidate.needs_generated_files,
+    }
+
+
+def _path_has_marker(checkout_path: str, source_path: str, patterns: tuple[str, ...], markers: tuple[str, ...]) -> bool:
+    root = Path(checkout_path).resolve()
+    candidate_root = root if source_path == "." else root / source_path
+    if not candidate_root.exists() or not candidate_root.is_dir():
+        return False
+    for pattern in patterns:
+        for path in candidate_root.glob(pattern):
+            try:
+                text = path.read_text(encoding="utf-8")
+            except (OSError, UnicodeDecodeError):
+                continue
+            lowered = text.lower()
+            if any(marker in lowered for marker in markers):
+                return True
+    return False
+
+
+def _maven_candidate_is_runnable(candidate: ProjectAppPreScanCandidate, *, checkout_path: str) -> bool:
+    source_path = str(candidate.source_path or "").strip() or "."
+    if Path(checkout_path, source_path, "Dockerfile").exists():
+        return True
+    if _path_has_marker(
+        checkout_path,
+        source_path,
+        ("pom.xml",),
+        ("<packaging>pom</packaging>",),
+    ):
+        return False
+    return _path_has_marker(
+        checkout_path,
+        source_path,
+        (
+            "pom.xml",
+            "src/main/resources/application.properties",
+            "src/main/resources/application.yml",
+            "src/main/resources/application.yaml",
+            "src/main/java/**/*.java",
+        ),
+        (
+            "spring-boot-maven-plugin",
+            "springbootapplication",
+            "server.port",
+            "spring.application.name",
+        ),
+    )
+
+
+def _dockerfile_uses_private_base(candidate: ProjectAppPreScanCandidate, *, checkout_path: str) -> bool:
+    source_path = str(candidate.source_path or "").strip() or "."
+    dockerfile = Path(checkout_path, source_path, "Dockerfile")
+    try:
+        text = dockerfile.read_text(encoding="utf-8")
+    except (OSError, UnicodeDecodeError):
+        return False
+    match = re.search(r"(?mi)^\s*FROM\s+([^\s]+)", text)
+    if match is None:
+        return False
+    image = match.group(1).strip().lower()
+    if image.startswith(("scratch", "alpine", "debian", "ubuntu", "python", "node", "nginx", "maven", "eclipse-temurin")):
+        return False
+    if image.startswith(("public.ecr.aws/", "docker.io/", "ghcr.io/")):
+        return False
+    registry = image.split("/", 1)[0]
+    return "." in registry or ":" in registry
+
+
+def _deployment_planner_candidates(
+    candidates: tuple[ProjectAppPreScanCandidate, ...],
+    *,
+    checkout_path: str,
+) -> tuple[ProjectAppPreScanCandidate, ...]:
+    filtered: list[ProjectAppPreScanCandidate] = []
+    for candidate in candidates:
+        if candidate.build_strategy == "docker_compose":
+            filtered.append(candidate)
+            continue
+        if candidate.detected_language == "java":
+            if candidate.detected_runtime == "spring_boot" and _maven_candidate_is_runnable(
+                candidate,
+                checkout_path=checkout_path,
+            ):
+                filtered.append(candidate)
+            continue
+        if candidate.detected_language == "javascript":
+            if candidate.detected_runtime in {"nextjs", "react", "vite"}:
+                filtered.append(candidate)
+            continue
+        if candidate.build_strategy == "dockerfile" and not _dockerfile_uses_private_base(
+            candidate,
+            checkout_path=checkout_path,
+        ):
+            filtered.append(candidate)
+    return tuple(filtered)
+
+
+def _render_user_prompt(
+    *,
+    tenant: Tenant,
+    project: Project,
+    checkout_path: str,
+    branch: str,
+    commit_sha: str,
+    pre_scan_candidates: tuple,
+) -> str:
+    payload = {
+        "tenant_id": tenant.tenant_id,
+        "project_id": project.project_id,
+        "project_name": project.name,
+        "github_repository": project.github_repository,
+        "branch": branch,
+        "commit_sha": commit_sha,
+        "checkout_path": str(Path(checkout_path).resolve()),
+        "deterministic_repo_evidence": [_candidate_prompt_json(candidate) for candidate in pre_scan_candidates],
+    }
+    return json.dumps(payload, sort_keys=True, indent=2)
+
+
+def _deployment_service(service: DeploymentPlanService, *, visibility: str) -> dict[str, object]:
+    service_type = "api" if service.kind == "api" else "website"
+    service_record: dict[str, object] = {
+        "key": service.key,
+        "kind": service_type,
+        "name": service.name,
+        "source_path": service.source_path,
+        "compose_service": service.compose_service,
+        "build_strategy": service.build_strategy,
+        "container_port": service.container_port,
+        "public": visibility == "public",
+        "config": {
+            "source": "deployment_planner",
+            "route_visibility": visibility,
+        },
+    }
+    if service.healthcheck is not None:
+        service_record["config"]["healthcheck"] = service.healthcheck
+    if service.depends_on:
+        service_record["config"]["depends_on"] = list(service.depends_on)
+    return service_record
+
+
+def _deployment_app_candidate(
+    *,
+    project: Project,
+    plan: DeploymentPlan,
+    analysis_source: str | None,
+) -> ProjectAppNormalizedCandidate:
+    route_visibility_by_service = {route.service_key: route.visibility for route in plan.routes}
+    services = [
+        _deployment_service(service, visibility=route_visibility_by_service[service.key])
+        for service in plan.services
+    ]
+    resources = [resource.model_dump(exclude_none=True) for resource in plan.resources]
+    volumes = [volume.model_dump(exclude_none=True) for volume in plan.volumes]
+    return ProjectAppNormalizedCandidate(
+        name=str(project.name or plan.name or "production"),
+        source_path=".",
+        build_strategy="docker_compose",
+        detected_runtime="compose",
+        detected_language=None,
+        detection_confidence=1.0,
+        exposed_port=None,
+        healthcheck=None,
+        start_command=None,
+        env_schema_json={},
+        secret_schema_json={},
+        deployment_config={
+            "source_strategy": "docker_compose",
+            "services": services,
+            "resources": resources,
+            "volumes": volumes,
+            "backup_policies": [],
+            "generated_compose_raw": plan.compose_raw,
+            "deployment_plan": plan.model_dump(exclude_none=True),
+        },
+        analysis_source=analysis_source,
+        needs_generated_files=False,
+        resources_json=tuple(resources),
+        services_json=tuple(services),
+        volumes_json=tuple(volumes),
+        env_json={},
+        secret_json={},
+        slug="production",
+    )
+
+
+def _allowed_deployment_service_source_paths(
+    candidates: tuple[ProjectAppPreScanCandidate, ...],
+) -> set[str]:
+    allowed: set[str] = set()
+    for candidate in candidates:
+        if candidate.build_strategy != "docker_compose":
+            allowed.add(str(candidate.source_path or "").strip() or ".")
+        for service in getattr(candidate, "services_json", ()):
+            if not isinstance(service, dict):
+                continue
+            source_path = str(service.get("source_path") or "").strip()
+            if source_path:
+                allowed.add(source_path)
+    return allowed
+
+
+def _validate_plan_service_sources(
+    *,
+    plan: DeploymentPlan,
+    candidates: tuple[ProjectAppPreScanCandidate, ...],
+) -> None:
+    allowed_source_paths = _allowed_deployment_service_source_paths(candidates)
+    undeclared_source_paths = sorted(
+        {
+            service.source_path
+            for service in plan.services
+            if service.source_path not in allowed_source_paths
+        }
+    )
+    if undeclared_source_paths:
+        raise ValueError(
+            "deployment plan contains undeclared deployment service source_path(s): "
+            f"{', '.join(undeclared_source_paths)}"
+        )
+
+
+def run_project_deployment_planning(
+    *,
+    tenant: Tenant,
+    project: Project,
+    checkout_path: str,
+    branch: str,
+    commit_sha: str,
+    analysis_source: str | None = None,
+    session=None,  # noqa: ANN001
+    settings=None,  # noqa: ANN001
+    workflow_id: str | None = None,
+    operation_id: str | None = None,
+    attempt_id: str | None = None,
+    attempt_number: int | None = None,
+    extra_on_log_line: Callable[[str, str], None] | None = None,
+) -> DeploymentPlanningResult:
+    normalized_checkout_path = str(Path(checkout_path or "").resolve())
+    pre_scan_candidates = scan_repo_for_project_apps(
+        checkout_path=normalized_checkout_path,
+        analysis_source=analysis_source,
+    )
+    deployment_candidates = _deployment_planner_candidates(
+        pre_scan_candidates,
+        checkout_path=normalized_checkout_path,
+    )
+    active_settings = settings or get_settings()
+    runtime = build_codex_runtime(session=session, settings=active_settings)
+    try:
+        runtime_payload = invoke_runtime_json(
+            runtime=runtime,
+            context=AgentInvocationContext(
+                channel="system",
+                tenant_id=tenant.tenant_id,
+                project_id=project.project_id,
+                command="project_deployment_planning",
+                stage="project_deployment_planning",
+                working_dir=normalized_checkout_path,
+                workflow_id=workflow_id,
+                operation_id=operation_id,
+                attempt_id=attempt_id,
+                attempt=attempt_number,
+                reasoning_effort="medium",
+            ),
+            system_prompt=_DEPLOYMENT_PLANNER_SYSTEM_PROMPT,
+            user_prompt=_render_user_prompt(
+                tenant=tenant,
+                project=project,
+                checkout_path=normalized_checkout_path,
+                branch=branch,
+                commit_sha=commit_sha,
+                pre_scan_candidates=deployment_candidates,
+            ),
+            extra_on_log_line=extra_on_log_line,
+        )
+    except CodexRuntimeError as exc:
+        raise RuntimeError(f"Project deployment planning failed: {exc}") from exc
+
+    response = DeploymentPlannerResponse.model_validate(runtime_payload)
+    _validate_plan_service_sources(plan=response.deployment, candidates=deployment_candidates)
+    deployment_plan = _normalize_compose_healthchecks(plan=response.deployment)
+    deployment_plan = _normalize_plan_volume_names(plan=deployment_plan)
+    deployment_plan = _normalize_postgres_resource_bootstrap(plan=deployment_plan)
+    deployment_plan = _normalize_elasticsearch_resource_images(plan=deployment_plan)
+    deployment_plan = _normalize_vite_service_builds(
+        plan=deployment_plan,
+        checkout_path=normalized_checkout_path,
+    )
+    deployment_plan = _normalize_python_service_builds(
+        plan=deployment_plan,
+        checkout_path=normalized_checkout_path,
+    )
+    deployment_plan = _normalize_maven_service_builds(
+        plan=deployment_plan,
+        checkout_path=normalized_checkout_path,
+    )
+    deployment_plan = _normalize_maven_service_dependencies(
+        plan=deployment_plan,
+        checkout_path=normalized_checkout_path,
+    )
+    _validate_build_dockerfiles(plan=deployment_plan, checkout_path=normalized_checkout_path)
+    return DeploymentPlanningResult(
+        app=_deployment_app_candidate(
+            project=project,
+            plan=deployment_plan,
+            analysis_source=analysis_source,
+        ),
+        plan=deployment_plan,
+        raw_planner_result_json=dict(runtime_payload),
+    )

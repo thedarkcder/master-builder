@@ -1,5 +1,4 @@
 import type { ReactNode } from "react";
-import { Loader2, RefreshCw } from "lucide-react";
 
 import type { CodexModelOptionRecord, GitHubRepositoryRecord } from "@/lib/api";
 import { CodexModelSelect } from "@/components/codex-model-select";
@@ -197,15 +196,13 @@ type RepositoryMappingSectionProps = {
   repositoryOptions: GitHubRepositoryRecord[];
   repositoriesLoading: boolean;
   onGithubRepositoryTextChange: (value: string) => void;
-  onRefreshRepositoryOptions?: () => void;
 };
 
 export function RepositoryMappingSection({
   githubRepositoryText,
   repositoryOptions,
   repositoriesLoading,
-  onGithubRepositoryTextChange,
-  onRefreshRepositoryOptions
+  onGithubRepositoryTextChange
 }: RepositoryMappingSectionProps) {
   return (
     <SectionFrame title="Repository Mapping" description="Define the target repository.">
@@ -227,18 +224,6 @@ export function RepositoryMappingSection({
               </option>
             ))}
           </select>
-          {onRefreshRepositoryOptions ? (
-            <button
-              type="button"
-              className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-input bg-background text-muted-foreground hover:bg-muted disabled:opacity-50"
-              onClick={onRefreshRepositoryOptions}
-              disabled={repositoriesLoading}
-              aria-label="Refresh repositories"
-              title="Refresh repositories"
-            >
-              {repositoriesLoading ? <Loader2 className="h-4 w-4 animate-spin" /> : <RefreshCw className="h-4 w-4" />}
-            </button>
-          ) : null}
         </div>
       </div>
     </SectionFrame>

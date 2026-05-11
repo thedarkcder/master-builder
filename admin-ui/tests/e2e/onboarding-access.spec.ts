@@ -937,7 +937,7 @@ test("lets standard tenant users open Projects without showing project-managemen
   await expect(page.getByRole("tab", { name: "Runs" })).toHaveCount(0);
 });
 
-test("lets platform super admins see troubleshooting navigation and direct settings tabs", async ({ page }) => {
+test("lets platform super admins see development navigation and direct settings tabs", async ({ page }) => {
   const principal = makePlatformAdminPrincipal();
   const tenant = makeTenant({
     tenant_id: "route25",
@@ -979,7 +979,7 @@ test("lets platform super admins see troubleshooting navigation and direct setti
     "Danger",
   ]);
 
-  await expect(page.getByText("Troubleshooting")).toBeVisible();
+  await expect(page.getByText("Development")).toBeVisible();
   await expect(page.getByRole("link", { name: "Pipeline" })).toBeVisible();
   await expect(page.getByRole("link", { name: "Workflows" })).toBeVisible();
   await expect(page.getByRole("link", { name: "Executions" })).toBeVisible();

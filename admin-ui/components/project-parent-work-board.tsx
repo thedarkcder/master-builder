@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
-import { Clock3, ExternalLink, Play, RefreshCw, X } from "lucide-react";
+import { Clock3, ExternalLink, Play, X } from "lucide-react";
 
 import { useAuth } from "@/components/auth-provider";
 import { StatusBadge } from "@/components/ui/status-badge";
@@ -256,13 +256,14 @@ export function ProjectParentWorkBoard({
             type="button"
             variant="outline"
             size="sm"
-            className="h-8 w-8 p-0"
+            className="h-8"
             onClick={() => void syncJiraWork()}
             disabled={!ready || !credentials || syncing}
             aria-label="Sync"
             title="Sync"
           >
-            <RefreshCw className={`h-3.5 w-3.5 ${syncing ? "animate-spin" : ""}`} />
+            <Play className="mr-1.5 h-3.5 w-3.5" />
+            {syncing ? "Syncing" : "Sync Jira"}
           </Button>
         </div>
       ) : null}

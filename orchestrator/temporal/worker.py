@@ -23,8 +23,10 @@ async def run_temporal_worker() -> None:
         process_handler_workflow_advance_activity,
         retry_handler_workflow_operation_activity,
     )
+    from orchestrator.temporal.activities.project_deployment_setup import run_project_deployment_setup_activity
     from orchestrator.temporal.workflows.development_team_run import DevelopmentTeamRunWorkflow
     from orchestrator.temporal.workflows.handler_backed_workflow import HandlerBackedWorkflow
+    from orchestrator.temporal.workflows.project_deployment_setup import ProjectDeploymentSetupWorkflow
 
     settings = get_settings()
     configure_logging(
@@ -38,12 +40,13 @@ async def run_temporal_worker() -> None:
     worker = Worker(
         client,
         task_queue=temporal_task_queue(settings),
-        workflows=[DevelopmentTeamRunWorkflow, HandlerBackedWorkflow],
+        workflows=[DevelopmentTeamRunWorkflow, HandlerBackedWorkflow, ProjectDeploymentSetupWorkflow],
         activities=[
             execute_claimed_run_activity,
             resume_human_input_activity,
             process_handler_workflow_advance_activity,
             retry_handler_workflow_operation_activity,
+            run_project_deployment_setup_activity,
         ],
         activity_executor=ThreadPoolExecutor(max_workers=4),
         interceptors=[TemporalWorkerTelemetryInterceptor()],

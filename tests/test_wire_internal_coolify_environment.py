@@ -49,6 +49,7 @@ class WireInternalCoolifyEnvironmentTests(unittest.TestCase):
             coolify_environment_name="production",
             coolify_server_uuid="server-uuid-1",
             coolify_destination_uuid="destination-uuid-1",
+            coolify_github_app_uuid="github-app-uuid-1",
             secret_ref_updates={"coolify_webhook_token": "tenant/tenant-alpha/COOLIFY_WEBHOOK_TOKEN"},
         )
         self.assertEqual(merged["provider"], "internal_coolify")
@@ -59,6 +60,7 @@ class WireInternalCoolifyEnvironmentTests(unittest.TestCase):
         self.assertEqual(merged["platform_subdomain"], "builder")
         self.assertEqual(merged["coolify_project_uuid"], "project-uuid-1")
         self.assertEqual(merged["coolify_environment_name"], "production")
+        self.assertEqual(merged["coolify_github_app_uuid"], "github-app-uuid-1")
         self.assertEqual(
             merged["secret_refs"],
             {
