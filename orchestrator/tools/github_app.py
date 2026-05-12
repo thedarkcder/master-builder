@@ -113,6 +113,9 @@ class ReactionSummary:
     user_login: str | None
 
 
+PULL_REQUEST_STATUS_REACTION_CONTENTS = frozenset({"+1", "-1", "confused", "eyes", "hooray", "rocket"})
+
+
 @dataclass(frozen=True)
 class PullRequestInlineCommentDraft:
     path: str
@@ -216,6 +219,7 @@ class GitHubAppClient:
         self._config = config
         self._cached_installation_token: _InstallationToken | None = None
         self._cached_actor_login: str | None = None
+        self._cached_app_bot_login: str | None = None
 
     def create_app_jwt(self) -> str:
         private_key_pem = self._normalize_private_key(self._config.private_key_pem)
@@ -263,7 +267,7 @@ class GitHubAppClient:
         path: str,
         bearer_token: str,
         payload: dict | None = None,
-    ) -> dict:
+    ) -> dict | list:
         url = f"{self._config.api_base_url.rstrip('/')}{path}"
         headers = {
             "Accept": "application/vnd.github+json",
@@ -329,6 +333,23 @@ class GitHubAppClient:
             raise GitHubApiError("GitHub authenticated user response did not include login")
         self._cached_actor_login = login.strip()
         return self._cached_actor_login
+
+    def get_app_bot_login(self) -> str:
+        if self._cached_app_bot_login is not None:
+            return self._cached_app_bot_login
+        app_jwt = self.create_app_jwt()
+        response = self._request_json(
+            method="GET",
+            path="/app",
+            bearer_token=app_jwt,
+        )
+        if not isinstance(response, dict):
+            raise GitHubApiError("GitHub app response was not an object")
+        slug = response.get("slug")
+        if not isinstance(slug, str) or not slug.strip():
+            raise GitHubApiError("GitHub app response did not include slug")
+        self._cached_app_bot_login = f"{slug.strip()}[bot]"
+        return self._cached_app_bot_login
 
     def create_pull_request(
         self,
@@ -905,11 +926,38 @@ class GitHubAppClient:
         pr_number: int,
         content: str,
     ) -> CommentReactionResult:
-        # Installation tokens cannot call GET /user. Use idempotent create-reaction behavior instead.
+        normalized_content = str(content or "").strip()
+        if not normalized_content:
+            raise ValueError("GitHub pull request reaction content is required")
+
+        app_bot_login = self.get_app_bot_login()
+        matching_reaction: ReactionSummary | None = None
+        for reaction in self.list_pull_request_reactions(
+            repo_full_name=repo_full_name,
+            pr_number=pr_number,
+        ):
+            if reaction.user_login != app_bot_login:
+                continue
+            if reaction.content not in PULL_REQUEST_STATUS_REACTION_CONTENTS:
+                continue
+            if reaction.content == normalized_content:
+                matching_reaction = reaction
+                continue
+            self.delete_issue_reaction(
+                repo_full_name=repo_full_name,
+                reaction_id=reaction.reaction_id,
+            )
+
+        if matching_reaction is not None:
+            return CommentReactionResult(
+                reaction_id=matching_reaction.reaction_id,
+                content=matching_reaction.content,
+            )
+
         return self.add_pull_request_reaction(
             repo_full_name=repo_full_name,
             pr_number=pr_number,
-            content=content,
+            content=normalized_content,
         )
 
     def submit_pull_request_review(

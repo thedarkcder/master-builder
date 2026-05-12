@@ -284,10 +284,7 @@ class GitHubWebhookProductionPathTests(ProductionPathApiTestCase):
         self.assertEqual(processed.status, "done")
         self.assertEqual(
             fake_client.pull_request_reactions,
-            [
-                {"repo_full_name": "org/repo", "pr_number": 17, "content": "eyes"},
-                {"repo_full_name": "org/repo", "pr_number": 17, "content": "confused"},
-            ],
+            [{"repo_full_name": "org/repo", "pr_number": 17, "content": "confused"}],
         )
         self.assertTrue(fake_client.issue_comments)
         self.assertTrue(any("Codex PR Review" in str(comment["body"]) for comment in fake_client.issue_comments))

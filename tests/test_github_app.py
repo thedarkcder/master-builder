@@ -4,7 +4,7 @@ import json
 import unittest
 from io import BytesIO
 from urllib.error import HTTPError
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 from jwt.exceptions import InvalidKeyError
 
@@ -20,6 +20,7 @@ from orchestrator.tools.github_app import (
     PullRequestReviewComment,
     PullRequestResult,
     PullRequestSummary,
+    ReactionSummary,
     WorkflowCheckSuite,
     github_client_from_tenant_config,
 )
@@ -1049,12 +1050,22 @@ class GitHubAppClientTests(unittest.TestCase):
         self.assertEqual(review_reaction.content, "eyes")
         self.assertEqual(request_json.call_count, 2)
 
-    def test_sync_pull_request_reaction_uses_reaction_create_without_actor_lookup(self) -> None:
+    def test_sync_pull_request_reaction_replaces_owned_status_reactions_without_actor_lookup(self) -> None:
         config = GitHubAppConfig(app_id="12345", installation_id="999", private_key_pem="unused")
         client = GitHubAppClient(config)
         with (
             patch.object(client, "get_actor_login") as get_actor_login,
-            patch.object(client, "list_pull_request_reactions") as list_reactions,
+            patch.object(client, "get_app_bot_login", return_value="route25-master-builder[bot]"),
+            patch.object(
+                client,
+                "list_pull_request_reactions",
+                return_value=[
+                    ReactionSummary(reaction_id=301, content="eyes", user_login="route25-master-builder[bot]"),
+                    ReactionSummary(reaction_id=302, content="confused", user_login="route25-master-builder[bot]"),
+                    ReactionSummary(reaction_id=303, content="confused", user_login="reviewer"),
+                    ReactionSummary(reaction_id=304, content="heart", user_login="route25-master-builder[bot]"),
+                ],
+            ) as list_reactions,
             patch.object(client, "delete_issue_reaction") as delete_reaction,
             patch.object(
                 client,
@@ -1069,8 +1080,14 @@ class GitHubAppClientTests(unittest.TestCase):
             )
 
         get_actor_login.assert_not_called()
-        list_reactions.assert_not_called()
-        delete_reaction.assert_not_called()
+        list_reactions.assert_called_once_with(repo_full_name="example/repo", pr_number=10)
+        delete_reaction.assert_has_calls(
+            [
+                call(repo_full_name="example/repo", reaction_id=301),
+                call(repo_full_name="example/repo", reaction_id=302),
+            ]
+        )
+        self.assertEqual(delete_reaction.call_count, 2)
         add_reaction.assert_called_once_with(
             repo_full_name="example/repo",
             pr_number=10,
@@ -1078,6 +1095,32 @@ class GitHubAppClientTests(unittest.TestCase):
         )
         self.assertEqual(result.reaction_id, 401)
         self.assertEqual(result.content, "+1")
+
+    def test_sync_pull_request_reaction_reuses_existing_owned_status_reaction(self) -> None:
+        config = GitHubAppConfig(app_id="12345", installation_id="999", private_key_pem="unused")
+        client = GitHubAppClient(config)
+        with (
+            patch.object(client, "get_app_bot_login", return_value="route25-master-builder[bot]"),
+            patch.object(
+                client,
+                "list_pull_request_reactions",
+                return_value=[
+                    ReactionSummary(reaction_id=301, content="confused", user_login="route25-master-builder[bot]"),
+                ],
+            ),
+            patch.object(client, "delete_issue_reaction") as delete_reaction,
+            patch.object(client, "add_pull_request_reaction") as add_reaction,
+        ):
+            result = client.sync_pull_request_reaction(
+                repo_full_name="example/repo",
+                pr_number=10,
+                content="confused",
+            )
+
+        delete_reaction.assert_not_called()
+        add_reaction.assert_not_called()
+        self.assertEqual(result.reaction_id, 301)
+        self.assertEqual(result.content, "confused")
 
     def test_submit_pull_request_review_and_merge(self) -> None:
         config = GitHubAppConfig(app_id="12345", installation_id="999", private_key_pem="unused")

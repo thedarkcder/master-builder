@@ -56,14 +56,6 @@ def plan_pull_request_targets(
         signal = type("Signal", (), {"ready": False, "state": "not_triggered", "message": "review_not_triggered"})()
         review_publication_actions: list[TransportAction] = []
         if full_review_trigger:
-            planned_actions.append(
-                GitHubPullRequestReactionAction(
-                    repo_full_name=repo_full_name,
-                    pr_number=pr_number,
-                    content="eyes",
-                )
-            )
-        if full_review_trigger:
             try:
                 signal = reviewer_gate.evaluate_pr(
                     repo_full_name=repo_full_name,

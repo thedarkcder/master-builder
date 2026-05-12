@@ -1,5 +1,6 @@
 2026-05-05
 
+- When a screenshot shows GitHub PR reaction chips, inspect the PR/webhook reaction automation before searching product UI. GitHub's reaction picker and aggregate chips are not app components, and the status reaction contract lives in the PR automation service.
 - When backend tenant settings are split into section routes, split the frontend submit contracts too. A single form save that calls multiple section endpoints recreates hidden coupling even when the backend is correctly separated.
 - When splitting tenant settings pages, move section-local form state and payload construction into a section component. Keeping Discord/observability/etc. state in the page shell recreates the same god-component coupling through React state instead of API calls.
 - When a page shell remains large after an initial settings split, extract whole section boundaries including their loaders, local form state, and mutation handlers. Moving only JSX out leaves the orchestration smell behind.
