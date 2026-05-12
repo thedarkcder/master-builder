@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from datetime import datetime, timezone
 from pathlib import Path
@@ -27,6 +28,25 @@ from orchestrator.storage.models import Project, ProjectApp, ProjectAppAnalysisR
 def _write(path: Path, content: str) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(content, encoding="utf-8")
+
+
+def _dockerfile_pre_scan_candidate(source_path: str) -> ProjectAppPreScanCandidate:
+    return ProjectAppPreScanCandidate(
+        name=Path(source_path).name,
+        source_path=source_path,
+        build_strategy="dockerfile",
+        detected_runtime="python",
+        detected_language="python",
+        detection_confidence=0.9,
+        exposed_port=8080,
+        healthcheck=None,
+        start_command=None,
+        env_schema_json={},
+        secret_schema_json={},
+        deployment_config={},
+        analysis_source="deployment_setup",
+        needs_generated_files=False,
+    )
 
 
 def test_scan_repo_for_project_apps_detects_dockerfile_and_framework_candidates() -> None:
@@ -546,7 +566,9 @@ services:
     assert result.metadata.normalized_count == 2
     assert result.metadata.raw_planner_result_json["apps"][0]["source_path"] == "api"
     assert invoke.call_count == 1
-    assert "temporal-ui" in invoke.call_args.kwargs["user_prompt"]
+    prompt_payload = invoke.call_args.kwargs["user_prompt"]
+    assert "docker_compose" in prompt_payload
+    assert "temporal-ui" not in prompt_payload
     api_app = next(app for app in result.apps if app.source_path == "api")
     assert api_app.build_strategy == "dockerfile"
     assert api_app.status == "ready"
@@ -766,7 +788,14 @@ volumes:
     assert "infra" in prompt
     assert "api/shared-library" not in prompt
     assert "web/legacy-ui" not in prompt
-    assert "machine-learning/analytics" not in prompt
+    assert "machine-learning/analytics" in prompt
+    prompt_payload = json.loads(prompt)
+    analytics_candidate = next(
+        candidate
+        for candidate in prompt_payload["deterministic_repo_evidence"]
+        if candidate["source_path"] == "machine-learning/analytics"
+    )
+    assert analytics_candidate["uses_private_base_image"] is True
     assert ".master-builder/deployments" not in prompt
     assert "stale-generated-service" not in prompt
     assert "temporalio/auto-setup" not in prompt
@@ -816,13 +845,13 @@ def test_run_project_deployment_planning_rejects_runtime_invented_deployable_ser
                         "container_port": 4173,
                         "depends_on": [],
                     },
-                    {
-                        "key": "analytics-api",
-                        "name": "Analytics API",
-                        "kind": "api",
-                        "source_path": "machine-learning/analytics",
-                        "build_strategy": "dockerfile",
-                        "compose_service": "analytics-api",
+                        {
+                            "key": "analytics-api",
+                            "name": "Analytics API",
+                            "kind": "api",
+                            "source_path": "machine-learning/invented",
+                            "build_strategy": "dockerfile",
+                            "compose_service": "analytics-api",
                         "container_port": 8080,
                         "depends_on": [],
                     },
@@ -846,7 +875,7 @@ services:
         CMD ["npm", "run", "preview", "--", "--host", "0.0.0.0", "--port", "4173"]
   analytics-api:
     build:
-      context: ./machine-learning/analytics
+      context: ./machine-learning/invented
       dockerfile_inline: |
         FROM python:3.12-slim
         WORKDIR /app
@@ -880,7 +909,10 @@ services:
 def test_run_project_deployment_planning_aligns_compose_volume_names_with_contract() -> None:
     with TemporaryDirectory() as tmp:
         root = Path(tmp)
-        _write(root / "web" / "package.json", '{"name":"web","scripts":{"build":"vite build"}}')
+        _write(
+            root / "web" / "package.json",
+            '{"name":"web","scripts":{"build":"vite build","start":"vite --host 0.0.0.0"},"dependencies":{"vite":"^5.0.0"}}',
+        )
         planner_payload = {
             "deployment": {
                 "name": "production",
@@ -1208,7 +1240,7 @@ services:
         }
         with (
             patch("orchestrator.core.deployment_setup.planner.build_codex_runtime", return_value=SimpleNamespace()),
-            patch("orchestrator.core.deployment_setup.planner.invoke_runtime_json", return_value=planner_payload),
+            patch("orchestrator.core.deployment_setup.planner.invoke_runtime_json", return_value=planner_payload) as invoke,
         ):
             with pytest.raises(Exception, match="unsupported/private registry"):
                 run_project_deployment_planning(
@@ -1225,11 +1257,17 @@ services:
                     session=SimpleNamespace(),
                     settings=SimpleNamespace(),
                 )
+        prompt_payload = json.loads(invoke.call_args.kwargs["user_prompt"])
+        evidence = prompt_payload["deterministic_repo_evidence"]
+        analytics_candidate = next(candidate for candidate in evidence if candidate["source_path"] == "analytics")
+        assert analytics_candidate["uses_private_base_image"] is True
 
 
 def test_run_project_deployment_planning_accepts_public_docker_hub_tagged_base_image() -> None:
     with TemporaryDirectory() as tmp:
         root = Path(tmp)
+        _write(root / "api" / "pom.xml", "<project><artifactId>spring-boot-starter-web</artifactId></project>")
+        _write(root / "web" / "package.json", '{"name":"web","dependencies":{"vite":"^5.0.0"}}')
         planner_payload = {
             "deployment": {
                 "name": "production",
@@ -1964,8 +2002,10 @@ services:
             }
         }
 
+        scan_candidates = (_dockerfile_pre_scan_candidate("analytics"),)
+
         with (
-            patch("orchestrator.core.deployment_setup.planner.scan_repo_for_project_apps", return_value=()),
+            patch("orchestrator.core.deployment_setup.planner.scan_repo_for_project_apps", return_value=scan_candidates),
             patch("orchestrator.core.deployment_setup.planner.build_codex_runtime", return_value=SimpleNamespace()),
             patch("orchestrator.core.deployment_setup.planner.invoke_runtime_json", return_value=planner_payload),
         ):
@@ -2025,8 +2065,10 @@ services:
             }
         }
 
+        scan_candidates = (_dockerfile_pre_scan_candidate("analytics"),)
+
         with (
-            patch("orchestrator.core.deployment_setup.planner.scan_repo_for_project_apps", return_value=()),
+            patch("orchestrator.core.deployment_setup.planner.scan_repo_for_project_apps", return_value=scan_candidates),
             patch("orchestrator.core.deployment_setup.planner.build_codex_runtime", return_value=SimpleNamespace()),
             patch("orchestrator.core.deployment_setup.planner.invoke_runtime_json", return_value=planner_payload),
         ):
@@ -2090,8 +2132,10 @@ services:
             }
         }
 
+        scan_candidates = (_dockerfile_pre_scan_candidate("analytics"),)
+
         with (
-            patch("orchestrator.core.deployment_setup.planner.scan_repo_for_project_apps", return_value=()),
+            patch("orchestrator.core.deployment_setup.planner.scan_repo_for_project_apps", return_value=scan_candidates),
             patch("orchestrator.core.deployment_setup.planner.build_codex_runtime", return_value=SimpleNamespace()),
             patch("orchestrator.core.deployment_setup.planner.invoke_runtime_json", return_value=planner_payload),
         ):

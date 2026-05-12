@@ -89,6 +89,12 @@ def handle_parent_feature_sync(
     session: Session,
     settings,  # noqa: ANN001
 ) -> dict | None:
+    normalized_labels = {str(label).strip().casefold() for label in context.issue_labels or []}
+    if (
+        context.webhook_event not in {"issue_created", "issue_updated"}
+        or "pm-parent" not in normalized_labels
+    ) and not bool(context.payload.get("_mb_pm_interview_followup")):
+        return None
     result = handle_parent_feature_sync_service(
         context=_build_service_context(context=context),
         session=session,
