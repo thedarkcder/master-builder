@@ -103,6 +103,9 @@ class _FakeGitHubClient:
             )
         ]
 
+    def list_repository_branches(self, *, repo_full_name: str, github_repository: str) -> list[SimpleNamespace]:
+        return [SimpleNamespace(name="main", protected=True), SimpleNamespace(name="develop", protected=False)]
+
 
 class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
     EXCLUDED_ROUTE_PATHS = {
@@ -1154,6 +1157,230 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                 path="/api/admin/tenants/route25/projects/route25-default/discord/allowlist-requests/u1/approve",
                 auth=admin,
                 expected_statuses=(200, 404),
+            ),
+            ("GET", "/api/admin/deployment-hosts"): RouteScenario(
+                path="/api/admin/deployment-hosts",
+                auth=admin,
+            ),
+            ("POST", "/api/admin/deployment-hosts"): RouteScenario(
+                path="/api/admin/deployment-hosts",
+                auth=admin,
+                json={"label": "Smoke Host", "provider": "internal_coolify"},
+                expected_statuses=(201, 409),
+            ),
+            ("GET", "/api/admin/deployment-hosts/{host_id}"): RouteScenario(
+                path="/api/admin/deployment-hosts/host-missing",
+                auth=admin,
+                expected_statuses=(404,),
+            ),
+            ("POST", "/api/internal/deployment-hosts/register"): RouteScenario(
+                path="/api/internal/deployment-hosts/register",
+                json={"bootstrap_token": "missing", "agent_version": "smoke", "advertised_capabilities": []},
+                expected_statuses=(401,),
+            ),
+            ("POST", "/api/internal/deployment-hosts/heartbeat"): RouteScenario(
+                path="/api/internal/deployment-hosts/heartbeat",
+                json={"agent_version": "smoke", "advertised_capabilities": [], "state": "active"},
+                expected_statuses=(401, 403),
+            ),
+            ("POST", "/api/internal/deployment-hosts/commands/claim"): RouteScenario(
+                path="/api/internal/deployment-hosts/commands/claim",
+                json={},
+                expected_statuses=(401, 403),
+            ),
+            ("POST", "/api/internal/deployment-hosts/commands/{command_id}/start"): RouteScenario(
+                path="/api/internal/deployment-hosts/commands/command-missing/start",
+                json={"claim_id": "claim-missing"},
+                expected_statuses=(401, 403),
+            ),
+            ("POST", "/api/internal/deployment-hosts/commands/{command_id}/result"): RouteScenario(
+                path="/api/internal/deployment-hosts/commands/command-missing/result",
+                json={"claim_id": "claim-missing", "status": "failed", "result": {}, "last_error": "smoke"},
+                expected_statuses=(401, 403),
+            ),
+            ("GET", "/api/admin/tenants/{tenant_id}/deployment-plane"): RouteScenario(
+                path="/api/admin/tenants/route25/deployment-plane",
+                auth=admin,
+            ),
+            ("PUT", "/api/admin/tenants/{tenant_id}/deployment-plane"): RouteScenario(
+                path="/api/admin/tenants/route25/deployment-plane",
+                auth=admin,
+                json={"provider": "internal_coolify", "state": "unconfigured"},
+            ),
+            ("GET", "/api/admin/tenants/{tenant_id}/deployments/overview"): RouteScenario(
+                path="/api/admin/tenants/route25/deployments/overview",
+                auth=admin,
+            ),
+            ("GET", "/api/admin/tenants/{tenant_id}/project-navigation"): RouteScenario(
+                path="/api/admin/tenants/route25/project-navigation",
+                auth=admin,
+            ),
+            ("GET", "/api/admin/tenants/{tenant_id}/projects/{project_id}/github/branches"): RouteScenario(
+                path="/api/admin/tenants/route25/projects/route25-default/github/branches",
+                auth=admin,
+                expected_statuses=(200, 400, 404, 502),
+            ),
+            ("GET", "/api/admin/tenants/{tenant_id}/projects/{project_id}/deployment-policy"): RouteScenario(
+                path="/api/admin/tenants/route25/projects/route25-default/deployment-policy",
+                auth=admin,
+            ),
+            ("PUT", "/api/admin/tenants/{tenant_id}/projects/{project_id}/deployment-policy"): RouteScenario(
+                path="/api/admin/tenants/route25/projects/route25-default/deployment-policy",
+                auth=admin,
+                json={"enabled": False, "production_branch": None, "preview_prs_enabled": False},
+            ),
+            ("POST", "/api/admin/tenants/{tenant_id}/projects/{project_id}/deployment-setup"): RouteScenario(
+                path="/api/admin/tenants/route25/projects/route25-default/deployment-setup",
+                auth=admin,
+                json={"enabled": False, "production_branch": None, "preview_prs_enabled": False},
+                expected_statuses=(202, 400, 409, 422),
+            ),
+            ("GET", "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps"): RouteScenario(
+                path="/api/admin/tenants/route25/projects/route25-default/apps?limit=10&offset=0",
+                auth=admin,
+            ),
+            ("POST", "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps"): RouteScenario(
+                path="/api/admin/tenants/route25/projects/route25-default/apps",
+                auth=admin,
+                json={},
+                expected_statuses=(422,),
+            ),
+            ("POST", "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/analyze"): RouteScenario(
+                path="/api/admin/tenants/route25/projects/route25-default/apps/analyze",
+                auth=admin,
+                json={},
+                expected_statuses=(201, 400, 404, 409, 422),
+            ),
+            ("GET", "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/analysis-runs"): RouteScenario(
+                path="/api/admin/tenants/route25/projects/route25-default/apps/analysis-runs",
+                auth=admin,
+            ),
+            ("GET", "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/analysis-runs/{run_id}"): RouteScenario(
+                path="/api/admin/tenants/route25/projects/route25-default/apps/analysis-runs/run-missing",
+                auth=admin,
+                expected_statuses=(404,),
+            ),
+            ("GET", "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}"): RouteScenario(
+                path="/api/admin/tenants/route25/projects/route25-default/apps/app-missing",
+                auth=admin,
+                expected_statuses=(404,),
+            ),
+            ("PATCH", "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}"): RouteScenario(
+                path="/api/admin/tenants/route25/projects/route25-default/apps/app-missing",
+                auth=admin,
+                json={"name": "Missing App"},
+                expected_statuses=(404,),
+            ),
+            ("PUT", "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}"): RouteScenario(
+                path="/api/admin/tenants/route25/projects/route25-default/apps/app-missing",
+                auth=admin,
+                json={"name": "Missing App"},
+                expected_statuses=(404,),
+            ),
+            ("DELETE", "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}"): RouteScenario(
+                path="/api/admin/tenants/route25/projects/route25-default/apps/app-missing",
+                auth=admin,
+                expected_statuses=(204, 404),
+            ),
+            ("GET", "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}/deployment-config"): RouteScenario(
+                path="/api/admin/tenants/route25/projects/route25-default/apps/app-missing/deployment-config",
+                auth=admin,
+                expected_statuses=(404,),
+            ),
+            ("PUT", "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}/deployment-config"): RouteScenario(
+                path="/api/admin/tenants/route25/projects/route25-default/apps/app-missing/deployment-config",
+                auth=admin,
+                json={},
+                expected_statuses=(404, 422),
+            ),
+            ("GET", "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}/deployment-releases"): RouteScenario(
+                path="/api/admin/tenants/route25/projects/route25-default/apps/app-missing/deployment-releases",
+                auth=admin,
+                expected_statuses=(404,),
+            ),
+            ("POST", "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}/deployment-releases"): RouteScenario(
+                path="/api/admin/tenants/route25/projects/route25-default/apps/app-missing/deployment-releases",
+                auth=admin,
+                json={"git_ref": "main", "commit_sha": "abcdef1"},
+                expected_statuses=(404, 409, 422),
+            ),
+            ("GET", "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}/deployment-releases/{release_id}"): RouteScenario(
+                path="/api/admin/tenants/route25/projects/route25-default/apps/app-missing/deployment-releases/release-missing",
+                auth=admin,
+                expected_statuses=(404,),
+            ),
+            ("PATCH", "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}/deployment-releases/{release_id}/status"): RouteScenario(
+                path="/api/admin/tenants/route25/projects/route25-default/apps/app-missing/deployment-releases/release-missing/status",
+                auth=admin,
+                json={"status": "failed", "last_error": "smoke"},
+                expected_statuses=(404,),
+            ),
+            ("POST", "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}/deployment-resources/apply"): RouteScenario(
+                path="/api/admin/tenants/route25/projects/route25-default/apps/app-missing/deployment-resources/apply",
+                auth=admin,
+                json={"resource_keys": []},
+                expected_statuses=(404,),
+            ),
+            ("POST", "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}/deployment-volumes/apply"): RouteScenario(
+                path="/api/admin/tenants/route25/projects/route25-default/apps/app-missing/deployment-volumes/apply",
+                auth=admin,
+                json={"volume_keys": []},
+                expected_statuses=(404,),
+            ),
+            ("POST", "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}/deployment-domains/apply"): RouteScenario(
+                path="/api/admin/tenants/route25/projects/route25-default/apps/app-missing/deployment-domains/apply",
+                auth=admin,
+                json={"domain_keys": []},
+                expected_statuses=(404,),
+            ),
+            ("POST", "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}/deployment-backups/apply"): RouteScenario(
+                path="/api/admin/tenants/route25/projects/route25-default/apps/app-missing/deployment-backups/apply",
+                auth=admin,
+                json={"backup_keys": []},
+                expected_statuses=(404,),
+            ),
+            ("POST", "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}/deployment-backups/trigger"): RouteScenario(
+                path="/api/admin/tenants/route25/projects/route25-default/apps/app-missing/deployment-backups/trigger",
+                auth=admin,
+                json={"backup_keys": []},
+                expected_statuses=(404,),
+            ),
+            ("POST", "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}/deployment-backups/request"): RouteScenario(
+                path="/api/admin/tenants/route25/projects/route25-default/apps/app-missing/deployment-backups/request",
+                auth=admin,
+                json={"backup_keys": []},
+                expected_statuses=(404,),
+            ),
+            ("POST", "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}/deployment-backups/restore"): RouteScenario(
+                path="/api/admin/tenants/route25/projects/route25-default/apps/app-missing/deployment-backups/restore",
+                auth=admin,
+                json={
+                    "backup_key": "backup",
+                    "resource_key": "database",
+                    "execution_uuid": "execution",
+                    "confirmation_value": "app-missing",
+                },
+                expected_statuses=(404,),
+            ),
+            ("GET", "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}/deployment-backups/executions"): RouteScenario(
+                path="/api/admin/tenants/route25/projects/route25-default/apps/app-missing/deployment-backups/executions?backup_key=backup",
+                auth=admin,
+                expected_statuses=(404,),
+            ),
+            ("GET", "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}/deployment-backups/restore-runs"): RouteScenario(
+                path="/api/admin/tenants/route25/projects/route25-default/apps/app-missing/deployment-backups/restore-runs",
+                auth=admin,
+                expected_statuses=(404,),
+            ),
+            ("GET", "/api/admin/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}/deployment-backups/restore-runs/{restore_run_id}"): RouteScenario(
+                path="/api/admin/tenants/route25/projects/route25-default/apps/app-missing/deployment-backups/restore-runs/restore-missing",
+                auth=admin,
+                expected_statuses=(404,),
+            ),
+            ("POST", "/deployments/coolify/webhook/{tenant_id}/{project_id}/{token}"): RouteScenario(
+                path="/deployments/coolify/webhook/route25/route25-default/token-missing",
+                json={},
+                expected_statuses=(202, 401, 404),
             ),
             ("GET", "/api/admin/tenants/{tenant_id}/ready-preview"): RouteScenario(
                 path="/api/admin/tenants/route25/ready-preview?max_results=5",

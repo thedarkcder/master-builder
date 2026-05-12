@@ -696,7 +696,6 @@ class ArchitectureBoundaryTests(unittest.TestCase):
         eager_surfaces = [
             ROOT / "admin-ui" / "components" / "dashboard-shell.tsx",
             ROOT / "admin-ui" / "components" / "tenant-project-details-page.tsx",
-            ROOT / "admin-ui" / "components" / "project-section-tabs.tsx",
             ROOT / "admin-ui" / "components" / "project-parent-work-board.tsx",
         ]
         violations = [

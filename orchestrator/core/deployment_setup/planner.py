@@ -1751,8 +1751,8 @@ def _validate_no_host_source_mounts(*, service_name: str, volumes: object) -> No
             raise ValueError(f"compose service {service_name} has invalid volume entry")
 
 
-def _candidate_prompt_json(candidate) -> dict[str, object]:  # noqa: ANN001
-    return {
+def _candidate_prompt_json(candidate, *, checkout_path: str) -> dict[str, object]:  # noqa: ANN001
+    payload = {
         "name": candidate.name,
         "source_path": candidate.source_path,
         "build_strategy": candidate.build_strategy,
@@ -1767,6 +1767,9 @@ def _candidate_prompt_json(candidate) -> dict[str, object]:  # noqa: ANN001
         "volumes": [dict(volume) for volume in getattr(candidate, "volumes_json", ())],
         "needs_generated_files": candidate.needs_generated_files,
     }
+    if candidate.build_strategy == "dockerfile":
+        payload["uses_private_base_image"] = _dockerfile_uses_private_base(candidate, checkout_path=checkout_path)
+    return payload
 
 
 def _path_has_marker(checkout_path: str, source_path: str, patterns: tuple[str, ...], markers: tuple[str, ...]) -> bool:
@@ -1856,10 +1859,7 @@ def _deployment_planner_candidates(
             if candidate.detected_runtime in {"nextjs", "react", "vite"}:
                 filtered.append(candidate)
             continue
-        if candidate.build_strategy == "dockerfile" and not _dockerfile_uses_private_base(
-            candidate,
-            checkout_path=checkout_path,
-        ):
+        if candidate.build_strategy == "dockerfile":
             filtered.append(candidate)
     return tuple(filtered)
 
@@ -1881,7 +1881,10 @@ def _render_user_prompt(
         "branch": branch,
         "commit_sha": commit_sha,
         "checkout_path": str(Path(checkout_path).resolve()),
-        "deterministic_repo_evidence": [_candidate_prompt_json(candidate) for candidate in pre_scan_candidates],
+        "deterministic_repo_evidence": [
+            _candidate_prompt_json(candidate, checkout_path=checkout_path)
+            for candidate in pre_scan_candidates
+        ],
     }
     return json.dumps(payload, sort_keys=True, indent=2)
 

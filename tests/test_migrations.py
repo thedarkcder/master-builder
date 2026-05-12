@@ -65,7 +65,7 @@ class MigrationTests(unittest.TestCase):
 
         duplicates = {revision_id: count for revision_id, count in Counter(revision_ids).items() if count > 1}
         self.assertEqual(duplicates, {})
-        self.assertEqual(script.get_heads(), ["20260507_0113"])
+        self.assertEqual(script.get_heads(), ["20260510_0123"])
 
     def test_workflow_execution_source_external_id_index_is_composite_in_metadata(self) -> None:
         expected_columns = ["tenant_id", "source_system", "source_external_id", "dedupe_scope"]
@@ -1539,7 +1539,7 @@ class MigrationTests(unittest.TestCase):
 
             with engine.begin() as connection:
                 versions = connection.execute(text("SELECT version_num FROM alembic_version")).scalars().all()
-            self.assertEqual(versions, ["20260507_0113"])
+            self.assertEqual(versions, ["20260510_0123"])
 
     def test_run_migrations_disables_alembic_logger_reconfiguration(self) -> None:
         fake_config = MagicMock()
