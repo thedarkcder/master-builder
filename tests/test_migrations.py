@@ -67,6 +67,23 @@ class MigrationTests(unittest.TestCase):
         self.assertEqual(duplicates, {})
         self.assertEqual(script.get_heads(), ["20260505_0106"])
 
+    def test_run_migrations_repairs_orphaned_database_stamp_when_schema_is_at_head(self) -> None:
+        with TemporaryDirectory() as tmpdir:
+            database_url = f"sqlite:///{Path(tmpdir) / 'orphaned-stamp.sqlite'}"
+            run_migrations(database_url=database_url)
+
+            engine = create_engine(database_url)
+            with engine.begin() as connection:
+                connection.execute(text("DELETE FROM alembic_version"))
+                connection.execute(text("INSERT INTO alembic_version (version_num) VALUES ('20260509_0122')"))
+
+            run_migrations(database_url=database_url)
+
+            with engine.connect() as connection:
+                versions = connection.execute(text("SELECT version_num FROM alembic_version")).scalars().all()
+
+            self.assertEqual(versions, ["20260505_0106"])
+
     def test_workflow_execution_source_external_id_index_is_composite_in_metadata(self) -> None:
         expected_columns = ["tenant_id", "source_system", "source_external_id", "dedupe_scope"]
         matching_indexes = [
@@ -1445,16 +1462,24 @@ class MigrationTests(unittest.TestCase):
     def test_run_migrations_disables_alembic_logger_reconfiguration(self) -> None:
         fake_config = MagicMock()
         fake_config.attributes = {}
+        fake_script_directory = MagicMock()
+        fake_script_directory.get_heads.return_value = ["20260505_0106"]
         with (
             patch("orchestrator.storage.migrations._normalize_repaired_top_revisions") as normalize_mock,
             patch("orchestrator.storage.migrations._repair_stamp_if_schema_ahead_of_version") as repair_mock,
+            patch("orchestrator.storage.migrations._repair_orphaned_revision_stamp") as orphaned_repair_mock,
             patch("orchestrator.storage.migrations.Config", return_value=fake_config),
+            patch(
+                "orchestrator.storage.migrations.ScriptDirectory.from_config",
+                return_value=fake_script_directory,
+            ),
             patch("orchestrator.storage.migrations.command.upgrade") as upgrade_mock,
         ):
             run_migrations(database_url="sqlite:///tmp/test.db")
 
         normalize_mock.assert_called_once_with("sqlite:///tmp/test.db")
         repair_mock.assert_called_once_with("sqlite:///tmp/test.db")
+        orphaned_repair_mock.assert_called_once_with("sqlite:///tmp/test.db", "20260505_0106")
         self.assertEqual(fake_config.attributes.get("configure_logger"), False)
         upgrade_mock.assert_called_once_with(fake_config, "head")
 
