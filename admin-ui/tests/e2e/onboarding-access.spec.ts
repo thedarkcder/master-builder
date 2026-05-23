@@ -475,6 +475,143 @@ test("workspace home summarizes projects and project overview shows parent Jira 
   await expect(page.getByText("Recent Delivery")).toHaveCount(0);
 });
 
+test("project overview lets operators select queued parent planning items and start them", async ({ page }) => {
+  const principal = makeTenantUserPrincipal({
+    email: "product-planning@example.com",
+    full_name: "Product Planning",
+  });
+  const tenant = makeTenant({ tenant_id: "example", name: "Route 25" });
+  const project = makeProject({
+    tenant_id: "example",
+    project_id: "example-default",
+    name: "Route 25 Default",
+    jira_project_key: "MAB",
+    github_repository: "thedarkcder/master-builder",
+  });
+  const parentWorkflowType = {
+    ...makeWorkflow().workflow_type,
+    key: "parent_planning",
+    label: "Parent Planning",
+  };
+  const queuedParents = [
+    makeWorkflow({
+      execution_id: "wfexec-mab-252",
+      workflow_id: "parent_planning:MAB-252",
+      tenant_id: "example",
+      project_id: "example-default",
+      source_system: "jira",
+      source_ref: "MAB-252",
+      display_name: "Queued billing redesign",
+      workflow_type: parentWorkflowType,
+      status: "queued",
+      waiting_on: null,
+      runs: [],
+    }),
+    makeWorkflow({
+      execution_id: "wfexec-mab-253",
+      workflow_id: "parent_planning:MAB-253",
+      tenant_id: "example",
+      project_id: "example-default",
+      source_system: "jira",
+      source_ref: "MAB-253",
+      display_name: "Queued onboarding redesign",
+      workflow_type: parentWorkflowType,
+      status: "queued",
+      waiting_on: null,
+      runs: [],
+    }),
+  ];
+  const waitingParent = makeWorkflow({
+    execution_id: "wfexec-mab-254",
+    workflow_id: "parent_planning:MAB-254",
+    tenant_id: "example",
+    project_id: "example-default",
+    source_system: "jira",
+    source_ref: "MAB-254",
+    display_name: "Needs product answer",
+    workflow_type: parentWorkflowType,
+    status: "waiting_for_input",
+    waiting_on: "stakeholder",
+    pending_input_request_id: "input-mab-254",
+    runs: [],
+  });
+  const startedExecutionIds: string[] = [];
+  let workflows = [...queuedParents, waitingParent];
+
+  await seedTenantSession(page, { principal, userEmail: principal.email, userName: principal.full_name });
+  await installBffApiMocks(page, [
+    {
+      method: "GET",
+      pathname: "/api/bff/api/app/auth/me",
+      handler: (route) => fulfillJson(route, principal),
+    },
+    {
+      method: "GET",
+      pathname: "/api/bff/api/admin/tenants/example",
+      handler: (route) => fulfillJson(route, tenant),
+    },
+    {
+      method: "GET",
+      pathname: "/api/bff/api/admin/tenants/example/projects",
+      handler: (route) => fulfillJson(route, [project]),
+    },
+    {
+      method: "GET",
+      pathname: "/api/bff/api/admin/tenants/example/projects/example-default",
+      handler: (route) => fulfillJson(route, project),
+    },
+    {
+      method: "GET",
+      pathname: "/api/bff/api/admin/runs",
+      handler: (route) => fulfillJson(route, []),
+    },
+    {
+      method: "GET",
+      pathname: /^\/api\/bff\/api\/admin\/workflows(?:\/board)?$/,
+      handler: (route, url) => {
+        expect(url.searchParams.get("tenant_id")).toBe("example");
+        expect(url.searchParams.get("project_id")).toBe("example-default");
+        return fulfillJson(route, workflows);
+      },
+    },
+    {
+      method: "POST",
+      pathname: /^\/api\/bff\/api\/admin\/workflows\/[^/]+\/start-planning$/,
+      handler: (route, url) => {
+        const executionId = decodeURIComponent(url.pathname.split("/").at(-2) ?? "");
+        startedExecutionIds.push(executionId);
+        workflows = workflows.map((workflow) =>
+          workflow.execution_id === executionId
+            ? {
+                ...workflow,
+                status: "running",
+                current_state: "running",
+                started_at: "2026-05-23T10:55:00Z",
+                updated_at: "2026-05-23T10:55:00Z",
+              }
+            : workflow,
+        );
+        const started = workflows.find((workflow) => workflow.execution_id === executionId);
+        return fulfillJson(route, started);
+      },
+    },
+  ]);
+
+  await page.goto("/example/projects/example-default");
+
+  await expect(page.getByRole("heading", { name: "Planning" })).toBeVisible();
+  await expect(page.getByRole("checkbox", { name: "Select MAB-252 for planning start" })).toBeVisible();
+  await page.getByRole("checkbox", { name: "Select MAB-252 for planning start" }).check();
+  await page.getByRole("checkbox", { name: "Select MAB-253 for planning start" }).check();
+  await expect(page.getByRole("button", { name: "Start selected planning (2)" })).toBeEnabled();
+  await expect(page.getByText("Waiting on you")).toBeVisible();
+
+  await page.getByRole("button", { name: "Start selected planning (2)" }).click();
+
+  await expect.poll(() => startedExecutionIds).toEqual(["wfexec-mab-252", "wfexec-mab-253"]);
+  await expect(page.getByRole("button", { name: "Start selected planning" })).toBeDisabled();
+});
+
 test("workspace home shows configured projects even when no active work exists", async ({ page }) => {
   const principal = makeTenantUserPrincipal({
     email: "product-empty@example.com",
