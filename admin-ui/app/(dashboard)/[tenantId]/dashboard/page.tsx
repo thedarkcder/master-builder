@@ -598,9 +598,7 @@ function ProjectConstraintPanel({
   if (loading) {
     return <Skeleton className="h-80 rounded-[2rem]" />;
   }
-  const visibleSummaries = summaries
-    .filter((summary) => summary.parentCount > 0 || summary.readyCount > 0 || summary.runningRunCount > 0 || summary.needsInputCount > 0)
-    .slice(0, 6);
+  const visibleSummaries = summaries.slice(0, 6);
 
   return (
     <section className="rounded-[2rem] border bg-background shadow-sm">
@@ -609,7 +607,7 @@ function ProjectConstraintPanel({
         <h2 className="mt-3 text-2xl font-semibold">Project operating state</h2>
       </div>
       {visibleSummaries.length === 0 ? (
-        <div className="p-6 text-sm text-muted-foreground">No active project work is currently tracked.</div>
+        <div className="p-6 text-sm text-muted-foreground">No active projects are configured for this workspace.</div>
       ) : (
         <div className="divide-y">
           {visibleSummaries.map((summary) => (

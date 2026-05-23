@@ -4,6 +4,9 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from temporalio.client import WorkflowUpdateFailedError
+from temporalio.exceptions import ApplicationError
+
 from orchestrator.api.admin.route_helpers import reconcile_tenant_projects
 from orchestrator.core.jira_project_reconciliation.scheduler import run_scheduled_jira_project_reconciliation_pass
 from orchestrator.storage.db import create_session_factory
@@ -70,6 +73,51 @@ class JiraProjectReconciliationTriggerTests(AdminApiTestHarness):
         self.assertEqual(start_kwargs["project"].project_id, "tenant-a-default")
         self.assertEqual(start_kwargs["max_items"], 250)
         self.assertEqual(start_kwargs["trigger_event"], "admin_workflow_start")
+
+    def test_generic_workflow_start_route_returns_reauth_required_when_jira_token_is_invalid(self) -> None:
+        payload = self._tenant_payload()
+        self._insert_jira_connection(connection_id="conn-1")
+        create_response = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_response.status_code, 201)
+
+        temporal_error = WorkflowUpdateFailedError(
+            ApplicationError(
+                'terminal_workflow_advance_error: Atlassian request failed (403): '
+                '{"error":"unauthorized_client","error_description":"refresh_token is invalid"}'
+            )
+        )
+        with patch(
+            "orchestrator.api.admin.workflows.use_cases.start_jira_project_reconciliation",
+            side_effect=temporal_error,
+        ):
+            response = self.client.post(
+                "/api/admin/workflows",
+                json={
+                    "workflow_type_key": "jira_project_reconciliation",
+                    "tenant_id": "tenant-a",
+                    "project_id": "tenant-a-default",
+                    "input": {"max_items": 250},
+                },
+                auth=("admin", "secret"),
+            )
+
+        self.assertEqual(response.status_code, 409, response.text)
+        self.assertEqual(response.json()["detail"], "Atlassian connection requires reauthentication.")
+
+        notifications_response = self.client.get(
+            "/api/admin/tenants/tenant-a/notifications",
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(notifications_response.status_code, 200, notifications_response.text)
+        notifications = notifications_response.json()["notifications"]
+        self.assertEqual(len(notifications), 1)
+        self.assertEqual(notifications[0]["kind"], "reauth_required")
+        self.assertEqual(notifications[0]["scope_type"], "jira_connection")
+        self.assertEqual(notifications[0]["scope_id"], "conn-1")
 
     def test_tenant_setup_reconciliation_uses_shared_workflow_start_path(self) -> None:
         session_factory = create_session_factory(self.database_url)
