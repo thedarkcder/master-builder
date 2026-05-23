@@ -99,7 +99,11 @@ export function workflowLane(workflow: WorkflowBoardItemRecord): BoardLaneKey {
 
 function canStartPlanning(workflow: WorkflowBoardItemRecord): boolean {
   const status = normalizedWorkflowStatus(workflow.status);
-  return workflow.workflow_type_key === "parent_planning" && (status === "queued" || status === "pending");
+  return isParentPlanningWorkflow(workflow) && (status === "queued" || status === "pending");
+}
+
+function sortWorkflowsByLatestActivity(workflows: WorkflowBoardItemRecord[]): WorkflowBoardItemRecord[] {
+  return [...workflows].sort((left, right) => latestWorkflowActivity(right).localeCompare(latestWorkflowActivity(left)));
 }
 
 function buildParentWorkCard(workflow: WorkflowBoardItemRecord): ParentWorkCard {
@@ -138,6 +142,8 @@ export function ProjectParentWorkBoard({
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [startingPlanningExecutionId, setStartingPlanningExecutionId] = useState<string | null>(null);
+  const [bulkStartingPlanning, setBulkStartingPlanning] = useState(false);
+  const [selectedPlanningExecutionIds, setSelectedPlanningExecutionIds] = useState<Set<string>>(() => new Set());
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [selectedCard, setSelectedCard] = useState<ParentWorkCard | null>(null);
 
@@ -150,9 +156,7 @@ export function ProjectParentWorkBoard({
       try {
         const workflowPayload = await listWorkflowBoardItems(credentials, { tenantId, projectId, limit: 100 });
         if (disposed) return;
-        setAllWorkflows(
-          workflowPayload.sort((left, right) => latestWorkflowActivity(right).localeCompare(latestWorkflowActivity(left))),
-        );
+        setAllWorkflows(sortWorkflowsByLatestActivity(workflowPayload));
       } catch (error) {
         if (!disposed) {
           setErrorMessage(`Failed to load project parent work: ${(error as Error).message}`);
@@ -181,9 +185,7 @@ export function ProjectParentWorkBoard({
         input: { max_items: 1000 },
       });
       const workflowPayload = await listWorkflowBoardItems(credentials, { tenantId, projectId, limit: 100 });
-      setAllWorkflows(
-        workflowPayload.sort((left, right) => latestWorkflowActivity(right).localeCompare(latestWorkflowActivity(left))),
-      );
+      setAllWorkflows(sortWorkflowsByLatestActivity(workflowPayload));
       showToast({
         title: "Jira reconciliation started",
         description: `Workflow execution ${result.execution_id} is ${result.status}.`,
@@ -209,8 +211,13 @@ export function ProjectParentWorkBoard({
     try {
       const started = await startParentPlanning(credentials, card.workflow.execution_id);
       const workflowPayload = await listWorkflowBoardItems(credentials, { tenantId, projectId, limit: 100 });
-      const sortedWorkflows = workflowPayload.sort((left, right) => latestWorkflowActivity(right).localeCompare(latestWorkflowActivity(left)));
+      const sortedWorkflows = sortWorkflowsByLatestActivity(workflowPayload);
       setAllWorkflows(sortedWorkflows);
+      setSelectedPlanningExecutionIds((current) => {
+        const next = new Set(current);
+        next.delete(card.workflow.execution_id);
+        return next;
+      });
       const refreshed = sortedWorkflows.find((workflow) => workflow.execution_id === started.execution_id);
       if (refreshed) {
         setSelectedCard(buildParentWorkCard(refreshed));
@@ -233,11 +240,68 @@ export function ProjectParentWorkBoard({
     }
   }
 
+  async function startSelectedPlanning() {
+    if (!credentials || bulkStartingPlanning) return;
+    const selectedCards = cards.filter(
+      (card) => canStartPlanning(card.workflow) && selectedPlanningExecutionIds.has(card.workflow.execution_id),
+    );
+    if (selectedCards.length === 0) return;
+    setBulkStartingPlanning(true);
+    setErrorMessage(null);
+    const failures: { executionId: string; issueKey: string; message: string }[] = [];
+    const startedIssueKeys: string[] = [];
+    try {
+      for (const card of selectedCards) {
+        try {
+          await startParentPlanning(credentials, card.workflow.execution_id);
+          startedIssueKeys.push(card.issueKey);
+        } catch (error) {
+          failures.push({
+            executionId: card.workflow.execution_id,
+            issueKey: card.issueKey,
+            message: (error as Error).message,
+          });
+        }
+      }
+      const workflowPayload = await listWorkflowBoardItems(credentials, { tenantId, projectId, limit: 100 });
+      const sortedWorkflows = sortWorkflowsByLatestActivity(workflowPayload);
+      setAllWorkflows(sortedWorkflows);
+      setSelectedPlanningExecutionIds(new Set(failures.map((failure) => failure.executionId)));
+      if (selectedCard) {
+        const refreshed = sortedWorkflows.find((workflow) => workflow.execution_id === selectedCard.workflow.execution_id);
+        setSelectedCard(refreshed ? buildParentWorkCard(refreshed) : selectedCard);
+      }
+      if (startedIssueKeys.length > 0) {
+        showToast({
+          title: "Planning started",
+          description: `${startedIssueKeys.length} parent item${startedIssueKeys.length === 1 ? "" : "s"} started.`,
+          tone: "success",
+        });
+      }
+      if (failures.length > 0) {
+        const failedSummary = failures.map((failure) => `${failure.issueKey}: ${failure.message}`).join("; ");
+        setErrorMessage(`Some planning starts failed: ${failedSummary}`);
+        showToast({
+          title: "Some planning starts failed",
+          description: failedSummary,
+          tone: "error",
+        });
+      }
+    } finally {
+      setBulkStartingPlanning(false);
+    }
+  }
+
   const parentWorkflows = useMemo(
     () => allWorkflows.filter(isParentPlanningWorkflow),
     [allWorkflows],
   );
   const cards = useMemo(() => parentWorkflows.map(buildParentWorkCard), [parentWorkflows]);
+  const startablePlanningCards = useMemo(() => cards.filter((card) => canStartPlanning(card.workflow)), [cards]);
+  const selectedStartableCount = startablePlanningCards.filter((card) =>
+    selectedPlanningExecutionIds.has(card.workflow.execution_id),
+  ).length;
+  const allStartableSelected = startablePlanningCards.length > 0 && selectedStartableCount === startablePlanningCards.length;
   const cardsByLane = useMemo(() => {
     return BOARD_LANES.reduce<Record<BoardLaneKey, ParentWorkCard[]>>(
       (accumulator, lane) => {
@@ -247,6 +311,43 @@ export function ProjectParentWorkBoard({
       { needs_input: [], planning: [], ready: [], engineering: [], done: [] },
     );
   }, [cards]);
+
+  useEffect(() => {
+    const startableIds = new Set(startablePlanningCards.map((card) => card.workflow.execution_id));
+    setSelectedPlanningExecutionIds((current) => {
+      const next = new Set([...current].filter((executionId) => startableIds.has(executionId)));
+      return next.size === current.size ? current : next;
+    });
+  }, [startablePlanningCards]);
+
+  function togglePlanningSelection(card: ParentWorkCard, checked: boolean) {
+    setSelectedPlanningExecutionIds((current) => {
+      const next = new Set(current);
+      if (checked) {
+        next.add(card.workflow.execution_id);
+      } else {
+        next.delete(card.workflow.execution_id);
+      }
+      return next;
+    });
+  }
+
+  function toggleAllStartablePlanning(checked: boolean) {
+    setSelectedPlanningExecutionIds((current) => {
+      const next = new Set(current);
+      for (const card of startablePlanningCards) {
+        if (checked) {
+          next.add(card.workflow.execution_id);
+        } else {
+          next.delete(card.workflow.execution_id);
+        }
+      }
+      return next;
+    });
+  }
+
+  const startSelectedPlanningLabel =
+    selectedStartableCount > 0 ? `Start selected planning (${selectedStartableCount})` : "Start selected planning";
 
   return (
     <section className="space-y-4">
@@ -273,6 +374,39 @@ export function ProjectParentWorkBoard({
         </div>
       ) : null}
 
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border bg-background px-4 py-3">
+        <div className="min-w-0">
+          <p className="text-sm font-semibold">Planning queue</p>
+          <p className="mt-0.5 text-xs text-muted-foreground">
+            {startablePlanningCards.length > 0
+              ? `${startablePlanningCards.length} queued parent item${startablePlanningCards.length === 1 ? "" : "s"} can be started here.`
+              : "No queued parent planning items need a manual start."}
+          </p>
+        </div>
+        <div className="flex flex-wrap items-center gap-3">
+          <label className="inline-flex items-center gap-2 text-xs font-medium text-muted-foreground">
+            <input
+              type="checkbox"
+              className="h-4 w-4 rounded border-border"
+              aria-label="Select all queued planning items"
+              checked={allStartableSelected}
+              disabled={startablePlanningCards.length === 0 || bulkStartingPlanning}
+              onChange={(event) => toggleAllStartablePlanning(event.currentTarget.checked)}
+            />
+            Select all queued
+          </label>
+          <Button
+            type="button"
+            size="sm"
+            onClick={() => void startSelectedPlanning()}
+            disabled={!ready || !credentials || bulkStartingPlanning || selectedStartableCount === 0}
+          >
+            <Play className={`mr-2 h-3.5 w-3.5 ${bulkStartingPlanning ? "animate-pulse" : ""}`} />
+            {bulkStartingPlanning ? `Starting ${selectedStartableCount}…` : startSelectedPlanningLabel}
+          </Button>
+        </div>
+      </div>
+
       <div className="grid gap-4 md:grid-cols-2 2xl:grid-cols-5">
         {BOARD_LANES.map((lane) => (
           <BoardColumn
@@ -281,6 +415,9 @@ export function ProjectParentWorkBoard({
             cards={cardsByLane[lane.key]}
             loading={loading}
             onOpenDetails={setSelectedCard}
+            selectedPlanningExecutionIds={selectedPlanningExecutionIds}
+            selectionDisabled={bulkStartingPlanning}
+            onTogglePlanningSelection={togglePlanningSelection}
           />
         ))}
       </div>
@@ -300,11 +437,17 @@ function BoardColumn({
   cards,
   loading,
   onOpenDetails,
+  selectedPlanningExecutionIds,
+  selectionDisabled,
+  onTogglePlanningSelection,
 }: {
   lane: BoardLane;
   cards: ParentWorkCard[];
   loading: boolean;
   onOpenDetails: (card: ParentWorkCard) => void;
+  selectedPlanningExecutionIds: Set<string>;
+  selectionDisabled: boolean;
+  onTogglePlanningSelection: (card: ParentWorkCard, checked: boolean) => void;
 }) {
   return (
     <div className="rounded-2xl border bg-muted/20">
@@ -327,6 +470,9 @@ function BoardColumn({
               key={card.workflow.execution_id}
               card={card}
               onOpenDetails={onOpenDetails}
+              selected={selectedPlanningExecutionIds.has(card.workflow.execution_id)}
+              selectionDisabled={selectionDisabled}
+              onTogglePlanningSelection={onTogglePlanningSelection}
             />
           ))
         )}
@@ -338,10 +484,17 @@ function BoardColumn({
 function ParentWorkItemCard({
   card,
   onOpenDetails,
+  selected,
+  selectionDisabled,
+  onTogglePlanningSelection,
 }: {
   card: ParentWorkCard;
   onOpenDetails: (card: ParentWorkCard) => void;
+  selected: boolean;
+  selectionDisabled: boolean;
+  onTogglePlanningSelection: (card: ParentWorkCard, checked: boolean) => void;
 }) {
+  const startable = canStartPlanning(card.workflow);
   return (
     <article
       className="cursor-pointer rounded-xl border bg-background p-4 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md focus-within:ring-2 focus-within:ring-primary/30"
@@ -361,6 +514,29 @@ function ParentWorkItemCard({
           <p className="text-xs font-medium text-primary">{card.issueKey}</p>
           <h4 className="mt-1 line-clamp-2 text-sm font-semibold leading-5">{card.title}</h4>
         </div>
+        {startable ? (
+          <label
+            className="inline-flex shrink-0 items-center gap-2 rounded-full border bg-muted/30 px-2.5 py-1 text-[11px] font-medium text-muted-foreground"
+            onClick={(event) => event.stopPropagation()}
+            onKeyDown={(event) => event.stopPropagation()}
+          >
+            <input
+              type="checkbox"
+              className="h-4 w-4 rounded border-border"
+              aria-label={`Select ${card.issueKey} for planning start`}
+              checked={selected}
+              disabled={selectionDisabled}
+              onChange={(event) => onTogglePlanningSelection(card, event.currentTarget.checked)}
+            />
+            Start
+          </label>
+        ) : card.questionOpen ? (
+          <span className="shrink-0 rounded-full border border-amber-300 bg-amber-50 px-2.5 py-1 text-[11px] font-semibold text-amber-700">
+            Waiting on you
+          </span>
+        ) : (
+          <StatusBadge status={card.workflow.status} className="shrink-0" />
+        )}
       </div>
 
       <div className="mt-4 flex items-center justify-between gap-3 border-t pt-3">
