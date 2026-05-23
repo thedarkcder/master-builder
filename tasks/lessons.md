@@ -3,6 +3,7 @@
 - When a Jira reconciliation summary claims a high scanned count but the UI only shows a small subset, inspect persisted page-fetch work-unit outputs for repeated issue keys before blaming board filters. Duplicate first-page outputs mean the provider pagination contract is wrong or ignored.
 - When a provider error links to a deprecation migration, verify the exact replacement contract before coding. For Atlassian Jira search, `/rest/api/3/search` is removed and `/rest/api/3/search/jql` uses `nextPageToken`, not `startAt`.
 - When a user says remaining dirty files are yours, do not keep labeling them unrelated based only on a stale memory. Inspect the diff, verify ownership, and commit the full owned scope.
+- For this repo, target PRs at the staging branch, not `main`, unless the user explicitly asks for a different base.
 - When replacing `docker compose up --build` with explicit phases, verify the exact flags supported by each Compose subcommand. `docker compose run` does not accept every `up` flag; omitting `--build` is the no-rebuild contract for one-off runs.
 - When disabling optional Compose services by default, still stop any stale containers from those services during restart. Otherwise old optional workers can keep hammering shared infrastructure and make the new startup path look broken.
 - When a script loads host `.env` before invoking Docker Compose, explicitly override container-only connection URLs for Compose commands. Host URLs like `localhost:60003` or old `localhost:4402` are valid for local processes but broken inside containers.
