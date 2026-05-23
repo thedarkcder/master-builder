@@ -18,7 +18,7 @@ import {
 } from "@/lib/api";
 import { useToast } from "@/components/ui/toast-provider";
 
-type BoardLaneKey = "needs_input" | "planning" | "ready" | "engineering" | "done";
+type BoardLaneKey = "needs_input" | "awaiting_planning" | "planning" | "ready" | "engineering" | "done";
 
 type BoardLane = {
   key: BoardLaneKey;
@@ -39,6 +39,7 @@ type ParentWorkCard = {
 
 const BOARD_LANES: BoardLane[] = [
   { key: "needs_input", title: "Needs input" },
+  { key: "awaiting_planning", title: "Awaiting planning" },
   { key: "planning", title: "Planning" },
   { key: "ready", title: "Ready to start" },
   { key: "engineering", title: "Engineering active" },
@@ -85,8 +86,11 @@ export function workflowLane(workflow: WorkflowBoardItemRecord): BoardLaneKey {
   if (status === "failed" || status === "blocked") {
     return "needs_input";
   }
+  if (canStartPlanning(workflow)) {
+    return "awaiting_planning";
+  }
   if (hasActiveRun) {
-    return "engineering";
+    return isParentPlanningWorkflow(workflow) ? "planning" : "engineering";
   }
   if (allRunsCompleted) {
     return "done";
@@ -223,15 +227,15 @@ export function ProjectParentWorkBoard({
         setSelectedCard(buildParentWorkCard(refreshed));
       }
       showToast({
-        title: "Planning started",
-        description: `${card.issueKey} is now being planned.`,
+        title: "Moved to planning",
+        description: `${card.issueKey} moved into planning.`,
         tone: "success",
       });
     } catch (error) {
       const message = (error as Error).message;
-      setErrorMessage(`Failed to start planning for ${card.issueKey}: ${message}`);
+      setErrorMessage(`Failed to move ${card.issueKey} into planning: ${message}`);
       showToast({
-        title: "Planning start failed",
+        title: "Move to planning failed",
         description: message,
         tone: "error",
       });
@@ -273,16 +277,16 @@ export function ProjectParentWorkBoard({
       }
       if (startedIssueKeys.length > 0) {
         showToast({
-          title: "Planning started",
-          description: `${startedIssueKeys.length} parent item${startedIssueKeys.length === 1 ? "" : "s"} started.`,
+          title: "Moved to planning",
+          description: `${startedIssueKeys.length} parent item${startedIssueKeys.length === 1 ? "" : "s"} moved into planning.`,
           tone: "success",
         });
       }
       if (failures.length > 0) {
         const failedSummary = failures.map((failure) => `${failure.issueKey}: ${failure.message}`).join("; ");
-        setErrorMessage(`Some planning starts failed: ${failedSummary}`);
+        setErrorMessage(`Some planning moves failed: ${failedSummary}`);
         showToast({
-          title: "Some planning starts failed",
+          title: "Some planning moves failed",
           description: failedSummary,
           tone: "error",
         });
@@ -308,7 +312,7 @@ export function ProjectParentWorkBoard({
         accumulator[lane.key] = cards.filter((card) => card.lane === lane.key);
         return accumulator;
       },
-      { needs_input: [], planning: [], ready: [], engineering: [], done: [] },
+      { needs_input: [], awaiting_planning: [], planning: [], ready: [], engineering: [], done: [] },
     );
   }, [cards]);
 
@@ -347,7 +351,7 @@ export function ProjectParentWorkBoard({
   }
 
   const startSelectedPlanningLabel =
-    selectedStartableCount > 0 ? `Start selected planning (${selectedStartableCount})` : "Start selected planning";
+    selectedStartableCount > 0 ? `Move selected to planning (${selectedStartableCount})` : "Move selected to planning";
 
   return (
     <section className="space-y-4">
@@ -374,40 +378,7 @@ export function ProjectParentWorkBoard({
         </div>
       ) : null}
 
-      <div className="flex flex-wrap items-center justify-between gap-3 rounded-2xl border bg-background px-4 py-3">
-        <div className="min-w-0">
-          <p className="text-sm font-semibold">Planning queue</p>
-          <p className="mt-0.5 text-xs text-muted-foreground">
-            {startablePlanningCards.length > 0
-              ? `${startablePlanningCards.length} queued parent item${startablePlanningCards.length === 1 ? "" : "s"} can be started here.`
-              : "No queued parent planning items need a manual start."}
-          </p>
-        </div>
-        <div className="flex flex-wrap items-center gap-3">
-          <label className="inline-flex items-center gap-2 text-xs font-medium text-muted-foreground">
-            <input
-              type="checkbox"
-              className="h-4 w-4 rounded border-border"
-              aria-label="Select all queued planning items"
-              checked={allStartableSelected}
-              disabled={startablePlanningCards.length === 0 || bulkStartingPlanning}
-              onChange={(event) => toggleAllStartablePlanning(event.currentTarget.checked)}
-            />
-            Select all queued
-          </label>
-          <Button
-            type="button"
-            size="sm"
-            onClick={() => void startSelectedPlanning()}
-            disabled={!ready || !credentials || bulkStartingPlanning || selectedStartableCount === 0}
-          >
-            <Play className={`mr-2 h-3.5 w-3.5 ${bulkStartingPlanning ? "animate-pulse" : ""}`} />
-            {bulkStartingPlanning ? `Starting ${selectedStartableCount}…` : startSelectedPlanningLabel}
-          </Button>
-        </div>
-      </div>
-
-      <div className="grid gap-4 md:grid-cols-2 2xl:grid-cols-5">
+      <div className="grid gap-4 md:grid-cols-2 2xl:grid-cols-6">
         {BOARD_LANES.map((lane) => (
           <BoardColumn
             key={lane.key}
@@ -418,6 +389,14 @@ export function ProjectParentWorkBoard({
             selectedPlanningExecutionIds={selectedPlanningExecutionIds}
             selectionDisabled={bulkStartingPlanning}
             onTogglePlanningSelection={togglePlanningSelection}
+            showAwaitingPlanningControls={lane.key === "awaiting_planning"}
+            allStartableSelected={allStartableSelected}
+            selectedStartableCount={selectedStartableCount}
+            startablePlanningCount={startablePlanningCards.length}
+            startSelectedPlanningLabel={startSelectedPlanningLabel}
+            startSelectedPlanningDisabled={!ready || !credentials || bulkStartingPlanning || selectedStartableCount === 0}
+            onToggleAllStartablePlanning={toggleAllStartablePlanning}
+            onStartSelectedPlanning={startSelectedPlanning}
           />
         ))}
       </div>
@@ -440,6 +419,14 @@ function BoardColumn({
   selectedPlanningExecutionIds,
   selectionDisabled,
   onTogglePlanningSelection,
+  showAwaitingPlanningControls,
+  allStartableSelected,
+  selectedStartableCount,
+  startablePlanningCount,
+  startSelectedPlanningLabel,
+  startSelectedPlanningDisabled,
+  onToggleAllStartablePlanning,
+  onStartSelectedPlanning,
 }: {
   lane: BoardLane;
   cards: ParentWorkCard[];
@@ -448,11 +435,50 @@ function BoardColumn({
   selectedPlanningExecutionIds: Set<string>;
   selectionDisabled: boolean;
   onTogglePlanningSelection: (card: ParentWorkCard, checked: boolean) => void;
+  showAwaitingPlanningControls: boolean;
+  allStartableSelected: boolean;
+  selectedStartableCount: number;
+  startablePlanningCount: number;
+  startSelectedPlanningLabel: string;
+  startSelectedPlanningDisabled: boolean;
+  onToggleAllStartablePlanning: (checked: boolean) => void;
+  onStartSelectedPlanning: () => void;
 }) {
   return (
-    <div className="rounded-2xl border bg-muted/20">
+    <section className="rounded-2xl border bg-muted/20" role="region" aria-label={lane.title}>
       <div className="border-b bg-background/70 p-4">
         <h3 className="truncate text-sm font-semibold">{lane.title}</h3>
+        {showAwaitingPlanningControls ? (
+          <div className="mt-3 space-y-3">
+            <p className="text-xs text-muted-foreground">
+              {startablePlanningCount > 0
+                ? `${startablePlanningCount} queued parent item${startablePlanningCount === 1 ? "" : "s"} waiting for planning to start.`
+                : "No parent items are waiting for planning."}
+            </p>
+            <div className="flex flex-wrap items-center gap-3">
+              <label className="inline-flex items-center gap-2 text-xs font-medium text-muted-foreground">
+                <input
+                  type="checkbox"
+                  className="h-4 w-4 rounded border-border"
+                  aria-label="Select all queued planning items"
+                  checked={allStartableSelected}
+                  disabled={startablePlanningCount === 0 || selectionDisabled}
+                  onChange={(event) => onToggleAllStartablePlanning(event.currentTarget.checked)}
+                />
+                Select all
+              </label>
+              <Button
+                type="button"
+                size="sm"
+                onClick={() => onStartSelectedPlanning()}
+                disabled={startSelectedPlanningDisabled}
+              >
+                <Play className={`mr-2 h-3.5 w-3.5 ${selectionDisabled && selectedStartableCount > 0 ? "animate-pulse" : ""}`} />
+                {selectionDisabled && selectedStartableCount > 0 ? `Moving ${selectedStartableCount}…` : startSelectedPlanningLabel}
+              </Button>
+            </div>
+          </div>
+        ) : null}
       </div>
       <div className="space-y-3 p-3">
         {loading ? (
@@ -477,7 +503,7 @@ function BoardColumn({
           ))
         )}
       </div>
-    </div>
+    </section>
   );
 }
 
@@ -528,7 +554,7 @@ function ParentWorkItemCard({
               disabled={selectionDisabled}
               onChange={(event) => onTogglePlanningSelection(card, event.currentTarget.checked)}
             />
-            Start
+            Move
           </label>
         ) : card.questionOpen ? (
           <span className="shrink-0 rounded-full border border-amber-300 bg-amber-50 px-2.5 py-1 text-[11px] font-semibold text-amber-700">
@@ -605,7 +631,7 @@ function ParentWorkDetailsDrawer({
                 disabled={startingPlanning}
               >
                 <Play className={`mr-2 h-3.5 w-3.5 ${startingPlanning ? "animate-pulse" : ""}`} />
-                Start planning
+                Move to planning
               </Button>
             ) : null}
           </div>
