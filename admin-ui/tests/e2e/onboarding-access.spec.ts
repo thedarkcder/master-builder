@@ -475,7 +475,7 @@ test("workspace home summarizes projects and project overview shows parent Jira 
   await expect(page.getByText("Recent Delivery")).toHaveCount(0);
 });
 
-test("project overview lets operators select queued parent planning items and start them", async ({ page }) => {
+test("project overview moves queued parent work from awaiting planning into planning", async ({ page }) => {
   const principal = makeTenantUserPrincipal({
     email: "product-planning@example.com",
     full_name: "Product Planning",
@@ -599,17 +599,22 @@ test("project overview lets operators select queued parent planning items and st
 
   await page.goto("/example/projects/example-default");
 
-  await expect(page.getByRole("heading", { name: "Planning" })).toBeVisible();
-  await expect(page.getByRole("checkbox", { name: "Select MAB-252 for planning start" })).toBeVisible();
+  const awaitingPlanningLane = page.getByRole("region", { name: "Awaiting planning" });
+  const planningLane = page.getByRole("region", { name: "Planning" });
+
+  await expect(page.getByRole("heading", { name: "Awaiting planning" })).toBeVisible();
+  await expect(awaitingPlanningLane.getByRole("checkbox", { name: "Select MAB-252 for planning start" })).toBeVisible();
   await page.getByRole("checkbox", { name: "Select MAB-252 for planning start" }).check();
   await page.getByRole("checkbox", { name: "Select MAB-253 for planning start" }).check();
-  await expect(page.getByRole("button", { name: "Start selected planning (2)" })).toBeEnabled();
+  await expect(awaitingPlanningLane.getByRole("button", { name: "Move selected to planning (2)" })).toBeEnabled();
   await expect(page.getByText("Waiting on you")).toBeVisible();
 
-  await page.getByRole("button", { name: "Start selected planning (2)" }).click();
+  await awaitingPlanningLane.getByRole("button", { name: "Move selected to planning (2)" }).click();
 
   await expect.poll(() => startedExecutionIds).toEqual(["wfexec-mab-252", "wfexec-mab-253"]);
-  await expect(page.getByRole("button", { name: "Start selected planning" })).toBeDisabled();
+  await expect(awaitingPlanningLane.getByText("MAB-252")).toHaveCount(0);
+  await expect(awaitingPlanningLane.getByRole("button", { name: "Move selected to planning" })).toBeDisabled();
+  await expect(planningLane.getByText("MAB-252")).toBeVisible();
 });
 
 test("workspace home shows configured projects even when no active work exists", async ({ page }) => {

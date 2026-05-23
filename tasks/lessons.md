@@ -1,3 +1,7 @@
+2026-05-23
+
+- When a user reframes a workflow board interaction as a lane/state model instead of a bulk action widget, change the state model first. Do not keep the old control surface and just rename buttons; the lane semantics and transition labels must match the operator mental model.
+
 2026-05-19
 
 - When a Jira reconciliation summary claims a high scanned count but the UI only shows a small subset, inspect persisted page-fetch work-unit outputs for repeated issue keys before blaming board filters. Duplicate first-page outputs mean the provider pagination contract is wrong or ignored.
