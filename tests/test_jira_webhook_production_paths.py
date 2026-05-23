@@ -23,6 +23,7 @@ from tests.production_path_support import (
     seed_core_runtime_state,
     session_factory_for,
 )
+from tests.test_support.workflow_runtime_harness import build_local_workflow_runtime
 
 pytestmark = pytest.mark.production_path
 
@@ -37,10 +38,16 @@ class JiraWebhookProductionPathTests(ProductionPathApiTestCase):
         seed_core_runtime_state(session_factory_for(cls._template_database_url))
 
     def setUp(self) -> None:
+        self._workflow_runtime_patch = patch(
+            "orchestrator.api.webhooks.jira_parent_child_sync.build_workflow_runtime",
+            build_local_workflow_runtime,
+        )
+        self._workflow_runtime_patch.start()
         self._start_test_runtime(name_prefix="jira-webhook-production")
 
     def tearDown(self) -> None:
         self._stop_test_runtime()
+        self._workflow_runtime_patch.stop()
 
     def _process_one_webhook_job(self):
         with self.session_factory() as session:
