@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
+import pytest
 from sqlalchemy import select
 
 from orchestrator.core.workflow.execution_projection import WorkflowExecutionReference, WorkflowSourceReference
@@ -16,9 +17,9 @@ from orchestrator.core.workflow.advance import (
 )
 from orchestrator.api.admin.workflows.type_read_model import workflow_operation_reads
 from orchestrator.api.admin.workflows.operation_stale_recovery_service import recover_stale_workflow_operation_attempts
-from orchestrator.core.workflow.type_catalog import get_workflow_type
+from orchestrator.core.workflow.type_catalog import get_workflow_type, validate_persisted_workflow_definitions
 from orchestrator.storage.db import create_session_factory
-from orchestrator.storage.models import WorkflowExecution, WorkflowOperation, WorkflowOperationAttempt
+from orchestrator.storage.models import Tenant, WorkflowExecution, WorkflowOperation, WorkflowOperationAttempt
 from tests.test_support.db_harness import SqliteTemplateDbTestCase
 
 
@@ -323,3 +324,92 @@ class WorkflowLifecycleTests(SqliteTemplateDbTestCase):
 
         assert recovered == 1
         assert restarted_operation_ids == [running_operation_id]
+
+
+class PersistedWorkflowValidationTests(SqliteTemplateDbTestCase):
+    def setUp(self) -> None:
+        self.database_url = self._prepare_test_database(name_prefix="workflow-validation")
+        self.session_factory = create_session_factory(self.database_url)
+
+    def tearDown(self) -> None:
+        self._cleanup_test_database()
+
+    def _insert_tenant(self, *, session, tenant_id: str) -> None:  # noqa: ANN001
+        now = datetime.now(timezone.utc)
+        session.add(
+            Tenant(
+                tenant_id=tenant_id,
+                name=f"Tenant {tenant_id}",
+                is_enabled=True,
+                archived_at=None,
+                purge_after_at=None,
+                jira_config={},
+                github_config={},
+                repos_config={},
+                policy_config={},
+                discord_config=None,
+                experience_config={},
+                setup_state={},
+                created_at=now,
+                updated_at=now,
+            )
+        )
+
+    def _insert_workflow(self, *, session, workflow_id: str, workflow_type_key: str) -> None:  # noqa: ANN001
+        now = datetime.now(timezone.utc)
+        session.add(
+            WorkflowExecution(
+                workflow_id=workflow_id,
+                execution_id=f"exec-{workflow_id}",
+                workflow_type_key=workflow_type_key,
+                tenant_id="tenant-validation",
+                project_id=None,
+                source_system="jira",
+                source_ref=f"SRC-{workflow_id}",
+                source_external_id=None,
+                display_name="Validation workflow",
+                source_description=None,
+                repo_url=None,
+                branch=None,
+                pr_url=None,
+                orchestration_backend="temporal",
+                dedupe_scope="issue_execution",
+                status="running",
+                last_error=None,
+                active_run_id=None,
+                latest_checkpoint_id=None,
+                source_workflow_id=None,
+                source_run_id=None,
+                created_at=now,
+                started_at=now,
+                finished_at=None,
+                updated_at=now,
+            )
+        )
+
+    def test_validate_persisted_workflow_definitions_purges_legacy_project_deployment_setup_rows(self) -> None:
+        with self.session_factory() as session:
+            self._insert_tenant(session=session, tenant_id="tenant-validation")
+            self._insert_workflow(
+                session=session,
+                workflow_id="workflow-legacy",
+                workflow_type_key="project_deployment_setup",
+            )
+            session.commit()
+
+            validate_persisted_workflow_definitions(session=session)
+
+            assert session.get(WorkflowExecution, "workflow-legacy") is None
+
+    def test_validate_persisted_workflow_definitions_still_fails_for_unknown_non_legacy_workflow(self) -> None:
+        with self.session_factory() as session:
+            self._insert_tenant(session=session, tenant_id="tenant-validation")
+            self._insert_workflow(
+                session=session,
+                workflow_id="workflow-unknown",
+                workflow_type_key="unknown_removed_workflow",
+            )
+            session.commit()
+
+            with pytest.raises(LookupError, match="Workflow type not registered: unknown_removed_workflow"):
+                validate_persisted_workflow_definitions(session=session)
