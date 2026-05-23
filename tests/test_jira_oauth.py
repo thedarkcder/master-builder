@@ -33,7 +33,7 @@ class JiraOAuthTests(unittest.TestCase):
         self.assertIn("read:attachment:jira", scopes)
         self.assertIn("write:attachment:jira", scopes)
 
-    def test_search_issues_uses_offset_search_endpoint(self) -> None:
+    def test_search_issues_uses_enhanced_search_jql_endpoint(self) -> None:
         client = AtlassianOAuthClient(
             AtlassianOAuthClientConfig(
                 client_id="client-id",
@@ -53,12 +53,11 @@ class JiraOAuthTests(unittest.TestCase):
         self.assertEqual(issues, [])
         mocked.assert_called_once_with(
             method="POST",
-            url="https://api.atlassian.com/ex/jira/cloud-id/rest/api/3/search",
+            url="https://api.atlassian.com/ex/jira/cloud-id/rest/api/3/search/jql",
             access_token="token",
             payload={
                 "jql": 'project = "MAB"',
                 "maxResults": 25,
-                "startAt": 0,
                 "fields": ["summary", "status"],
             },
         )

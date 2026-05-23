@@ -54,11 +54,18 @@ from orchestrator.tools.atlassian_oauth_models import (
     AtlassianOAuthHttpError,
     JiraIssueDetail,
     JiraIssuePreview,
+    JiraIssueSearchPage,
 )
 
 
 class JiraProjectReconciliationGateway(Protocol):
-    def search_project_issues_page(self, *, project_key: str, start_at: int, max_results: int) -> list[JiraIssuePreview]:
+    def search_project_issues_page(
+        self,
+        *,
+        project_key: str,
+        next_page_token: str | None,
+        max_results: int,
+    ) -> JiraIssueSearchPage:
         ...
 
     def get_issue_detail(self, *, issue_key: str) -> JiraIssueDetail:
@@ -89,16 +96,22 @@ class _AtlassianJiraProjectReconciliationGateway:
     def _cloud_id(self) -> str:
         return str(self._oauth_context.connection.cloud_id or "").strip()
 
-    def search_project_issues_page(self, *, project_key: str, start_at: int, max_results: int) -> list[JiraIssuePreview]:
+    def search_project_issues_page(
+        self,
+        *,
+        project_key: str,
+        next_page_token: str | None,
+        max_results: int,
+    ) -> JiraIssueSearchPage:
         normalized_project_key = _normalized_key(project_key)
         if not normalized_project_key:
             raise ValueError("Jira project reconciliation requires a project key")
-        return self._client.search_issues_by_jql(
+        return self._client.search_issues_by_jql_page(
             access_token=self._access_token,
             cloud_id=self._cloud_id,
             jql=f"project = {normalized_project_key} ORDER BY created ASC",
             max_results=max_results,
-            start_at=start_at,
+            next_page_token=next_page_token,
         )
 
     def get_issue_detail(self, *, issue_key: str) -> JiraIssueDetail:
@@ -507,40 +520,61 @@ class JiraProjectReconciliationWorkflowService:
     def _run_scan_step(self, *, operation, attempt) -> str:  # noqa: ANN001
         loaded = 0
         page_size = min(50, self._max_items)
-        start_at = 0
+        next_page_token: str | None = None
+        seen_page_tokens: set[str] = set()
         full_page_signatures: set[tuple[str, ...]] = set()
+        page_number = 0
         while loaded < self._max_items:
-            previews = run_work_unit(
+            page = run_work_unit(
                 self._session,
                 operation=operation,
                 operation_attempt=attempt,
                 unit_key=JIRA_PROJECT_RECONCILIATION_WU_PAGE_FETCH,
-                idempotency_key=f"{self._idempotency_scope}:page:{start_at}:{page_size}",
+                idempotency_key=f"{self._idempotency_scope}:cursor-page:{page_number}:{page_size}",
                 input_payload={
                     "request_id": self._request_id,
                     "project_id": self._project.project_id,
                     "project_key": self._project.jira_project_key,
-                    "start_at": start_at,
+                    "next_page_token": next_page_token,
                     "max_results": page_size,
                 },
-                execute=lambda _context: [
-                    {
-                        "key": preview.key,
-                        "summary": preview.summary,
-                        "status": preview.status,
-                    }
-                    for preview in self._gateway.search_project_issues_page(
+                execute=lambda _context: self._gateway.search_project_issues_page(
                         project_key=self._project.jira_project_key,
-                        start_at=start_at,
+                        next_page_token=next_page_token,
                         max_results=page_size,
-                    )
-                ],
-                serialize=lambda result: {"items": list(result)},
-                deserialize=lambda payload: list(payload.get("items") or []),
+                    ),
+                serialize=lambda result: {
+                    "items": [
+                        {
+                            "key": preview.key,
+                            "summary": preview.summary,
+                            "status": preview.status,
+                        }
+                        for preview in result.issues
+                    ],
+                    "next_page_token": result.next_page_token,
+                },
+                deserialize=lambda payload: JiraIssueSearchPage(
+                    issues=[
+                        JiraIssuePreview(
+                            key=str(item.get("key") or ""),
+                            summary=str(item.get("summary") or ""),
+                            status=str(item.get("status") or ""),
+                        )
+                        for item in list(payload.get("items") or [])
+                        if isinstance(item, dict)
+                    ],
+                    next_page_token=(
+                        str(payload.get("next_page_token") or "").strip()
+                        if payload.get("next_page_token") is not None
+                        else None
+                    ),
+                ),
             )
+            previews = page.issues
             if not previews:
                 break
-            page_issue_keys = tuple(_normalized_key(preview.get("key")) for preview in previews)
+            page_issue_keys = tuple(_normalized_key(preview.key) for preview in previews)
             if len(previews) == page_size:
                 if page_issue_keys in full_page_signatures:
                     raise ValueError(
@@ -548,7 +582,7 @@ class JiraProjectReconciliationWorkflowService:
                     )
                 full_page_signatures.add(page_issue_keys)
             for preview in previews:
-                issue_key = _normalized_key(preview.get("key"))
+                issue_key = _normalized_key(preview.key)
                 if not issue_key:
                     raise ValueError("Jira preview payload is missing issue key")
                 issue = run_work_unit(
@@ -569,9 +603,15 @@ class JiraProjectReconciliationWorkflowService:
                 loaded += 1
                 if loaded >= self._max_items:
                     break
-            if len(previews) < page_size:
+            if loaded >= self._max_items:
                 break
-            start_at += len(previews)
+            next_page_token = page.next_page_token
+            if not next_page_token:
+                break
+            if next_page_token in seen_page_tokens:
+                raise ValueError("Jira search pagination repeated nextPageToken; refusing to continue scan")
+            seen_page_tokens.add(next_page_token)
+            page_number += 1
         return f"Scanned {loaded} Jira issues for project {self._project.jira_project_key}."
 
     def _run_classification_step(self, *, operation, attempt) -> str:  # noqa: ANN001

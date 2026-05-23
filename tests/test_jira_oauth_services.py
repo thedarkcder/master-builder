@@ -194,7 +194,7 @@ class JiraOAuthIssueServiceTests(unittest.TestCase):
 
         def _request_json(**kwargs):  # noqa: ANN003
             request_calls.append(kwargs)
-            if kwargs["method"] == "POST" and kwargs["url"].endswith("/search"):
+            if kwargs["method"] == "POST" and kwargs["url"].endswith("/search/jql"):
                 return {"issues": [{"key": "MAB-1", "fields": {"summary": "MAB-1", "status": {"name": "Done"}}}]}
             if kwargs["method"] == "POST" and kwargs["url"].endswith("/comment"):
                 return {"id": "c1"}
@@ -223,39 +223,55 @@ class JiraOAuthIssueServiceTests(unittest.TestCase):
         self.assertEqual(comment["id"], "c1")
         self.assertTrue(request_calls)
 
-    def test_issue_search_uses_offset_search_endpoint_for_start_at_pagination(self) -> None:
+    def test_issue_search_page_uses_enhanced_search_jql_next_page_token(self) -> None:
         request_calls: list[dict] = []
 
         def _request_json(**kwargs):  # noqa: ANN003
             request_calls.append(kwargs)
-            return {"issues": [{"key": "MAB-51", "fields": {"summary": "Page two", "status": {"name": "Backlog"}}}]}
+            return {
+                "issues": [{"key": "MAB-51", "fields": {"summary": "Page two", "status": {"name": "Backlog"}}}],
+                "nextPageToken": "token-2",
+            }
 
         service = JiraOAuthIssueService(
-            get_json=lambda **_kwargs: (_ for _ in ()).throw(AssertionError("search must not use GET /search/jql")),
+            get_json=lambda **_kwargs: (_ for _ in ()).throw(AssertionError("search must use POST /search/jql")),
             request_json=_request_json,
         )
 
-        issues = service.search_issues_by_jql(
+        page = service.search_issues_by_jql_page(
             access_token="tok",
             cloud_id="cloud",
             jql="project = MAB ORDER BY created ASC",
             max_results=50,
-            start_at=50,
+            next_page_token="token-1",
         )
 
-        self.assertEqual([issue.key for issue in issues], ["MAB-51"])
+        self.assertEqual([issue.key for issue in page.issues], ["MAB-51"])
+        self.assertEqual(page.next_page_token, "token-2")
         self.assertEqual(len(request_calls), 1)
         self.assertEqual(request_calls[0]["method"], "POST")
-        self.assertTrue(request_calls[0]["url"].endswith("/rest/api/3/search"))
+        self.assertTrue(request_calls[0]["url"].endswith("/rest/api/3/search/jql"))
         self.assertEqual(
             request_calls[0]["payload"],
             {
                 "jql": "project = MAB ORDER BY created ASC",
                 "maxResults": 50,
-                "startAt": 50,
+                "nextPageToken": "token-1",
                 "fields": ["summary", "status"],
             },
         )
+
+    def test_issue_search_rejects_removed_start_at_pagination(self) -> None:
+        service = JiraOAuthIssueService(get_json=lambda **_kwargs: {}, request_json=lambda **_kwargs: {})
+
+        with self.assertRaisesRegex(AtlassianOAuthError, "nextPageToken"):
+            service.search_issues_by_jql(
+                access_token="tok",
+                cloud_id="cloud",
+                jql="project = MAB ORDER BY created ASC",
+                max_results=50,
+                start_at=50,
+            )
 
     def test_issue_service_bulk_create_and_update_validation(self) -> None:
         def _get_json(**kwargs):  # noqa: ANN003
@@ -320,7 +336,7 @@ class JiraOAuthIssueServiceTests(unittest.TestCase):
 
         def _request_json(**kwargs):  # noqa: ANN003
             captured.append(kwargs)
-            if kwargs["method"] == "POST" and kwargs["url"].endswith("/search"):
+            if kwargs["method"] == "POST" and kwargs["url"].endswith("/search/jql"):
                 return {
                     "issues": [
                         {"key": "MAB-2", "fields": {"summary": "Summary", "status": {"name": "Backlog"}}},
@@ -493,7 +509,7 @@ class JiraOAuthIssueServiceTests(unittest.TestCase):
             return {"key": "MAB-1", "fields": "bad-fields"}
 
         def _request_json(**kwargs):  # noqa: ANN003
-            if kwargs["method"] == "POST" and kwargs["url"].endswith("/search"):
+            if kwargs["method"] == "POST" and kwargs["url"].endswith("/search/jql"):
                 return {"issues": ["skip", {"key": "MAB-1", "fields": "bad-fields"}]}
             return ["not-an-object"]
 

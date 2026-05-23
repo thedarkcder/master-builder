@@ -65,6 +65,12 @@ class JiraIssuePreview:
 
 
 @dataclass(frozen=True)
+class JiraIssueSearchPage:
+    issues: list[JiraIssuePreview]
+    next_page_token: str | None = None
+
+
+@dataclass(frozen=True)
 class JiraIssueDetail:
     key: str
     summary: str

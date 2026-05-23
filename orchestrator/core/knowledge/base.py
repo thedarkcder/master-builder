@@ -1146,17 +1146,19 @@ def sync_project_knowledge_from_jira(
     active_refs: set[str] = set()
     page_size = max(1, min(max_issues, 50))
     remaining = max(1, max_issues)
-    start_at = 0
+    next_page_token: str | None = None
+    seen_page_tokens: set[str] = set()
 
     while remaining > 0:
         requested = min(page_size, remaining)
-        previews = jira_client.search_issues_by_jql(
+        page = jira_client.search_issues_by_jql_page(
             access_token=access_token,
             cloud_id=cloud_id,
             jql=f'project = "{normalized_project_key}" ORDER BY updated DESC',
             max_results=requested,
-            start_at=start_at,
+            next_page_token=next_page_token,
         )
+        previews = page.issues
         if not previews:
             break
 
@@ -1308,9 +1310,12 @@ def sync_project_knowledge_from_jira(
                     },
                 )] += 1
 
-        start_at += len(previews)
-        if len(previews) < requested:
+        next_page_token = page.next_page_token
+        if not next_page_token:
             break
+        if next_page_token in seen_page_tokens:
+            raise RuntimeError("Jira knowledge sync pagination loop detected (repeated nextPageToken)")
+        seen_page_tokens.add(next_page_token)
 
     existing_assets = session.execute(
         select(KnowledgeAsset).where(

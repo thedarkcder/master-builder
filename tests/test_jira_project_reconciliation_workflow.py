@@ -32,14 +32,20 @@ class _FakeGateway:
     fail_label_once_for: set[str]
 
     def __post_init__(self) -> None:
-        self.search_calls: list[tuple[str, int, int]] = []
+        self.search_calls: list[tuple[str, str | None, int]] = []
         self.detail_calls: list[str] = []
         self.label_replacements: list[tuple[str, list[str]]] = []
         self.label_call_counts: Counter[str] = Counter()
 
-    def search_project_issues_page(self, *, project_key: str, start_at: int, max_results: int) -> list[JiraIssuePreview]:
-        self.search_calls.append((project_key, start_at, max_results))
-        return list(self.previews[start_at:start_at + max_results])
+    def search_project_issues_page(self, *, project_key: str, next_page_token: str | None, max_results: int):
+        self.search_calls.append((project_key, next_page_token, max_results))
+        start_at = int(next_page_token or "0")
+        issues = list(self.previews[start_at:start_at + max_results])
+        next_offset = start_at + len(issues)
+        return SimpleNamespace(
+            issues=issues,
+            next_page_token=str(next_offset) if next_offset < len(self.previews) else None,
+        )
 
     def get_issue_detail(self, *, issue_key: str) -> JiraIssueDetail:
         self.detail_calls.append(issue_key)
@@ -215,9 +221,12 @@ class JiraProjectReconciliationWorkflowTests(SqliteTemplateDbTestCase):
 
     def test_scan_fails_when_provider_repeats_a_full_page(self) -> None:
         class _RepeatingPageGateway(_FakeGateway):
-            def search_project_issues_page(self, *, project_key: str, start_at: int, max_results: int) -> list[JiraIssuePreview]:
-                self.search_calls.append((project_key, start_at, max_results))
-                return list(self.previews[:max_results])
+            def search_project_issues_page(self, *, project_key: str, next_page_token: str | None, max_results: int):
+                self.search_calls.append((project_key, next_page_token, max_results))
+                return SimpleNamespace(
+                    issues=list(self.previews[:max_results]),
+                    next_page_token="page-2" if next_page_token is None else "page-3",
+                )
 
         gateway = _RepeatingPageGateway(
             previews=[
@@ -254,7 +263,7 @@ class JiraProjectReconciliationWorkflowTests(SqliteTemplateDbTestCase):
 
         assert result.failed is True
         assert "repeated a full Jira issue page" in str(result.reason)
-        assert gateway.search_calls == [("MAB", 0, 50), ("MAB", 50, 50)]
+        assert gateway.search_calls == [("MAB", None, 50), ("MAB", "page-2", 50)]
 
     def test_existing_parent_workflow_is_matched_by_stable_issue_id_without_duplicate_on_key_rename(self) -> None:
         gateway = _FakeGateway(
@@ -685,7 +694,7 @@ class JiraProjectReconciliationWorkflowTests(SqliteTemplateDbTestCase):
             ).scalar_one()
 
             assert reconciliation_workflow.status == "failed"
-            assert gateway.search_calls == [("MAB", 0, 50)]
+            assert gateway.search_calls == [("MAB", None, 50)]
             assert gateway.detail_calls == ["MAB-100", "MAB-101"]
             assert gateway.label_call_counts == Counter({"MAB-100": 1, "MAB-101": 1})
 
@@ -706,7 +715,7 @@ class JiraProjectReconciliationWorkflowTests(SqliteTemplateDbTestCase):
 
         assert refreshed_workflow is not None
         assert refreshed_workflow.status == "completed"
-        assert gateway.search_calls == [("MAB", 0, 50)]
+        assert gateway.search_calls == [("MAB", None, 50)]
         assert gateway.detail_calls == ["MAB-100", "MAB-101"]
         assert gateway.label_call_counts == Counter({"MAB-100": 1, "MAB-101": 2})
         assert len(parent_workflows) == 1
