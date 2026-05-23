@@ -118,10 +118,16 @@ class RunHybridWorkersScriptTests(unittest.TestCase):
         self.assertIn('export MASTER_BUILDER_API_PORT="${MASTER_BUILDER_API_PORT:-60001}"', script)
         self.assertIn('export MASTER_BUILDER_POSTGRES_PORT="${MASTER_BUILDER_POSTGRES_PORT:-60003}"', script)
         self.assertIn("LOCAL_PUBLIC_API_BASE_URL=\"http://localhost:${MASTER_BUILDER_API_PORT}\"", script)
+        self.assertIn("LOCAL_ADMIN_UI_BASE_URL=\"http://localhost:${ADMIN_UI_PORT}\"", script)
         self.assertIn(
             "LOCAL_DATABASE_URL=\"postgresql+psycopg://orchestrator:orchestrator@127.0.0.1:${MASTER_BUILDER_POSTGRES_PORT}/orchestrator\"",
             script,
         )
+        self.assertIn(
+            'if [[ -z "${ORCHESTRATOR_ADMIN_UI_BASE_URL:-}" || "${ORCHESTRATOR_ADMIN_UI_BASE_URL}" == "http://localhost:4100" || "${ORCHESTRATOR_ADMIN_UI_BASE_URL}" == "http://127.0.0.1:4100" ]]; then',
+            script,
+        )
+        self.assertIn('export ORCHESTRATOR_ADMIN_UI_BASE_URL="$LOCAL_ADMIN_UI_BASE_URL"', script)
         self.assertIn(
             'if [[ -z "${NEXT_PUBLIC_API_BASE_URL:-}" || "${NEXT_PUBLIC_API_BASE_URL}" == "http://localhost:4000" ]]; then',
             script,

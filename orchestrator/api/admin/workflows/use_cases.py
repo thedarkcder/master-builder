@@ -6,6 +6,7 @@ from datetime import datetime
 from fastapi import HTTPException, status
 from sqlalchemy import select
 from sqlalchemy.orm import Session
+from temporalio.client import WorkflowUpdateFailedError
 
 from orchestrator.api.admin.schema_mappers import run_to_schema, workflow_to_schema
 from orchestrator.api.admin.workflows.live_stream_service import (
@@ -50,13 +51,26 @@ from orchestrator.api.schemas import (
 from orchestrator.core.runtime.agent_runtime_resolver import build_runtime_for_selector
 from orchestrator.core.config import get_settings
 from orchestrator.core.jira_project_reconciliation.start import start_jira_project_reconciliation
+from orchestrator.core.platform.admin_notifications import (
+    ADMIN_NOTIFICATION_KIND_JIRA_CONNECTION_REAUTH_REQUIRED,
+    AdminNotificationDraft,
+    AdminNotificationScope,
+    emit_admin_notification,
+)
 from orchestrator.core.platform.access import PERMISSION_PROJECTS_MANAGE
 from orchestrator.core.security import AuthenticatedPrincipal, require_tenant_permission, require_tenant_workspace_access
 from orchestrator.core.integrations.workflow.router import WorkflowIntegrationRouter
 from orchestrator.core.workflow.type_catalog import get_workflow_type
 from orchestrator.runtime.issue_fanout import seed_issues_with_runtime
 from orchestrator.storage.db import create_session_factory
-from orchestrator.storage.models import Project, Tenant, WorkflowExecution, WorkflowOperation, WorkflowOperationAttempt
+from orchestrator.storage.models import (
+    AtlassianOAuthConnection,
+    Project,
+    Tenant,
+    WorkflowExecution,
+    WorkflowOperation,
+    WorkflowOperationAttempt,
+)
 
 workflow_integration_router = WorkflowIntegrationRouter()
 
@@ -238,6 +252,18 @@ def _start_jira_project_reconciliation_workflow(
         )
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    except WorkflowUpdateFailedError as exc:
+        if _workflow_update_failure_requires_jira_reauth(exc):
+            _emit_jira_reauth_required_notification(session=session, tenant=tenant)
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Atlassian connection requires reauthentication.",
+            ) from exc
+        session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Jira sync could not start because the workflow update failed.",
+        ) from exc
     return WorkflowExecutionStartRead(
         execution_id=result.execution_id,
         workflow_id=result.workflow_id,
@@ -245,6 +271,60 @@ def _start_jira_project_reconciliation_workflow(
         status=result.status,
         started_attempt_id=result.started_attempt_id,
     )
+
+
+def _workflow_update_failure_requires_jira_reauth(exc: BaseException) -> bool:
+    messages: list[str] = []
+    current: BaseException | None = exc
+    for _ in range(8):
+        if current is None:
+            break
+        messages.append(str(current))
+        if isinstance(current, WorkflowUpdateFailedError):
+            current = current.cause
+            continue
+        current = current.__cause__ or current.__context__
+    normalized = "\n".join(messages).lower()
+    return (
+        "refresh_token is invalid" in normalized
+        or "unauthorized_client" in normalized
+        or "atlassian connection requires reauthentication" in normalized
+        or "atlassian request failed (401)" in normalized
+        or "atlassian request failed (403)" in normalized
+    )
+
+
+def _emit_jira_reauth_required_notification(*, session: Session, tenant: Tenant) -> None:
+    connection_id = str((tenant.jira_config or {}).get("connection_id") or "").strip()
+    tenant_id = tenant.tenant_id
+    session.rollback()
+    if not connection_id:
+        return
+
+    connection = session.get(AtlassianOAuthConnection, connection_id)
+    emit_admin_notification(
+        session=session,
+        notification=AdminNotificationDraft(
+            scope=AdminNotificationScope(
+                scope_type="jira_connection",
+                scope_id=connection_id,
+                tenant_id=tenant_id,
+            ),
+            source="atlassian_oauth",
+            kind=ADMIN_NOTIFICATION_KIND_JIRA_CONNECTION_REAUTH_REQUIRED,
+            detail=(
+                "Stored Atlassian credentials are no longer valid. Reconnect Atlassian from tenant settings to "
+                "restore project loading, issue sync, and webhook administration."
+            ),
+            dedupe_key="reauth_required",
+            context={
+                "connection_id": connection_id,
+                "site_url": connection.site_url if connection is not None else None,
+                "failure_category": "invalid_refresh_token",
+            },
+        ),
+    )
+    session.commit()
 
 
 def _workflow_start_positive_int(value: object, *, field_name: str, default: int) -> int:

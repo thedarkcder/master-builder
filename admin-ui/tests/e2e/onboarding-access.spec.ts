@@ -432,6 +432,7 @@ test("workspace home summarizes projects and project overview shows parent Jira 
   await page.goto("/route25/dashboard");
 
   await expect(page.getByText("Capacity used today")).toBeVisible({ timeout: 15000 });
+  await expect(page.getByRole("link", { name: "Route 25 Default" }).first()).toBeVisible();
   await expect(page.getByRole("heading", { name: "Work conversion" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Project operating state" })).toBeVisible();
   const projectCard = page
@@ -472,6 +473,63 @@ test("workspace home summarizes projects and project overview shows parent Jira 
   await expect(page.getByText("MAB-250")).toBeVisible();
   await expect(detailsDrawer.getByText("Questions")).toBeVisible();
   await expect(page.getByText("Recent Delivery")).toHaveCount(0);
+});
+
+test("workspace home shows configured projects even when no active work exists", async ({ page }) => {
+  const principal = makeTenantUserPrincipal({
+    email: "product-empty@example.com",
+    full_name: "Product Empty",
+  });
+  const tenant = makeTenant({ tenant_id: "route25", name: "Route 25" });
+  const projects = [
+    makeProject({
+      tenant_id: "route25",
+      project_id: "route25-default",
+      name: "Route 25 Default",
+    }),
+    makeProject({
+      tenant_id: "route25",
+      project_id: "route25-yana",
+      name: "Yana",
+    }),
+  ];
+
+  await seedTenantSession(page, { principal, userEmail: principal.email, userName: principal.full_name });
+  await installBffApiMocks(page, [
+    {
+      method: "GET",
+      pathname: "/api/bff/api/app/auth/me",
+      handler: (route) => fulfillJson(route, principal),
+    },
+    {
+      method: "GET",
+      pathname: "/api/bff/api/admin/tenants/route25",
+      handler: (route) => fulfillJson(route, tenant),
+    },
+    {
+      method: "GET",
+      pathname: "/api/bff/api/admin/tenants/route25/projects",
+      handler: (route) => fulfillJson(route, projects),
+    },
+    {
+      method: "GET",
+      pathname: /^\/api\/bff\/api\/admin\/workflows(?:\/board)?$/,
+      handler: (route, url) => {
+        expect(url.searchParams.get("tenant_id")).toBe("route25");
+        return fulfillJson(route, []);
+      },
+    },
+  ]);
+
+  await page.goto("/route25/dashboard");
+
+  await expect(page.getByText("Capacity used today")).toBeVisible({ timeout: 15000 });
+  await expect(page.getByRole("heading", { name: "Project operating state" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Route 25 Default" }).first()).toBeVisible();
+  await expect(page.getByRole("link", { name: "Yana" }).first()).toBeVisible();
+  await expect(page.locator('main a[href="/route25/projects/route25-default"]')).toContainText("Route 25 Default");
+  await expect(page.locator('main a[href="/route25/projects/route25-yana"]')).toContainText("Yana");
+  await expect(page.getByText("No active project work is currently tracked.")).toHaveCount(0);
 });
 
 test("lets a platform admin create a workspace through the setup wizard and blocks Jira step validation", async ({ page }) => {
