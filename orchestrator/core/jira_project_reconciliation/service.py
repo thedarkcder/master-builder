@@ -508,6 +508,7 @@ class JiraProjectReconciliationWorkflowService:
         loaded = 0
         page_size = min(50, self._max_items)
         start_at = 0
+        full_page_signatures: set[tuple[str, ...]] = set()
         while loaded < self._max_items:
             previews = run_work_unit(
                 self._session,
@@ -539,6 +540,13 @@ class JiraProjectReconciliationWorkflowService:
             )
             if not previews:
                 break
+            page_issue_keys = tuple(_normalized_key(preview.get("key")) for preview in previews)
+            if len(previews) == page_size:
+                if page_issue_keys in full_page_signatures:
+                    raise ValueError(
+                        "Jira search pagination repeated a full Jira issue page; refusing to report an incomplete scan"
+                    )
+                full_page_signatures.add(page_issue_keys)
             for preview in previews:
                 issue_key = _normalized_key(preview.get("key"))
                 if not issue_key:

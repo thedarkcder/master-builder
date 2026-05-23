@@ -65,17 +65,16 @@ class JiraOAuthIssueService:
         start_at: int = 0,
     ) -> list[JiraIssuePreview]:
         bounded_max_results = max(1, min(max_results, 50))
-        query = urlencode(
-            {
+        payload = self._request_json(
+            method="POST",
+            url=f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/search",
+            access_token=access_token,
+            payload={
                 "jql": jql,
                 "maxResults": bounded_max_results,
                 "startAt": max(0, int(start_at)),
-                "fields": "summary,status",
-            }
-        )
-        payload = self._get_json(
-            url=f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/search/jql?{query}",
-            access_token=access_token,
+                "fields": ["summary", "status"],
+            },
         )
         issues = payload.get("issues") if isinstance(payload, dict) else None
         if not isinstance(issues, list):

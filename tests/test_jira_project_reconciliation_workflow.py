@@ -213,6 +213,49 @@ class JiraProjectReconciliationWorkflowTests(SqliteTemplateDbTestCase):
         }
         assert {attempt.status for attempt in attempts} == {"completed"}
 
+    def test_scan_fails_when_provider_repeats_a_full_page(self) -> None:
+        class _RepeatingPageGateway(_FakeGateway):
+            def search_project_issues_page(self, *, project_key: str, start_at: int, max_results: int) -> list[JiraIssuePreview]:
+                self.search_calls.append((project_key, start_at, max_results))
+                return list(self.previews[:max_results])
+
+        gateway = _RepeatingPageGateway(
+            previews=[
+                JiraIssuePreview(key=f"MAB-{index}", summary=f"Issue {index}", status="Backlog")
+                for index in range(1, 51)
+            ],
+            details={
+                f"MAB-{index}": JiraIssueDetail(
+                    key=f"MAB-{index}",
+                    summary=f"Issue {index}",
+                    status="Backlog",
+                    description="Parent brief",
+                    issue_type="Epic",
+                    labels=[],
+                    issue_id=f"10{index:03d}",
+                    parent_key=None,
+                    parent_issue_id=None,
+                )
+                for index in range(1, 51)
+            },
+            fail_label_once_for=set(),
+        )
+
+        with self.session_factory() as session:
+            registry = self._handler_registry(gateway=gateway)
+            workflow_type = get_workflow_type(session, workflow_type_key="jira_project_reconciliation")
+            result = execute_workflow_advance(
+                session=session,
+                settings=SimpleNamespace(),
+                workflow_type=workflow_type,
+                request=self._request(request_id="repeating-page", max_items=100),
+                resolve_advance_handler_fn=registry.resolve_advance_handler,
+            )
+
+        assert result.failed is True
+        assert "repeated a full Jira issue page" in str(result.reason)
+        assert gateway.search_calls == [("MAB", 0, 50), ("MAB", 50, 50)]
+
     def test_existing_parent_workflow_is_matched_by_stable_issue_id_without_duplicate_on_key_rename(self) -> None:
         gateway = _FakeGateway(
             previews=[JiraIssuePreview(key="MAB-200", summary="Renamed issue key", status="Backlog")],
