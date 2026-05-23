@@ -1,3 +1,12 @@
+2026-05-19
+
+- When replacing `docker compose up --build` with explicit phases, verify the exact flags supported by each Compose subcommand. `docker compose run` does not accept every `up` flag; omitting `--build` is the no-rebuild contract for one-off runs.
+- When disabling optional Compose services by default, still stop any stale containers from those services during restart. Otherwise old optional workers can keep hammering shared infrastructure and make the new startup path look broken.
+- When a script loads host `.env` before invoking Docker Compose, explicitly override container-only connection URLs for Compose commands. Host URLs like `localhost:60003` or old `localhost:4402` are valid for local processes but broken inside containers.
+- Command-line entrypoints must not import every runtime at module import time. Keep command-specific runtime imports inside the selected branch so lightweight commands like `migrate` do not pay worker, voice, Temporal, or tool startup costs.
+- When moving default local ports, migrate stale default URLs loaded from `.env` in the launcher. Leaving `localhost:4402` in exported DB URLs makes the local worker hit the old port even after Compose moved to `60003`.
+- If a service exists because the product needs that capability, do not hide it behind a startup opt-in as a performance fix. Keep the service in the one-command path and remove the expensive dependency from that service's default image/provider path instead.
+
 2026-05-05
 
 - When backend tenant settings are split into section routes, split the frontend submit contracts too. A single form save that calls multiple section endpoints recreates hidden coupling even when the backend is correctly separated.
@@ -388,3 +397,8 @@
 - 2026-05-07: When adding a new FastAPI route module to the composition root, update the architecture boundary expectation in the same commit. A passing API smoke test is not enough if the route-import gate enforces explicit composition ownership.
 - 2026-05-07: When removing a broad settings route, update backend tests to use the new narrow endpoint instead of restoring the broad contract for test convenience. Old route expectations are compatibility pressure and should fail until the test is corrected.
 - 2026-05-07: For PR/CI fixes, do not push after only the immediate failing test when the CI job runs a broader suite. Run the matching CI suite locally first, then commit and push only after that suite passes.
+- 2026-05-19: When a user corrects the scope to a specific script or command, stop generalizing from adjacent Docker/Compose behavior. Re-read the named entrypoint and answer from its actual call path before proposing changes.
+- 2026-05-19: For Docker build performance fixes, do not only skip future builds. Inspect the expensive build layer itself and remove unnecessary local package wheel installs when the container already runs from copied source.
+- 2026-05-19: Preserve the user's exact numeric intent for port ranges. If they ask for `6000x`, use five-digit `6000x` ports such as `60001`, not four-digit `600x` ports like `6001`.
+- 2026-05-19: For one-command Compose launchers, avoid using multiple broad `docker compose up` calls that replay dependency graphs. Start infra explicitly, wait for health, run one-shot jobs with `run --rm --no-deps`, then start runtime services with `up --no-deps`.
+- 2026-05-19: Performance work must not change product/provider semantics. If asked to optimize Docker startup, keep runtime functionality and defaults unchanged; do not switch voice providers, credentials, optional dependency contracts, or service behavior unless the user explicitly asks for that functional change.

@@ -7,9 +7,11 @@ import {
   makeTenant,
   seedAdminSession,
 } from "./support/admin-ui";
-import { archiveTenant } from "./support/live-backend";
+import { API_BASE_URL, archiveTenant } from "./support/live-backend";
 
 test.describe.configure({ mode: "serial" });
+
+const MAILPIT_BASE_URL = process.env.PLAYWRIGHT_MAILPIT_BASE_URL ?? "http://localhost:60005";
 
 type RuntimeMatrixEntry = {
   runtimeKind: string;
@@ -867,7 +869,7 @@ test("logging out fully ends the session before another user signs in", async ({
   let cleanupRequestContext: Awaited<ReturnType<typeof playwrightRequest.newContext>> | null = null;
 
   try {
-    const userTwoResponse = await request.post("http://localhost:4000/api/public/register", {
+    const userTwoResponse = await request.post(`${API_BASE_URL}/api/public/register`, {
       data: {
         full_name: "User Two",
         email: userTwoEmail,
@@ -915,7 +917,7 @@ test("requests a password reset and completes it through the real browser flow",
   let tenantId = "";
 
   try {
-    const registerResponse = await request.post("http://localhost:4000/api/public/register", {
+    const registerResponse = await request.post(`${API_BASE_URL}/api/public/register`, {
       data: {
         full_name: "Reset User",
         email,
@@ -932,7 +934,7 @@ test("requests a password reset and completes it through the real browser flow",
     await page.getByRole("button", { name: "Send reset link" }).click();
     await expect(page.getByText("If an account exists for that email, a reset link has been sent.")).toBeVisible();
 
-    const messageSearch = await request.get(`http://localhost:4206/api/v1/search?query=${encodeURIComponent(email)}`);
+    const messageSearch = await request.get(`${MAILPIT_BASE_URL}/api/v1/search?query=${encodeURIComponent(email)}`);
     expect(messageSearch.ok()).toBeTruthy();
     const searchPayload = await messageSearch.json();
     expect(Array.isArray(searchPayload.messages)).toBeTruthy();
@@ -941,7 +943,7 @@ test("requests a password reset and completes it through the real browser flow",
     );
     expect(resetMessage).toBeTruthy();
 
-    const messageResponse = await request.get(`http://localhost:4206/api/v1/message/${resetMessage.ID as string}`);
+    const messageResponse = await request.get(`${MAILPIT_BASE_URL}/api/v1/message/${resetMessage.ID as string}`);
     expect(messageResponse.ok()).toBeTruthy();
     const messagePayload = await messageResponse.json();
     const textBody = String(messagePayload.Text ?? "");

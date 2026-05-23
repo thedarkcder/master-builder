@@ -1,7 +1,7 @@
 import type { APIRequestContext } from "@playwright/test";
 import { expect, test } from "@playwright/test";
 
-import { archiveTenant, loginTenantUser, seedTenantProject } from "./support/live-backend";
+import { API_BASE_URL, archiveTenant, loginTenantUser, seedTenantProject } from "./support/live-backend";
 
 function uniqueEmail(prefix: string): string {
   return `${prefix}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}@example.com`;
@@ -46,7 +46,7 @@ test("accepts a real invite through the browser flow and lands in member onboard
   let tenantId = "";
   let ownerToken = "";
   try {
-    const registerResponse = await request.post("http://localhost:4000/api/public/register", {
+    const registerResponse = await request.post(`${API_BASE_URL}/api/public/register`, {
       data: {
         full_name: "Playwright Owner",
         email: ownerEmail,
@@ -59,7 +59,7 @@ test("accepts a real invite through the browser flow and lands in member onboard
     tenantId = registration.tenant.tenant_id as string;
     ownerToken = registration.access_token as string;
 
-    const inviteResponse = await request.post(`http://localhost:4000/api/admin/tenants/${tenantId}/invites`, {
+    const inviteResponse = await request.post(`${API_BASE_URL}/api/admin/tenants/${tenantId}/invites`, {
       data: {
         email: invitedEmail,
         full_name: "Playwright Invitee",
@@ -115,7 +115,7 @@ test("lets a tenant admin click Team and load the team workspace", async ({ page
   let accessToken = "";
 
   try {
-    const registerResponse = await request.post("http://localhost:4000/api/public/register", {
+    const registerResponse = await request.post(`${API_BASE_URL}/api/public/register`, {
       data: {
         full_name: "Playwright Team Admin",
         email,
@@ -128,7 +128,7 @@ test("lets a tenant admin click Team and load the team workspace", async ({ page
     tenantId = registration.tenant.tenant_id as string;
     accessToken = registration.access_token as string;
 
-    const completeResponse = await request.post(`http://localhost:4000/api/app/onboarding/${tenantId}/complete`, {
+    const completeResponse = await request.post(`${API_BASE_URL}/api/app/onboarding/${tenantId}/complete`, {
       headers: {
         Authorization: `Bearer ${accessToken}`,
       },
@@ -161,7 +161,7 @@ test("lets a platform super admin click Team inside a tenant workspace", async (
   let ownerToken = "";
 
   try {
-    const registerResponse = await request.post("http://localhost:4000/api/public/register", {
+    const registerResponse = await request.post(`${API_BASE_URL}/api/public/register`, {
       data: {
         full_name: "Workspace Owner",
         email,
@@ -207,7 +207,7 @@ test("hides troubleshooting surfaces from an invited team member after joining t
   const invitedPage = await invitedContext.newPage();
 
   try {
-    const registerResponse = await request.post("http://localhost:4000/api/public/register", {
+    const registerResponse = await request.post(`${API_BASE_URL}/api/public/register`, {
       data: {
         full_name: "Pipeline Owner",
         email: ownerEmail,
@@ -220,7 +220,7 @@ test("hides troubleshooting surfaces from an invited team member after joining t
     tenantId = registration.tenant.tenant_id as string;
     ownerToken = registration.access_token as string;
 
-    const completeResponse = await request.post(`http://localhost:4000/api/app/onboarding/${tenantId}/complete`, {
+    const completeResponse = await request.post(`${API_BASE_URL}/api/app/onboarding/${tenantId}/complete`, {
       headers: {
         Authorization: `Bearer ${ownerToken}`,
       },

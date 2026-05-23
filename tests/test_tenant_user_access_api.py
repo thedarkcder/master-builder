@@ -34,8 +34,8 @@ class TenantUserAccessApiTests(SqliteTemplateApiTestCase):
             "ORCHESTRATOR_ADMIN_TOKEN_SECRET": "admin-token-secret-for-tests-0123456789",
             "ORCHESTRATOR_AUTH_TOKEN_SECRET": "tenant-auth-token-secret-for-tests-0123456789",
             "ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET": "unit-test-secret",
-            "ORCHESTRATOR_ADMIN_UI_BASE_URL": "http://localhost:4100",
-            "ORCHESTRATOR_PUBLIC_API_BASE_URL": "http://localhost:4000",
+            "ORCHESTRATOR_ADMIN_UI_BASE_URL": "http://localhost:60002",
+            "ORCHESTRATOR_PUBLIC_API_BASE_URL": "http://localhost:60001",
             "ORCHESTRATOR_ATLASSIAN_OAUTH_STATE_SECRET": "atlassian-oauth-state-secret",
             "ORCHESTRATOR_GITHUB_APP_SLUG": "master-builder-app",
             "ORCHESTRATOR_DISCORD_OAUTH_CLIENT_ID": "discord-client-id-123",
@@ -1309,7 +1309,7 @@ class TenantUserAccessApiTests(SqliteTemplateApiTestCase):
         self.assertEqual(callback_response.status_code, 302, callback_response.text)
         self.assertEqual(
             callback_response.headers["location"],
-            f"http://localhost:4100/{tenant_id}/settings/discord?discord_install=success",
+            f"http://localhost:60002/{tenant_id}/settings/discord?discord_install=success",
         )
 
         cancel_start_response = self.client.post(
@@ -1330,7 +1330,7 @@ class TenantUserAccessApiTests(SqliteTemplateApiTestCase):
         self.assertEqual(
             cancel_response.headers["location"],
             (
-                f"http://localhost:4100/{tenant_id}/settings/discord"
+                f"http://localhost:60002/{tenant_id}/settings/discord"
                 "?discord_install=cancelled&discord_error=access_denied&discord_error_description=Rejected"
             ),
         )

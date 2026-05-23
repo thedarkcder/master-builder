@@ -7,30 +7,6 @@ from collections.abc import Sequence
 from datetime import datetime, timezone
 from typing import Any
 
-from sqlalchemy import func, select
-
-from orchestrator.core.runtime.tools import execute_agent_tool, print_tool_event
-from orchestrator.core.config import get_settings
-from orchestrator.core.discord.gateway_runtime import run_discord_gateway
-from orchestrator.core.discord.live_voice_gateway_runtime import run_discord_live_voice
-from orchestrator.core.jira_project_reconciliation.scheduler import run_jira_project_reconciliation_runtime
-from orchestrator.core.knowledge.prewarm import prewarm_knowledge_dependencies
-from orchestrator.core.knowledge.jira_sync_runtime import run_knowledge_jira_sync
-from orchestrator.core.projects.automation_runtime import run_project_automation_runtime
-from orchestrator.core.runs.service import (
-    enqueue_run,
-    resolve_enqueue_precheck_outcome,
-    resolve_precheck_outcome_for_enqueue,
-)
-from orchestrator.core.voice.prewarm import prewarm_voice_dependencies
-from orchestrator.temporal.worker import run_temporal_worker
-from orchestrator.storage.database_support import ensure_postgres_database_url
-from orchestrator.storage.db import create_session_factory
-from orchestrator.storage.migrations import run_migrations
-from orchestrator.storage.models import Run, Tenant
-from orchestrator.worker import main as worker_main
-from orchestrator.worker import run_worker_child_once
-
 
 def _coerce_positive_int(value: object, *, default: int) -> int:
     try:
@@ -90,6 +66,16 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _handle_run(*, tenant_id: str, issue_key: str) -> int:
+    from orchestrator.core.config import get_settings
+    from orchestrator.core.runs.service import (
+        enqueue_run,
+        resolve_enqueue_precheck_outcome,
+        resolve_precheck_outcome_for_enqueue,
+    )
+    from orchestrator.storage.database_support import ensure_postgres_database_url
+    from orchestrator.storage.db import create_session_factory
+    from orchestrator.storage.models import Tenant
+
     settings = get_settings()
     ensure_postgres_database_url(
         database_url=settings.database_url,
@@ -135,6 +121,10 @@ def _handle_run(*, tenant_id: str, issue_key: str) -> int:
 
 
 def _count_runs_for_tenant(session, *, tenant_id: str, status: str) -> int:  # noqa: ANN001
+    from sqlalchemy import func, select
+
+    from orchestrator.storage.models import Run
+
     return int(
         session.execute(
             select(func.count(Run.run_id)).where(
@@ -145,7 +135,7 @@ def _count_runs_for_tenant(session, *, tenant_id: str, status: str) -> int:  # n
     )
 
 
-def _tenant_poll_snapshot(session, tenant: Tenant) -> dict:  # noqa: ANN001
+def _tenant_poll_snapshot(session, tenant: Any) -> dict:  # noqa: ANN001
     max_concurrent_runs = _coerce_positive_int(
         tenant.policy_config.get("max_concurrent_runs"),
         default=1,
@@ -164,6 +154,13 @@ def _tenant_poll_snapshot(session, tenant: Tenant) -> dict:  # noqa: ANN001
 
 
 def _handle_poll(*, tenant_filter: str) -> int:
+    from sqlalchemy import select
+
+    from orchestrator.core.config import get_settings
+    from orchestrator.storage.database_support import ensure_postgres_database_url
+    from orchestrator.storage.db import create_session_factory
+    from orchestrator.storage.models import Tenant
+
     settings = get_settings()
     ensure_postgres_database_url(
         database_url=settings.database_url,
@@ -201,6 +198,11 @@ def _handle_agent_tool(
     tool_name: str,
     args_json: str,
 ) -> int:
+    from orchestrator.core.config import get_settings
+    from orchestrator.core.runtime.tools import execute_agent_tool, print_tool_event
+    from orchestrator.storage.database_support import ensure_postgres_database_url
+    from orchestrator.storage.db import create_session_factory
+
     try:
         parsed_args = json.loads(args_json)
     except json.JSONDecodeError as exc:
@@ -241,6 +243,9 @@ def _handle_agent_tool(
 
 
 def _handle_voice_prewarm() -> int:
+    from orchestrator.core.config import get_settings
+    from orchestrator.core.voice.prewarm import prewarm_voice_dependencies
+
     settings = get_settings()
     result = prewarm_voice_dependencies(settings=settings)
     print(
@@ -258,6 +263,9 @@ def _handle_voice_prewarm() -> int:
 
 
 def _handle_knowledge_prewarm() -> int:
+    from orchestrator.core.config import get_settings
+    from orchestrator.core.knowledge.prewarm import prewarm_knowledge_dependencies
+
     settings = get_settings()
     result = prewarm_knowledge_dependencies(settings=settings)
     print(
@@ -276,44 +284,68 @@ def main(argv: Sequence[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if args.command == "worker":
+        from orchestrator.worker import main as worker_main
+
         worker_main(mode="runs")
         return 0
 
     if args.command == "worker-runs":
+        from orchestrator.worker import main as worker_main
+
         worker_main(mode="runs")
         return 0
 
     if args.command == "worker-webhooks":
+        from orchestrator.worker import main as worker_main
+
         worker_main(mode="webhooks")
         return 0
 
     if args.command == "worker-child-runs":
+        from orchestrator.worker import run_worker_child_once
+
         return int(run_worker_child_once(mode="runs"))
 
     if args.command == "worker-child-webhooks":
+        from orchestrator.worker import run_worker_child_once
+
         return int(run_worker_child_once(mode="webhooks"))
 
     if args.command == "temporal-worker":
+        from orchestrator.temporal.worker import run_temporal_worker
+
         asyncio.run(run_temporal_worker())
         return 0
 
     if args.command == "discord-gateway":
+        from orchestrator.core.discord.gateway_runtime import run_discord_gateway
+
         run_discord_gateway()
         return 0
 
     if args.command == "discord-live-voice":
+        from orchestrator.core.discord.live_voice_gateway_runtime import run_discord_live_voice
+
         run_discord_live_voice()
         return 0
 
     if args.command == "knowledge-jira-sync":
+        from orchestrator.core.knowledge.jira_sync_runtime import run_knowledge_jira_sync
+
         run_knowledge_jira_sync()
         return 0
 
     if args.command == "jira-project-reconciliation":
+        from orchestrator.core.jira_project_reconciliation.scheduler import (
+            run_jira_project_reconciliation_runtime,
+        )
+
         run_jira_project_reconciliation_runtime()
         return 0
 
     if args.command == "project-automation":
+        from orchestrator.core.projects.automation_runtime import run_project_automation_runtime
+
         run_project_automation_runtime()
         return 0
 
@@ -321,6 +353,8 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _handle_knowledge_prewarm()
 
     if args.command == "migrate":
+        from orchestrator.storage.migrations import run_migrations
+
         run_migrations()
         return 0
 
