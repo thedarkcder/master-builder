@@ -33,6 +33,10 @@ while true; do
   sleep 1
 done
 
+echo "[tailscale] clearing stale funnel config"
+tailscale --socket="$SOCKET" funnel reset || true
+tailscale --socket="$SOCKET" serve reset || true
+
 echo "[tailscale] enabling funnel on port ${FUNNEL_PORT}"
 tailscale --socket="$SOCKET" funnel --bg "$FUNNEL_PORT" || true
 

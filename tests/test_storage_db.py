@@ -52,7 +52,7 @@ def test_create_db_engine_skips_queuepool_overrides_for_sqlite() -> None:
 def test_default_database_url_targets_local_postgres() -> None:
     get_settings.cache_clear()
     settings = get_settings()
-    assert settings.database_url == "postgresql+psycopg://orchestrator:orchestrator@127.0.0.1:4402/orchestrator"
+    assert settings.database_url == "postgresql+psycopg://orchestrator:orchestrator@127.0.0.1:60003/orchestrator"
 
 
 def test_ensure_postgres_database_url_allows_sqlite_for_tests() -> None:

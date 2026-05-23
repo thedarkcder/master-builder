@@ -101,8 +101,8 @@ COPY .codex ./.codex
 COPY orchestrator ./orchestrator
 COPY alembic.ini ./alembic.ini
 
-RUN --mount=type=cache,target=/root/.cache/pip \
-    "${VIRTUAL_ENV}/bin/pip" install --no-deps --no-build-isolation .
+RUN printf '#!/usr/bin/env sh\nexec python -m orchestrator "$@"\n' > "${VIRTUAL_ENV}/bin/orchestrator" && \
+    chmod +x "${VIRTUAL_ENV}/bin/orchestrator"
 
 RUN mkdir -p /app/data
 
@@ -148,8 +148,8 @@ COPY .codex ./.codex
 COPY orchestrator ./orchestrator
 COPY alembic.ini ./alembic.ini
 
-RUN --mount=type=cache,target=/root/.cache/pip \
-    "${VIRTUAL_ENV}/bin/pip" install --no-deps --no-build-isolation .
+RUN printf '#!/usr/bin/env sh\nexec python -m orchestrator "$@"\n' > "${VIRTUAL_ENV}/bin/orchestrator" && \
+    chmod +x "${VIRTUAL_ENV}/bin/orchestrator"
 
 RUN mkdir -p /app/data
 
@@ -184,8 +184,8 @@ COPY .codex ./.codex
 COPY orchestrator ./orchestrator
 COPY alembic.ini ./alembic.ini
 
-RUN --mount=type=cache,target=/root/.cache/pip \
-    "${VIRTUAL_ENV}/bin/pip" install --no-deps --no-build-isolation .
+RUN printf '#!/usr/bin/env sh\nexec python -m orchestrator "$@"\n' > "${VIRTUAL_ENV}/bin/orchestrator" && \
+    chmod +x "${VIRTUAL_ENV}/bin/orchestrator"
 
 RUN mkdir -p /app/data
 
