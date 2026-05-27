@@ -467,3 +467,5 @@
 - 2026-05-27: Do not let execution policy resolution split across queue, Temporal, legacy, and preparation paths. Centralize project plus effective-policy resolution and make required policy fields fail hard so missing context cannot quietly become a default.
 
 - Runtime observability writes are not part of the execution contract. ClickHouse/log persistence failures must be surfaced as diagnostics/telemetry errors, but must not terminally fail or block a customer run. Add regression coverage at the invocation or lifecycle boundary when changing this.
+
+- Correction: runtime log sinks should remain async for performance, but async must be best-effort. Do not make workflow success depend on enqueue, background persistence, or final flush success.

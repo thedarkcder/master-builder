@@ -138,7 +138,7 @@ class _AsyncRuntimeLogWriter:
         with self._pending_cond:
             self._pending_counts[invocation_id] = self._pending_counts.get(invocation_id, 0) + 1
         try:
-            self._queue.put(item, timeout=5.0)
+            self._queue.put_nowait(item)
         except Full:
             with self._pending_cond:
                 current = self._pending_counts.get(invocation_id, 0)
@@ -1044,7 +1044,6 @@ def _invoke_runtime_json_once(
         "native_tool_policy_violations": "",
         "runtime_log_persistence_failures": 0,
         "runtime_log_persistence_error": "",
-        "runtime_log_flush_completed": True,
     }
     usage_state: dict[str, int | None] = {
         "prompt_tokens": None,
@@ -1134,27 +1133,6 @@ def _invoke_runtime_json_once(
             raise RuntimeJsonContractError(f"Runtime did not return a JSON object: {failure_reason}") from exc
         raise
     finally:
-        try:
-            flush_result = _get_log_writer().flush_invocation(invocation_id=invocation_id)
-            if isinstance(flush_result, _RuntimeLogFlushResult):
-                sink_state["runtime_log_flush_completed"] = flush_result.completed
-                if flush_result.failure_message:
-                    sink_state["runtime_log_persistence_error"] = redact_sensitive_text(flush_result.failure_message)
-                    sink_state["runtime_log_persistence_failures"] = int(
-                        sink_state.get("runtime_log_persistence_failures", 0)
-                    ) + 1
-        except Exception as exc:  # noqa: BLE001
-            redacted_error = redact_sensitive_text(str(exc))
-            sink_state["runtime_log_flush_completed"] = False
-            sink_state["runtime_log_persistence_error"] = redacted_error
-            sink_state["runtime_log_persistence_failures"] = int(
-                sink_state.get("runtime_log_persistence_failures", 0)
-            ) + 1
-            logger.exception(
-                "runtime_log_flush_failed_non_terminal invocation_id=%s error=%s",
-                invocation_id,
-                redacted_error,
-            )
         duration_ms = int((time.monotonic() - invocation_started_monotonic) * 1000)
         _emit_invocation_event(
             context=invocation_context,
@@ -1169,7 +1147,6 @@ def _invoke_runtime_json_once(
                 "runtime_log_persistence_failed": int(sink_state["runtime_log_persistence_failures"]) > 0,
                 "runtime_log_persistence_failures": int(sink_state["runtime_log_persistence_failures"]),
                 "runtime_log_persistence_error": str(sink_state["runtime_log_persistence_error"]),
-                "runtime_log_flush_completed": bool(sink_state["runtime_log_flush_completed"]),
                 "resumed_session": bool(resume_session_id),
                 "codex_session_id": str(sink_state.get("codex_session_id") or ""),
                 "model": resolved_model_override,
@@ -1483,6 +1460,7 @@ def _combined_log_sink(
             sink_state["runtime_log_persistence_failures"] = int(
                 sink_state.get("runtime_log_persistence_failures", 0)
             ) + 1
+            sink_state["runtime_log_persistence_error"] = "Runtime log write failed; see worker logs"
         if extra_on_log_line is not None:
             extra_on_log_line(stream, message)
 
