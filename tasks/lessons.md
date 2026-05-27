@@ -465,3 +465,5 @@
 - 2026-05-27: Durable checkpoint safety must not kill active execution. If a stage artifact is not yet pushed, mark the checkpoint non-reusable and skip durable checkpoint publication; let the live run continue so later stages can publish or repair the artifact.
 - 2026-05-27: Shared run execution paths must preserve policy context across every backend boundary. If Temporal or another orchestrator calls the same worker processor, pass the resolved tenant/project effective policy instead of an empty placeholder that silently falls back to defaults.
 - 2026-05-27: Do not let execution policy resolution split across queue, Temporal, legacy, and preparation paths. Centralize project plus effective-policy resolution and make required policy fields fail hard so missing context cannot quietly become a default.
+
+- Runtime observability writes are not part of the execution contract. ClickHouse/log persistence failures must be surfaced as diagnostics/telemetry errors, but must not terminally fail or block a customer run. Add regression coverage at the invocation or lifecycle boundary when changing this.

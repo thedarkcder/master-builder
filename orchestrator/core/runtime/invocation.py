@@ -91,6 +91,14 @@ class _QueuedLogLine:
     message: str
 
 
+@dataclass(frozen=True)
+class _RuntimeLogFlushResult:
+    invocation_id: str
+    completed: bool
+    pending_count: int = 0
+    failure_message: str | None = None
+
+
 class _AsyncRuntimeLogWriter:
     def __init__(self, *, max_queue_size: int = 2000) -> None:
         self._queue: Queue[_QueuedLogLine] = Queue(maxsize=max_queue_size)
@@ -139,29 +147,45 @@ class _AsyncRuntimeLogWriter:
                 else:
                     self._pending_counts[invocation_id] = current - 1
                 self._pending_cond.notify_all()
-            raise RuntimeError("Runtime log persistence queue is full")
+                self._pending_failures[invocation_id] = "Runtime log persistence queue is full"
+            logger.warning("runtime_log_enqueue_dropped invocation_id=%s reason=queue_full", invocation_id)
+            return False
         return True
 
-    def flush_invocation(self, *, invocation_id: str, timeout_seconds: float = 3.0) -> None:
+    def flush_invocation(self, *, invocation_id: str, timeout_seconds: float = 3.0) -> _RuntimeLogFlushResult:
         normalized_invocation_id = str(invocation_id or "").strip()
         if not normalized_invocation_id:
-            return
+            return _RuntimeLogFlushResult(invocation_id="", completed=True)
         deadline = time.monotonic() + max(0.0, timeout_seconds)
         with self._pending_cond:
             while self._pending_counts.get(normalized_invocation_id, 0) > 0:
                 remaining = deadline - time.monotonic()
                 if remaining <= 0:
                     pending = self._pending_counts.get(normalized_invocation_id, 0)
-                    raise RuntimeError(
+                    failure_message = (
                         f"Runtime log persistence flush timed out for invocation_id={normalized_invocation_id} "
                         f"pending={pending}"
+                    )
+                    logger.warning("runtime_log_flush_incomplete %s", failure_message)
+                    return _RuntimeLogFlushResult(
+                        invocation_id=normalized_invocation_id,
+                        completed=False,
+                        pending_count=pending,
+                        failure_message=failure_message,
                     )
                 self._pending_cond.wait(timeout=remaining)
             failure = self._pending_failures.pop(normalized_invocation_id, None)
             if failure is not None:
-                raise RuntimeError(
+                failure_message = (
                     f"Runtime log persistence failed for invocation_id={normalized_invocation_id}: {failure}"
                 )
+                logger.warning("runtime_log_flush_failed %s", failure_message)
+                return _RuntimeLogFlushResult(
+                    invocation_id=normalized_invocation_id,
+                    completed=True,
+                    failure_message=failure_message,
+                )
+            return _RuntimeLogFlushResult(invocation_id=normalized_invocation_id, completed=True)
 
     def _run(self) -> None:
         while True:
@@ -524,6 +548,24 @@ def _emit_invocation_event(
         **payload,
     }
     settings = get_settings()
+    live_metadata: dict[str, object] = {
+        "workflow_id": context.workflow_id,
+        "operation_id": context.operation_id,
+        "attempt_id": context.attempt_id,
+        "run_id": context.run_id,
+        "issue_key": context.issue_key,
+        "invocation_id": str(context.invocation_id or "").strip() or None,
+        "stage": context.stage,
+        "attempt": context.attempt,
+        "event_kind": event_kind,
+    }
+    for key, value in payload.items():
+        if key == "message":
+            continue
+        if value is None or isinstance(value, (str, int, float, bool)):
+            live_metadata[key] = value
+            continue
+        live_metadata[f"{key}_json"] = redact_sensitive_text(json.dumps(value, sort_keys=True, ensure_ascii=False))
 
     def _record(session: Session) -> None:
         row = record_observability_stream_event(
@@ -569,31 +611,24 @@ def _emit_invocation_event(
                 payload=event_payload,
             )
 
-    if context.db_session is not None:
-        _record(context.db_session)
-    else:
-        session_factory = create_session_factory(database_url=settings.database_url)
-        with session_factory() as session:
-            _record(session)
-            session.commit()
-    live_metadata: dict[str, object] = {
-        "workflow_id": context.workflow_id,
-        "operation_id": context.operation_id,
-        "attempt_id": context.attempt_id,
-        "run_id": context.run_id,
-        "issue_key": context.issue_key,
-        "invocation_id": str(context.invocation_id or "").strip() or None,
-        "stage": context.stage,
-        "attempt": context.attempt,
-        "event_kind": event_kind,
-    }
-    for key, value in payload.items():
-        if key == "message":
-            continue
-        if value is None or isinstance(value, (str, int, float, bool)):
-            live_metadata[key] = value
-            continue
-        live_metadata[f"{key}_json"] = redact_sensitive_text(json.dumps(value, sort_keys=True, ensure_ascii=False))
+    try:
+        if context.db_session is not None:
+            _record(context.db_session)
+        else:
+            session_factory = create_session_factory(database_url=settings.database_url)
+            with session_factory() as session:
+                _record(session)
+                session.commit()
+    except Exception as exc:  # noqa: BLE001
+        redacted_error = redact_sensitive_text(str(exc))
+        live_metadata["observability_persist_failed"] = True
+        live_metadata["observability_persist_error"] = redacted_error
+        logger.exception(
+            "runtime_invocation_event_persist_failed event_kind=%s invocation_id=%s error=%s",
+            event_kind,
+            str(context.invocation_id or "").strip() or None,
+            redacted_error,
+        )
     _LIVE_INVOCATION_LOGGER.info(
         message,
         extra={
@@ -685,12 +720,20 @@ def _append_raw_log_line(
         logger.exception("codex_raw_log_write_failed path=%s", raw_path)
 
 
-def _enqueue_runtime_log_line(*, context: AgentInvocationContext, stream: str, message: str) -> None:
-    if context.db_session is not None:
-        _persist_runtime_log_line_with_session(session=context.db_session, context=context, stream=stream, message=message)
-        return
-    writer = _get_log_writer()
-    writer.enqueue(context=context, stream=stream, message=message)
+def _enqueue_runtime_log_line(*, context: AgentInvocationContext, stream: str, message: str) -> bool:
+    try:
+        if context.db_session is not None:
+            _persist_runtime_log_line_with_session(session=context.db_session, context=context, stream=stream, message=message)
+            return True
+        writer = _get_log_writer()
+        return writer.enqueue(context=context, stream=stream, message=message)
+    except Exception as exc:  # noqa: BLE001
+        logger.exception(
+            "runtime_log_enqueue_failed invocation_id=%s error=%s",
+            str(context.invocation_id or "").strip() or None,
+            redact_sensitive_text(str(exc)),
+        )
+        return False
 
 
 def _persist_runtime_log_line_with_session(
@@ -999,6 +1042,9 @@ def _invoke_runtime_json_once(
         "raw_lines_written": 0,
         "codex_session_id": resume_session_id or "",
         "native_tool_policy_violations": "",
+        "runtime_log_persistence_failures": 0,
+        "runtime_log_persistence_error": "",
+        "runtime_log_flush_completed": True,
     }
     usage_state: dict[str, int | None] = {
         "prompt_tokens": None,
@@ -1088,7 +1134,27 @@ def _invoke_runtime_json_once(
             raise RuntimeJsonContractError(f"Runtime did not return a JSON object: {failure_reason}") from exc
         raise
     finally:
-        _get_log_writer().flush_invocation(invocation_id=invocation_id)
+        try:
+            flush_result = _get_log_writer().flush_invocation(invocation_id=invocation_id)
+            if isinstance(flush_result, _RuntimeLogFlushResult):
+                sink_state["runtime_log_flush_completed"] = flush_result.completed
+                if flush_result.failure_message:
+                    sink_state["runtime_log_persistence_error"] = redact_sensitive_text(flush_result.failure_message)
+                    sink_state["runtime_log_persistence_failures"] = int(
+                        sink_state.get("runtime_log_persistence_failures", 0)
+                    ) + 1
+        except Exception as exc:  # noqa: BLE001
+            redacted_error = redact_sensitive_text(str(exc))
+            sink_state["runtime_log_flush_completed"] = False
+            sink_state["runtime_log_persistence_error"] = redacted_error
+            sink_state["runtime_log_persistence_failures"] = int(
+                sink_state.get("runtime_log_persistence_failures", 0)
+            ) + 1
+            logger.exception(
+                "runtime_log_flush_failed_non_terminal invocation_id=%s error=%s",
+                invocation_id,
+                redacted_error,
+            )
         duration_ms = int((time.monotonic() - invocation_started_monotonic) * 1000)
         _emit_invocation_event(
             context=invocation_context,
@@ -1100,6 +1166,10 @@ def _invoke_runtime_json_once(
                 "no_assistant_output_detected": bool(sink_state["no_assistant_output_detected"]),
                 "db_persisted_lines": int(sink_state["db_persisted_lines"]),
                 "raw_lines_written": int(sink_state["raw_lines_written"]),
+                "runtime_log_persistence_failed": int(sink_state["runtime_log_persistence_failures"]) > 0,
+                "runtime_log_persistence_failures": int(sink_state["runtime_log_persistence_failures"]),
+                "runtime_log_persistence_error": str(sink_state["runtime_log_persistence_error"]),
+                "runtime_log_flush_completed": bool(sink_state["runtime_log_flush_completed"]),
                 "resumed_session": bool(resume_session_id),
                 "codex_session_id": str(sink_state.get("codex_session_id") or ""),
                 "model": resolved_model_override,
@@ -1407,8 +1477,12 @@ def _combined_log_sink(
         ):
             sink_state["no_assistant_output_detected"] = True
             _append_raw_log_line(context=context, stream=stream, message=sanitized_message)
-        _enqueue_runtime_log_line(context=context, stream=stream, message=sanitized_message)
-        sink_state["db_persisted_lines"] = int(sink_state.get("db_persisted_lines", 0)) + 1
+        if _enqueue_runtime_log_line(context=context, stream=stream, message=sanitized_message):
+            sink_state["db_persisted_lines"] = int(sink_state.get("db_persisted_lines", 0)) + 1
+        else:
+            sink_state["runtime_log_persistence_failures"] = int(
+                sink_state.get("runtime_log_persistence_failures", 0)
+            ) + 1
         if extra_on_log_line is not None:
             extra_on_log_line(stream, message)
 
