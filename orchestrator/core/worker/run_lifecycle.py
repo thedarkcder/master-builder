@@ -424,6 +424,7 @@ def requeue_workflow_result_for_stale_snapshot(
     execution_context: dict[str, str] | None = None,
     expected_worker_service_instance_id: str | None = None,
     expected_claim_id: str | None = None,
+    mark_stale_snapshot: bool = True,
 ) -> Run:
     ownership = RunOwnership.from_expected(
         expected_worker_service_instance_id=expected_worker_service_instance_id,
@@ -442,7 +443,10 @@ def requeue_workflow_result_for_stale_snapshot(
         workflow_result=workflow_result,
         stage_updates=stage_updates,
     )
-    snapshot.context.execution_context["stale_branch_snapshot"] = True
+    if mark_stale_snapshot:
+        snapshot.context.execution_context["stale_branch_snapshot"] = True
+    else:
+        snapshot.context.execution_context.pop("stale_branch_snapshot", None)
     snapshot.workflow.outcome = "requeue"
     snapshot.workflow.requeue_target = None
     snapshot.workflow.requeue_reason = error

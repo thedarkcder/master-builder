@@ -97,6 +97,19 @@ def _github_git_extraheader(github_installation_token: str) -> str:
     return f"AUTHORIZATION: basic {credential}"
 
 
+def _github_git_env(github_installation_token: str | None) -> dict[str, str] | None:
+    token = str(github_installation_token or "").strip()
+    if not token:
+        return None
+    return {
+        **os.environ,
+        "GIT_TERMINAL_PROMPT": "0",
+        "GIT_CONFIG_COUNT": "1",
+        "GIT_CONFIG_KEY_0": "http.https://github.com/.extraheader",
+        "GIT_CONFIG_VALUE_0": _github_git_extraheader(token),
+    }
+
+
 def _run_git(args: list[str], *, cwd: Path, env: dict[str, str] | None = None) -> str:
     process = subprocess.run(
         ["git", *args],
@@ -523,9 +536,10 @@ def check_run_snapshot_freshness(
     project: Project,
     start_point_ref: str,
     start_point_sha: str,
+    github_installation_token: str | None = None,
 ) -> RunSnapshotFreshness:
     repo_dir = project_repo_dir(base_dir=base_dir, tenant_id=tenant_id, project_id=project.project_id)
-    _run_git(["fetch", "origin", "--prune"], cwd=repo_dir)
+    _run_git(["fetch", "origin", "--prune"], cwd=repo_dir, env=_github_git_env(github_installation_token))
     try:
         current_sha = _resolve_ref_commit_sha(repo_dir=repo_dir, ref=start_point_ref)
     except ProjectRepoCheckoutError:
@@ -566,6 +580,7 @@ def ensure_run_worktree(
     base_branch: str,
     integration_branch: str,
     workspace_key: str,
+    github_installation_token: str | None = None,
 ) -> tuple[Path, str]:
     repo_dir = project_repo_dir(base_dir=base_dir, tenant_id=tenant_id, project_id=project.project_id)
     if not (repo_dir / ".git").exists():
@@ -582,7 +597,7 @@ def ensure_run_worktree(
         workspace_key=normalized_workspace_key,
     )
     execution_branch = execution_branch_name(issue_key=issue_key, run_id=run_id)
-    _run_git(["fetch", "origin", "--prune"], cwd=repo_dir)
+    _run_git(["fetch", "origin", "--prune"], cwd=repo_dir, env=_github_git_env(github_installation_token))
     start_point_ref = _resolve_worktree_start_point(
         repo_dir=repo_dir,
         base_branch=base_branch,
