@@ -80,10 +80,6 @@ class ToolBridgeExhaustedError(RuntimeInvocationError):
     """Raised when the governed tool bridge cannot reach a final response."""
 
 
-class ToolExecutionError(RuntimeInvocationError):
-    """Raised when a governed tool execution fails."""
-
-
 class NativeToolPolicyError(RuntimeInvocationError):
     """Raised when a runtime uses a native tool outside the stage allowlist."""
 
@@ -738,14 +734,30 @@ def invoke_runtime_json(
     extra_on_log_line: Callable[[str, str], None] | None = None,
     allowed_native_tools: set[str] | None = None,
 ) -> dict:
-    payload, _ = _invoke_runtime_json_once(
-        runtime=runtime,
-        context=context,
-        system_prompt=system_prompt,
-        user_prompt=user_prompt,
-        extra_on_log_line=extra_on_log_line,
-        allowed_native_tools=allowed_native_tools,
-    )
+    try:
+        payload, _ = _invoke_runtime_json_once(
+            runtime=runtime,
+            context=context,
+            system_prompt=system_prompt,
+            user_prompt=user_prompt,
+            extra_on_log_line=extra_on_log_line,
+            allowed_native_tools=allowed_native_tools,
+        )
+    except NativeToolPolicyError as exc:
+        payload, _ = _invoke_runtime_json_once(
+            runtime=runtime,
+            context=context,
+            system_prompt=system_prompt,
+            user_prompt=_build_native_tool_policy_repair_prompt(
+                original_user_prompt=user_prompt,
+                error=str(exc),
+                allowed_native_tools=allowed_native_tools,
+                stage=context.stage,
+                runtime_command=str(getattr(runtime, "command", "") or ""),
+            ),
+            extra_on_log_line=extra_on_log_line,
+            allowed_native_tools=allowed_native_tools,
+        )
     return payload
 
 
@@ -764,38 +776,53 @@ def invoke_runtime_json_with_tools(
 ) -> dict:
     resume_session_id = str(context.codex_session_id or "").strip() or None
     current_user_prompt = user_prompt
+    original_user_prompt = user_prompt
     normalized_allowed_tools = {str(tool).strip() for tool in allowed_tools if str(tool).strip()}
     normalized_required_tools = {str(tool).strip() for tool in required_tools or set() if str(tool).strip()}
     tool_hops_used = 0
     final_response_requested = False
+    native_tool_policy_repair_requested = False
 
     for _tool_hop in range(max(0, int(max_tool_hops)) + 2):
-        payload, observed_session_id = _invoke_runtime_json_once(
-            runtime=runtime,
-            context=AgentInvocationContext(
-                channel=context.channel,
-                tenant_id=context.tenant_id,
-                project_id=context.project_id,
-                command=context.command,
+        try:
+            payload, observed_session_id = _invoke_runtime_json_once(
+                runtime=runtime,
+                context=AgentInvocationContext(
+                    channel=context.channel,
+                    tenant_id=context.tenant_id,
+                    project_id=context.project_id,
+                    command=context.command,
+                    stage=context.stage,
+                    working_dir=context.working_dir,
+                    workflow_id=context.workflow_id,
+                    operation_id=context.operation_id,
+                    attempt_id=context.attempt_id,
+                    issue_key=context.issue_key,
+                    run_id=context.run_id,
+                    attempt=context.attempt,
+                    invocation_id=context.invocation_id,
+                    reasoning_effort=context.reasoning_effort,
+                    issue_description_chars=context.issue_description_chars,
+                    codex_session_id=resume_session_id,
+                    db_session=context.db_session,
+                ),
+                system_prompt=system_prompt,
+                user_prompt=current_user_prompt,
+                extra_on_log_line=extra_on_log_line,
+                allowed_native_tools=allowed_native_tools,
+            )
+        except NativeToolPolicyError as exc:
+            if native_tool_policy_repair_requested:
+                raise
+            native_tool_policy_repair_requested = True
+            current_user_prompt = _build_native_tool_policy_repair_prompt(
+                original_user_prompt=original_user_prompt,
+                error=str(exc),
+                allowed_native_tools=allowed_native_tools,
                 stage=context.stage,
-                working_dir=context.working_dir,
-                workflow_id=context.workflow_id,
-                operation_id=context.operation_id,
-                attempt_id=context.attempt_id,
-                issue_key=context.issue_key,
-                run_id=context.run_id,
-                attempt=context.attempt,
-                invocation_id=context.invocation_id,
-                reasoning_effort=context.reasoning_effort,
-                issue_description_chars=context.issue_description_chars,
-                codex_session_id=resume_session_id,
-                db_session=context.db_session,
-            ),
-            system_prompt=system_prompt,
-            user_prompt=current_user_prompt,
-            extra_on_log_line=extra_on_log_line,
-            allowed_native_tools=allowed_native_tools,
-        )
+                runtime_command=str(getattr(runtime, "command", "") or ""),
+            )
+            continue
         if observed_session_id:
             resume_session_id = observed_session_id
 
@@ -817,7 +844,7 @@ def invoke_runtime_json_with_tools(
                 tool_result={
                     "tool_name": str(payload.get("tool_name") or "").strip(),
                     "ok": False,
-                    "failure_policy": "terminal_tool_hop_limit",
+                    "failure_policy": "tool_hop_limit",
                     "error": f"Runtime tool hop limit {max_tool_hops} reached.",
                 },
                 require_final_response=True,
@@ -887,18 +914,24 @@ def invoke_runtime_json_with_tools(
                 },
             )
         except Exception as exc:  # noqa: BLE001
+            bridge_result = {
+                "tool_name": tool_name,
+                "ok": False,
+                "required": tool_name in normalized_required_tools,
+                "failure_policy": "recoverable_tool_failure",
+                "error": str(exc),
+            }
             _emit_invocation_event(
                 context=context,
                 event_kind="tool_result",
                 payload={
-                    "message": f"Tool {tool_name} failed.",
+                    "message": f"Tool {tool_name} failed with a recoverable execution error.",
                     "tool_name": tool_name,
                     "tool_hop": tool_hops_used,
                     "ok": False,
                     "error": str(exc),
                 },
             )
-            raise ToolExecutionError(f"Runtime tool {tool_name} failed: {exc}") from exc
 
         current_user_prompt = _build_tool_result_prompt(tool_result=bridge_result)
 
@@ -1106,7 +1139,25 @@ def _build_tool_result_prompt(*, tool_result: dict[str, object], require_final_r
         if failure_policy == "correctable_request":
             continuation += (
                 "This tool failure means the request shape or permission was invalid, not that the evidence is unavailable. "
-                "If this evidence is needed, issue a corrected allowed tool_request; otherwise explain why the evidence is unnecessary in the final_response. "
+            )
+            if tool_result.get("required") is True:
+                continuation += (
+                    "This failed tool is required evidence. Issue a corrected allowed tool_request unless that is impossible; "
+                    "if impossible, return a blocker that states the failed tool and the evidence still needed. "
+                )
+            else:
+                continuation += (
+                    "If this evidence is needed, issue a corrected allowed tool_request; otherwise explain why the evidence is unnecessary in the final_response. "
+                )
+        elif failure_policy == "recoverable_tool_failure":
+            continuation += (
+                "The allowed tool failed while executing. Treat this as recoverable: issue a corrected or narrower allowed tool_request if that can resolve it. "
+                "If the tool is required and cannot be recovered, return a blocker that states the failed tool and the evidence still needed. "
+            )
+        elif failure_policy == "tool_hop_limit":
+            continuation += (
+                "The allowed tool-hop budget is exhausted for this invocation. Do not invent missing evidence. "
+                "Return the best final_response from the evidence already gathered, or return a blocker that names the missing evidence. "
             )
         elif tool_result.get("required") is True:
             continuation += (
@@ -1126,6 +1177,32 @@ def _build_tool_result_prompt(*, tool_result: dict[str, object], require_final_r
         "Tool result:\n"
         f"{json.dumps(tool_result, sort_keys=True)}\n\n"
         f"{continuation}"
+    )
+
+
+def _build_native_tool_policy_repair_prompt(
+    *,
+    original_user_prompt: str,
+    error: str,
+    allowed_native_tools: set[str] | None,
+    stage: str,
+    runtime_command: str,
+) -> str:
+    resolved_allowed_native_tools = sorted(
+        _resolve_allowed_native_tools(
+            allowed_native_tools=allowed_native_tools,
+            stage=stage,
+            runtime_command=runtime_command,
+        )
+    )
+    return (
+        "Your previous response used a native runtime tool that is not allowed for this stage.\n"
+        f"Policy error: {error}\n"
+        f"Allowed native runtime tools for this stage: {json.dumps(resolved_allowed_native_tools)}\n\n"
+        "Retry the task using only the allowed native runtime tools and any governed tool_request tools described in the original prompt. "
+        "Do not rely on evidence gathered from the disallowed tool use. Return JSON only.\n\n"
+        "Original prompt:\n"
+        f"{original_user_prompt}"
     )
 
 

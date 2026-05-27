@@ -21,6 +21,7 @@ from orchestrator.core.worker.process_service import (
 )
 from orchestrator.core.worker.queue_selector import claim_next_queued_run
 from orchestrator.core.worker.queue_selector import ClaimedRun
+from orchestrator.core.worker.run_execution_context import resolve_run_execution_policy_context
 from orchestrator.core.worker.run_health import (
     WorkerRunHeartbeatController,
     worker_service_instance_id_for_mode,
@@ -167,6 +168,11 @@ def process_claimed_run_with_dependencies(
         ),
     )
     if str(getattr(workflow, "orchestration_backend", "") or "").strip().lower() == "legacy":
+        policy_context = resolve_run_execution_policy_context(
+            session,
+            tenant=tenant,
+            run=claimed_run,
+        )
         return _process_claimed_run_impl(
             session=session,
             runner=runner,
@@ -175,8 +181,8 @@ def process_claimed_run_with_dependencies(
                 claimed_run=ClaimedRun(
                     run=claimed_run,
                     tenant=tenant,
-                    project=None,
-                    effective_policy={},
+                    project=policy_context.project,
+                    effective_policy=policy_context.effective_policy,
                     run_id=claimed_run.run_id,
                     claim_id=expected_claim_id,
                     worker_service_instance_id=expected_owner,

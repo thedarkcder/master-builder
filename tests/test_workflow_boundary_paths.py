@@ -17,7 +17,7 @@ from orchestrator.core.observability.repository import (
 )
 from orchestrator.core.workflow.type_catalog import ISSUE_EXECUTION_STEP_RUN_ATTEMPT_EXECUTION
 from orchestrator.storage.db import create_session_factory
-from orchestrator.storage.models import WorkflowExecution, WorkflowOperation, WorkflowOperationAttempt
+from orchestrator.storage.models import Project, WorkflowExecution, WorkflowOperation, WorkflowOperationAttempt
 from orchestrator.storage.models import Run
 from orchestrator.temporal.activities.run_execution import (
     _WorkflowOperationAttemptHeartbeatController,
@@ -114,6 +114,9 @@ class RunTemporalStreamBoundaryTests(AdminApiTestHarness):
         session_factory = create_session_factory(self.database_url)
 
         with session_factory() as session:
+            project = session.get(Project, "tenant-a-default")
+            assert project is not None
+            project.policy_overrides = {"max_dev_test_review_loops": 1}
             add_workflow_attempt(
                 session,
                 workflow_id=workflow_id,
@@ -140,6 +143,8 @@ class RunTemporalStreamBoundaryTests(AdminApiTestHarness):
             self.assertIs(selection.claimed_run.run, selection.run)
             self.assertEqual(selection.claimed_run.claim_id, claim_id)
             self.assertEqual(selection.claimed_run.worker_service_instance_id, "worker:test")
+            self.assertEqual(selection.claimed_run.project.project_id, "tenant-a-default")
+            self.assertEqual(selection.claimed_run.effective_policy["max_dev_test_review_loops"], 1)
             run = selection.run
             operation = session.execute(
                 select(WorkflowOperation).where(
@@ -255,6 +260,9 @@ class RunTemporalStreamBoundaryTests(AdminApiTestHarness):
         session_factory = create_session_factory(self.database_url)
 
         with session_factory() as session:
+            project = session.get(Project, "tenant-a-default")
+            assert project is not None
+            project.policy_overrides = {"max_dev_test_review_loops": 1}
             add_workflow_attempt(
                 session,
                 workflow_id=workflow_id,
@@ -330,6 +338,9 @@ class RunTemporalStreamBoundaryTests(AdminApiTestHarness):
         session_factory = create_session_factory(self.database_url)
 
         with session_factory() as session:
+            project = session.get(Project, "tenant-a-default")
+            assert project is not None
+            project.policy_overrides = {"max_dev_test_review_loops": 1}
             add_workflow_attempt(
                 session,
                 workflow_id=workflow_id,
@@ -434,6 +445,9 @@ class RunTemporalStreamBoundaryTests(AdminApiTestHarness):
         session_factory = create_session_factory(self.database_url)
 
         with session_factory() as session:
+            project = session.get(Project, "tenant-a-default")
+            self.assertIsNotNone(project)
+            project.policy_overrides = {"max_dev_test_review_loops": 1}
             add_workflow_attempt(
                 session,
                 workflow_id=workflow_id,
@@ -498,6 +512,8 @@ class RunTemporalStreamBoundaryTests(AdminApiTestHarness):
             self.assertEqual(selection.claimed_run.run_id, resume_run_id)
             self.assertEqual(selection.claimed_run.claim_id, claim_id)
             self.assertEqual(selection.claimed_run.worker_service_instance_id, worker_owner)
+            self.assertEqual(selection.claimed_run.project.project_id, "tenant-a-default")
+            self.assertEqual(selection.claimed_run.effective_policy["max_dev_test_review_loops"], 1)
             selection.claimed_run.run.status = "succeeded"
             selection.claimed_run.run.finished_at = now
             return selection.claimed_run.run

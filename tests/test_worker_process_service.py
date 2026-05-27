@@ -98,8 +98,15 @@ class WorkerProcessServiceTests(unittest.TestCase):
             finished_at=None,
             pr_url=None,
         )
-        tenant = SimpleNamespace(tenant_id="tenant-1", policy_config={})
-        project = SimpleNamespace(project_id="project-1", policy_overrides={}, is_archived=False)
+        tenant = SimpleNamespace(
+            tenant_id="tenant-1",
+            policy_config={"allow_jira_transitions": True, "max_dev_test_review_loops": 10},
+        )
+        project = SimpleNamespace(
+            project_id="project-1",
+            policy_overrides={"max_dev_test_review_loops": 3},
+            is_archived=False,
+        )
         session = MagicMock()
         fail_guardrail_violation_fn = MagicMock(
             return_value=SimpleNamespace(run_id="run-1", status="failed", last_error="failed")
@@ -199,8 +206,15 @@ class WorkerProcessServiceTests(unittest.TestCase):
             finished_at=None,
             pr_url=None,
         )
-        tenant = SimpleNamespace(tenant_id="tenant-1", policy_config={})
-        project = SimpleNamespace(project_id="project-1", policy_overrides={}, is_archived=False)
+        tenant = SimpleNamespace(
+            tenant_id="tenant-1",
+            policy_config={"allow_jira_transitions": True, "max_dev_test_review_loops": 10},
+        )
+        project = SimpleNamespace(
+            project_id="project-1",
+            policy_overrides={"max_dev_test_review_loops": 3},
+            is_archived=False,
+        )
         session = MagicMock()
 
         def _promote(_session, *, run, expected_worker_service_instance_id, expected_claim_id):  # noqa: ANN001
@@ -326,8 +340,15 @@ class WorkerProcessServiceTests(unittest.TestCase):
             finished_at=None,
             pr_url=None,
         )
-        tenant = SimpleNamespace(tenant_id="tenant-1", policy_config={})
-        project = SimpleNamespace(project_id="project-1", policy_overrides={}, is_archived=False)
+        tenant = SimpleNamespace(
+            tenant_id="tenant-1",
+            policy_config={"allow_jira_transitions": True, "max_dev_test_review_loops": 10},
+        )
+        project = SimpleNamespace(
+            project_id="project-1",
+            policy_overrides={"max_dev_test_review_loops": 3},
+            is_archived=False,
+        )
         session = MagicMock()
         fail_guardrail_violation_fn = MagicMock(
             return_value=SimpleNamespace(run_id="run-1", status="failed", last_error="failed")
@@ -516,8 +537,15 @@ class WorkerProcessServiceTests(unittest.TestCase):
             finished_at=None,
             pr_url=None,
         )
-        tenant = SimpleNamespace(tenant_id="tenant-1", policy_config={})
-        project = SimpleNamespace(project_id="project-1", policy_overrides={}, is_archived=False)
+        tenant = SimpleNamespace(
+            tenant_id="tenant-1",
+            policy_config={"allow_jira_transitions": True, "max_dev_test_review_loops": 10},
+        )
+        project = SimpleNamespace(
+            project_id="project-1",
+            policy_overrides={"max_dev_test_review_loops": 3},
+            is_archived=False,
+        )
         heartbeat = _FakeHeartbeatController()
         session = MagicMock()
 
@@ -541,6 +569,20 @@ class WorkerProcessServiceTests(unittest.TestCase):
         def _emit_agent_event(**kwargs):  # noqa: ANN001
             if kwargs.get("event_type") == "TASK_STARTED":
                 order.append("task_started")
+
+        def _workflow_request_for_run(_session, _tenant, _run, *, project, effective_policy):  # noqa: ANN001
+            self.assertEqual(project.project_id, "project-1")
+            self.assertTrue(effective_policy["allow_jira_transitions"])
+            self.assertEqual(effective_policy["max_dev_test_review_loops"], 3)
+            return SimpleNamespace(
+                start_point_ref=None,
+                start_point_sha=None,
+                execution_repo_dir="/tmp/workdirs/repo",
+                workspace_key="worker-a",
+                execution_branch="feature/test",
+                integration_branch="feature/test",
+                base_branch="main",
+            )
 
         finalize_workflow_result_fn = MagicMock(
             return_value=SimpleNamespace(
@@ -580,7 +622,7 @@ class WorkerProcessServiceTests(unittest.TestCase):
                     run=run,
                     tenant=tenant,
                     project=project,
-                    effective_policy={"allow_jira_transitions": True},
+                    effective_policy={"allow_jira_transitions": False, "max_dev_test_review_loops": 1},
                 ),
                 send_discord_message_fn=MagicMock(return_value=SimpleNamespace(sent=True, reason=None)),
                 send_jira_message_fn=MagicMock(),
@@ -595,17 +637,7 @@ class WorkerProcessServiceTests(unittest.TestCase):
                 build_run_heartbeat_controller_fn=lambda **_: heartbeat,
                 promote_run_to_running_fn=_promote,
                 bind_run_project_fn=MagicMock(return_value=run),
-                workflow_request_for_run_fn=MagicMock(
-                    return_value=SimpleNamespace(
-                        start_point_ref=None,
-                        start_point_sha=None,
-                        execution_repo_dir="/tmp/workdirs/repo",
-                        workspace_key="worker-a",
-                        execution_branch="feature/test",
-                        integration_branch="feature/test",
-                        base_branch="main",
-                    )
-                ),
+                workflow_request_for_run_fn=_workflow_request_for_run,
                 fail_guardrail_violation_fn=MagicMock(),
                 tenant_jira_issue_url_fn=MagicMock(return_value="https://jira.example/browse/GP-122"),
                 lock_acquired_update_fn=_stage_update_mock("lock_acquired"),

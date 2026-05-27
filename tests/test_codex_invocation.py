@@ -11,7 +11,6 @@ from orchestrator.core.runtime.invocation import (
     NativeToolPolicyError,
     RuntimeJsonContractError,
     ToolBridgeProtocolError,
-    ToolExecutionError,
     invoke_runtime_json,
     invoke_runtime_json_with_tools,
 )
@@ -965,7 +964,44 @@ class CodexInvocationTests(unittest.TestCase):
         self.assertIn('"tool_name": "decision.read_state"', str(runtime_calls[1]["user_prompt"]))
         self.assertIn('"ok": true', str(runtime_calls[1]["user_prompt"]).lower())
 
-    def test_invoke_runtime_json_fails_when_disallowed_native_tool_is_observed(self) -> None:
+    def test_invoke_runtime_json_retries_after_disallowed_native_tool_observation(self) -> None:
+        class _Runtime:
+            command = "codex"
+
+            def __init__(self) -> None:
+                self.user_prompts: list[str] = []
+
+            def run_json(self, **kwargs):  # noqa: ANN003
+                self.user_prompts.append(str(kwargs.get("user_prompt") or ""))
+                on_log_line = kwargs.get("on_log_line")
+                if len(self.user_prompts) == 1 and callable(on_log_line):
+                    on_log_line("stdout", '{"type":"web_search_call","query":"jira api"}')
+                return {"ok": True, "attempt": len(self.user_prompts)}
+
+        context = AgentInvocationContext(
+            channel="system",
+            tenant_id="tenant-1",
+            project_id=None,
+            command="policy",
+            stage="decision_planner",
+            working_dir=".",
+        )
+        runtime = _Runtime()
+
+        with patch("orchestrator.core.runtime.invocation._get_log_writer", return_value=self._Writer()):
+            payload = invoke_runtime_json(
+                runtime=runtime,  # type: ignore[arg-type]
+                context=context,
+                system_prompt="system",
+                user_prompt="user",
+            )
+
+        self.assertEqual(payload, {"ok": True, "attempt": 2})
+        self.assertEqual(len(runtime.user_prompts), 2)
+        self.assertIn("web.search", runtime.user_prompts[1])
+        self.assertIn("Do not rely on evidence gathered from the disallowed tool use", runtime.user_prompts[1])
+
+    def test_invoke_runtime_json_fails_when_native_tool_policy_repair_also_violates_policy(self) -> None:
         class _Runtime:
             command = "codex"
 
@@ -1329,13 +1365,22 @@ class CodexInvocationTests(unittest.TestCase):
         self.assertEqual(result, {"message": "corrected"})
         self.assertEqual(len(runtime_calls), 2)
 
-    def test_invoke_runtime_json_with_tools_fails_when_tool_executor_fails(self) -> None:
+    def test_invoke_runtime_json_with_tools_returns_tool_executor_failure_to_model(self) -> None:
         class _Runtime:
-            def run_json(self, **_kwargs):  # noqa: ANN003
+            def __init__(self) -> None:
+                self.user_prompts: list[str] = []
+
+            def run_json(self, **kwargs):  # noqa: ANN003
+                self.user_prompts.append(str(kwargs.get("user_prompt") or ""))
+                if len(self.user_prompts) == 1:
+                    return {
+                        "type": "tool_request",
+                        "tool_name": "decision.read_state",
+                        "tool_args": {},
+                    }
                 return {
-                    "type": "tool_request",
-                    "tool_name": "decision.read_state",
-                    "tool_args": {},
+                    "type": "final_response",
+                    "result": {"state": "blocked", "reason": "tool database unavailable"},
                 }
 
         context = AgentInvocationContext(
@@ -1350,12 +1395,10 @@ class CodexInvocationTests(unittest.TestCase):
         def _raise_tool_failure(_tool_name: str, _tool_args: dict[str, object]) -> dict[str, object]:
             raise RuntimeError("tool database unavailable")
 
-        with (
-            patch("orchestrator.core.runtime.invocation._get_log_writer", return_value=self._Writer()),
-            self.assertRaises(ToolExecutionError) as raised,
-        ):
-            invoke_runtime_json_with_tools(
-                runtime=_Runtime(),  # type: ignore[arg-type]
+        runtime = _Runtime()
+        with patch("orchestrator.core.runtime.invocation._get_log_writer", return_value=self._Writer()):
+            result = invoke_runtime_json_with_tools(
+                runtime=runtime,  # type: ignore[arg-type]
                 context=context,
                 system_prompt="system",
                 user_prompt="user",
@@ -1363,7 +1406,96 @@ class CodexInvocationTests(unittest.TestCase):
                 execute_tool=_raise_tool_failure,
             )
 
-        self.assertIn("tool database unavailable", str(raised.exception))
+        self.assertEqual(result, {"state": "blocked", "reason": "tool database unavailable"})
+        self.assertEqual(len(runtime.user_prompts), 2)
+        self.assertIn('"failure_policy": "recoverable_tool_failure"', runtime.user_prompts[1])
+        self.assertIn("tool database unavailable", runtime.user_prompts[1])
+
+    def test_invoke_runtime_json_with_tools_native_policy_repair_keeps_original_prompt(self) -> None:
+        class _Runtime:
+            command = "codex"
+
+            def __init__(self) -> None:
+                self.user_prompts: list[str] = []
+
+            def run_json(self, **kwargs):  # noqa: ANN003
+                self.user_prompts.append(str(kwargs.get("user_prompt") or ""))
+                if len(self.user_prompts) == 1:
+                    return {
+                        "type": "tool_request",
+                        "tool_name": "decision.read_state",
+                        "tool_args": {},
+                    }
+                on_log_line = kwargs.get("on_log_line")
+                if len(self.user_prompts) == 2 and callable(on_log_line):
+                    on_log_line("stdout", '{"type":"web_search_call","query":"jira api"}')
+                return {"type": "final_response", "result": {"state": "ok"}}
+
+        context = AgentInvocationContext(
+            channel="system",
+            tenant_id="tenant-1",
+            project_id=None,
+            command="policy",
+            stage="decision_planner",
+            working_dir=".",
+        )
+        runtime = _Runtime()
+
+        with patch("orchestrator.core.runtime.invocation._get_log_writer", return_value=self._Writer()):
+            result = invoke_runtime_json_with_tools(
+                runtime=runtime,  # type: ignore[arg-type]
+                context=context,
+                system_prompt="system",
+                user_prompt="original task context",
+                allowed_tools={"decision.read_state"},
+                execute_tool=lambda _name, _args: {"answered": True},
+            )
+
+        self.assertEqual(result, {"state": "ok"})
+        self.assertEqual(len(runtime.user_prompts), 3)
+        self.assertIn("original task context", runtime.user_prompts[2])
+        self.assertNotIn("Tool result:", runtime.user_prompts[2])
+
+    def test_required_correctable_tool_failure_remains_required_evidence(self) -> None:
+        class _Runtime:
+            def __init__(self) -> None:
+                self.user_prompts: list[str] = []
+
+            def run_json(self, **kwargs):  # noqa: ANN003
+                self.user_prompts.append(str(kwargs.get("user_prompt") or ""))
+                if len(self.user_prompts) == 1:
+                    return {
+                        "type": "tool_request",
+                        "tool_name": "decision.read_state",
+                        "tool_args": {"bad": True},
+                    }
+                return {
+                    "type": "final_response",
+                    "result": {"state": "blocked"},
+                }
+
+        context = AgentInvocationContext(
+            channel="system",
+            tenant_id="tenant-1",
+            project_id=None,
+            command="policy",
+            stage="decision_planner",
+            working_dir=".",
+        )
+        runtime = _Runtime()
+
+        with patch("orchestrator.core.runtime.invocation._get_log_writer", return_value=self._Writer()):
+            invoke_runtime_json_with_tools(
+                runtime=runtime,  # type: ignore[arg-type]
+                context=context,
+                system_prompt="system",
+                user_prompt="user",
+                allowed_tools={"decision.read_state"},
+                required_tools={"decision.read_state"},
+                execute_tool=lambda _name, _args: (_ for _ in ()).throw(ValueError("bad args")),
+            )
+
+        self.assertIn("This failed tool is required evidence", runtime.user_prompts[1])
 
 
 if __name__ == "__main__":

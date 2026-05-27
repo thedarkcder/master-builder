@@ -18,7 +18,6 @@ from orchestrator.core.workflow.checkpoints import (
     upsert_workflow_checkpoint,
 )
 from orchestrator.core.workflow.execution_artifacts import (
-    MissingDurableExecutionArtifactError,
     latest_pushed_execution_artifact_for_run,
     snapshot_requires_durable_execution_artifact,
 )
@@ -517,20 +516,30 @@ def persist_stage_checkpoint(
     snapshot = _load_or_init_snapshot(run.plan)
     snapshot.apply_stage_checkpoint(checkpoint)
     snapshot.apply_execution_context(execution_context)
-    if snapshot_requires_durable_execution_artifact(snapshot.dump()) and latest_pushed_execution_artifact_for_run(
-        session=session,
-        run_id=run.run_id,
-    ) is None:
-        raise MissingDurableExecutionArtifactError(
+    requires_durable_artifact = snapshot_requires_durable_execution_artifact(snapshot.dump())
+    missing_durable_artifact = (
+        requires_durable_artifact
+        and latest_pushed_execution_artifact_for_run(
+            session=session,
+            run_id=run.run_id,
+        )
+        is None
+    )
+    if missing_durable_artifact:
+        snapshot.context.execution_context["execution_checkpoint_reusable"] = False
+        snapshot.context.execution_context["execution_checkpoint_reusable_reason"] = (
             f"{checkpoint.stage.upper()} checkpoint is not reusable until the execution branch is pushed."
         )
+    elif requires_durable_artifact:
+        snapshot.context.execution_context["execution_checkpoint_reusable"] = True
+        snapshot.context.execution_context.pop("execution_checkpoint_reusable_reason", None)
     run.plan = snapshot.dump()
     if checkpoint.stage == "dev" and checkpoint.dev_result is not None:
         run.pr_url = checkpoint.dev_result.pr_url
     elif checkpoint.stage == "review" and checkpoint.review_result is not None:
         run.pr_url = checkpoint.review_result.pr_url or run.pr_url
     checkpoint_kind = checkpoint_kind_for_stage(checkpoint.stage)
-    if checkpoint_kind is not None:
+    if checkpoint_kind is not None and not missing_durable_artifact:
         upsert_workflow_checkpoint(
             session,
             workflow_id=run.workflow_id,

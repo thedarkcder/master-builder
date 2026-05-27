@@ -28,6 +28,7 @@ from orchestrator.core.workflow.type_catalog import (
     get_workflow_type,
 )
 from orchestrator.core.worker.execution_service import build_run_process_kwargs
+from orchestrator.core.worker.run_execution_context import resolve_run_execution_policy_context
 from orchestrator.core.worker.run_lifecycle import claim_run_for_dispatch
 from orchestrator.core.worker.runtime_factory import build_workflow_runner_for_session
 from orchestrator.core.worker.process_service import process_claimed_run
@@ -219,6 +220,24 @@ def _claim_queued_run_for_temporal_activity(*, session, workflow: WorkflowExecut
     return claimed
 
 
+def _claimed_run_ref_for_temporal_activity(*, session, tenant: Tenant, run: Run):  # noqa: ANN001, ANN202
+    policy_context = resolve_run_execution_policy_context(
+        session,
+        tenant=tenant,
+        run=run,
+    )
+    return SimpleNamespace(
+        run=run,
+        tenant=tenant,
+        project=policy_context.project,
+        effective_policy=policy_context.effective_policy,
+        run_id=run.run_id,
+        claim_id=str(getattr(run, "claim_id", "") or "").strip(),
+        worker_service_instance_id=str(getattr(run, "worker_service_instance_id", "") or "").strip(),
+        status=str(getattr(run, "status", "") or "").strip(),
+    )
+
+
 @activity.defn(name="execute_claimed_run_activity")
 def execute_claimed_run_activity(payload: DevelopmentTeamRunWorkflowInput) -> DevelopmentTeamRunActivityResult:
     settings = get_settings()
@@ -261,15 +280,10 @@ def execute_claimed_run_activity(payload: DevelopmentTeamRunWorkflowInput) -> De
                         run=claimed_run,
                         tenant=tenant,
                         terminal_run=None,
-                        claimed_run=SimpleNamespace(
-                            run=claimed_run,
+                        claimed_run=_claimed_run_ref_for_temporal_activity(
+                            session=session,
                             tenant=tenant,
-                            project=None,
-                            effective_policy={},
-                            run_id=claimed_run.run_id,
-                            claim_id=claimed_claim_id,
-                            worker_service_instance_id=claimed_worker_service_instance_id or "",
-                            status=str(getattr(claimed_run, "status", "") or "").strip(),
+                            run=claimed_run,
                         ),
                     ),
                     **_run_process_kwargs_with_operation_attempt_heartbeat(
@@ -388,15 +402,10 @@ def resume_human_input_activity(payload: HumanInputResumeInput) -> DevelopmentTe
                 if tenant is None:
                     raise RuntimeError(f"Temporal resume activity missing tenant {claimed.tenant_id}")
                 runner = build_workflow_runner_for_session(session=session)
-                claimed_ref = SimpleNamespace(
-                    run=claimed,
+                claimed_ref = _claimed_run_ref_for_temporal_activity(
+                    session=session,
                     tenant=tenant,
-                    project=None,
-                    effective_policy={},
-                    run_id=claimed.run_id,
-                    claim_id=str(getattr(claimed, "claim_id", "") or "").strip(),
-                    worker_service_instance_id=str(getattr(claimed, "worker_service_instance_id", "") or "").strip(),
-                    status=str(getattr(claimed, "status", "") or "").strip(),
+                    run=claimed,
                 )
                 processed = process_claimed_run(
                     session=session,

@@ -16,7 +16,7 @@ class PromptTemplateTests(unittest.TestCase):
     def test_render_prompt_uses_template_environment(self) -> None:
         class _Template:
             def render(self, **context):  # noqa: ANN003
-                return f"Tenant={context['tenant_id']}"
+                return f"Tenant={context['tenant_id']} Skills={context['skills']}"
 
         class _Env:
             def get_template(self, template_name: str):  # noqa: ANN001
@@ -27,7 +27,20 @@ class PromptTemplateTests(unittest.TestCase):
         with patch("orchestrator.core.prompt_templates._jinja_environment", return_value=fake_env):
             rendered = render_prompt("workflow/pm_user.j2", tenant_id="tenant-1")
         self.assertEqual(fake_env.template_name, "workflow/pm_user.j2")
-        self.assertEqual(rendered, "Tenant=tenant-1")
+        self.assertEqual(rendered, "Tenant=tenant-1 Skills={}")
+
+    def test_render_prompt_injects_required_skills_for_review_prompt(self) -> None:
+        rendered = render_prompt("workflow/review_system.j2")
+
+        self.assertIn('<skill name="staff-engineer-review">', rendered)
+        self.assertIn("# Skill: Staff Engineering Review", rendered)
+        self.assertIn("Autonomy Contract", rendered)
+        self.assertIn("Workflow-stage adaptation:", rendered)
+
+    def test_render_prompt_cannot_override_required_review_skills(self) -> None:
+        rendered = render_prompt("workflow/review_system.j2", skills={})
+
+        self.assertIn("# Skill: Staff Engineering Review", rendered)
 
     def test_pm_user_prompt_enforces_macos_signals_for_ios_work(self) -> None:
         prompt_path = (
@@ -130,6 +143,15 @@ class PromptTemplateTests(unittest.TestCase):
         self.assertIn("instead of raw `git push`", dev_system_prompt)
         self.assertIn("Remote branch publication and PR creation/update are governed actions", review_system_prompt)
         self.assertIn("instead of raw `git push`", review_system_prompt)
+
+    def test_review_system_prompt_uses_staff_engineer_review_protocol(self) -> None:
+        prompts_dir = Path(__file__).resolve().parents[1] / "orchestrator" / "prompts" / "workflow"
+        review_system_prompt = (prompts_dir / "review_system.j2").read_text(encoding="utf-8")
+
+        self.assertIn("Apply the `staff-engineer-review` skill below as your mandatory review method", review_system_prompt)
+        self.assertIn('{{ skills["staff-engineer-review"] }}', review_system_prompt)
+        self.assertIn("Workflow-stage adaptation:", review_system_prompt)
+        self.assertIn("Preserve the ReviewResult JSON contract", review_system_prompt)
 
     def test_workflow_stage_prompts_treat_tool_base_as_part_of_diagnosis(self) -> None:
         prompts_dir = Path(__file__).resolve().parents[1] / "orchestrator" / "prompts" / "workflow"
