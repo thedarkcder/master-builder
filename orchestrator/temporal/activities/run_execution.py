@@ -20,6 +20,7 @@ from orchestrator.core.workflow.step_runner import (
     complete_workflow_step_attempt,
     fail_workflow_step_attempt,
     start_workflow_step_attempt,
+    wait_workflow_step_attempt,
 )
 from orchestrator.core.workflow.work_units import run_work_unit
 from orchestrator.core.workflow.type_catalog import (
@@ -43,6 +44,8 @@ from orchestrator.temporal.payloads import (
 logger = logging.getLogger(__name__)
 _EXECUTABLE_RUN_STATUSES = {"dispatching", "running"}
 _CLAIMABLE_OR_EXECUTABLE_RUN_STATUSES = {"queued", *_EXECUTABLE_RUN_STATUSES}
+_SUCCESS_RUN_STATUSES = {"succeeded"}
+_FAILED_RUN_STATUSES = {"blocked", "failed", "cancelled"}
 
 
 class _CompositeHeartbeatController:
@@ -205,6 +208,32 @@ def _run_result_to_payload(result: DevelopmentTeamRunActivityResult) -> dict[str
     }
 
 
+def _finish_workflow_step_for_run_result(
+    *,
+    lifecycle: WorkflowExecutionProjection,
+    step,
+    result: DevelopmentTeamRunActivityResult,
+    action_label: str,
+) -> None:  # noqa: ANN001
+    result_status = str(result.status or "").strip().lower()
+    summary = f"{action_label} {result.run_id} finished with status {result_status}"
+    if result_status in _SUCCESS_RUN_STATUSES:
+        complete_workflow_step_attempt(lifecycle=lifecycle, step=step, summary=summary)
+        return
+    if result_status == "waiting_for_input":
+        wait_workflow_step_attempt(lifecycle=lifecycle, step=step, summary=summary)
+        return
+    if result_status in _FAILED_RUN_STATUSES:
+        fail_workflow_step_attempt(
+            lifecycle=lifecycle,
+            step=step,
+            category=f"{action_label.lower().replace(' ', '_')}_{result_status}",
+            message=result.last_error or summary,
+        )
+        return
+    complete_workflow_step_attempt(lifecycle=lifecycle, step=step, summary=summary)
+
+
 def _claim_queued_run_for_temporal_activity(*, session, workflow: WorkflowExecution, run: Run) -> Run:  # noqa: ANN001
     normalized_status = str(getattr(run, "status", "") or "").strip().lower()
     if normalized_status != "queued":
@@ -252,6 +281,13 @@ def execute_claimed_run_activity(payload: DevelopmentTeamRunWorkflowInput) -> De
         tenant = session.get(Tenant, run.tenant_id)
         if tenant is None:
             raise RuntimeError(f"Temporal run activity missing tenant {run.tenant_id}")
+        if str(getattr(run, "status", "") or "").strip().lower() not in _CLAIMABLE_OR_EXECUTABLE_RUN_STATUSES:
+            return _result_for_run(
+                session=session,
+                workflow_id=workflow.workflow_id,
+                run=run,
+                claim_id=str(getattr(run, "claim_id", "") or "").strip() or None,
+            )
 
         workflow_type = get_workflow_type(session, workflow_type_key=workflow.workflow_type_key)
         lifecycle = WorkflowExecutionProjection(session=session, workflow=workflow, workflow_type=workflow_type)
@@ -328,10 +364,11 @@ def execute_claimed_run_activity(payload: DevelopmentTeamRunWorkflowInput) -> De
                 serialize=_run_result_to_payload,
                 deserialize=_run_result_from_payload,
             )
-            complete_workflow_step_attempt(
+            _finish_workflow_step_for_run_result(
                 lifecycle=lifecycle,
                 step=step,
-                summary=f"Run attempt {result.run_id} finished with status {result.status}",
+                result=result,
+                action_label="Run attempt",
             )
             session.commit()
             return result
@@ -468,10 +505,11 @@ def resume_human_input_activity(payload: HumanInputResumeInput) -> DevelopmentTe
                 serialize=_run_result_to_payload,
                 deserialize=_run_result_from_payload,
             )
-            complete_workflow_step_attempt(
+            _finish_workflow_step_for_run_result(
                 lifecycle=lifecycle,
                 step=step,
-                summary=f"Resumed run {result.run_id} finished with status {result.status}",
+                result=result,
+                action_label="Resumed run",
             )
             session.commit()
             return result

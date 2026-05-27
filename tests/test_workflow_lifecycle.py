@@ -17,7 +17,10 @@ from orchestrator.core.workflow.advance import (
     execute_workflow_advance,
 )
 from orchestrator.api.admin.workflows.type_read_model import workflow_operation_reads
-from orchestrator.api.admin.workflows.operation_stale_recovery_service import recover_stale_workflow_operation_attempts
+from orchestrator.api.admin.workflows.operation_stale_recovery_service import (
+    close_active_operation_attempts_for_terminal_workflows,
+    recover_stale_workflow_operation_attempts,
+)
 from orchestrator.core.workflow.type_catalog import get_workflow_type, validate_persisted_workflow_definitions
 from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.models import Tenant, WorkflowExecution, WorkflowOperation, WorkflowOperationAttempt
@@ -357,6 +360,37 @@ class WorkflowLifecycleTests(SqliteTemplateDbTestCase):
         )
 
         assert recovered == 0
+
+    def test_terminal_workflow_active_attempts_are_closed_before_recovery(self) -> None:
+        with self.session_factory() as session:
+            workflow_type = get_workflow_type(session, workflow_type_key="parent_planning")
+            running_request = self._request(issue_key="MAB-402")
+            lifecycle = DurableWorkflowLifecycle(
+                session=session,
+                workflow_type=workflow_type,
+                tenant_id=running_request.tenant_id,
+                project_id=running_request.project_id,
+                execution=running_request.execution,
+            )
+            lifecycle.ensure_execution(display_name="Terminal stale", description="Close terminal attempts.")
+            workflow = lifecycle.workflow
+            operation, attempt = lifecycle.start_operation_attempt(operation_type="jira_child_fanout")
+            workflow.status = "failed"
+            session.commit()
+
+            closed = close_active_operation_attempts_for_terminal_workflows(
+                session=session,
+                actor="test",
+            )
+
+            session.refresh(operation)
+            session.refresh(attempt)
+
+        assert closed == 1
+        assert operation.status == "failed"
+        assert attempt.status == "failed"
+        assert attempt.retryable is False
+        assert attempt.lease_expires_at is None
 
 
 class PersistedWorkflowValidationTests(SqliteTemplateDbTestCase):

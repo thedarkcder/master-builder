@@ -10,10 +10,12 @@ from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from orchestrator.api.schemas import WorkflowOperationRestartRequest, WorkflowOperationRetryRead
-from orchestrator.core.workflow.operation_service import OPERATION_STATUS_RUNNING
+from orchestrator.core.workflow.operation_service import OPERATION_STATUS_COMPLETED, OPERATION_STATUS_FAILED, OPERATION_STATUS_RUNNING
+from orchestrator.core.workflow.transitions import TERMINAL_WORKFLOW_STATUSES
 from orchestrator.storage.models import WorkflowExecution, WorkflowOperation, WorkflowOperationAttempt
 
 logger = logging.getLogger(__name__)
+_TERMINAL_WORKFLOW_STATUSES = frozenset({*TERMINAL_WORKFLOW_STATUSES, "completed"})
 
 
 @dataclass(frozen=True)
@@ -27,6 +29,45 @@ class StaleWorkflowOperationAttemptRef:
 
 
 RestartWorkflowOperationFn = Callable[..., WorkflowOperationRetryRead]
+
+
+def close_active_operation_attempts_for_terminal_workflows(
+    *,
+    session: Session,
+    actor: str,
+) -> int:
+    rows = session.execute(
+        select(WorkflowExecution, WorkflowOperation, WorkflowOperationAttempt)
+        .join(WorkflowOperation, WorkflowOperation.workflow_id == WorkflowExecution.workflow_id)
+        .join(WorkflowOperationAttempt, WorkflowOperationAttempt.operation_id == WorkflowOperation.operation_id)
+        .where(
+            WorkflowExecution.status.in_(_TERMINAL_WORKFLOW_STATUSES),
+            WorkflowOperationAttempt.status == OPERATION_STATUS_RUNNING,
+        )
+    ).all()
+    now = datetime.now(timezone.utc)
+    for workflow, operation, attempt in rows:
+        workflow_status = str(workflow.status or "").strip().lower()
+        operation.status = OPERATION_STATUS_COMPLETED if workflow_status in {"completed", "succeeded"} else OPERATION_STATUS_FAILED
+        operation.finished_at = operation.finished_at or now
+        operation.updated_at = now
+        attempt.status = "failed"
+        attempt.status_detail = (
+            "Closed active workflow operation attempt because the workflow is already terminal. "
+            f"Actor: {actor}."
+        )
+        attempt.retryable = False
+        attempt.next_retry_at = None
+        attempt.lease_expires_at = None
+        attempt.finished_at = attempt.finished_at or now
+    if rows:
+        session.commit()
+        logger.warning(
+            "terminal_workflow_active_operation_attempts_closed actor=%s count=%s",
+            actor,
+            len(rows),
+        )
+    return len(rows)
 
 
 def stale_running_workflow_operation_attempt_refs(
@@ -43,6 +84,7 @@ def stale_running_workflow_operation_attempt_refs(
         .join(WorkflowOperation, WorkflowOperation.workflow_id == WorkflowExecution.workflow_id)
         .join(WorkflowOperationAttempt, WorkflowOperationAttempt.operation_id == WorkflowOperation.operation_id)
         .where(
+            WorkflowExecution.status.notin_(_TERMINAL_WORKFLOW_STATUSES),
             WorkflowOperationAttempt.status == OPERATION_STATUS_RUNNING,
             or_(
                 WorkflowOperationAttempt.lease_expires_at <= anchor,
@@ -79,6 +121,10 @@ def recover_stale_workflow_operation_attempts(
     limit: int = 50,
 ) -> int:  # noqa: ANN001
     with session_factory() as session:
+        close_active_operation_attempts_for_terminal_workflows(
+            session=session,
+            actor=actor,
+        )
         stale_refs = stale_running_workflow_operation_attempt_refs(
             session=session,
             stale_timeout_seconds=stale_timeout_seconds,
