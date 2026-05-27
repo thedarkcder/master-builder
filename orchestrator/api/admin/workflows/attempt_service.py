@@ -355,7 +355,7 @@ def create_workflow_attempt(
             ) from error
         raise
     session.refresh(enqueue_result.run)
-    return run_to_schema_fn(enqueue_result.run)
+    return run_to_schema_fn(enqueue_result.run, workflow_execution_id=workflow.execution_id)
 
 
 def resume_workflow_execution(
@@ -467,4 +467,4 @@ def resume_workflow_execution(
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Execution already has an active attempt.") from error
         raise
     session.refresh(enqueue_result.run)
-    return run_to_schema_fn(enqueue_result.run)
+    return run_to_schema_fn(enqueue_result.run, workflow_execution_id=workflow.execution_id)

@@ -509,6 +509,8 @@ export default function RunDetailPage() {
   const [chatVisibleCount, setChatVisibleCount] = useState(CHAT_PAGE_SIZE);
   const [chatAutoScroll, setChatAutoScroll] = useState(true);
   const chatListRef = useRef<HTMLUListElement | null>(null);
+  const liveSnapshotRefreshInFlightRef = useRef<Promise<void> | null>(null);
+  const liveSnapshotRefreshQueuedRef = useRef(false);
 
   const loadRun = useCallback(async () => {
     if (!credentials) {
@@ -530,7 +532,7 @@ export default function RunDetailPage() {
           tenantId: runPayload.tenant_id,
           include_retries: true
         }),
-        getWorkflow(credentials, runPayload.workflow_id),
+        getWorkflow(credentials, runPayload.workflow_execution_id),
       ]);
       if (timelineResult.status === "fulfilled") {
         timeline = timelineResult.value;
@@ -563,6 +565,33 @@ export default function RunDetailPage() {
     }
   }, [ready, credentials, loadRun]);
 
+  const refreshLiveRunSnapshot = useCallback(async () => {
+    if (!credentials) {
+      return;
+    }
+    if (liveSnapshotRefreshInFlightRef.current) {
+      liveSnapshotRefreshQueuedRef.current = true;
+      return liveSnapshotRefreshInFlightRef.current;
+    }
+    const refreshPromise = (async () => {
+      try {
+        do {
+          liveSnapshotRefreshQueuedRef.current = false;
+          const runPayload = await getRun(credentials, params.runId);
+          setRun(runPayload);
+          const workflowPayload = await getWorkflow(credentials, runPayload.workflow_execution_id);
+          setWorkflow(workflowPayload);
+        } while (liveSnapshotRefreshQueuedRef.current);
+      } catch (error) {
+        setStatusLine(`Failed to refresh live run state: ${(error as Error).message}`);
+      } finally {
+        liveSnapshotRefreshInFlightRef.current = null;
+      }
+    })();
+    liveSnapshotRefreshInFlightRef.current = refreshPromise;
+    return refreshPromise;
+  }, [credentials, params.runId]);
+
   const runStatus = run?.status ?? null;
   const runId = run?.run_id ?? null;
 
@@ -575,7 +604,13 @@ export default function RunDetailPage() {
       const next = [...prev, logEvent];
       return dedupeRunLogs(next).slice(-800);
     });
-  }, []);
+    if (logEvent.stage === "telemetry" && logEvent.stream === "system") {
+      const payload = parseTelemetryPayload(logEvent.message);
+      if (payload && (payload.event_kind === "stage_invocation_started" || payload.event_kind === "stage_invocation_finished")) {
+        void refreshLiveRunSnapshot();
+      }
+    }
+  }, [refreshLiveRunSnapshot]);
 
   const handleStreamLifecycleEvent = useCallback((lifecycleEvent: RunEventRecord) => {
     setEvents((prev) => {
@@ -592,7 +627,8 @@ export default function RunDetailPage() {
       const next = [...prev, lifecycleEvent];
       return next.slice(-200);
     });
-  }, []);
+    void refreshLiveRunSnapshot();
+  }, [refreshLiveRunSnapshot]);
 
   const handleStreamStatusChange = useCallback((nextStatus: RunRecord["status"]) => {
     setRun((prev) => (prev && prev.status !== nextStatus ? { ...prev, status: nextStatus } : prev));
@@ -619,7 +655,7 @@ export default function RunDetailPage() {
     setForceRerunBusy(true);
     try {
       const cancelled = await cancelRun(credentials, run.run_id);
-      const nextRun = await createWorkflowAttempt(credentials, cancelled.workflow_id, {
+      const nextRun = await createWorkflowAttempt(credentials, workflow?.execution_id ?? cancelled.workflow_execution_id, {
         mode: "fresh"
       });
       showToast({ title: "Fresh run queued", description: `Cancelled ${cancelled.run_id}; queued ${nextRun.run_id}.`, tone: "success" });
@@ -950,7 +986,7 @@ export default function RunDetailPage() {
     }
     setRerunBusy(true);
     try {
-      const nextRun = await createWorkflowAttempt(credentials, run.workflow_id, payload);
+      const nextRun = await createWorkflowAttempt(credentials, workflow?.execution_id ?? run.workflow_execution_id, payload);
       showToast({ title: `${label} queued`, description: `Run ${nextRun.run_id} for ${nextRun.issue_key}.`, tone: "success" });
       router.push(
         buildRunDetailPath({

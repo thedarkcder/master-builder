@@ -7,7 +7,7 @@ from fastapi import HTTPException, status
 
 from orchestrator.core.observability.logging_pane import list_run_logging_pane_events as list_run_logging_pane_events_core
 from orchestrator.core.runs.service import RunStateTransitionError, cancel_run as cancel_run_execution
-from orchestrator.storage.models import AgentLifecycleEvent
+from orchestrator.storage.models import AgentLifecycleEvent, WorkflowExecution
 
 
 def _with_issue_url(payload, issue_url: str | None):  # noqa: ANN001
@@ -78,7 +78,8 @@ def get_run(*, session, run_id: str, run_model, run_to_schema_fn, tenant_model, 
     run = session.get(run_model, run_id)
     if run is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
-    payload = run_to_schema_fn(run)
+    workflow_execution_id = _workflow_execution_id_for_run(session=session, run=run)
+    payload = run_to_schema_fn(run, workflow_execution_id=workflow_execution_id)
     tenant = session.get(tenant_model, run.tenant_id)
     issue_url = (
         tenant_jira_issue_url_fn(
@@ -90,6 +91,15 @@ def get_run(*, session, run_id: str, run_model, run_to_schema_fn, tenant_model, 
         else None
     )
     return _with_issue_url(payload, issue_url)
+
+
+def _workflow_execution_id_for_run(*, session, run) -> str | None:  # noqa: ANN001
+    execution_id = session.execute(
+        select(WorkflowExecution.execution_id)
+        .where(WorkflowExecution.workflow_id == run.workflow_id)
+        .limit(1)
+    ).scalar_one_or_none()
+    return str(execution_id or "").strip() or None
 
 
 def cancel_run_admin(
@@ -109,13 +119,13 @@ def cancel_run_admin(
             detail=f"Cannot cancel run {run_id} from terminal status {run.status}",
         )
     try:
-        return run_to_schema_fn(
-            cancel_run_execution(
-                session,
-                run_id=run_id,
-                cancelled_by=cancelled_by,
-            )
+        cancelled_run = cancel_run_execution(
+            session,
+            run_id=run_id,
+            cancelled_by=cancelled_by,
         )
+        workflow_execution_id = _workflow_execution_id_for_run(session=session, run=cancelled_run)
+        return run_to_schema_fn(cancelled_run, workflow_execution_id=workflow_execution_id)
     except RunStateTransitionError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
 

@@ -368,6 +368,7 @@ export function makeRun(overrides: Partial<RunRecord> = {}): RunRecord {
   return {
     run_id: "5de2cedf-b7ae-400c-a53c-3beecf078a51",
     workflow_id: "workflow-gp-124",
+    workflow_execution_id: "exec-workflow-gp-124",
     attempt_number: 1,
     parent_run_id: null,
     entry_mode: "fresh",
@@ -415,7 +416,7 @@ export function makeRun(overrides: Partial<RunRecord> = {}): RunRecord {
 export function makeWorkflow(overrides: Partial<WorkflowRecord> = {}): WorkflowRecord {
   const baselineRun = makeRun();
   return {
-    execution_id: `exec-${baselineRun.workflow_id}`,
+    execution_id: baselineRun.workflow_execution_id,
     workflow_id: baselineRun.workflow_id,
     tenant_id: baselineRun.tenant_id,
     project_id: baselineRun.project_id,
@@ -756,7 +757,9 @@ export async function mockRunDetailApis(
   page: Page,
   options: {
     run: RunRecord;
+    runResponses?: RunRecord[];
     workflow?: WorkflowRecord;
+    workflowResponses?: WorkflowRecord[];
     events?: RunEventRecord[];
     logs?: RuntimeLogEventRecord[];
     tokenTimeline?: TokenTimelineRecord;
@@ -776,6 +779,7 @@ export async function mockRunDetailApis(
     makeRun({
       run_id: "8e8957f2-79f8-4dc8-8deb-786b2c93828d",
       workflow_id: "workflow-gp-124-restart",
+      workflow_execution_id: "exec-workflow-gp-124-restart",
       status: "queued",
       created_at: "2026-03-27T17:10:00Z",
       started_at: null,
@@ -785,26 +789,34 @@ export async function mockRunDetailApis(
       }),
       pr_url: null,
     });
-  const workflow =
-    options.workflow ??
-    makeWorkflow({
-      workflow_id: options.run.workflow_id,
-      tenant_id: options.run.tenant_id,
-      project_id: options.run.project_id,
-      source_system: "jira",
-      source_ref: options.run.issue_key,
-      display_name: options.run.issue_summary,
-      repo_url: options.run.repo_url,
-      branch: options.run.branch,
-      pr_url: options.run.pr_url,
-      status: options.run.status,
-      active_run_id: options.run.run_id,
-      latest_checkpoint_kind: "execution",
-      runs: [options.run],
-      created_at: options.run.created_at,
-      started_at: options.run.started_at,
-      finished_at: options.run.finished_at,
-    });
+  const runResponses = options.runResponses ?? [options.run];
+  const workflowResponses =
+    options.workflowResponses ??
+    (options.workflow
+      ? [options.workflow]
+      : runResponses.map((runResponse) =>
+          makeWorkflow({
+            execution_id: runResponse.workflow_execution_id,
+            workflow_id: runResponse.workflow_id,
+            tenant_id: runResponse.tenant_id,
+            project_id: runResponse.project_id,
+            source_system: "jira",
+            source_ref: runResponse.issue_key,
+            display_name: runResponse.issue_summary,
+            repo_url: runResponse.repo_url,
+            branch: runResponse.branch,
+            pr_url: runResponse.pr_url,
+            status: runResponse.status,
+            active_run_id: runResponse.run_id,
+            latest_checkpoint_kind: "execution",
+            runs: [runResponse],
+            created_at: runResponse.created_at,
+            started_at: runResponse.started_at,
+            finished_at: runResponse.finished_at,
+          }),
+        ));
+  let runResponseIndex = 0;
+  let workflowResponseIndex = 0;
   await installBffApiMocks(page, [
     {
       method: "GET",
@@ -817,7 +829,9 @@ export async function mockRunDetailApis(
       handler: (route, url) => {
         const runId = decodeURIComponent(url.pathname.split("/").at(-1) ?? "");
         if (runId === options.run.run_id) {
-          return fulfillJson(route, options.run);
+          const response = runResponses[Math.min(runResponseIndex, runResponses.length - 1)];
+          runResponseIndex += 1;
+          return fulfillJson(route, response);
         }
         if (runId === nextRun.run_id) {
           return fulfillJson(route, nextRun);
@@ -834,12 +848,15 @@ export async function mockRunDetailApis(
       pathname: /^\/api\/bff\/api\/admin\/workflows\/[^/]+$/,
       handler: (route, url) => {
         const workflowId = decodeURIComponent(url.pathname.split("/").at(-1) ?? "");
-        if (workflowId === workflow.workflow_id) {
-          return fulfillJson(route, workflow);
+        if (workflowId === options.run.workflow_execution_id) {
+          const response = workflowResponses[Math.min(workflowResponseIndex, workflowResponses.length - 1)];
+          workflowResponseIndex += 1;
+          return fulfillJson(route, response);
         }
-        if (workflowId === nextRun.workflow_id) {
+        if (workflowId === nextRun.workflow_execution_id) {
           return fulfillJson(route, {
-            ...workflow,
+            ...workflowResponses[workflowResponses.length - 1],
+            execution_id: nextRun.workflow_execution_id,
             workflow_id: nextRun.workflow_id,
             status: nextRun.status,
             active_run_id: nextRun.run_id,
@@ -913,7 +930,7 @@ export async function mockRunDetailApis(
     },
     {
       method: "POST",
-      pathname: `/api/bff/api/admin/workflows/${encodeURIComponent(options.run.workflow_id)}/attempts`,
+      pathname: `/api/bff/api/admin/workflows/${encodeURIComponent(options.run.workflow_execution_id)}/attempts`,
       handler: async (route) => {
         const payload = JSON.parse(route.request().postData() ?? "{}") as WorkflowAttemptCreatePayload;
         options.onCreateAttempt?.(payload);
@@ -1035,10 +1052,10 @@ export async function mockTenantWorkflowApis(
         if (executionId === currentWorkflow.execution_id) {
           return fulfillJson(route, currentWorkflow);
         }
-        if (executionId === `exec-${nextRun.workflow_id}`) {
+        if (executionId === nextRun.workflow_execution_id) {
           return fulfillJson(route, {
             ...primaryWorkflow,
-            execution_id: `exec-${nextRun.workflow_id}`,
+            execution_id: nextRun.workflow_execution_id,
             workflow_id: nextRun.workflow_id,
             status: nextRun.status,
             active_run_id: nextRun.run_id,

@@ -13,16 +13,30 @@ from orchestrator.api.admin.workflows.queries import (
     workflow_runs,
 )
 from orchestrator.api.admin.workflows.type_read_model import workflow_operation_reads
-from orchestrator.api.schemas import WorkflowBoardItemRead, WorkflowBoardRunSummaryRead, WorkflowLinkRead
+from orchestrator.api.schemas import (
+    WorkflowBoardChildIssueRead,
+    WorkflowBoardItemRead,
+    WorkflowBoardRunSummaryRead,
+    WorkflowLinkRead,
+)
 from orchestrator.core.integrations.atlassian.links import tenant_jira_issue_url
-from orchestrator.storage.models import Run, RunHumanInputRequest, Tenant, WorkflowCheckpoint, WorkflowExecution
+from orchestrator.storage.models import (
+    Run,
+    RunHumanInputRequest,
+    Tenant,
+    WorkflowCheckpoint,
+    WorkflowExecutableWorkItem,
+    WorkflowExecution,
+)
 
 
-BOARD_WORKFLOW_TYPE_KEYS = ("parent_planning", "jira_project_reconciliation")
-BOARD_DEDUPE_SCOPES = ("parent_planning", "jira_project_reconciliation")
 BOARD_EXCLUDED_WORKFLOW_STATUSES = ("cancelled",)
 BOARD_ACTIVE_RUN_STATUSES = frozenset(
     ("queued", "running", "processing", "retrying", "review", "in_review", "blocked", "failed")
+)
+STARTABLE_CHILD_WORK_STATES = frozenset({"planning_candidate"})
+STARTED_CHILD_RUN_STATUSES = frozenset(
+    ("queued", "dispatching", "running", "waiting_for_input", "blocked", "failed", "succeeded", "cancelled")
 )
 
 
@@ -52,6 +66,104 @@ def _run_summary(run: Run) -> WorkflowBoardRunSummaryRead:
         started_at=run.started_at,
         finished_at=run.finished_at,
     )
+
+
+def _latest_child_runs_by_issue(*, session, tenant_id: str, project_id: str | None) -> dict[str, Run]:  # noqa: ANN001
+    query = (
+        select(Run)
+        .where(
+            Run.tenant_id == tenant_id,
+            Run.dedupe_scope == "issue_execution",
+            Run.status.in_(STARTED_CHILD_RUN_STATUSES),
+        )
+        .order_by(Run.issue_key.asc(), desc(Run.created_at))
+    )
+    if project_id:
+        query = query.where(Run.project_id == project_id)
+    latest: dict[str, Run] = {}
+    for run in session.execute(query).scalars():
+        issue_key = str(run.issue_key or "").strip().upper()
+        if issue_key:
+            latest.setdefault(issue_key, run)
+    return latest
+
+
+def _board_children_by_workflow(
+    *,
+    session,
+    parent_workflow_ids: list[str],
+) -> dict[str, list[WorkflowExecutableWorkItem]]:  # noqa: ANN001
+    if not parent_workflow_ids:
+        return {}
+    children_by_workflow: dict[str, list[WorkflowExecutableWorkItem]] = {workflow_id: [] for workflow_id in parent_workflow_ids}
+    rows = session.execute(
+        select(WorkflowExecutableWorkItem)
+        .where(
+            WorkflowExecutableWorkItem.parent_workflow_id.in_(parent_workflow_ids),
+            WorkflowExecutableWorkItem.item_kind == "child",
+        )
+        .order_by(WorkflowExecutableWorkItem.issue_key.asc())
+    ).scalars()
+    for row in rows:
+        children_by_workflow.setdefault(row.parent_workflow_id, []).append(row)
+    return children_by_workflow
+
+
+def _child_start_blocked_reason(*, run: Run | None, mb_work_state: str | None) -> str | None:
+    if run is not None:
+        return "already_started"
+    if mb_work_state not in STARTABLE_CHILD_WORK_STATES:
+        return "not_ready"
+    return None
+
+
+def _child_issue_read(
+    *,
+    child: WorkflowExecutableWorkItem,
+    run: Run | None,
+    child_starts_enabled: bool,
+) -> WorkflowBoardChildIssueRead:
+    base_startable = run is None and child.mb_work_state in STARTABLE_CHILD_WORK_STATES
+    startable = base_startable and child_starts_enabled
+    start_blocked_reason = _child_start_blocked_reason(run=run, mb_work_state=child.mb_work_state)
+    if base_startable and not child_starts_enabled:
+        start_blocked_reason = "parent_not_completed"
+    return WorkflowBoardChildIssueRead(
+        work_item_id=child.work_item_id,
+        issue_key=child.issue_key,
+        summary=child.issue_summary,
+        status=child.issue_status,
+        mb_work_state=child.mb_work_state,
+        issue_type=child.issue_type,
+        run_id=run.run_id if run is not None else None,
+        run_status=run.status if run is not None else None,
+        startable=startable,
+        start_label="Start" if startable else None,
+        start_blocked_reason=start_blocked_reason,
+    )
+
+
+def _parent_start_metadata(
+    *,
+    parent_work_item: WorkflowExecutableWorkItem,
+    workflow: WorkflowExecution,
+    children: list[WorkflowBoardChildIssueRead],
+    pending_request: RunHumanInputRequest | None,
+) -> tuple[bool, str | None, str | None]:
+    status = str(workflow.status or "").strip().casefold()
+    if pending_request is not None or status == "waiting_for_input":
+        return False, None, "waiting_for_input"
+    if status in {"failed", "blocked"}:
+        return False, None, status
+    if status in {"queued", "pending"} and str(workflow.workflow_type_key or "").strip() == "parent_planning":
+        return True, "Start planning", None
+    if status != "completed":
+        return False, None, "not_ready"
+    if children:
+        return False, None, "start_children_individually"
+    if parent_work_item.mb_work_state in STARTABLE_CHILD_WORK_STATES:
+        return True, "Start run", None
+    return False, None, "not_ready"
 
 
 def _board_links(*, session, tenant: Tenant | None, workflow: WorkflowExecution) -> list[WorkflowLinkRead]:  # noqa: ANN001
@@ -173,7 +285,7 @@ def workflow_schema(
     )
     return workflow_to_schema_fn(
         workflow,
-        runs=[run_to_schema_fn(run) for run in runs],
+        runs=[run_to_schema_fn(run, workflow_execution_id=workflow.execution_id) for run in runs],
         pending_input_request_id=(pending_request.request_id if pending_request is not None else None),
         latest_checkpoint_kind=latest_checkpoint.checkpoint_kind if latest_checkpoint is not None else None,
         workflow_type=workflow_type,
@@ -248,28 +360,33 @@ def list_workflow_board_items(
     limit: int,
     offset: int,
 ) -> list[WorkflowBoardItemRead]:  # noqa: ANN001
-    query = select(WorkflowExecution).where(
-        WorkflowExecution.tenant_id == tenant_id,
-        or_(
-            WorkflowExecution.workflow_type_key.in_(BOARD_WORKFLOW_TYPE_KEYS),
-            WorkflowExecution.dedupe_scope.in_(BOARD_DEDUPE_SCOPES),
-            WorkflowExecution.workflow_id.like("parent_planning:%"),
-            WorkflowExecution.workflow_id.like("jira_project_reconciliation:%"),
-        ),
+    query = (
+        select(WorkflowExecutableWorkItem, WorkflowExecution)
+        .join(WorkflowExecution, WorkflowExecution.workflow_id == WorkflowExecutableWorkItem.parent_workflow_id)
+        .where(
+            WorkflowExecutableWorkItem.tenant_id == tenant_id,
+            WorkflowExecutableWorkItem.item_kind == "parent",
+            WorkflowExecution.status.notin_(BOARD_EXCLUDED_WORKFLOW_STATUSES),
+        )
     )
     if project_id:
-        query = query.where(WorkflowExecution.project_id == project_id)
-    query = query.where(WorkflowExecution.status.notin_(BOARD_EXCLUDED_WORKFLOW_STATUSES))
-    workflows = (
-        session.execute(query.order_by(desc(WorkflowExecution.updated_at)).limit(limit).offset(offset))
-        .scalars()
+        query = query.where(WorkflowExecutableWorkItem.project_id == project_id)
+    parent_rows = (
+        session.execute(
+            query.order_by(desc(WorkflowExecution.updated_at), desc(WorkflowExecutableWorkItem.updated_at))
+            .limit(limit)
+            .offset(offset)
+        )
         .all()
     )
+    workflows = [workflow for _parent_work_item, workflow in parent_rows]
     workflow_ids = [workflow.workflow_id for workflow in workflows]
     if not workflow_ids:
         return []
 
     tenant = session.get(Tenant, tenant_id)
+    children_by_workflow = _board_children_by_workflow(session=session, parent_workflow_ids=workflow_ids)
+    latest_runs_by_issue = _latest_child_runs_by_issue(session=session, tenant_id=tenant_id, project_id=project_id)
 
     pending_request_by_workflow: dict[str, RunHumanInputRequest] = {}
     pending_requests = session.execute(
@@ -293,14 +410,30 @@ def list_workflow_board_items(
         runs_by_workflow.setdefault(run.workflow_id, []).append(run)
 
     board_items: list[WorkflowBoardItemRead] = []
-    for workflow in workflows:
+    for parent_work_item, workflow in parent_rows:
         workflow_runs = runs_by_workflow.get(workflow.workflow_id, [])
         sorted_runs = sorted(workflow_runs, key=_run_activity_at, reverse=True)
         latest_run = sorted_runs[0] if sorted_runs else None
         run_summaries = [_run_summary(run) for run in sorted_runs]
         pending_request = pending_request_by_workflow.get(workflow.workflow_id)
+        workflow_status = str(workflow.status or "").strip().casefold()
+        children = [
+            _child_issue_read(
+                child=child,
+                run=latest_runs_by_issue.get(str(child.issue_key or "").strip().upper()),
+                child_starts_enabled=workflow_status == "completed",
+            )
+            for child in children_by_workflow.get(workflow.workflow_id, [])
+        ]
+        startable, start_label, start_blocked_reason = _parent_start_metadata(
+            parent_work_item=parent_work_item,
+            workflow=workflow,
+            children=children,
+            pending_request=pending_request,
+        )
         board_items.append(
             WorkflowBoardItemRead(
+                work_item_id=parent_work_item.work_item_id,
                 execution_id=workflow.execution_id,
                 workflow_id=workflow.workflow_id,
                 workflow_type_key=workflow.workflow_type_key,
@@ -308,16 +441,20 @@ def list_workflow_board_items(
                 project_id=workflow.project_id,
                 source_system=workflow.source_system,
                 source_ref=workflow.source_ref,
-                display_name=workflow.display_name,
+                display_name=parent_work_item.issue_summary or workflow.display_name,
                 dedupe_scope=workflow.dedupe_scope,
                 status=workflow.status,
                 failure_reason=workflow.last_error,
                 pending_input_request_id=pending_request.request_id if pending_request is not None else None,
+                startable=startable,
+                start_label=start_label,
+                start_blocked_reason=start_blocked_reason,
                 run_count=len(sorted_runs),
                 active_run_count=sum(1 for run in sorted_runs if str(run.status).lower() in BOARD_ACTIVE_RUN_STATUSES),
                 failed_run_count=sum(1 for run in sorted_runs if str(run.status).lower() == "failed"),
                 latest_run=_run_summary(latest_run) if latest_run is not None else None,
                 runs=run_summaries,
+                children=children,
                 links=_board_links(session=session, tenant=tenant, workflow=workflow),
                 latest_activity_at=_workflow_activity_at(workflow, sorted_runs),
                 created_at=workflow.created_at,
