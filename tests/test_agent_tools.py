@@ -52,12 +52,17 @@ def test_allowed_tools_for_planning_stages_are_read_only_research_tools() -> Non
     security_tools = allowed_tools_for_stage("security_planning")
     tester_tools = allowed_tools_for_stage("test_planning")
 
-    assert {"jira.get_issue", "knowledge.read", "knowledge.exact_read", "repo.read", "web.search", "web.fetch", "browser.open", "browser.snapshot"} <= normalization_tools
-    assert {"jira.get_issue", "knowledge.read", "knowledge.exact_read", "repo.read", "web.search", "web.fetch", "browser.open", "browser.snapshot"} <= architect_tools
+    research_tools = {"jira.get_issue", "knowledge.read", "knowledge.exact_read", "repo.read"}
+    native_codex_tools = {"web.search", "web.fetch", "browser.open", "browser.snapshot"}
+    assert research_tools <= normalization_tools
+    assert research_tools <= architect_tools
+    assert research_tools <= security_tools
+    assert research_tools <= tester_tools
     assert {"project.list_installs", "project.check_runtime_bindings"} <= architect_tools
     assert {"project.list_installs", "project.check_runtime_bindings"} <= security_tools
     assert {"project.list_installs", "project.check_runtime_bindings"} <= tester_tools
     for tools in (normalization_tools, architect_tools, security_tools, tester_tools):
+        assert native_codex_tools.isdisjoint(tools)
         assert "jira.comment" not in tools
         assert "jira.transition" not in tools
         assert "github.create_branch" not in tools
@@ -73,8 +78,24 @@ def test_codex_runtime_splits_native_and_governed_tools_for_planning_stages() ->
 
     assert {"jira.get_issue", "knowledge.read", "knowledge.exact_read", "repo.read"} <= architect_governed
     assert {"project.list_installs", "project.check_runtime_bindings"} <= architect_governed
-    assert architect_native == {"web.search", "web.fetch", "browser.open", "browser.snapshot"}
+    assert architect_native == set()
     assert architect_governed.isdisjoint(architect_native)
+
+
+def test_pr_review_findings_allows_declared_native_research_tools_for_codex_runtime() -> None:
+    governed = governed_allowed_tools_for_stage("pr_review_findings", runtime_command="codex")
+    native = native_model_tools_for_stage("pr_review_findings", runtime_command="codex")
+
+    assert governed == set()
+    assert native == {"web.search", "web.fetch"}
+
+
+def test_pr_ready_allows_declared_native_research_tools_for_codex_runtime() -> None:
+    governed = governed_allowed_tools_for_stage("pr_ready", runtime_command="codex")
+    native = native_model_tools_for_stage("pr_ready", runtime_command="codex")
+
+    assert governed == set()
+    assert native == {"web.search", "web.fetch"}
 
 
 def test_non_codex_runtime_does_not_expose_native_codex_tools() -> None:
@@ -119,6 +140,12 @@ def test_tool_catalog_descriptions_explain_usage() -> None:
     assert "verify presence" in runtime_description
     assert "never returns the underlying values" in runtime_description
 
+    install_description = by_name["project.request_install"]
+    assert "install/dependency approval request" in install_description
+    assert "stable capability label" in install_description
+    assert "plain operator language" in install_description
+    assert "do not make the operator read JSON" in install_description
+
 
 def test_tool_catalog_for_stage_returns_structured_entries() -> None:
     tools = tool_catalog_for_stage("test")
@@ -128,6 +155,10 @@ def test_tool_catalog_for_stage_returns_structured_entries() -> None:
     assert runtime_tool["category"] == "project"
     assert "explicitly named project bindings" in str(runtime_tool["description"])
     assert "test" in runtime_tool["stages"]
+
+    repo_tool = next(item for item in tools if item["tool_name"] == "repo.read")
+    assert repo_tool["args_schema"]["required"] == ["command"]
+    assert "command" in repo_tool["args_schema"]["properties"]
 
     browser_tool = next(item for item in tools if item["tool_name"] == "browser.snapshot")
     assert browser_tool["category"] == "browser"
@@ -891,8 +922,232 @@ def test_repo_read_allows_read_only_git_status() -> None:
                 tool_args={"command": "git status -sb"},
             )
 
-    assert payload == {"ok": True, "exit_code": 0, "stdout": "ok", "stderr": ""}
+    assert payload == {
+        "ok": True,
+        "exit_code": 0,
+        "stdout": "ok",
+        "stderr": "",
+        "stdout_original_chars": 2,
+        "stderr_original_chars": 0,
+        "output_available": True,
+    }
     run_mock.assert_called_once()
+    assert run_mock.call_args.args[0][:2] == ["/bin/sh", "-lc"]
+
+
+def test_repo_read_allows_read_only_git_branch_listing() -> None:
+    class _FakeTenant:
+        tenant_id = "example"
+        github_config = {}
+        policy_config = {}
+
+    class _FakeProject:
+        project_id = "example-default"
+        github_repository = "https://github.com/acme/repo"
+        policy_overrides = {}
+
+    class _FakeContext:
+        tenant = _FakeTenant()
+        project = _FakeProject()
+        stage = "repo_setup"
+        issue_key = "MAB-1"
+        run_id = "run-1"
+        repo_dir = Path("/tmp/checkout/repo")
+        checkout_root = Path("/tmp/checkout")
+
+    fake_process = SimpleNamespace(returncode=0, stdout="* main\n", stderr="")
+    with patch("orchestrator.core.runtime.tools._resolve_context", return_value=_FakeContext()):
+        with patch("orchestrator.core.runtime.tools._ensure_repo_checkout_exists"):
+            with patch("orchestrator.core.runtime.tools.subprocess.run", return_value=fake_process) as run_mock:
+                payload = execute_agent_tool(
+                    session=None,  # type: ignore[arg-type]
+                    settings=None,
+                    tenant_id="example",
+                    project_id="example-default",
+                    run_id="run-1",
+                    issue_key="MAB-1",
+                    stage="repo_setup",
+                    tool_name="repo.read",
+                    tool_args={"command": "git branch --all --verbose --no-abbrev"},
+                )
+
+    assert payload["ok"] is True
+    assert payload["stdout"] == "* main\n"
+    run_mock.assert_called_once()
+
+
+def test_repo_read_allows_git_c_inside_checkout_root() -> None:
+    class _FakeTenant:
+        tenant_id = "example"
+        github_config = {}
+        policy_config = {}
+
+    class _FakeProject:
+        project_id = "example-default"
+        github_repository = "https://github.com/acme/repo"
+        policy_overrides = {}
+
+    class _FakeContext:
+        tenant = _FakeTenant()
+        project = _FakeProject()
+        stage = "repo_setup"
+        issue_key = "MAB-1"
+        run_id = "run-1"
+        repo_dir = Path("/tmp/checkout")
+        checkout_root = Path("/tmp/checkout")
+
+    fake_process = SimpleNamespace(returncode=0, stdout="* main\n", stderr="")
+    with patch("orchestrator.core.runtime.tools._resolve_context", return_value=_FakeContext()):
+        with patch("orchestrator.core.runtime.tools._ensure_repo_checkout_exists"):
+            with patch("orchestrator.core.runtime.tools.subprocess.run", return_value=fake_process) as run_mock:
+                payload = execute_agent_tool(
+                    session=None,  # type: ignore[arg-type]
+                    settings=None,
+                    tenant_id="example",
+                    project_id="example-default",
+                    run_id="run-1",
+                    issue_key="MAB-1",
+                    stage="repo_setup",
+                    tool_name="repo.read",
+                    tool_args={"command": "git -C /tmp/checkout/repo branch -a"},
+                )
+
+    assert payload["ok"] is True
+    assert payload["stdout"] == "* main\n"
+    run_mock.assert_called_once()
+
+
+def test_repo_exec_bootstrap_injects_github_app_auth_without_exposing_token() -> None:
+    class _FakeTenant:
+        tenant_id = "example"
+        github_config = {"app_id": "1", "installation_id": "2", "private_key_ref": "tenant/key"}
+        policy_config = {}
+
+    class _FakeProject:
+        project_id = "example-default"
+        github_repository = "https://github.com/acme/repo"
+        policy_overrides = {}
+
+    class _FakeContext:
+        tenant = _FakeTenant()
+        project = _FakeProject()
+        stage = "repo_setup"
+        issue_key = "MAB-1"
+        run_id = "run-1"
+        repo_dir = Path("/tmp/checkout/repo")
+        checkout_root = Path("/tmp/checkout")
+
+    class _FakeGitHubClient:
+        def get_installation_token(self) -> str:
+            return "ghs_installation_token"
+
+    fake_process = SimpleNamespace(returncode=0, stdout="ready\n", stderr="")
+    with patch("orchestrator.core.runtime.tools._resolve_context", return_value=_FakeContext()):
+        with patch("orchestrator.core.runtime.tools.github_client_from_tenant_config", return_value=_FakeGitHubClient()):
+            with patch("orchestrator.core.runtime.tools.subprocess.run", return_value=fake_process) as run_mock:
+                payload = execute_agent_tool(
+                    session=object(),  # type: ignore[arg-type]
+                    settings=SimpleNamespace(secrets_encryption_key="test-key"),
+                    tenant_id="example",
+                    project_id="example-default",
+                    run_id="run-1",
+                    issue_key="MAB-1",
+                    stage="repo_setup",
+                    tool_name="repo.exec_bootstrap",
+                    tool_args={"command": "git fetch origin --prune"},
+                )
+
+    assert payload["ok"] is True
+    command = run_mock.call_args.args[0]
+    env = run_mock.call_args.kwargs["env"]
+    assert command == ["/bin/sh", "-lc", "git fetch origin --prune"]
+    assert env["GIT_TERMINAL_PROMPT"] == "0"
+    assert env["GIT_CONFIG_KEY_0"] == "http.https://github.com/.extraheader"
+    assert "AUTHORIZATION: basic " in env["GIT_CONFIG_VALUE_0"]
+    assert "ghs_installation_token" not in str(command)
+    assert "ghs_installation_token" not in str(env["GIT_CONFIG_VALUE_0"])
+
+
+def test_repo_read_rejects_git_c_outside_checkout_root() -> None:
+    class _FakeTenant:
+        tenant_id = "example"
+        github_config = {}
+        policy_config = {}
+
+    class _FakeProject:
+        project_id = "example-default"
+        github_repository = "https://github.com/acme/repo"
+        policy_overrides = {}
+
+    class _FakeContext:
+        tenant = _FakeTenant()
+        project = _FakeProject()
+        stage = "repo_setup"
+        issue_key = "MAB-1"
+        run_id = "run-1"
+        repo_dir = Path("/tmp/checkout")
+        checkout_root = Path("/tmp/checkout")
+
+    with patch("orchestrator.core.runtime.tools._resolve_context", return_value=_FakeContext()):
+        with patch("orchestrator.core.runtime.tools._ensure_repo_checkout_exists"):
+            with patch("orchestrator.core.runtime.tools.subprocess.run") as run_mock:
+                with pytest.raises(PermissionError, match="inside the project checkout root"):
+                    execute_agent_tool(
+                        session=None,  # type: ignore[arg-type]
+                        settings=None,
+                        tenant_id="example",
+                        project_id="example-default",
+                        run_id="run-1",
+                        issue_key="MAB-1",
+                        stage="repo_setup",
+                        tool_name="repo.read",
+                        tool_args={"command": "git -C /tmp/other/repo branch -a"},
+                    )
+    run_mock.assert_not_called()
+
+
+def test_repo_read_bounds_large_output() -> None:
+    class _FakeTenant:
+        tenant_id = "example"
+        github_config = {}
+        policy_config = {}
+
+    class _FakeProject:
+        project_id = "example-default"
+        github_repository = "https://github.com/acme/repo"
+        policy_overrides = {}
+
+    class _FakeContext:
+        tenant = _FakeTenant()
+        project = _FakeProject()
+        stage = "test"
+        issue_key = "MAB-1"
+        run_id = "run-1"
+        repo_dir = Path("/tmp/repo")
+
+    fake_process = SimpleNamespace(returncode=0, stdout="x" * 13000, stderr="")
+    with patch("orchestrator.core.runtime.tools._resolve_context", return_value=_FakeContext()):
+        with patch("orchestrator.core.runtime.tools._ensure_repo_checkout_exists"):
+            with patch("orchestrator.core.runtime.tools.subprocess.run", return_value=fake_process):
+                payload = execute_agent_tool(
+                    session=None,  # type: ignore[arg-type]
+                    settings=None,
+                    tenant_id="example",
+                    project_id="example-default",
+                    run_id="run-1",
+                    issue_key="MAB-1",
+                    stage="test",
+                    tool_name="repo.read",
+                    tool_args={"command": "git status -sb"},
+                )
+
+    assert payload["ok"] is False
+    assert payload["failure_policy"] == "output_overflow"
+    assert payload["output_available"] is False
+    assert payload["stdout"] == ""
+    assert payload["stdout_original_chars"] == 13000
+    assert "Tool output exceeded" in str(payload["error"])
+    assert "narrower repo.read command" in str(payload["retry_guidance"])
 
 
 def test_repo_read_rejects_mutating_git_subcommand() -> None:
@@ -929,6 +1184,43 @@ def test_repo_read_rejects_mutating_git_subcommand() -> None:
                     tool_name="repo.read",
                     tool_args={"command": "git checkout -b bad"},
                 )
+    run_mock.assert_not_called()
+
+
+def test_repo_read_rejects_mutating_git_branch_option() -> None:
+    class _FakeTenant:
+        tenant_id = "example"
+        github_config = {}
+        policy_config = {}
+
+    class _FakeProject:
+        project_id = "example-default"
+        github_repository = "https://github.com/acme/repo"
+        policy_overrides = {}
+
+    class _FakeContext:
+        tenant = _FakeTenant()
+        project = _FakeProject()
+        stage = "repo_setup"
+        issue_key = "MAB-1"
+        run_id = "run-1"
+        repo_dir = Path("/tmp/repo")
+
+    with patch("orchestrator.core.runtime.tools._resolve_context", return_value=_FakeContext()):
+        with patch("orchestrator.core.runtime.tools._ensure_repo_checkout_exists"):
+            with patch("orchestrator.core.runtime.tools.subprocess.run") as run_mock:
+                with pytest.raises(PermissionError, match="mutating git option"):
+                    execute_agent_tool(
+                        session=None,  # type: ignore[arg-type]
+                        settings=None,
+                        tenant_id="example",
+                        project_id="example-default",
+                        run_id="run-1",
+                        issue_key="MAB-1",
+                        stage="repo_setup",
+                        tool_name="repo.read",
+                        tool_args={"command": "git branch -D stale-branch"},
+                    )
     run_mock.assert_not_called()
 
 
@@ -1004,7 +1296,15 @@ def test_repo_read_allows_mutating_git_command_for_dev_stage() -> None:
                 tool_args={"command": "git checkout -b jira/MAB-1-test"},
             )
 
-    assert payload == {"ok": True, "exit_code": 0, "stdout": "", "stderr": ""}
+    assert payload == {
+        "ok": True,
+        "exit_code": 0,
+        "stdout": "",
+        "stderr": "",
+        "stdout_original_chars": 0,
+        "stderr_original_chars": 0,
+        "output_available": True,
+    }
     run_mock.assert_called_once()
 
 
@@ -1463,6 +1763,53 @@ def test_project_request_install_creates_request_and_pauses() -> None:
         "kind_supported": True,
     }
     request_mock.assert_called_once()
+
+
+def test_project_request_install_returns_approved_without_waiting() -> None:
+    class _FakeTenant:
+        tenant_id = "example"
+        github_config = {}
+        policy_config = {}
+
+    class _FakeProject:
+        project_id = "example-default"
+        github_repository = "https://github.com/acme/repo"
+        policy_overrides = {}
+        environment = {}
+        secret_refs = {}
+
+    class _FakeContext:
+        tenant = _FakeTenant()
+        project = _FakeProject()
+        stage = "test"
+        issue_key = "MAB-1"
+        run_id = "run-42"
+        repo_dir = Path("/tmp/repo")
+        run = SimpleNamespace(run_id="run-42", workflow_id="workflow-1", issue_key="MAB-1")
+
+    fake_request = SimpleNamespace(request_id="request-1", request_kind="project_missing_install", status="approved")
+    with (
+        patch("orchestrator.core.runtime.tools._resolve_context", return_value=_FakeContext()),
+        patch("orchestrator.core.runtime.tools.create_install_request", return_value=fake_request),
+    ):
+        payload = execute_agent_tool(
+            session=object(),  # type: ignore[arg-type]
+            settings=SimpleNamespace(secrets_encryption_key=""),
+            tenant_id="example",
+            project_id="example-default",
+            run_id="run-42",
+            issue_key="MAB-1",
+            stage="test",
+            tool_name="project.request_install",
+            tool_args={
+                "kind": "fastlane_lane",
+                "label": "iOS Beta Lane",
+                "reason": "Ticket requires Fastlane delivery",
+            },
+        )
+
+    assert payload["status"] == "approved"
+    assert payload["waiting_for_input"] is False
 
 
 def test_exec_run_install_executes_registered_install() -> None:
