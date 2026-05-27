@@ -162,6 +162,45 @@ def test_development_team_run_workflow_uses_configured_activity_timeouts(monkeyp
     assert "timeout" not in resume_captured
 
 
+def test_development_team_run_workflow_keeps_dispatching_intermediate_queued_results(monkeypatch):
+    captured: dict[str, object] = {"initial_calls": 0}
+    workflow_defn = DevelopmentTeamRunWorkflow()
+
+    async def _fake_execute_activity(fn, payload, *, start_to_close_timeout):
+        target_name = getattr(fn, "__name__", "")
+        assert target_name == "execute_claimed_run_activity"
+        captured["payload"] = payload
+        captured["timeout"] = start_to_close_timeout
+        captured["initial_calls"] = int(captured["initial_calls"]) + 1
+        if captured["initial_calls"] == 1:
+            return DevelopmentTeamRunActivityResult(
+                workflow_id="workflow-123",
+                run_id="run-123",
+                status="queued",
+                issue_key="MAB-215",
+                last_error="Repo setup retry required",
+            )
+        return DevelopmentTeamRunActivityResult(
+            workflow_id="workflow-123",
+            run_id="run-123",
+            status="succeeded",
+            issue_key="MAB-215",
+        )
+
+    monkeypatch.setattr(
+        "orchestrator.temporal.workflows.development_team_run.workflow.execute_activity",
+        _fake_execute_activity,
+    )
+
+    payload = _workflow_input()
+    state = asyncio.run(workflow_defn.run(payload))
+
+    assert state.status == "succeeded"
+    assert captured["initial_calls"] == 2
+    assert captured["payload"] == payload
+    assert captured["timeout"] == timedelta(seconds=321)
+
+
 def test_temporal_engine_advances_handler_backed_workflow_through_temporal_update(monkeypatch):
     captured: dict[str, object] = {}
 

@@ -202,6 +202,23 @@ def _run_result_to_payload(result: DevelopmentTeamRunActivityResult) -> dict[str
     }
 
 
+def _claim_queued_run_for_temporal_activity(*, session, workflow: WorkflowExecution, run: Run) -> Run:  # noqa: ANN001
+    normalized_status = str(getattr(run, "status", "") or "").strip().lower()
+    if normalized_status != "queued":
+        return run
+    temporal_owner = f"temporal:{workflow.workflow_id}"
+    claimed = claim_run_for_dispatch(
+        session,
+        run=run,
+        expected_status="queued",
+        worker_service_instance_id=temporal_owner,
+        claim_id=uuid4().hex,
+    )
+    if claimed is None:
+        raise RuntimeError(f"Unable to claim queued run {run.run_id} for temporal execution")
+    return claimed
+
+
 @activity.defn(name="execute_claimed_run_activity")
 def execute_claimed_run_activity(payload: DevelopmentTeamRunWorkflowInput) -> DevelopmentTeamRunActivityResult:
     settings = get_settings()
@@ -230,48 +247,58 @@ def execute_claimed_run_activity(payload: DevelopmentTeamRunWorkflowInput) -> De
 
         try:
             def _execute(_context) -> DevelopmentTeamRunActivityResult:  # noqa: ANN001
+                claimed_run = _claim_queued_run_for_temporal_activity(session=session, workflow=workflow, run=run)
                 runner = build_workflow_runner_for_session(session=session)
+                claimed_worker_service_instance_id = (
+                    str(getattr(claimed_run, "worker_service_instance_id", "") or "").strip() or None
+                )
+                claimed_claim_id = str(getattr(claimed_run, "claim_id", "") or "").strip()
                 processed = process_claimed_run(
                     session=session,
                     runner=runner,
                     settings=settings,
                     selection=SimpleNamespace(
-                        run=run,
+                        run=claimed_run,
                         tenant=tenant,
                         terminal_run=None,
                         claimed_run=SimpleNamespace(
-                            run=run,
+                            run=claimed_run,
                             tenant=tenant,
                             project=None,
                             effective_policy={},
-                            run_id=run.run_id,
-                            claim_id=str(payload.claim_id or run.claim_id or "").strip(),
-                            worker_service_instance_id=str(getattr(run, "worker_service_instance_id", "") or "").strip(),
-                            status=str(getattr(run, "status", "") or "").strip(),
+                            run_id=claimed_run.run_id,
+                            claim_id=claimed_claim_id,
+                            worker_service_instance_id=claimed_worker_service_instance_id or "",
+                            status=str(getattr(claimed_run, "status", "") or "").strip(),
                         ),
                     ),
                     **_run_process_kwargs_with_operation_attempt_heartbeat(
                         session=session,
                         settings=settings,
                         step=step,
-                        worker_service_instance_id=str(getattr(run, "worker_service_instance_id", "") or "").strip()
-                        or None,
+                        worker_service_instance_id=claimed_worker_service_instance_id,
                     ),
                 )
                 if processed is None:
                     raise RuntimeError(f"Temporal run activity returned no run for workflow_id={workflow.workflow_id}")
-                return _result_for_run(session=session, workflow_id=workflow.workflow_id, run=processed)
+                return _result_for_run(
+                    session=session,
+                    workflow_id=workflow.workflow_id,
+                    run=processed,
+                    claim_id=claimed_claim_id or None,
+                )
 
             result = run_work_unit(
                 session,
                 operation=step.operation,
                 operation_attempt=step.attempt,
                 unit_key="run_attempt_execution.runtime_invocation",
-                idempotency_key=f"run:{run.run_id}:runtime_invocation",
+                idempotency_key=f"run:{run.run_id}:runtime_invocation:{step.attempt.attempt_id}",
                 input_payload={
                     "workflow_id": workflow.workflow_id,
                     "run_id": run.run_id,
                     "attempt_number": run.attempt_number,
+                    "operation_attempt_id": step.attempt.attempt_id,
                     "issue_key": run.issue_key,
                 },
                 execute=_execute,

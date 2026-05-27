@@ -315,6 +315,107 @@ class RunTemporalStreamBoundaryTests(AdminApiTestHarness):
         self.assertIn("Temporal run activity failed: dispatcher exploded", run.last_error or "")
         self.assertEqual(operation.status, "failed")
 
+    def test_run_temporal_activity_reclaims_queued_retry_and_does_not_reuse_old_work_unit(self) -> None:
+        self._insert_jira_connection()
+        tenant_response = self.client.post(
+            "/api/admin/tenants",
+            json=self._tenant_payload(),
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(tenant_response.status_code, 201)
+        now = datetime.now(timezone.utc)
+        claim_id = "claim-run-temporal-requeue"
+        workflow_id = "workflow-run-temporal-requeue"
+        run_id = "run-temporal-requeue"
+        session_factory = create_session_factory(self.database_url)
+
+        with session_factory() as session:
+            add_workflow_attempt(
+                session,
+                workflow_id=workflow_id,
+                run_id=run_id,
+                tenant_id="tenant-a",
+                project_id="tenant-a-default",
+                issue_key="TP-615",
+                issue_summary="Temporal requeue boundary",
+                issue_description="Prove queued retry results are not reused as terminal workflow output.",
+                repo_url="https://github.com/example/repo",
+                branch="feature/temporal-requeue",
+                workflow_type_key="issue_execution",
+                workflow_status="running",
+                run_status="dispatching",
+                attempt_number=1,
+                claim_id=claim_id,
+                worker_service_instance_id="worker:test",
+                dispatch_claimed_at=now,
+                now=now,
+            )
+            session.commit()
+
+        process_calls: list[tuple[str, str, str]] = []
+
+        def _process_claimed_run(*, session, selection, **_kwargs):  # noqa: ANN001, ANN003
+            claimed = selection.claimed_run
+            process_calls.append((str(claimed.run_id), str(claimed.claim_id), str(claimed.worker_service_instance_id)))
+            run = selection.run
+            if len(process_calls) == 1:
+                self.assertEqual(claimed.claim_id, claim_id)
+                self.assertEqual(claimed.worker_service_instance_id, "worker:test")
+                run.status = "queued"
+                run.claim_id = None
+                run.worker_service_instance_id = None
+                run.dispatch_claimed_at = None
+                run.last_heartbeat_at = None
+                session.flush()
+                return run
+            self.assertEqual(claimed.worker_service_instance_id, f"temporal:{workflow_id}")
+            self.assertTrue(claimed.claim_id)
+            self.assertNotEqual(claimed.claim_id, claim_id)
+            run.status = "succeeded"
+            run.finished_at = now
+            session.flush()
+            return run
+
+        payload = DevelopmentTeamRunWorkflowInput(
+            workflow_id=workflow_id,
+            run_id=run_id,
+            claim_id=claim_id,
+            tenant_id="tenant-a",
+            project_id="tenant-a-default",
+            issue_key="TP-615",
+            workflow_execution_timeout_seconds=86400,
+            workflow_run_timeout_seconds=43200,
+            activity_start_to_close_timeout_seconds=300,
+            human_input_resume_timeout_seconds=600,
+        )
+
+        with (
+            patch("orchestrator.temporal.activities.run_execution.build_workflow_runner_for_session", return_value=object()),
+            patch("orchestrator.temporal.activities.run_execution.process_claimed_run", side_effect=_process_claimed_run),
+        ):
+            first_result = execute_claimed_run_activity(payload)
+            second_result = execute_claimed_run_activity(payload)
+
+        with session_factory() as session:
+            operation = session.execute(
+                select(WorkflowOperation).where(
+                    WorkflowOperation.workflow_id == workflow_id,
+                    WorkflowOperation.operation_type == ISSUE_EXECUTION_STEP_RUN_ATTEMPT_EXECUTION,
+                )
+            ).scalar_one()
+            attempts = session.execute(
+                select(WorkflowOperationAttempt).where(
+                    WorkflowOperationAttempt.operation_id == operation.operation_id
+                )
+            ).scalars().all()
+
+        self.assertEqual(first_result.status, "queued")
+        self.assertEqual(second_result.status, "succeeded")
+        self.assertEqual(len(process_calls), 2)
+        self.assertEqual(len(attempts), 2)
+        self.assertTrue(all(attempt.status == "completed" for attempt in attempts))
+        self.assertEqual(operation.status, "completed")
+
     def test_resume_temporal_activity_processes_existing_temporal_claimed_resume_run(self) -> None:
         self._insert_jira_connection()
         tenant_response = self.client.post(
