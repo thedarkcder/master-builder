@@ -1,5 +1,8 @@
 2026-05-27
 
+- Temporal activity retries must be idempotent against terminal runs. If a run has already failed/blocked/succeeded, the activity should return the authoritative terminal state and must not re-enter `process_claimed_run` without worker ownership.
+- Requeue is a workflow control outcome, not a terminal failure. Generic `outcome="requeue"` without a capability target must reset the same run back to queued with the model-provided reason instead of falling through to unsupported-outcome terminalization.
+- Project checkout and branch freshness paths must use the GitHub App installation token for every GitHub network command. Do not let internal `git fetch` paths rely on ambient HTTPS credentials while governed `github.*` tools use app auth.
 - Live workflow pages must refresh the authoritative run/workflow snapshot when stream events arrive; appending logs and status alone leaves stage timelines stale because `run.plan` checkpoint state changes server-side after the initial page load.
 - Repo setup tools must inject GitHub App authentication server-side for all git network operations. Do not make runtime agents rely on ambient HTTPS git credentials; a tool bridge command like `git fetch` must receive auth from Master Builder without exposing the token to the model.
 
@@ -469,3 +472,4 @@
 - Runtime observability writes are not part of the execution contract. ClickHouse/log persistence failures must be surfaced as diagnostics/telemetry errors, but must not terminally fail or block a customer run. Add regression coverage at the invocation or lifecycle boundary when changing this.
 
 - Correction: runtime log sinks should remain async for performance, but async must be best-effort. Do not make workflow success depend on enqueue, background persistence, or final flush success.
+- 2026-05-27: Platform-owned GitHub network operations must use the installed GitHub App authentication path, not ambient git credentials. Agent-authored repository changes can use governed GitHub tools, but checkout/fetch/freshness code must inject the GitHub App installation token into every git command.

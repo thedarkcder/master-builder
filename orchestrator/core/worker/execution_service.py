@@ -11,6 +11,8 @@ from orchestrator.core.config import Settings, get_settings
 from orchestrator.core.observability.agent_observability import record_agent_lifecycle_event
 from orchestrator.core.discord.notifications import send_tenant_discord_message
 from orchestrator.core.integrations.atlassian.links import tenant_jira_issue_url
+from orchestrator.core.platform.secret_service import resolve_platform_secret_ref
+from orchestrator.core.platform.tenant_secret_service import resolve_scoped_secret_ref
 from orchestrator.core.workflow.runtime import build_workflow_runtime
 from orchestrator.core.worker.webhook_job_service import process_next_webhook_job
 from orchestrator.core.worker.jira_stage_service import send_stage_update_to_jira as _send_stage_update_to_jira
@@ -60,6 +62,7 @@ from orchestrator.api.admin.route_helpers import ensure_project_repository_check
 from orchestrator.storage.models import Project, Run, Tenant, WorkflowExecution
 from orchestrator.tools.project_repo_checkout import check_run_snapshot_freshness
 from orchestrator.tools.project_repo_checkout import cleanup_run_workspaces
+from orchestrator.tools.github_app import github_client_from_tenant_config
 
 logger = logging.getLogger(__name__)
 
@@ -88,6 +91,32 @@ def _workflow_request_for_run(
         effective_policy=effective_policy,
         settings=get_settings(),
     )
+
+
+def _github_installation_token_for_project(
+    *,
+    session: Session,
+    settings: Settings,
+    tenant: Tenant,
+    project: Project,
+) -> str:
+    github_config = tenant.github_config or {}
+    github_client = github_client_from_tenant_config(
+        github_config,
+        tenant_secret_lookup=lambda secret_ref: resolve_scoped_secret_ref(
+            session,
+            secret_ref=secret_ref,
+            encryption_key=settings.secrets_encryption_key,
+            tenant_id=tenant.tenant_id,
+            project_id=project.project_id,
+        ),
+        platform_secret_lookup=lambda secret_ref: resolve_platform_secret_ref(
+            session,
+            secret_ref=secret_ref,
+            encryption_key=settings.secrets_encryption_key,
+        ),
+    )
+    return github_client.get_installation_token()
 
 
 def process_next_queued_run(session: Session, runner: WorkflowRunner) -> Run | None:
@@ -230,6 +259,31 @@ def build_run_process_kwargs(
             agent_id=agent_id,
         )
 
+    def _check_run_snapshot_freshness_with_auth(**kwargs: object):
+        tenant_id = str(kwargs.get("tenant_id") or "").strip()
+        project = kwargs.get("project")
+        if not tenant_id:
+            raise ValueError("Snapshot freshness check requires tenant_id")
+        if not isinstance(project, Project):
+            raise ValueError("Snapshot freshness check requires project")
+        tenant = session.get(Tenant, tenant_id)
+        if tenant is None:
+            raise ValueError(f"Snapshot freshness check tenant not found: {tenant_id}")
+        token = _github_installation_token_for_project(
+            session=session,
+            settings=settings,
+            tenant=tenant,
+            project=project,
+        )
+        return check_run_snapshot_freshness(
+            base_dir=str(kwargs.get("base_dir") or ""),
+            tenant_id=tenant_id,
+            project=project,
+            start_point_ref=str(kwargs.get("start_point_ref") or ""),
+            start_point_sha=str(kwargs.get("start_point_sha") or ""),
+            github_installation_token=token,
+        )
+
     return dict(
         logger=logger,
         send_discord_message_fn=send_discord_message_fn,
@@ -267,7 +321,7 @@ def build_run_process_kwargs(
         requeue_run_for_repo_setup_fn=requeue_run_for_repo_setup,
         requeue_workflow_result_for_capability_fn=requeue_workflow_result_for_capability,
         requeue_workflow_result_for_stale_snapshot_fn=requeue_workflow_result_for_stale_snapshot,
-        check_run_snapshot_freshness_fn=check_run_snapshot_freshness,
+        check_run_snapshot_freshness_fn=_check_run_snapshot_freshness_with_auth,
         transition_issue_status_fn=_transition_issue_status,
         emit_agent_event_fn=_emit_agent_event,
         resolve_agent_id_fn=lambda: settings.agent_id,

@@ -41,6 +41,8 @@ from orchestrator.temporal.payloads import (
 )
 
 logger = logging.getLogger(__name__)
+_EXECUTABLE_RUN_STATUSES = {"dispatching", "running"}
+_CLAIMABLE_OR_EXECUTABLE_RUN_STATUSES = {"queued", *_EXECUTABLE_RUN_STATUSES}
 
 
 class _CompositeHeartbeatController:
@@ -267,6 +269,13 @@ def execute_claimed_run_activity(payload: DevelopmentTeamRunWorkflowInput) -> De
         try:
             def _execute(_context) -> DevelopmentTeamRunActivityResult:  # noqa: ANN001
                 claimed_run = _claim_queued_run_for_temporal_activity(session=session, workflow=workflow, run=run)
+                if str(getattr(claimed_run, "status", "") or "").strip().lower() not in _EXECUTABLE_RUN_STATUSES:
+                    return _result_for_run(
+                        session=session,
+                        workflow_id=workflow.workflow_id,
+                        run=claimed_run,
+                        claim_id=str(getattr(claimed_run, "claim_id", "") or "").strip() or None,
+                    )
                 runner = build_workflow_runner_for_session(session=session)
                 claimed_worker_service_instance_id = (
                     str(getattr(claimed_run, "worker_service_instance_id", "") or "").strip() or None
@@ -379,6 +388,13 @@ def resume_human_input_activity(payload: HumanInputResumeInput) -> DevelopmentTe
                     settings=settings,
                     request=request,
                 )
+                if str(getattr(resumed_run, "status", "") or "").strip().lower() not in _CLAIMABLE_OR_EXECUTABLE_RUN_STATUSES:
+                    return _result_for_run(
+                        session=session,
+                        workflow_id=workflow.workflow_id,
+                        run=resumed_run,
+                        claim_id=str(getattr(resumed_run, "claim_id", "") or "").strip() or None,
+                    )
                 temporal_owner = f"temporal:{workflow.workflow_id}"
                 claimed = None
                 if str(resumed_run.status or "").strip().lower() == "dispatching":
@@ -396,6 +412,13 @@ def resume_human_input_activity(payload: HumanInputResumeInput) -> DevelopmentTe
                     )
                 if claimed is None:
                     raise RuntimeError(f"Unable to claim resumed run {resumed_run.run_id} for temporal execution")
+                if str(getattr(claimed, "status", "") or "").strip().lower() not in _EXECUTABLE_RUN_STATUSES:
+                    return _result_for_run(
+                        session=session,
+                        workflow_id=workflow.workflow_id,
+                        run=claimed,
+                        claim_id=str(getattr(claimed, "claim_id", "") or "").strip() or None,
+                    )
                 step.operation.run_id = claimed.run_id
                 session.flush()
                 tenant = session.get(Tenant, claimed.tenant_id)

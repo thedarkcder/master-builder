@@ -65,7 +65,7 @@ class MigrationTests(unittest.TestCase):
 
         duplicates = {revision_id: count for revision_id, count in Counter(revision_ids).items() if count > 1}
         self.assertEqual(duplicates, {})
-        self.assertEqual(script.get_heads(), ["20260527_0113"])
+        self.assertEqual(script.get_heads(), ["20260527_0114"])
 
     def test_project_install_request_label_normalization_migration_canonicalizes_provider_labels(self) -> None:
         module = self._load_migration_module(
@@ -110,7 +110,34 @@ class MigrationTests(unittest.TestCase):
             with engine.connect() as connection:
                 versions = connection.execute(text("SELECT version_num FROM alembic_version")).scalars().all()
 
-            self.assertEqual(versions, ["20260527_0113"])
+            self.assertEqual(versions, ["20260527_0114"])
+
+    def test_requeue_snapshot_reason_repair_migration_backfills_missing_reason(self) -> None:
+        migration = self._load_migration_module(
+            "20260527_0114_repair_requeue_snapshot_reasons.py",
+            "migration_20260527_0114",
+        )
+
+        repaired = migration._repair_requeue_snapshot_reason(
+            {
+                "version": 1,
+                "context": {"trigger_context": {}, "execution_context": {}},
+                "workflow": {
+                    "outcome": "requeue",
+                    "attempts": 1,
+                    "summary": [],
+                    "blocker_message": None,
+                    "requeue_target": None,
+                    "requeue_reason": None,
+                },
+                "events": {"stage_updates": [], "live_stage_updates": [], "stage_trace": [], "workstream_trace": []},
+                "stages": {},
+            }
+        )
+
+        self.assertIsNotNone(repaired)
+        assert repaired is not None
+        self.assertEqual(repaired["workflow"]["requeue_reason"], "Workflow requested requeue.")
 
     def test_workflow_execution_source_external_id_index_is_composite_in_metadata(self) -> None:
         expected_columns = ["tenant_id", "source_system", "source_external_id", "dedupe_scope"]

@@ -77,6 +77,39 @@ def test_ensure_project_checkout_clones_when_repo_missing() -> None:
         assert ".gitignore" in exclude_lines
 
 
+def test_check_run_snapshot_freshness_fetches_with_github_app_auth() -> None:
+    project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/example/repo")
+    with TemporaryDirectory() as tmpdir:
+        repo_dir = Path(tmpdir) / "tenant-a" / "project-1" / "repo"
+        repo_dir.mkdir(parents=True)
+        calls: list[tuple[tuple[str, ...], dict[str, str] | None]] = []
+
+        def _fake_run_git(args: list[str], *, cwd: Path, env: dict[str, str] | None = None) -> str:
+            assert cwd == repo_dir
+            calls.append((tuple(args), env))
+            if args == ["rev-parse", "origin/main"]:
+                return "abc123\n"
+            return ""
+
+        with patch("orchestrator.tools.project_repo_checkout._run_git", side_effect=_fake_run_git):
+            freshness = check_run_snapshot_freshness(
+                base_dir=tmpdir,
+                tenant_id="tenant-a",
+                project=project,
+                start_point_ref="origin/main",
+                start_point_sha="abc123",
+                github_installation_token="token-123",
+            )
+
+        assert freshness.stale is False
+        assert calls[0][0] == ("fetch", "origin", "--prune")
+        assert calls[0][1] is not None
+        assert calls[0][1]["GIT_TERMINAL_PROMPT"] == "0"
+        encoded_credential = calls[0][1]["GIT_CONFIG_VALUE_0"].split(" ", 2)[2]
+        decoded_credential = base64.b64decode(encoded_credential).decode("utf-8")
+        assert decoded_credential == "x-access-token:token-123"
+
+
 def test_github_git_extraheader_uses_basic_auth_with_x_access_token() -> None:
     header = _github_git_extraheader("token-xyz")
     assert header.startswith("AUTHORIZATION: basic ")

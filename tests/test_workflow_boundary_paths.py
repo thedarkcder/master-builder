@@ -323,6 +323,63 @@ class RunTemporalStreamBoundaryTests(AdminApiTestHarness):
         self.assertIn("Temporal run activity failed: dispatcher exploded", run.last_error or "")
         self.assertEqual(operation.status, "failed")
 
+    def test_run_temporal_activity_returns_terminal_run_without_reexecuting(self) -> None:
+        self._insert_jira_connection()
+        tenant_response = self.client.post(
+            "/api/admin/tenants",
+            json=self._tenant_payload(),
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(tenant_response.status_code, 201)
+        now = datetime.now(timezone.utc)
+        workflow_id = "workflow-run-temporal-terminal-retry"
+        run_id = "run-temporal-terminal-retry"
+        session_factory = create_session_factory(self.database_url)
+
+        with session_factory() as session:
+            project = session.get(Project, "tenant-a-default")
+            assert project is not None
+            project.policy_overrides = {"max_dev_test_review_loops": 1}
+            add_workflow_attempt(
+                session,
+                workflow_id=workflow_id,
+                run_id=run_id,
+                tenant_id="tenant-a",
+                project_id="tenant-a-default",
+                issue_key="TP-613",
+                issue_summary="Temporal terminal retry boundary",
+                issue_description="Prove activity retry is idempotent after terminalization.",
+                repo_url="https://github.com/example/repo",
+                branch="feature/temporal-terminal-retry",
+                workflow_type_key="issue_execution",
+                workflow_status="failed",
+                run_status="failed",
+                attempt_number=1,
+                last_error="already failed",
+                now=now,
+            )
+            session.commit()
+
+        with patch("orchestrator.temporal.activities.run_execution.process_claimed_run") as process_mock:
+            result = execute_claimed_run_activity(
+                DevelopmentTeamRunWorkflowInput(
+                    workflow_id=workflow_id,
+                    run_id=run_id,
+                    claim_id="old-claim",
+                    tenant_id="tenant-a",
+                    project_id="tenant-a-default",
+                    issue_key="TP-613",
+                    workflow_execution_timeout_seconds=86400,
+                    workflow_run_timeout_seconds=43200,
+                    activity_start_to_close_timeout_seconds=300,
+                    human_input_resume_timeout_seconds=600,
+                )
+            )
+
+        self.assertEqual(result.status, "failed")
+        self.assertEqual(result.last_error, "already failed")
+        process_mock.assert_not_called()
+
     def test_run_temporal_activity_reclaims_queued_retry_and_does_not_reuse_old_work_unit(self) -> None:
         self._insert_jira_connection()
         tenant_response = self.client.post(
