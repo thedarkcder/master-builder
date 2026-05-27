@@ -8,6 +8,7 @@ from orchestrator.core.knowledge.base import KnowledgeEmbeddingAccessMode
 from orchestrator.core.runtime.invocation import (
     AgentInvocationContext,
     _AsyncRuntimeLogWriter,
+    _emit_invocation_event,
     NativeToolPolicyError,
     RuntimeJsonContractError,
     ToolBridgeProtocolError,
@@ -104,7 +105,7 @@ class CodexInvocationTests(unittest.TestCase):
             "turn.completed usage lines must bypass DB sampling",
         )
 
-    def test_async_runtime_log_writer_isolates_persistence_failures_by_invocation(self) -> None:
+    def test_async_runtime_log_writer_reports_persistence_failures_without_raising(self) -> None:
         writer = _AsyncRuntimeLogWriter()
         writer._batch_size = 100
         writer._batch_flush_ms = 50
@@ -133,12 +134,14 @@ class CodexInvocationTests(unittest.TestCase):
             self.assertTrue(writer.enqueue(context=contexts["bad"], stream="stdout", message="bad line"))
             self.assertTrue(writer.enqueue(context=contexts["good"], stream="stdout", message="good line"))
 
-            with self.assertRaisesRegex(RuntimeError, "bad invocation"):
-                writer.flush_invocation(invocation_id="bad")
-            writer.flush_invocation(invocation_id="good")
+            bad_flush = writer.flush_invocation(invocation_id="bad")
+            good_flush = writer.flush_invocation(invocation_id="good")
 
         self.assertIn(["bad"], persisted_groups)
         self.assertIn(["good"], persisted_groups)
+        self.assertEqual(bad_flush.failure_message, "Runtime log persistence failed for invocation_id=bad: bad invocation")
+        self.assertTrue(good_flush.completed)
+        self.assertIsNone(good_flush.failure_message)
 
     def test_invoke_runtime_json_captures_usage_from_turn_completed_log_line(self) -> None:
         def _request(  # noqa: ANN001
@@ -305,6 +308,91 @@ class CodexInvocationTests(unittest.TestCase):
         self.assertEqual(payload, {"ok": True})
         self.assertEqual(len(writer.flushed_invocations), 1)
         self.assertTrue(writer.flushed_invocations[0].strip())
+
+    def test_invoke_runtime_json_does_not_fail_when_runtime_log_flush_fails(self) -> None:
+        runtime = CodexRuntime(
+            model="m",
+            max_output_tokens=10,
+            command="override",
+            _request=lambda _s, _u, _w, _l=None: '{"ok": true}',
+        )
+        context = AgentInvocationContext(
+            channel="worker",
+            tenant_id="tenant-1",
+            project_id="proj-1",
+            command="workflow",
+            stage="test",
+            working_dir=".",
+            run_id="run-1",
+        )
+        events: list[tuple[str, dict[str, object]]] = []
+
+        class _FailingFlushWriter:
+            def flush_invocation(self, *, invocation_id: str, timeout_seconds: float = 3.0) -> None:
+                _ = invocation_id
+                _ = timeout_seconds
+                raise RuntimeError("ClickHouse query failed: 500 NOT_ENOUGH_SPACE")
+
+        def _capture_event(*, context, event_kind: str, payload: dict[str, object]) -> None:  # noqa: ANN001
+            _ = context
+            events.append((event_kind, payload))
+
+        with (
+            patch("orchestrator.core.runtime.invocation._get_log_writer", return_value=_FailingFlushWriter()),
+            patch("orchestrator.core.runtime.invocation._emit_invocation_event", side_effect=_capture_event),
+        ):
+            payload = invoke_runtime_json(
+                runtime=runtime,
+                context=context,
+                system_prompt="system",
+                user_prompt="user",
+            )
+
+        self.assertEqual(payload, {"ok": True})
+        finished_payload = next(
+            payload
+            for event_kind, payload in events
+            if event_kind == "stage_invocation_finished"
+        )
+        self.assertEqual(finished_payload["status"], "succeeded")
+        self.assertEqual(finished_payload["runtime_log_persistence_failed"], True)
+        self.assertEqual(finished_payload["runtime_log_flush_completed"], False)
+        self.assertIn("NOT_ENOUGH_SPACE", str(finished_payload["runtime_log_persistence_error"]))
+
+    def test_runtime_invocation_event_persistence_failure_is_non_terminal(self) -> None:
+        context = AgentInvocationContext(
+            channel="worker",
+            tenant_id="tenant-1",
+            project_id="proj-1",
+            command="workflow",
+            stage="test",
+            working_dir=".",
+            run_id="run-1",
+            invocation_id="invocation-1",
+            db_session=object(),  # type: ignore[arg-type]
+        )
+
+        with (
+            patch(
+                "orchestrator.core.runtime.invocation.record_observability_stream_event",
+                side_effect=RuntimeError("ClickHouse query failed: 500 NOT_ENOUGH_SPACE"),
+            ),
+            patch(
+                "orchestrator.core.runtime.invocation.get_settings",
+                return_value=SimpleNamespace(agent_id="agent-1"),
+            ),
+            self.assertLogs("orchestrator.core.runtime.invocation", level="ERROR") as logs,
+        ):
+            _emit_invocation_event(
+                context=context,
+                event_kind="stage_invocation_finished",
+                payload={"status": "succeeded"},
+            )
+
+        self.assertTrue(
+            any("runtime_invocation_event_persist_failed" in message for message in logs.output),
+            logs.output,
+        )
 
     def test_invoke_runtime_json_uses_explicit_codex_session_and_persists_it(self) -> None:
         runtime_call: dict[str, str | None] = {}
