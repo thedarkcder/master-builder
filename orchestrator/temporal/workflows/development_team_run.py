@@ -19,6 +19,10 @@ except ImportError as exc:  # pragma: no cover - exercised when temporal backend
     raise RuntimeError("Temporal backend requires temporalio to be installed") from exc
 
 
+MAX_INTERMEDIATE_DISPATCH_RESULTS = 8
+INTERMEDIATE_DISPATCH_STATUSES = {"queued", "dispatching"}
+
+
 @workflow.defn(name="DevelopmentTeamRunWorkflow")
 class DevelopmentTeamRunWorkflow:
     def __init__(self) -> None:
@@ -67,7 +71,15 @@ class DevelopmentTeamRunWorkflow:
         self._activity_timeout_seconds = max(1, int(payload.activity_start_to_close_timeout_seconds or 0))
         self._resume_timeout_seconds = max(1, int(payload.human_input_resume_timeout_seconds or 0))
         self._status = "dispatching"
-        self._apply_result(await self._execute_initial_run(payload))
+        for _ in range(MAX_INTERMEDIATE_DISPATCH_RESULTS):
+            self._apply_result(await self._execute_initial_run(payload))
+            if self._status not in INTERMEDIATE_DISPATCH_STATUSES:
+                break
+        else:
+            raise RuntimeError(
+                f"Workflow {self._workflow_id} stayed in an intermediate dispatch state after "
+                f"{MAX_INTERMEDIATE_DISPATCH_RESULTS} executions."
+            )
         while self._status == "waiting_for_input":
             await workflow.wait_condition(lambda: self._status != "waiting_for_input")
         return self.describe_state()
