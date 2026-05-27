@@ -12,6 +12,7 @@ from orchestrator.core.platform.secret_service import resolve_platform_secret_re
 
 DISCORD_INTERACTIONS_PUBLIC_KEY_SECRET_REF = "DISCORD_INTERACTIONS_PUBLIC_KEY"
 ASK_CONFIRM_CUSTOM_ID_PATTERN = re.compile(r"^ask\.(approve|reject)\.([0-9a-f]{32})$")
+INSTALL_REQUEST_DECISION_CUSTOM_ID_PATTERN = re.compile(r"^install_request\.(approve|reject)\.([0-9a-f]{32})$")
 ASK_REPLY_MODAL_CUSTOM_ID_PATTERN = re.compile(r"^ask\.reply\.([0-9]{15,25})$")
 ASK_REPLY_OPEN_CUSTOM_ID = "ask.reply.open"
 
@@ -115,6 +116,13 @@ def _discord_autocomplete_response(*, choices: list[dict]) -> JSONResponse:
 
 def _parse_ask_confirmation_custom_id(custom_id: str) -> tuple[str, str] | None:
     match = ASK_CONFIRM_CUSTOM_ID_PATTERN.match(custom_id.strip())
+    if match is None:
+        return None
+    return match.group(1), match.group(2)
+
+
+def _parse_install_request_decision_custom_id(custom_id: str) -> tuple[str, str] | None:
+    match = INSTALL_REQUEST_DECISION_CUSTOM_ID_PATTERN.match(custom_id.strip())
     if match is None:
         return None
     return match.group(1), match.group(2)

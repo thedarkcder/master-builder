@@ -84,6 +84,10 @@ class ToolExecutionError(RuntimeInvocationError):
     """Raised when a governed tool execution fails."""
 
 
+class NativeToolPolicyError(RuntimeInvocationError):
+    """Raised when a runtime uses a native tool outside the stage allowlist."""
+
+
 @dataclass(frozen=True)
 class _QueuedLogLine:
     context: AgentInvocationContext
@@ -732,6 +736,7 @@ def invoke_runtime_json(
     system_prompt: str,
     user_prompt: str,
     extra_on_log_line: Callable[[str, str], None] | None = None,
+    allowed_native_tools: set[str] | None = None,
 ) -> dict:
     payload, _ = _invoke_runtime_json_once(
         runtime=runtime,
@@ -739,6 +744,7 @@ def invoke_runtime_json(
         system_prompt=system_prompt,
         user_prompt=user_prompt,
         extra_on_log_line=extra_on_log_line,
+        allowed_native_tools=allowed_native_tools,
     )
     return payload
 
@@ -753,13 +759,17 @@ def invoke_runtime_json_with_tools(
     execute_tool: Callable[[str, dict[str, object]], dict[str, object]],
     extra_on_log_line: Callable[[str, str], None] | None = None,
     max_tool_hops: int = 8,
+    required_tools: set[str] | None = None,
+    allowed_native_tools: set[str] | None = None,
 ) -> dict:
     resume_session_id = str(context.codex_session_id or "").strip() or None
     current_user_prompt = user_prompt
     normalized_allowed_tools = {str(tool).strip() for tool in allowed_tools if str(tool).strip()}
+    normalized_required_tools = {str(tool).strip() for tool in required_tools or set() if str(tool).strip()}
     tool_hops_used = 0
+    final_response_requested = False
 
-    for _tool_hop in range(max(0, int(max_tool_hops)) + 1):
+    for _tool_hop in range(max(0, int(max_tool_hops)) + 2):
         payload, observed_session_id = _invoke_runtime_json_once(
             runtime=runtime,
             context=AgentInvocationContext(
@@ -784,6 +794,7 @@ def invoke_runtime_json_with_tools(
             system_prompt=system_prompt,
             user_prompt=current_user_prompt,
             extra_on_log_line=extra_on_log_line,
+            allowed_native_tools=allowed_native_tools,
         )
         if observed_session_id:
             resume_session_id = observed_session_id
@@ -799,7 +810,19 @@ def invoke_runtime_json_with_tools(
         if response_type != _TOOL_REQUEST_TYPE:
             raise ToolBridgeProtocolError(f"Runtime tool bridge returned unsupported response type '{response_type}'")
         if tool_hops_used >= max_tool_hops:
-            raise ToolBridgeExhaustedError("Runtime tool hop limit exceeded")
+            if final_response_requested:
+                raise ToolBridgeExhaustedError("Runtime tool hop limit exceeded")
+            final_response_requested = True
+            current_user_prompt = _build_tool_result_prompt(
+                tool_result={
+                    "tool_name": str(payload.get("tool_name") or "").strip(),
+                    "ok": False,
+                    "failure_policy": "terminal_tool_hop_limit",
+                    "error": f"Runtime tool hop limit {max_tool_hops} reached.",
+                },
+                require_final_response=True,
+            )
+            continue
 
         tool_hops_used += 1
 
@@ -844,6 +867,25 @@ def invoke_runtime_json_with_tools(
                     "tool_result": tool_result,
                 },
             )
+        except (PermissionError, ValueError) as exc:
+            bridge_result = {
+                "tool_name": tool_name,
+                "ok": False,
+                "required": tool_name in normalized_required_tools,
+                "failure_policy": "correctable_request",
+                "error": str(exc),
+            }
+            _emit_invocation_event(
+                context=context,
+                event_kind="tool_result",
+                payload={
+                    "message": f"Tool {tool_name} failed with a correctable request error.",
+                    "tool_name": tool_name,
+                    "tool_hop": tool_hops_used,
+                    "ok": False,
+                    "error": str(exc),
+                },
+            )
         except Exception as exc:  # noqa: BLE001
             _emit_invocation_event(
                 context=context,
@@ -870,6 +912,7 @@ def _invoke_runtime_json_once(
     system_prompt: str,
     user_prompt: str,
     extra_on_log_line: Callable[[str, str], None] | None = None,
+    allowed_native_tools: set[str] | None = None,
 ) -> tuple[dict, str | None]:
     (
         effective_user_prompt,
@@ -922,6 +965,7 @@ def _invoke_runtime_json_once(
         "db_persisted_lines": 0,
         "raw_lines_written": 0,
         "codex_session_id": resume_session_id or "",
+        "native_tool_policy_violations": "",
     }
     usage_state: dict[str, int | None] = {
         "prompt_tokens": None,
@@ -931,6 +975,11 @@ def _invoke_runtime_json_once(
     }
     runtime_model = str(getattr(runtime, "model", "") or "").strip()
     runtime_command = str(getattr(runtime, "command", "") or "").strip().lower()
+    resolved_allowed_native_tools = _resolve_allowed_native_tools(
+        allowed_native_tools=allowed_native_tools,
+        stage=context.stage,
+        runtime_command=runtime_command,
+    )
     if runtime_command.startswith("http:") and runtime_model:
         resolved_model_override = runtime_model
     _emit_invocation_event(
@@ -967,6 +1016,7 @@ def _invoke_runtime_json_once(
                 extra_on_log_line=extra_on_log_line,
                 sink_state=sink_state,
                 usage_state=usage_state,
+                allowed_native_tools=resolved_allowed_native_tools,
             ),
             reasoning_effort=effective_reasoning_effort,
             model_override=resolved_model_override,
@@ -982,6 +1032,13 @@ def _invoke_runtime_json_once(
                 usage=usage,
             ),
         )
+        native_tool_policy_violations = str(sink_state.get("native_tool_policy_violations") or "").strip()
+        if native_tool_policy_violations:
+            raise NativeToolPolicyError(
+                "Runtime used disallowed native tool(s): "
+                f"{native_tool_policy_violations}. "
+                "Native runtime tools must be enabled through the stage tool allowlist."
+            )
         _emit_runtime_response_event(
             context=invocation_context,
             payload=payload,
@@ -1043,11 +1100,24 @@ def _invoke_runtime_json_once(
 
 
 def _build_tool_result_prompt(*, tool_result: dict[str, object], require_final_response: bool = False) -> str:
-    continuation = (
-        "Continue from this result and return JSON only. "
-        "Tool failures are advisory unless they directly prove a real external blocker. "
-        "Use other available evidence or continue with best-effort reasoning rather than failing solely because a tool failed. "
-    )
+    continuation = "Continue from this result and return JSON only. "
+    if tool_result.get("ok") is False:
+        failure_policy = str(tool_result.get("failure_policy") or "").strip()
+        if failure_policy == "correctable_request":
+            continuation += (
+                "This tool failure means the request shape or permission was invalid, not that the evidence is unavailable. "
+                "If this evidence is needed, issue a corrected allowed tool_request; otherwise explain why the evidence is unnecessary in the final_response. "
+            )
+        elif tool_result.get("required") is True:
+            continuation += (
+                "This failed tool is required evidence. Do not treat it as advisory; return a blocker unless a corrected allowed tool_request can obtain the same evidence. "
+            )
+        else:
+            continuation += (
+                "This failed tool is advisory only when independent evidence is sufficient; otherwise return a blocker that names the missing evidence. "
+            )
+    else:
+        continuation += "Use the tool result as evidence for the next tool_request or final_response. "
     if require_final_response:
         continuation += "Do not issue another tool_request. Return a final_response now."
     else:
@@ -1128,12 +1198,92 @@ def _capture_usage_metrics(*, usage_state: dict[str, int | None], usage: dict[st
             usage_state[key] = value
 
 
+_NATIVE_TOOL_ALIASES = {
+    "web.search": "web.search",
+    "web_search": "web.search",
+    "web-search": "web.search",
+    "web_search_call": "web.search",
+    "web-search-call": "web.search",
+    "web.fetch": "web.fetch",
+    "web_fetch": "web.fetch",
+    "web-fetch": "web.fetch",
+    "browser.open": "browser.open",
+    "browser_open": "browser.open",
+    "browser-open": "browser.open",
+    "browser.snapshot": "browser.snapshot",
+    "browser_snapshot": "browser.snapshot",
+    "browser-snapshot": "browser.snapshot",
+}
+
+
+def _normalize_native_tool_name(value: object) -> str | None:
+    normalized = str(value or "").strip().lower()
+    if not normalized:
+        return None
+    return _NATIVE_TOOL_ALIASES.get(normalized)
+
+
+def _resolve_allowed_native_tools(
+    *,
+    allowed_native_tools: set[str] | None,
+    stage: str,
+    runtime_command: str,
+) -> set[str]:
+    if allowed_native_tools is not None:
+        return {str(tool).strip() for tool in allowed_native_tools if str(tool).strip()}
+    from orchestrator.core.runtime.tools import native_model_tools_for_stage
+
+    return native_model_tools_for_stage(stage, runtime_command=runtime_command)
+
+
+def _native_tool_names_from_log_payload(payload: object) -> set[str]:
+    observed: set[str] = set()
+    if isinstance(payload, dict):
+        for key in ("tool_name", "tool", "name", "type"):
+            native_tool_name = _normalize_native_tool_name(payload.get(key))
+            if native_tool_name is not None:
+                observed.add(native_tool_name)
+        for value in payload.values():
+            observed.update(_native_tool_names_from_log_payload(value))
+    elif isinstance(payload, list):
+        for item in payload:
+            observed.update(_native_tool_names_from_log_payload(item))
+    return observed
+
+
+def _record_native_tool_policy_observations(
+    *,
+    sink_state: dict[str, int | bool | str],
+    message_text: str,
+    allowed_native_tools: set[str],
+) -> None:
+    try:
+        payload = json.loads(message_text)
+    except json.JSONDecodeError:
+        return
+    observed = _native_tool_names_from_log_payload(payload)
+    if not observed:
+        return
+    allowed = {str(tool).strip() for tool in allowed_native_tools if str(tool).strip()}
+    disallowed = sorted(observed - allowed)
+    if not disallowed:
+        return
+    existing = {
+        item.strip()
+        for item in str(sink_state.get("native_tool_policy_violations") or "").split(",")
+        if item.strip()
+    }
+    existing.update(disallowed)
+    sink_state["native_tool_policy_violations"] = ", ".join(sorted(existing))
+
+
 def _combined_log_sink(
     *,
     context: AgentInvocationContext,
     extra_on_log_line: Callable[[str, str], None] | None,
-    sink_state: dict[str, int | bool],
+    sink_state: dict[str, int | bool | str],
     usage_state: dict[str, int | None],
+    allowed_native_tools: set[str] | None,
 ) -> Callable[[str, str], None]:
     telemetry_sink = build_runtime_log_sink(
         channel=context.channel,
@@ -1152,6 +1302,11 @@ def _combined_log_sink(
     def _sink(stream: str, message: str) -> None:
         telemetry_sink(stream, message)
         message_text = str(message or "")
+        _record_native_tool_policy_observations(
+            sink_state=sink_state,
+            message_text=message_text,
+            allowed_native_tools=allowed_native_tools,
+        )
         sanitized_message = redact_sensitive_text(message_text)
         parsed_usage = extract_turn_completed_usage(message_text)
         usage_from_line: dict[str, int] | None = None

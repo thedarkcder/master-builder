@@ -78,6 +78,38 @@ class DiscordFollowupFormatTests(unittest.TestCase):
         self.assertIn("- Issue: MAB-50", message)
         self.assertIn("- Run ID: `run-123`", message)
 
+    def test_run_decision_gate_response_is_not_formatted_as_queued(self) -> None:
+        pattern = re.compile(r"\b[A-Z][A-Z0-9_]+-\d+\b")
+        response = self._response(
+            command="run",
+            message="Decision Gate still needs clarification for `MAB-50`.\n- Who owns sign-off?",
+            data={"issue_key": "mab-50", "recheck_required": True, "followup_context_type": "decision_gate"},
+        )
+
+        message = build_command_followup_message(
+            user_id="u3",
+            command_response=response,
+            jira_browse_base_url=None,
+            issue_key_pattern=pattern,
+        )
+
+        self.assertIn("<@u3> Decision Gate still needs clarification for `MAB-50`.", message)
+        self.assertIn("Who owns sign-off?", message)
+        self.assertNotIn("Run queued.", message)
+        self.assertNotIn("Queued:", message)
+
+    def test_run_response_without_run_id_or_recheck_is_invalid(self) -> None:
+        pattern = re.compile(r"\b[A-Z][A-Z0-9_]+-\d+\b")
+        response = self._response(command="run", data={"issue_key": "mab-50"})
+
+        with self.assertRaisesRegex(ValueError, "run response must include run_id"):
+            build_command_followup_message(
+                user_id="u3",
+                command_response=response,
+                jira_browse_base_url=None,
+                issue_key_pattern=pattern,
+            )
+
     def test_runs_and_status_commands_include_entries(self) -> None:
         pattern = re.compile(r"\b[A-Z][A-Z0-9_]+-\d+\b")
         runs_response = self._response(

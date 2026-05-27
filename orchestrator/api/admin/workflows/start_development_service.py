@@ -1,11 +1,18 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
+
 from fastapi import HTTPException, status
+from sqlalchemy import select
 
 from orchestrator.api.admin.schema_mappers import workflow_operation_attempt_to_schema
 from orchestrator.api.admin.workflows.execution_read_service import workflow_schema
 from orchestrator.api.admin.workflows.queries import workflow_by_execution_id
-from orchestrator.api.schemas import StartEngineeringPreviewRead, StartWorkIssueRead, WorkflowStartWorkRead
+from orchestrator.api.schemas import (
+    StartEngineeringPreviewRead,
+    StartWorkIssueRead,
+    WorkflowStartWorkRead,
+)
 from orchestrator.api.webhooks.contracts import create_jira_comment, post_jira_comment
 from orchestrator.core.config import get_settings
 from orchestrator.core.development.start_work import StartWorkUseCase
@@ -13,7 +20,24 @@ from orchestrator.core.development.start_work_links import verify_start_work_act
 from orchestrator.core.integrations.atlassian.parent_child_sync_shared import JiraParentChildSyncContext
 from orchestrator.core.parent_feature_workflow.adapters import _JiraParentIssueGateway
 from orchestrator.core.security import AuthenticatedPrincipal, require_tenant_workspace_access
-from orchestrator.storage.models import Project, Tenant, WorkflowOperationAttempt
+from orchestrator.storage.models import Project, Tenant, WorkflowExecutableWorkItem, WorkflowExecution, WorkflowOperationAttempt
+
+
+@dataclass(frozen=True)
+class StartWorkItemBoardResult:
+    work_item_id: str
+    action: str
+    result: object
+    workflow: object
+    started_attempt: object | None
+
+    @property
+    def queued(self):  # noqa: ANN201
+        return self.result.queued
+
+    @property
+    def skipped(self):  # noqa: ANN201
+        return self.result.skipped
 
 
 def start_work_result_to_schema(*, result, workflow, started_attempt, workflow_to_schema_fn, run_to_schema_fn, session):  # noqa: ANN001
@@ -173,3 +197,104 @@ def start_engineering_from_action(
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     return result, workflow, session.get(WorkflowOperationAttempt, result.attempt_id) if result.attempt_id else None
 
+
+def start_work_item_from_board(
+    *,
+    session,
+    work_item_id: str,
+    principal: AuthenticatedPrincipal,
+    integration_router,
+):  # noqa: ANN001
+    work_item = session.get(WorkflowExecutableWorkItem, str(work_item_id or "").strip())
+    if work_item is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Executable work item not found")
+    workflow = session.get(WorkflowExecution, work_item.parent_workflow_id)
+    if workflow is None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Executable work item parent workflow is missing")
+    if str(workflow.status or "").strip().casefold() != "completed":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Parent planning must complete before work can start")
+    if work_item.item_kind == "parent":
+        existing_children = session.execute(
+            select(WorkflowExecutableWorkItem.work_item_id)
+            .where(
+                WorkflowExecutableWorkItem.parent_workflow_id == workflow.workflow_id,
+                WorkflowExecutableWorkItem.item_kind == "child",
+            )
+            .limit(1)
+        ).scalar_one_or_none()
+        if existing_children is not None:
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Start child work items individually")
+    elif work_item.item_kind != "child":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Unsupported executable work item kind")
+    if str(work_item.mb_work_state or "").strip() != "planning_candidate":
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Executable work item is not ready to start")
+    result, workflow, started_attempt = _start_projected_issue_from_board(
+        session=session,
+        workflow=workflow,
+        work_item=work_item,
+        principal=principal,
+        integration_router=integration_router,
+    )
+    return StartWorkItemBoardResult(
+        work_item_id=work_item.work_item_id,
+        action="engineering",
+        result=result,
+        workflow=workflow,
+        started_attempt=started_attempt,
+    )
+
+
+def _start_projected_issue_from_board(
+    *,
+    session,
+    workflow: WorkflowExecution,
+    work_item: WorkflowExecutableWorkItem,
+    principal: AuthenticatedPrincipal,
+    integration_router,
+):  # noqa: ANN001
+    require_tenant_workspace_access(principal=principal, tenant_id=workflow.tenant_id)
+    tenant = session.get(Tenant, workflow.tenant_id)
+    project_id = str(workflow.project_id or "").strip()
+    project = session.get(Project, project_id) if project_id else None
+    if tenant is None:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Workflow tenant is missing")
+    if project is None or project.tenant_id != tenant.tenant_id:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Workflow project is not available")
+    parent_issue_key = str(workflow.source_ref or "").strip().upper()
+    issue_key = str(work_item.issue_key or "").strip().upper()
+    if not issue_key:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Executable work item is missing issue key")
+    settings = get_settings()
+    gateway = _JiraParentIssueGateway(
+        session=session,
+        settings=settings,
+        context=JiraParentChildSyncContext(
+            request_id=f"start-work-item-board:{work_item.work_item_id}",
+            tenant_id=tenant.tenant_id,
+            tenant=tenant,
+            project_id=project.project_id,
+            issue_key=parent_issue_key,
+            issue_labels=[],
+            payload={"work_item_id": work_item.work_item_id},
+            webhook_event="start_work_item_board",
+            comment_command=None,
+            comment_command_argument=None,
+        ),
+        integration_router=integration_router,
+        post_jira_comment_fn=post_jira_comment,
+        create_jira_comment_fn=create_jira_comment,
+    )
+    actor = principal.email or principal.username or principal.user_id or "board_start_work_item"
+    try:
+        result = StartWorkUseCase(session=session, issue_gateway=gateway).start(
+            tenant=tenant,
+            project=project,
+            issue_key=issue_key,
+            target_status="To Do",
+            actor=actor,
+            reason="project_board_start_work_item",
+            require_source_workflow_completed=False,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    return result, workflow, session.get(WorkflowOperationAttempt, result.attempt_id) if result.attempt_id else None

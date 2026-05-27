@@ -17,7 +17,7 @@ _TOP_REVISION_IDS = {
 }
 
 _ORPHANED_REVISION_REPAIRS = {
-    "20260509_0122": "20260505_0106",
+    "20260509_0122": "20260523_0107",
 }
 
 
@@ -134,10 +134,10 @@ def _repair_stamp_if_schema_ahead_of_version(database_url: str) -> None:
         engine.dispose()
 
 
-def _head_revision_is_materialized(inspector: sa.Inspector, head_revision: str) -> bool:
-    if head_revision != "20260505_0106":
+def _repair_revision_is_materialized(inspector: sa.Inspector, repair_revision: str) -> bool:
+    if repair_revision != "20260523_0107":
         raise RuntimeError(
-            f"Orphaned alembic revision repair is not configured for branch head {head_revision}; "
+            f"Orphaned alembic revision repair is not configured for repair target {repair_revision}; "
             "add an explicit schema contract before repairing stale stamps."
         )
     return (
@@ -147,6 +147,7 @@ def _head_revision_is_materialized(inspector: sa.Inspector, head_revision: str) 
         and _column_exists(inspector, "workflow_operation_attempts", "last_heartbeat_at")
         and _column_exists(inspector, "workflow_operation_attempts", "lease_expires_at")
         and _column_exists(inspector, "workflow_operation_attempts", "lease_owner")
+        and _table_exists(inspector, "workflow_executable_work_items")
         and _index_columns(
             inspector,
             "workflow_executions",
@@ -157,6 +158,7 @@ def _head_revision_is_materialized(inspector: sa.Inspector, head_revision: str) 
 
 
 def _repair_orphaned_revision_stamp(database_url: str, head_revision: str) -> None:
+    _ = head_revision
     engine = create_engine(database_url)
     try:
         with engine.begin() as connection:
@@ -175,21 +177,15 @@ def _repair_orphaned_revision_stamp(database_url: str, head_revision: str) -> No
             expected_head = _ORPHANED_REVISION_REPAIRS.get(current_revision)
             if expected_head is None:
                 return
-            if expected_head != head_revision:
+            if not _repair_revision_is_materialized(inspector, expected_head):
                 raise RuntimeError(
                     "Database is stamped to orphaned Alembic revision "
-                    f"{current_revision}, which repairs to {expected_head}, but this branch head is {head_revision}. "
-                    "Manual migration intervention is required."
-                )
-            if not _head_revision_is_materialized(inspector, head_revision):
-                raise RuntimeError(
-                    "Database is stamped to orphaned Alembic revision "
-                    f"{current_revision}, but the live schema does not satisfy head revision {head_revision}. "
+                    f"{current_revision}, but the live schema does not satisfy repair target {expected_head}. "
                     "Manual migration intervention is required."
                 )
             connection.execute(
                 text("UPDATE alembic_version SET version_num = :head_revision"),
-                {"head_revision": head_revision},
+                {"head_revision": expected_head},
             )
     finally:
         engine.dispose()

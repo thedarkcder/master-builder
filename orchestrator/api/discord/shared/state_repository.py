@@ -2,10 +2,11 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import or_, select
 
 from orchestrator.core.discord.policy import channel_ids_from_discord_config
-from orchestrator.storage.models import Project, Tenant
+from orchestrator.core.pm.followup_context_service import ACTIVE_FOLLOWUP_CONTEXT_STATUS
+from orchestrator.storage.models import FollowupContext, Project, Tenant
 
 
 def _tenant_primary_channel_id(tenant: Tenant) -> str | None:
@@ -18,6 +19,13 @@ def resolve_project_for_discord_channel(*, session, tenant_id: str, channel_id: 
     normalized_channel_id = str(channel_id or "").strip()
     if not normalized_channel_id:
         return None
+    followup_project = _resolve_project_from_active_followup_context(
+        session=session,
+        tenant_id=tenant_id,
+        channel_id=normalized_channel_id,
+    )
+    if followup_project is not None:
+        return followup_project
     projects = session.execute(
         select(Project).where(
             Project.tenant_id == tenant_id,
@@ -33,6 +41,37 @@ def resolve_project_for_discord_channel(*, session, tenant_id: str, channel_id: 
         if tenant_channel_id and normalized_channel_id == tenant_channel_id and len(projects) == 1:
             return projects[0]
     return None
+
+
+def _resolve_project_from_active_followup_context(*, session, tenant_id: str, channel_id: str) -> Project | None:
+    normalized_tenant_id = str(tenant_id or "").strip()
+    normalized_channel_id = str(channel_id or "").strip()
+    if not normalized_tenant_id or not normalized_channel_id:
+        return None
+    contexts = session.execute(
+        select(FollowupContext.project_id)
+        .where(
+            FollowupContext.tenant_id == normalized_tenant_id,
+            FollowupContext.status == ACTIVE_FOLLOWUP_CONTEXT_STATUS,
+            FollowupContext.project_id.is_not(None),
+            or_(
+                FollowupContext.thread_channel_id == normalized_channel_id,
+                FollowupContext.channel_id == normalized_channel_id,
+            ),
+        )
+        .order_by(FollowupContext.updated_at.desc())
+    ).all()
+    project_ids: list[str] = []
+    for (project_id,) in contexts:
+        normalized_project_id = str(project_id or "").strip()
+        if normalized_project_id and normalized_project_id not in project_ids:
+            project_ids.append(normalized_project_id)
+    if len(project_ids) != 1:
+        return None
+    project = session.get(Project, project_ids[0])
+    if project is None or project.tenant_id != normalized_tenant_id or project.is_archived:
+        return None
+    return project
 
 
 def project_allowed_channel_ids(*, session, tenant_id: str) -> set[str]:

@@ -37,6 +37,7 @@ from orchestrator.api.discord.interactions.auth import (
     _discord_interaction_response,
     _discord_modal_text_value,
     _parse_ask_confirmation_custom_id,
+    _parse_install_request_decision_custom_id,
     _parse_ask_reply_modal_custom_id,
 )
 from orchestrator.api.discord.interactions.dispatcher import DiscordInteractionDispatchDeps
@@ -49,6 +50,7 @@ from orchestrator.api.discord.interactions.followup import (
     _run_discord_ask_confirmation_followup,
     _run_discord_command_followup,
     _run_discord_decision_gate_reply_followup,
+    _run_project_install_request_decision_followup,
 )
 from orchestrator.api.discord.interactions.followup_transport import (
     send_discord_interaction_callback,
@@ -89,6 +91,11 @@ from orchestrator.core.runs.human_input_service import (
     answer_human_input_request,
     pending_human_input_for_request_id,
     resume_workflow_from_human_input_answer,
+)
+from orchestrator.core.platform.install_request_service import (
+    approve_install_request,
+    get_project_install_request,
+    reject_install_request,
 )
 from orchestrator.core.platform.secret_service import (
     PLATFORM_SECRET_DISCORD_BOT_TOKEN_REF,
@@ -438,6 +445,7 @@ class DiscordGatewayListener:
             interaction_modal_response=_discord_interaction_modal_response,
             interaction_deferred_response=_discord_interaction_deferred_response,
             parse_ask_confirmation_custom_id=_parse_ask_confirmation_custom_id,
+            parse_install_request_decision_custom_id=_parse_install_request_decision_custom_id,
             parse_ask_reply_modal_custom_id=_parse_ask_reply_modal_custom_id,
             discord_modal_text_value=_discord_modal_text_value,
             find_tenant_for_discord_channel=_find_tenant_for_discord_channel,
@@ -448,6 +456,7 @@ class DiscordGatewayListener:
             resolve_followup_context=_interaction_resolve_followup_context,
             resolve_followup_reaction=_interaction_resolve_followup_reaction,
             run_discord_ask_confirmation_followup=_run_discord_ask_confirmation_followup,
+            run_project_install_request_decision_followup=_run_project_install_request_decision_followup,
             run_discord_command_followup=_run_discord_command_followup,
             run_discord_decision_gate_reply_followup=_run_discord_decision_gate_reply_followup,
             run_discord_application_command_followup=_run_discord_application_command_followup,
@@ -509,6 +518,9 @@ class DiscordGatewayListener:
             load_pending_human_input_request=pending_human_input_for_request_id,
             answer_human_input_request=answer_human_input_request,
             resume_workflow_from_human_input_answer=resume_workflow_from_human_input_answer,
+            load_project_install_request=get_project_install_request,
+            approve_install_request=approve_install_request,
+            reject_install_request=reject_install_request,
             resolve_followup_context_match=resolve_followup_context_match,
             resolve_followup_context=resolve_followup_context,
             resolve_followup_reaction=resolve_followup_reaction,

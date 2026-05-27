@@ -1,15 +1,19 @@
 from __future__ import annotations
 
+import logging
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from typing import Callable
 
+from fastapi import HTTPException
 from sqlalchemy import or_, select
 from sqlalchemy.orm import Session
 
 from orchestrator.api.schemas import WorkflowOperationRestartRequest, WorkflowOperationRetryRead
 from orchestrator.core.workflow.operation_service import OPERATION_STATUS_RUNNING
 from orchestrator.storage.models import WorkflowExecution, WorkflowOperation, WorkflowOperationAttempt
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -84,17 +88,30 @@ def recover_stale_workflow_operation_attempts(
     recovered = 0
     for stale_ref in stale_refs:
         with session_factory() as session:
-            restart_workflow_operation_fn(
-                session=session,
-                execution_id=stale_ref.execution_id,
-                operation_id=stale_ref.operation_id,
-                actor=actor,
-                payload=WorkflowOperationRestartRequest(
-                    restart_reason=(
-                        "Recovered stale running workflow operation attempt "
-                        f"{stale_ref.attempt_number} ({stale_ref.attempt_id})."
-                    )
-                ),
-            )
+            try:
+                restart_workflow_operation_fn(
+                    session=session,
+                    execution_id=stale_ref.execution_id,
+                    operation_id=stale_ref.operation_id,
+                    actor=actor,
+                    payload=WorkflowOperationRestartRequest(
+                        restart_reason=(
+                            "Recovered stale running workflow operation attempt "
+                            f"{stale_ref.attempt_number} ({stale_ref.attempt_id})."
+                        )
+                    ),
+                )
+            except HTTPException as exc:
+                session.rollback()
+                logger.warning(
+                    "stale_workflow_operation_recovery_skipped execution_id=%s operation_id=%s attempt_id=%s "
+                    "status_code=%s detail=%s",
+                    stale_ref.execution_id,
+                    stale_ref.operation_id,
+                    stale_ref.attempt_id,
+                    exc.status_code,
+                    exc.detail,
+                )
+                continue
             recovered += 1
     return recovered

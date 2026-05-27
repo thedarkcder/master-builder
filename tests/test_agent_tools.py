@@ -515,6 +515,8 @@ def test_github_push_branch_uses_canonical_run_branch() -> None:
 
     def _fake_run_git(_repo_dir: Path, args: list[str], *, token: str | None = None) -> str:
         git_calls.append((args, token))
+        if args == ["rev-parse", "HEAD"]:
+            return "abc123"
         return ""
 
     with (
@@ -522,6 +524,10 @@ def test_github_push_branch_uses_canonical_run_branch() -> None:
         patch("orchestrator.core.runtime.tools._ensure_repo_checkout_exists"),
         patch("orchestrator.core.runtime.tools.github_client_from_tenant_config", return_value=_FakeGitHubClient()),
         patch("orchestrator.core.runtime.tools._run_git", side_effect=_fake_run_git),
+        patch(
+            "orchestrator.core.runtime.tools.record_pushed_execution_artifact",
+            return_value=SimpleNamespace(artifact_id="artifact-1"),
+        ) as artifact_mock,
     ):
         payload = execute_agent_tool(
             session=SimpleNamespace(flush=lambda: None),  # type: ignore[arg-type]
@@ -535,10 +541,16 @@ def test_github_push_branch_uses_canonical_run_branch() -> None:
             tool_args={"branch_name": "run/mab-1/run-1"},
         )
 
-    assert payload == {"branch_name": "feature/MAB-1-shared"}
+    assert payload == {
+        "branch_name": "feature/MAB-1-shared",
+        "commit_sha": "abc123",
+        "artifact_id": "artifact-1",
+    }
     assert git_calls == [
         (["push", "-u", "origin", "HEAD:feature/MAB-1-shared"], "token-123"),
+        (["rev-parse", "HEAD"], None),
     ]
+    artifact_mock.assert_called_once()
 
 
 def test_github_open_pr_reuses_existing_pull_request() -> None:

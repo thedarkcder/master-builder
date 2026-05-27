@@ -1,9 +1,10 @@
 from __future__ import annotations
 
+import json
 import logging
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Request, status
+from fastapi import APIRouter, Depends, Request, status
 from sqlalchemy.orm import Session
 
 from orchestrator.api.dependencies import get_session
@@ -15,6 +16,7 @@ from orchestrator.api.discord.interactions.auth import (
     _resolve_discord_interactions_public_key,
     _validate_discord_interaction_signature,
 )
+from orchestrator.api.discord.shared.state_repository import resolve_project_for_discord_channel
 from orchestrator.api.webhooks.payload_utils import read_json_payload as _read_json_payload
 from orchestrator.api.transport_runtime import execute_http_ingress_result
 from orchestrator.core.communications import (
@@ -92,9 +94,26 @@ async def ingest_discord_interaction(
                 task_scheduler=lambda coro: coro,
                 logger=logger,
             ).find_tenant_for_discord_channel,
+            resolve_project_for_discord_channel=resolve_project_for_discord_channel,
         )
         if not tenant_id:
-            raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Unable to resolve interaction tenant")
+            logger.warning(
+                "discord_interaction_scope_unresolved request_id=%s interaction_id=%s channel_id=%s",
+                request_id,
+                str(payload.get("id") or "").strip(),
+                str(payload.get("channel_id") or "").strip(),
+            )
+            _close_deferred_interaction_work(result=result)
+            result = _unresolved_interaction_scope_result()
+            return execute_http_ingress_result(
+                result=result,
+                envelope=TransportEnvelope(
+                    transport="discord_http",
+                    event_type="interaction_create",
+                    request_id=request_id,
+                    payload=payload,
+                ),
+            )
         enqueue_result = enqueue_webhook_job(
             session,
             request=WebhookJobEnqueueRequest(
@@ -129,6 +148,28 @@ async def ingest_discord_interaction(
     return execute_http_ingress_result(
         result=_http_result_from_interaction_result(result),
         envelope=http_envelope,
+    )
+
+
+def _unresolved_interaction_scope_result() -> IngressResult:
+    return IngressResult(
+        actions=(
+            HttpJsonResponseBytesAction(
+                status_code=status.HTTP_200_OK,
+                body=json.dumps(
+                    {
+                        "type": 4,
+                        "data": {
+                            "content": "I could not map this Discord channel to an enabled Master Builder workspace.",
+                            "flags": 64,
+                        },
+                    },
+                    separators=(",", ":"),
+                ).encode("utf-8"),
+                headers={"content-type": "application/json"},
+            ),
+        ),
+        deferred_work=(),
     )
 
 

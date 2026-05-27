@@ -7,6 +7,7 @@ from orchestrator.core.decision.planner import DecisionPlannerQuestion, Decision
 from orchestrator.core.decision.gate import DecisionGateResult
 from orchestrator.core.gtd import GoodToDoValidationResult
 from orchestrator.core.precheck.pre_run_check import PreRunCheckResult
+from orchestrator.core.runtime.payload_models import InteractionAction, InteractionResponse
 from orchestrator.tools.atlassian_oauth import JiraIssueDetail, JiraIssuePreview
 from tests.test_support.discord_command_reply_harness import DiscordCommandReplyHarness
 
@@ -265,6 +266,162 @@ class DiscordReplyCommandFlowTests(DiscordCommandReplyHarness):
         dispatch_mock.assert_not_called()
         preview_mock.assert_not_called()
         build_message_mock.assert_not_called()
+
+    def test_reply_question_returns_conversation_response_without_recheck(self) -> None:
+        oauth_client = SimpleNamespace(
+            get_issue_detail=MagicMock(
+                return_value=SimpleNamespace(summary="HubSpot billing", description="Objective: clarify HubSpot subscription rules")
+            ),
+            add_issue_comment=MagicMock(),
+        )
+        oauth_context = {
+            "connection": SimpleNamespace(cloud_id="cloud-1"),
+            "access_token": "tok-1",
+            "client": oauth_client,
+        }
+        question_feedback = (
+            {
+                "question_id": "decision_owner",
+                "question_text": "Who is the single accountable decision owner for TP-248?",
+                "answer": "stake holder",
+                "note": "Current answer 'stake holder' is not a specific accountable person.",
+                "status": "answered",
+            },
+            {
+                "question_id": "hubspot_subscription_rules",
+                "question_text": "Which HubSpot information should decide whether the customer subscription is active, overdue, cancelled, or expired?",
+                "note": "Annual invoice is confirmed as billing source, but the business rules for subscription status are not clear yet.",
+                "status": "answered",
+            },
+        )
+
+        with (
+            patch("orchestrator.api.discord.ingress.jira_runtime.tenant_atlassian_oauth_context", return_value=oauth_context),
+            patch("orchestrator.api.discord.ingress.executor.build_codex_runtime", return_value=SimpleNamespace()),
+            patch(
+                "orchestrator.api.discord.commands.run_controls.active_case_and_cycle_for_issue",
+                return_value=(SimpleNamespace(case_id="case-1"), SimpleNamespace(cycle_id="cycle-1")),
+            ),
+            patch(
+                "orchestrator.api.discord.commands.run_controls.list_cycle_answers",
+                return_value=[],
+            ),
+            patch(
+                "orchestrator.api.discord.commands.run_controls.interpret_decision_reply",
+                return_value=InteractionResponse(
+                    message=(
+                        "I need to know which HubSpot information the product should trust before we link the "
+                        "tenant subscription, and which business statuses should make access active, overdue, "
+                        "cancelled, or expired."
+                    ),
+                    actions=(),
+                ),
+            ) as interpret_mock,
+            patch(
+                "orchestrator.api.discord.commands.run_controls.load_cycle_question_feedback",
+                return_value=question_feedback,
+            ),
+            patch(
+                "orchestrator.api.discord.ingress.executor._default_decision_clarification_port.capture_decision_reply_and_recheck"
+            ) as reply_recheck_mock,
+        ):
+            response = self.client.post(
+                f"/discord/command/{self.tenant_id}",
+                json={
+                    "user_id": "u-admin",
+                    "channel_id": "discord-channel-1",
+                    "command": "!reply TP-248 What fields do you need?",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertTrue(body["ok"])
+        self.assertEqual(body["command"], "reply")
+        self.assertTrue(body["data"]["conversation_response"])
+        self.assertIn("which HubSpot information the product should trust", body["message"])
+        self.assertIn("which business statuses should make access", body["message"])
+        self.assertNotIn("object-to-field", body["message"])
+        self.assertNotIn("properties", body["message"])
+        self.assertNotIn("plain English", body["message"])
+        self.assertNotIn("Please reply with:", body["message"])
+        self.assertEqual(interpret_mock.call_args.kwargs["issue_summary"], "HubSpot billing")
+        self.assertEqual(interpret_mock.call_args.kwargs["issue_description"], "Objective: clarify HubSpot subscription rules")
+        reply_recheck_mock.assert_not_called()
+        oauth_client.add_issue_comment.assert_not_called()
+
+    def test_reply_capture_action_without_recheck_persists_without_rechecking(self) -> None:
+        oauth_client = SimpleNamespace(
+            get_issue_detail=MagicMock(
+                return_value=SimpleNamespace(summary="HubSpot billing", description="Objective: clarify HubSpot subscription rules")
+            ),
+            add_issue_comment=MagicMock(),
+        )
+        oauth_context = {
+            "connection": SimpleNamespace(cloud_id="cloud-1"),
+            "access_token": "tok-1",
+            "client": oauth_client,
+        }
+
+        with (
+            patch("orchestrator.api.discord.ingress.jira_runtime.tenant_atlassian_oauth_context", return_value=oauth_context),
+            patch("orchestrator.api.discord.ingress.executor.build_codex_runtime", return_value=SimpleNamespace()),
+            patch(
+                "orchestrator.api.discord.commands.run_controls.active_case_and_cycle_for_issue",
+                return_value=(SimpleNamespace(case_id="case-1"), SimpleNamespace(cycle_id="cycle-1")),
+            ),
+            patch(
+                "orchestrator.api.discord.commands.run_controls.list_cycle_answers",
+                return_value=[],
+            ),
+            patch(
+                "orchestrator.api.discord.commands.run_controls.interpret_decision_reply",
+                return_value=InteractionResponse(
+                    message="I have recorded that answer. I still need to know how the business identifies the billing period before this can run.",
+                    actions=(
+                        InteractionAction(
+                            type="capture_decision_answer",
+                            payload={
+                                "question_id": "hubspot_subscription_rules",
+                                "status": "answered",
+                                "answer": "Annual invoice is the billing source.",
+                                "notes": "Billing source answered; billing-period business meaning is still missing.",
+                            },
+                        ),
+                    ),
+                ),
+            ),
+            patch(
+                "orchestrator.api.discord.commands.run_controls.capture_decision_reply",
+                return_value=SimpleNamespace(evidence_id="evidence-1", effect_ids=("effect-1",)),
+            ) as capture_mock,
+            patch("orchestrator.api.discord.commands.run_controls.publish_decision_effects") as publish_mock,
+            patch(
+                "orchestrator.api.discord.ingress.executor._default_decision_clarification_port.capture_decision_reply_and_recheck"
+            ) as reply_recheck_mock,
+        ):
+            response = self.client.post(
+                f"/discord/command/{self.tenant_id}",
+                json={
+                    "user_id": "u-admin",
+                    "channel_id": "discord-channel-1",
+                    "command": "!reply TP-248 Annual invoice is the billing source",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertEqual(body["command"], "reply")
+        self.assertEqual(
+            body["message"],
+            "I have recorded that answer. I still need to know how the business identifies the billing period before this can run.",
+        )
+        self.assertEqual(body["data"]["actions_applied"], ["capture_decision_answer"])
+        self.assertFalse(body["data"]["recheck_requested"])
+        self.assertEqual(body["data"]["evidence_id"], "evidence-1")
+        capture_mock.assert_called_once()
+        publish_mock.assert_called_once()
+        reply_recheck_mock.assert_not_called()
 
     def test_reply_uses_captured_evidence_id_for_decision_event_idempotency(self) -> None:
         self._queue_run(run_id="run-failed-reply-idempotency", issue_key="TP-90", status="failed")

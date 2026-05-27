@@ -220,12 +220,12 @@ def render_decision_gate_remaining_questions_message(
     questions: Iterable[object],
 ) -> str:
     lines = [
-        f"Decision Gate still needs clarification for `{issue_key}`.",
-        f"Reason: {reason}",
+        f"I need a bit more before I can run `{issue_key}`.",
+        f"Why: {reason}",
     ]
     normalized_questions = ClarificationQuestionSet.from_values(questions)
     if normalized_questions:
-        lines.append("Please reply with:")
+        lines.append("I need:")
         lines.extend(normalized_questions.render_lines(limit=5))
     return "\n".join(lines)
 
@@ -236,21 +236,58 @@ def render_decision_gate_feedback_message(
     reason: str,
     question_feedback: Iterable[Mapping[str, Any]],
 ) -> str:
-    lines = [
-        f"Decision Gate still needs clarification for `{issue_key}`.",
-        f"Reason: {reason}",
-    ]
     feedback = _normalize_question_feedback(question_feedback)
+    lines = [f"I still need a bit more before I can run `{issue_key}`."]
+    normalized_reason = str(reason or "").strip()
+    if normalized_reason:
+        lines.append(f"Why: {normalized_reason}")
     if feedback:
-        lines.append("Please reply with:")
+        lines.append("What is still missing:")
     for item in feedback[:5]:
-        question_text = str(item.get("question_text") or "").strip()
-        note = str(item.get("note") or "").strip()
-        if question_text:
-            lines.append(f"- {question_text}")
-        if note:
-            lines.append(f"  Missing detail: {note}")
+        feedback_line = _render_feedback_line(item)
+        if feedback_line:
+            lines.append(feedback_line)
     return "\n".join(lines)
+
+
+def _render_feedback_line(item: Mapping[str, Any]) -> str:
+    question_text = str(item.get("question_text") or "").strip()
+    note = str(item.get("note") or "").strip()
+    answer = str(item.get("answer") or "").strip()
+    label = _feedback_label(item=item, fallback=question_text)
+    normalized_note = _humanize_feedback_note(note=note, answer=answer)
+    if answer and note:
+        return f"- {label}: I have `{answer}`, but {normalized_note[:1].lower()}{normalized_note[1:]}"
+    if note:
+        return f"- {label}: {normalized_note[:1].upper()}{normalized_note[1:]}"
+    if question_text:
+        return f"- {question_text}"
+    return ""
+
+
+def _feedback_label(*, item: Mapping[str, Any], fallback: str) -> str:
+    question_id = str(item.get("question_id") or "").strip().lower()
+    fallback_text = str(fallback or "").strip()
+    if question_id == "decision_owner":
+        return "Owner"
+    if "hubspot" in fallback_text.lower():
+        return "HubSpot subscription rules"
+    if fallback_text.endswith("?"):
+        return fallback_text[:-1]
+    return fallback_text or "This answer"
+
+
+def _humanize_feedback_note(*, note: str, answer: str) -> str:
+    normalized_note = str(note or "").strip()
+    normalized_answer = str(answer or "").strip().strip("'\"")
+    if normalized_note and normalized_answer:
+        current_answer_prefix = f"Current answer '{normalized_answer}' is "
+        if normalized_note.startswith(current_answer_prefix):
+            return f"that is {normalized_note[len(current_answer_prefix):]}"
+        double_quote_prefix = f'Current answer "{normalized_answer}" is '
+        if normalized_note.startswith(double_quote_prefix):
+            return f"that is {normalized_note[len(double_quote_prefix):]}"
+    return normalized_note
 
 
 def _normalize_question_feedback(
@@ -262,14 +299,18 @@ def _normalize_question_feedback(
         question_text = str(item.get("question_text") or "").strip()
         note = str(item.get("note") or "").strip()
         status = str(item.get("status") or "").strip()
-        if not question_id and not question_text and not note and not status:
+        answer = str(item.get("answer") or "").strip()
+        if status.lower() == "accepted" or item.get("unresolved") is False:
             continue
-        normalized.append(
-            {
-                "question_id": question_id,
-                "question_text": question_text,
-                "note": note,
-                "status": status,
-            }
-        )
+        if not question_id and not question_text and not note and not status and not answer:
+            continue
+        normalized_item = {
+            "question_id": question_id,
+            "question_text": question_text,
+            "note": note,
+            "status": status,
+        }
+        if answer:
+            normalized_item["answer"] = answer
+        normalized.append(normalized_item)
     return tuple(normalized)

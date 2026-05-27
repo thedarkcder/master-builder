@@ -101,6 +101,9 @@ class WorkflowAdvanceLifecycle(Protocol):
     def wait_started_operation(self, *, operation, attempt, summary: str) -> None:  # noqa: ANN001
         ...
 
+    def complete_waiting_operation_attempt(self, *, operation_type: str, summary: str):  # noqa: ANN001
+        ...
+
     def mark_workflow_waiting_for_input(self) -> None:
         ...
 
@@ -219,6 +222,14 @@ class DurableWorkflowLifecycle:
     def wait_started_operation(self, *, operation, attempt, summary: str) -> None:  # noqa: ANN001
         self._ensure_projection().wait_started_operation(operation=operation, attempt=attempt, summary=summary)
         self._session.commit()
+
+    def complete_waiting_operation_attempt(self, *, operation_type: str, summary: str):  # noqa: ANN001
+        result = self._ensure_projection().complete_waiting_operation_attempt(
+            operation_type=operation_type,
+            summary=summary,
+        )
+        self._session.commit()
+        return result
 
     def mark_workflow_waiting_for_input(self) -> None:
         self._ensure_projection().mark_workflow_waiting_for_input()

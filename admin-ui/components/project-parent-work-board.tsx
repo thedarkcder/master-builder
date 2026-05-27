@@ -11,14 +11,15 @@ import { Skeleton } from "@/components/ui/skeleton";
 import { formatTimeAgo } from "@/lib/datetime";
 import {
   listWorkflowBoardItems,
-  startParentPlanning,
+  startWorkflowBoardWorkItem,
   startWorkflowExecution,
+  type WorkflowBoardChildIssueRecord,
   type WorkflowBoardItemRecord,
   type WorkflowBoardRunSummaryRecord,
 } from "@/lib/api";
 import { useToast } from "@/components/ui/toast-provider";
 
-type BoardLaneKey = "needs_input" | "awaiting_planning" | "planning" | "ready" | "engineering" | "done";
+type BoardLaneKey = "needs_input" | "awaiting_planning" | "ready" | "engineering" | "done";
 
 type BoardLane = {
   key: BoardLaneKey;
@@ -40,7 +41,6 @@ type ParentWorkCard = {
 const BOARD_LANES: BoardLane[] = [
   { key: "needs_input", title: "Needs input" },
   { key: "awaiting_planning", title: "Awaiting planning" },
-  { key: "planning", title: "Planning" },
   { key: "ready", title: "Ready to start" },
   { key: "engineering", title: "Engineering active" },
   { key: "done", title: "Done" },
@@ -90,15 +90,18 @@ export function workflowLane(workflow: WorkflowBoardItemRecord): BoardLaneKey {
     return "awaiting_planning";
   }
   if (hasActiveRun) {
-    return isParentPlanningWorkflow(workflow) ? "planning" : "engineering";
+    return "engineering";
   }
   if (allRunsCompleted) {
     return "done";
   }
+  if (isParentPlanningWorkflow(workflow) && ["running", "in_progress", "in progress"].includes(status)) {
+    return "engineering";
+  }
   if (status === "completed") {
     return "ready";
   }
-  return "planning";
+  return "engineering";
 }
 
 function canStartPlanning(workflow: WorkflowBoardItemRecord): boolean {
@@ -145,7 +148,7 @@ export function ProjectParentWorkBoard({
   const [allWorkflows, setAllWorkflows] = useState<WorkflowBoardItemRecord[]>([]);
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
-  const [startingPlanningExecutionId, setStartingPlanningExecutionId] = useState<string | null>(null);
+  const [startingWorkItemId, setStartingWorkItemId] = useState<string | null>(null);
   const [bulkStartingPlanning, setBulkStartingPlanning] = useState(false);
   const [selectedPlanningExecutionIds, setSelectedPlanningExecutionIds] = useState<Set<string>>(() => new Set());
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -209,11 +212,11 @@ export function ProjectParentWorkBoard({
   }
 
   async function startPlanning(card: ParentWorkCard) {
-    if (!credentials || startingPlanningExecutionId) return;
-    setStartingPlanningExecutionId(card.workflow.execution_id);
+    if (!credentials || startingWorkItemId) return;
+    setStartingWorkItemId(card.workflow.work_item_id);
     setErrorMessage(null);
     try {
-      const started = await startParentPlanning(credentials, card.workflow.execution_id);
+      const started = await startWorkflowBoardWorkItem(credentials, card.workflow.work_item_id);
       const workflowPayload = await listWorkflowBoardItems(credentials, { tenantId, projectId, limit: 100 });
       const sortedWorkflows = sortWorkflowsByLatestActivity(workflowPayload);
       setAllWorkflows(sortedWorkflows);
@@ -222,25 +225,92 @@ export function ProjectParentWorkBoard({
         next.delete(card.workflow.execution_id);
         return next;
       });
-      const refreshed = sortedWorkflows.find((workflow) => workflow.execution_id === started.execution_id);
+      const refreshed = sortedWorkflows.find((workflow) => workflow.execution_id === started.workflow.execution_id);
       if (refreshed) {
         setSelectedCard(buildParentWorkCard(refreshed));
       }
       showToast({
-        title: "Moved to planning",
-        description: `${card.issueKey} moved into planning.`,
+        title: "Planning started",
+        description: `${card.issueKey} ${started.action} started.`,
         tone: "success",
       });
     } catch (error) {
       const message = (error as Error).message;
-      setErrorMessage(`Failed to move ${card.issueKey} into planning: ${message}`);
+      setErrorMessage(`Failed to start planning for ${card.issueKey}: ${message}`);
       showToast({
-        title: "Move to planning failed",
+        title: "Start planning failed",
         description: message,
         tone: "error",
       });
     } finally {
-      setStartingPlanningExecutionId(null);
+      setStartingWorkItemId(null);
+    }
+  }
+
+  async function startEngineering(card: ParentWorkCard) {
+    if (!credentials || startingWorkItemId) return;
+    setStartingWorkItemId(card.workflow.work_item_id);
+    setErrorMessage(null);
+    try {
+      const result = await startWorkflowBoardWorkItem(credentials, card.workflow.work_item_id);
+      const workflowPayload = await listWorkflowBoardItems(credentials, { tenantId, projectId, limit: 100 });
+      const sortedWorkflows = sortWorkflowsByLatestActivity(workflowPayload);
+      setAllWorkflows(sortedWorkflows);
+      const refreshed = sortedWorkflows.find((workflow) => workflow.execution_id === card.workflow.execution_id);
+      if (refreshed) {
+        setSelectedCard(buildParentWorkCard(refreshed));
+      }
+      showToast({
+        title: "Engineering runs started",
+        description: `${result.queued.length} child run${result.queued.length === 1 ? "" : "s"} queued.`,
+        tone: "success",
+      });
+    } catch (error) {
+      const message = (error as Error).message;
+      setErrorMessage(`Failed to start engineering for ${card.issueKey}: ${message}`);
+      showToast({
+        title: "Start engineering failed",
+        description: message,
+        tone: "error",
+      });
+    } finally {
+      setStartingWorkItemId(null);
+    }
+  }
+
+  async function startChildEngineering(card: ParentWorkCard, child: WorkflowBoardChildIssueRecord) {
+    if (!credentials || startingWorkItemId) return;
+    const normalizedIssueKey = child.issue_key.trim().toUpperCase();
+    if (!normalizedIssueKey) return;
+    setStartingWorkItemId(child.work_item_id);
+    setErrorMessage(null);
+    try {
+      const result = await startWorkflowBoardWorkItem(credentials, child.work_item_id);
+      const workflowPayload = await listWorkflowBoardItems(credentials, { tenantId, projectId, limit: 100 });
+      const sortedWorkflows = sortWorkflowsByLatestActivity(workflowPayload);
+      setAllWorkflows(sortedWorkflows);
+      const refreshed = sortedWorkflows.find((workflow) => workflow.execution_id === card.workflow.execution_id);
+      if (refreshed) {
+        setSelectedCard(buildParentWorkCard(refreshed));
+      }
+      const queued = result.queued.find((item) => item.issue_key === normalizedIssueKey);
+      showToast({
+        title: queued ? "Ticket started" : "Ticket already active",
+        description: queued
+          ? `${normalizedIssueKey} run queued.`
+          : `${normalizedIssueKey} was not queued because it is already active or not startable.`,
+        tone: queued ? "success" : "info",
+      });
+    } catch (error) {
+      const message = (error as Error).message;
+      setErrorMessage(`Failed to start ${normalizedIssueKey}: ${message}`);
+      showToast({
+        title: "Start ticket failed",
+        description: message,
+        tone: "error",
+      });
+    } finally {
+      setStartingWorkItemId(null);
     }
   }
 
@@ -257,7 +327,7 @@ export function ProjectParentWorkBoard({
     try {
       for (const card of selectedCards) {
         try {
-          await startParentPlanning(credentials, card.workflow.execution_id);
+          await startWorkflowBoardWorkItem(credentials, card.workflow.work_item_id);
           startedIssueKeys.push(card.issueKey);
         } catch (error) {
           failures.push({
@@ -277,8 +347,8 @@ export function ProjectParentWorkBoard({
       }
       if (startedIssueKeys.length > 0) {
         showToast({
-          title: "Moved to planning",
-          description: `${startedIssueKeys.length} parent item${startedIssueKeys.length === 1 ? "" : "s"} moved into planning.`,
+          title: "Planning started",
+          description: `${startedIssueKeys.length} parent item${startedIssueKeys.length === 1 ? "" : "s"} started planning.`,
           tone: "success",
         });
       }
@@ -301,7 +371,10 @@ export function ProjectParentWorkBoard({
     [allWorkflows],
   );
   const cards = useMemo(() => parentWorkflows.map(buildParentWorkCard), [parentWorkflows]);
-  const startablePlanningCards = useMemo(() => cards.filter((card) => canStartPlanning(card.workflow)), [cards]);
+  const startablePlanningCards = useMemo(
+    () => cards.filter((card) => canStartPlanning(card.workflow) && card.workflow.startable),
+    [cards],
+  );
   const selectedStartableCount = startablePlanningCards.filter((card) =>
     selectedPlanningExecutionIds.has(card.workflow.execution_id),
   ).length;
@@ -312,7 +385,7 @@ export function ProjectParentWorkBoard({
         accumulator[lane.key] = cards.filter((card) => card.lane === lane.key);
         return accumulator;
       },
-      { needs_input: [], awaiting_planning: [], planning: [], ready: [], engineering: [], done: [] },
+      { needs_input: [], awaiting_planning: [], ready: [], engineering: [], done: [] },
     );
   }, [cards]);
 
@@ -351,7 +424,7 @@ export function ProjectParentWorkBoard({
   }
 
   const startSelectedPlanningLabel =
-    selectedStartableCount > 0 ? `Move selected to planning (${selectedStartableCount})` : "Move selected to planning";
+    selectedStartableCount > 0 ? `Start selected planning (${selectedStartableCount})` : "Start selected planning";
 
   return (
     <section className="space-y-4">
@@ -378,7 +451,7 @@ export function ProjectParentWorkBoard({
         </div>
       ) : null}
 
-      <div className="grid gap-4 md:grid-cols-2 2xl:grid-cols-6">
+      <div className="grid gap-4 md:grid-cols-2 2xl:grid-cols-5">
         {BOARD_LANES.map((lane) => (
           <BoardColumn
             key={lane.key}
@@ -403,8 +476,10 @@ export function ProjectParentWorkBoard({
 
       <ParentWorkDetailsDrawer
         card={selectedCard}
-        startingPlanning={selectedCard?.workflow.execution_id === startingPlanningExecutionId}
+        startingWorkItemId={startingWorkItemId}
         onStartPlanning={startPlanning}
+        onStartEngineering={startEngineering}
+        onStartChildEngineering={startChildEngineering}
         onClose={() => setSelectedCard(null)}
       />
     </section>
@@ -520,7 +595,7 @@ function ParentWorkItemCard({
   selectionDisabled: boolean;
   onTogglePlanningSelection: (card: ParentWorkCard, checked: boolean) => void;
 }) {
-  const startable = canStartPlanning(card.workflow);
+  const startable = canStartPlanning(card.workflow) && card.workflow.startable;
   return (
     <article
       className="cursor-pointer rounded-xl border bg-background p-4 shadow-sm transition hover:-translate-y-0.5 hover:shadow-md focus-within:ring-2 focus-within:ring-primary/30"
@@ -577,13 +652,17 @@ function ParentWorkItemCard({
 
 function ParentWorkDetailsDrawer({
   card,
-  startingPlanning,
+  startingWorkItemId,
   onStartPlanning,
+  onStartEngineering,
+  onStartChildEngineering,
   onClose,
 }: {
   card: ParentWorkCard | null;
-  startingPlanning: boolean;
+  startingWorkItemId: string | null;
   onStartPlanning: (card: ParentWorkCard) => void;
+  onStartEngineering: (card: ParentWorkCard) => void;
+  onStartChildEngineering: (card: ParentWorkCard, child: WorkflowBoardChildIssueRecord) => void;
   onClose: () => void;
 }) {
   const [mounted, setMounted] = useState(false);
@@ -594,7 +673,9 @@ function ParentWorkDetailsDrawer({
 
   if (!card || !mounted) return null;
   const jiraLink = card.workflow.links.find((link) => link.kind === "jira_issue" && link.url);
-  const startable = canStartPlanning(card.workflow);
+  const startable = card.workflow.startable;
+  const parentStarting = startingWorkItemId === card.workflow.work_item_id;
+  const parentStartLabel = card.workflow.start_label ?? (canStartPlanning(card.workflow) ? "Start planning" : "Start run");
 
   return createPortal(
     <div className="fixed inset-0 z-[80] flex justify-end bg-slate-950/35" role="dialog" aria-modal="true" aria-label={`${card.issueKey} details`}>
@@ -627,11 +708,11 @@ function ParentWorkDetailsDrawer({
               <Button
                 type="button"
                 size="sm"
-                onClick={() => onStartPlanning(card)}
-                disabled={startingPlanning}
+                onClick={() => (canStartPlanning(card.workflow) ? onStartPlanning(card) : onStartEngineering(card))}
+                disabled={parentStarting}
               >
-                <Play className={`mr-2 h-3.5 w-3.5 ${startingPlanning ? "animate-pulse" : ""}`} />
-                Move to planning
+                <Play className={`mr-2 h-3.5 w-3.5 ${parentStarting ? "animate-pulse" : ""}`} />
+                {parentStarting ? "Starting..." : parentStartLabel}
               </Button>
             ) : null}
           </div>
@@ -646,6 +727,50 @@ function ParentWorkDetailsDrawer({
               <DetailValue label="Failed" value={String(card.failedRunCount)} />
               <DetailValue label="Questions" value={card.questionOpen ? "Open" : "None"} />
             </div>
+          </section>
+
+          <section>
+            <h3 className="text-sm font-semibold">Child tickets</h3>
+            {card.workflow.children.length > 0 ? (
+              <div className="mt-3 space-y-3">
+                {card.workflow.children.map((child) => (
+                  <div key={child.issue_key} className="rounded-xl border p-4 text-sm">
+                    <div className="flex items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="text-xs font-medium text-primary">{child.issue_key}</p>
+                        <p className="mt-1 line-clamp-2 font-medium">{child.summary ?? "Engineering child ticket"}</p>
+                      </div>
+                      <div className="flex shrink-0 flex-col items-end gap-2">
+                        <StatusBadge status={child.run_status ?? child.status ?? "unknown"} />
+                        {child.startable ? (
+                          <Button
+                            type="button"
+                            size="sm"
+                            className="h-7 px-2 text-xs"
+                            onClick={() => onStartChildEngineering(card, child)}
+                            disabled={Boolean(startingWorkItemId)}
+                          >
+                            <Play
+                              className={`mr-1.5 h-3 w-3 ${
+                                startingWorkItemId === child.work_item_id ? "animate-pulse" : ""
+                              }`}
+                            />
+                            {startingWorkItemId === child.work_item_id ? "Starting..." : child.start_label ?? "Start"}
+                          </Button>
+                        ) : null}
+                      </div>
+                    </div>
+                    <p className="mt-3 text-xs text-muted-foreground">
+                      {child.run_id ? `Run ${child.run_id}` : child.startable ? "Ready to start" : "Not ready to start"}
+                    </p>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <p className="mt-3 rounded-xl border border-dashed px-4 py-5 text-sm text-muted-foreground">
+                No child tickets were found for this parent item in the latest Jira sync.
+              </p>
+            )}
           </section>
 
           <section>

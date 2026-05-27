@@ -73,6 +73,23 @@ class PromptTemplateTests(unittest.TestCase):
         self.assertIn("Never emit top-level `questions`", prompt_text)
         self.assertIn('use `request_type="decision_gate_clarification"`', prompt_text)
 
+    def test_pm_prompts_require_plain_language_install_approval_contract(self) -> None:
+        prompts_dir = Path(__file__).resolve().parents[1] / "orchestrator" / "prompts" / "workflow"
+        pm_system = (prompts_dir / "pm_system.j2").read_text(encoding="utf-8")
+        pm_user = (prompts_dir / "pm_user.j2").read_text(encoding="utf-8")
+
+        for prompt_text in (pm_system, pm_user):
+            self.assertIn("source project", prompt_text)
+            self.assertIn("Master Builder", prompt_text)
+            self.assertIn("secrets", prompt_text)
+            self.assertIn("yes/no", prompt_text)
+
+        self.assertIn("operator_decision", pm_user)
+        self.assertIn("source_project_changes", pm_user)
+        self.assertIn("master_builder_changes", pm_user)
+        self.assertIn("secrets_or_bindings_needed", pm_user)
+        self.assertIn("Do not ask the PM for API field names", pm_user)
+
     def test_test_user_prompt_requires_changed_scope_before_full_suite(self) -> None:
         prompt_path = (
             Path(__file__).resolve().parents[1]
@@ -214,6 +231,30 @@ class PromptTemplateTests(unittest.TestCase):
         self.assertIn('"type":"tool_request"', user_prompt_text)
         self.assertIn('"type":"final_response"', user_prompt_text)
         self.assertNotIn("Agent tool command:", user_prompt_text)
+
+    def test_decision_gate_prompts_require_pm_facing_business_language(self) -> None:
+        prompts_dir = Path(__file__).resolve().parents[1] / "orchestrator" / "prompts" / "policy"
+        planner_prompt = (prompts_dir / "decision_planner_system.j2").read_text(encoding="utf-8")
+        reply_prompt = (prompts_dir / "decision_reply_system.j2").read_text(encoding="utf-8")
+
+        for prompt_text in (planner_prompt, reply_prompt):
+            self.assertIn("business mapping", prompt_text)
+            self.assertIn("Do not ask", prompt_text)
+            self.assertIn("implementation identifiers", prompt_text)
+            self.assertIn("Engineering can map", prompt_text)
+            self.assertIn("Translate", prompt_text)
+
+        self.assertIn("a paid invoice activates access", reply_prompt)
+        self.assertIn("what should happen to customer access", reply_prompt)
+        self.assertIn("I need the product rule for how HubSpot billing controls access", reply_prompt)
+        self.assertIn("Do not ask for \"record types\"", reply_prompt)
+        self.assertIn("Do not call web search or any native runtime tool", reply_prompt)
+        self.assertIn("Do not call web search or any native runtime tool", planner_prompt)
+        self.assertIn("allowed `tool_request` contract only", planner_prompt)
+        self.assertIn("Do not copy", reply_prompt)
+        self.assertNotIn("hs_invoice_id", reply_prompt)
+        self.assertNotIn("dealstage", reply_prompt)
+        self.assertNotIn("term_start", reply_prompt)
 
     def test_workflow_stage_prompts_forbid_direct_db_inspection(self) -> None:
         prompts_dir = Path(__file__).resolve().parents[1] / "orchestrator" / "prompts" / "workflow"

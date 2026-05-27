@@ -11,6 +11,7 @@ from orchestrator.core.decision.precheck_mapping import (
     merge_case_metadata,
     serialize_result_snapshot,
 )
+from orchestrator.core.decision.question_state import unresolved_question_ids_for_question_set
 from orchestrator.core.decision.state_machine import (
     case_state_for_decision,
     decision_missing_slots_for_precheck,
@@ -159,18 +160,12 @@ def persist_decision_state(
         if current_active_cycle is not None and current_active_cycle.status == "open":
             cycle = current_active_cycle
             next_question_set = question_set or list(cycle.question_set_json)
-            current_question_ids = [
-                str(item.get("id") or "").strip()
-                for item in next_question_set
-                if str(item.get("id") or "").strip()
-            ]
             cycle.classification = classification
             cycle.question_set_json = next_question_set
-            cycle.unresolved_question_ids_json = [
-                question_id
-                for question_id in current_question_ids
-                if question_id not in accepted_question_ids
-            ]
+            cycle.unresolved_question_ids_json = unresolved_question_ids_for_question_set(
+                question_set=next_question_set,
+                accepted_question_ids=accepted_question_ids,
+            )
             cycle.reason = reason or cycle.reason
             cycle.updated_at = occurred_at
         else:
@@ -188,11 +183,10 @@ def persist_decision_state(
                 reason=reason,
                 classification=classification,
                 question_set_json=question_set,
-                unresolved_question_ids_json=[
-                    str(item.get("id") or "")
-                    for item in question_set
-                    if str(item.get("id") or "").strip() and str(item.get("id") or "").strip() not in accepted_question_ids
-                ],
+                unresolved_question_ids_json=unresolved_question_ids_for_question_set(
+                    question_set=question_set,
+                    accepted_question_ids=accepted_question_ids,
+                ),
                 metadata_json={},
                 opened_at=occurred_at,
                 closed_at=None,

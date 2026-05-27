@@ -101,7 +101,67 @@ class DecisionReducerTests(unittest.TestCase):
                     "text": "What are the dependencies?",
                     "status": "open",
                     "detail": None,
+                    "unresolved": True,
                 }
+            ],
+        )
+
+    def test_reduce_planner_result_marks_answered_state_unresolved_only_when_still_asked(self) -> None:
+        decision = _base_decision(outcome=PrecheckOutcome.DECISION_GATE_REQUIRED)
+        planner_result = DecisionPlannerResult(
+            gate_status="blocked_decision_gate",
+            reason="Need narrower clarification.",
+            questions=(
+                DecisionPlannerQuestion(
+                    question_id="scope",
+                    kind="decision_gate",
+                    question="Which minimum HubSpot fields are required?",
+                    status="open",
+                    detail="The broad scope is known; the exact field contract is missing.",
+                ),
+            ),
+            question_states=(
+                DecisionPlannerQuestion(
+                    question_id="scope",
+                    kind="decision_gate",
+                    question="What is in scope?",
+                    status="answered",
+                    detail="Scope is partially captured.",
+                ),
+                DecisionPlannerQuestion(
+                    question_id="acceptance_criteria",
+                    kind="decision_gate",
+                    question="What are the acceptance criteria?",
+                    status="answered",
+                    detail="Acceptance criteria are already captured.",
+                ),
+            ),
+            resolved_items=(),
+            missing_items=("scope",),
+            captured_answer_summary=None,
+        )
+
+        reduced = reduce_decision_planner_result(decision=decision, planner_result=planner_result)
+
+        self.assertEqual(
+            reduced.question_set,
+            [
+                {
+                    "id": "scope",
+                    "kind": "decision_gate",
+                    "text": "Which minimum HubSpot fields are required?",
+                    "status": "answered",
+                    "detail": "The broad scope is known; the exact field contract is missing.",
+                    "unresolved": True,
+                },
+                {
+                    "id": "acceptance_criteria",
+                    "kind": "decision_gate",
+                    "text": "What are the acceptance criteria?",
+                    "status": "answered",
+                    "detail": "Acceptance criteria are already captured.",
+                    "unresolved": False,
+                },
             ],
         )
 

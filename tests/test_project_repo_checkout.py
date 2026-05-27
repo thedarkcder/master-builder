@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import shutil
+import subprocess
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from types import SimpleNamespace
@@ -83,6 +84,57 @@ def test_github_git_extraheader_uses_basic_auth_with_x_access_token() -> None:
     decoded = base64.b64decode(encoded).decode("utf-8")
     assert decoded == "x-access-token:token-xyz"
     assert "Bearer" not in header
+
+
+def test_existing_project_checkout_preserves_tracked_agent_workspace_files() -> None:
+    project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/example/repo")
+    with TemporaryDirectory() as tmpdir:
+        repo_dir = project_repo_dir(base_dir=tmpdir, tenant_id="tenant-a", project_id="project-1")
+        repo_dir.mkdir(parents=True)
+        subprocess.run(["git", "init"], cwd=repo_dir, check=True, capture_output=True, text=True)
+        (repo_dir / "AGENTS.md").write_text("project-owned agents\n", encoding="utf-8")
+        (repo_dir / ".codex").mkdir()
+        (repo_dir / ".codex" / "config.toml").write_text(
+            "[features]\napps = true\nplugins = true\n",
+            encoding="utf-8",
+        )
+        subprocess.run(["git", "add", "AGENTS.md", ".codex/config.toml"], cwd=repo_dir, check=True)
+        subprocess.run(
+            [
+                "git",
+                "-c",
+                "user.email=test@example.com",
+                "-c",
+                "user.name=Test",
+                "commit",
+                "-m",
+                "initial",
+            ],
+            cwd=repo_dir,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+
+        assert ensure_project_checkout(
+            base_dir=tmpdir,
+            tenant_id="tenant-a",
+            project=project,
+            github_installation_token="unused",
+        ) == repo_dir
+
+        assert (repo_dir / "AGENTS.md").read_text(encoding="utf-8") == "project-owned agents\n"
+        assert (repo_dir / ".codex" / "config.toml").read_text(encoding="utf-8") == (
+            "[features]\napps = true\nplugins = true\n"
+        )
+        status = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=repo_dir,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        assert status.stdout == ""
 
 
 def test_collect_local_repo_context_returns_not_cloned_when_missing() -> None:

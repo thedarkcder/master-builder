@@ -199,7 +199,7 @@ class DockerBuildContractTests(unittest.TestCase):
 
         funnel_reset = 'tailscale --socket="$SOCKET" funnel reset'
         serve_reset = 'tailscale --socket="$SOCKET" serve reset'
-        funnel_enable = 'tailscale --socket="$SOCKET" funnel --bg "$FUNNEL_PORT"'
+        funnel_enable = 'tailscale --socket="$SOCKET" funnel --bg --yes "$FUNNEL_PORT"'
 
         self.assertIn(funnel_reset, script)
         self.assertIn(serve_reset, script)

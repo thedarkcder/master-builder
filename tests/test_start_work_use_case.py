@@ -2,20 +2,31 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 import unittest
 
 from sqlalchemy import select
 
+from orchestrator.api.admin.workflows.start_development_service import start_work_item_from_board
+from orchestrator.core.development.executable_work_items import child_work_item_id, parent_work_item_id, parse_work_item_id
 from orchestrator.core.development.start_work import StartWorkUseCase
+from orchestrator.core.pm.interview_service import (
+    PM_INTERVIEW_SOURCE_KIND_PARENT_BRIEF_SNAPSHOT,
+    PM_INTERVIEW_STATUS_PM_COMPLETED,
+)
+from orchestrator.core.security import AuthenticatedPrincipal
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.models import (
     Base,
+    PMInterviewCase,
     Project,
     Run,
     Tenant,
+    WorkflowExecutableWorkItem,
     WorkflowExecution,
     WorkflowOperation,
     WorkflowOperationAttempt,
+    WorkflowOperationWorkUnit,
 )
 from orchestrator.tools.atlassian_oauth import JiraIssueDetail
 
@@ -120,6 +131,94 @@ class StartWorkUseCaseTests(unittest.TestCase):
                 )
             )
             session.commit()
+
+    def _seed_self_executable_contract(self, session) -> None:  # noqa: ANN001
+        now = _now()
+        session.add(
+            PMInterviewCase(
+                case_id="pm-snapshot-mab-243",
+                tenant_id="route25",
+                project_id="route25-default",
+                request_id="pm-snapshot-mab-243",
+                parent_issue_key="MAB-243",
+                source_kind=PM_INTERVIEW_SOURCE_KIND_PARENT_BRIEF_SNAPSHOT,
+                status=PM_INTERVIEW_STATUS_PM_COMPLETED,
+                channel_id="",
+                thread_channel_id=None,
+                root_message_id=None,
+                owner_user_id=None,
+                source_text="",
+                brief_json={
+                    "objective": "Generate signed downloads for queued audit export requests.",
+                    "user_value": "Administrators can securely retrieve completed exports.",
+                    "acceptance_criteria": ["Signed download URLs are generated for completed export jobs."],
+                    "scope_in": ["Signed URL generation"],
+                    "scope_out": ["Changing export generation"],
+                    "constraints": ["Links must expire."],
+                    "risks": ["Leaked URLs expose exports."],
+                    "success_outcomes": ["Audit exports can be downloaded securely."],
+                    "recommendation": "Implement signed download creation directly on the source task.",
+                },
+                evidence_json=[],
+                question_history_json=[],
+                current_question_json={},
+                next_question_json={},
+                missing_slots_json=[],
+                notes_json={},
+                created_at=now,
+                updated_at=now,
+                closed_at=now,
+            )
+        )
+        operation = WorkflowOperation(
+            operation_id="operation-backlog-mab-243",
+            workflow_id="parent_planning:MAB-243",
+            run_id=None,
+            operation_type="backlog_planning",
+            idempotency_key="workflow-definition:backlog_planning",
+            status="completed",
+            target_system="jira",
+            target_ref="MAB-243",
+            summary="Backlog planning completed.",
+            created_at=now,
+            started_at=now,
+            finished_at=now,
+            updated_at=now,
+        )
+        attempt = WorkflowOperationAttempt(
+            attempt_id="attempt-backlog-mab-243",
+            operation_id=operation.operation_id,
+            attempt_number=1,
+            status="completed",
+            retryable=False,
+            next_retry_at=None,
+            created_at=now,
+            started_at=now,
+            finished_at=now,
+        )
+        work_unit = WorkflowOperationWorkUnit(
+            work_unit_id="work-unit-planning-package-mab-243",
+            operation_id=operation.operation_id,
+            parent_attempt_id=attempt.attempt_id,
+            unit_key="backlog_planning.package_assembly",
+            unit_kind="assembly",
+            idempotency_key="mab-243-planning-package",
+            input_fingerprint="fingerprint-mab-243",
+            status="completed",
+            output_json={
+                "planning_package": {
+                    "planning_state": "planning_completed",
+                    "specialist_outputs": {},
+                    "child_issues": [],
+                    "technical_decisions": [],
+                    "pm_decision_requests": [],
+                }
+            },
+            created_at=now,
+            updated_at=now,
+            completed_at=now,
+        )
+        session.add_all([operation, attempt, work_unit])
 
     def tearDown(self) -> None:
         self.tmp.cleanup()
@@ -252,6 +351,147 @@ class StartWorkUseCaseTests(unittest.TestCase):
         self.assertEqual([run.issue_key for run in runs], ["MAB-250"])
         self.assertEqual(result.queued[0].issue_key, "MAB-250")
         self.assertEqual(gateway.transitions, [])
+
+    def test_start_completed_task_parent_without_children_queues_the_source_issue(self) -> None:
+        gateway = _FakeIssueGateway(
+            parent=JiraIssueDetail(
+                key="MAB-243",
+                summary="Generate signed downloads",
+                status="Backlog",
+                description="Task brief",
+                issue_type="Task",
+                labels=["pm-parent"],
+            ),
+            children=[],
+        )
+        with self.session_factory() as session:
+            self._seed_self_executable_contract(session)
+            session.commit()
+            result = StartWorkUseCase(session=session, issue_gateway=gateway).start(
+                tenant=session.get(Tenant, "route25"),
+                project=session.get(Project, "route25-default"),
+                issue_key="MAB-243",
+                target_status="To Do",
+                actor="admin",
+                reason="operator_start",
+                source_workflow_id="parent_planning:MAB-243",
+            )
+            runs = session.execute(select(Run)).scalars().all()
+
+        self.assertEqual([run.issue_key for run in runs], ["MAB-243"])
+        self.assertIn("Owned by Engineering", str(runs[0].issue_description))
+        self.assertNotEqual(runs[0].issue_description, "Task brief")
+        self.assertEqual(result.queued[0].issue_key, "MAB-243")
+        self.assertEqual(gateway.transitions, [("MAB-243", "To Do")])
+
+    def test_start_task_parent_without_completed_self_executable_contract_is_rejected(self) -> None:
+        gateway = _FakeIssueGateway(
+            parent=JiraIssueDetail(
+                key="MAB-243",
+                summary="Generate signed downloads",
+                status="Backlog",
+                description="Task brief",
+                issue_type="Task",
+                labels=["pm-parent"],
+            ),
+            children=[],
+        )
+        with self.session_factory() as session:
+            with self.assertRaisesRegex(ValueError, "No executable engineering work found"):
+                StartWorkUseCase(session=session, issue_gateway=gateway).start(
+                    tenant=session.get(Tenant, "route25"),
+                    project=session.get(Project, "route25-default"),
+                    issue_key="MAB-243",
+                    target_status="To Do",
+                    actor="admin",
+                    reason="operator_start",
+                    source_workflow_id="parent_planning:MAB-243",
+                )
+
+    def test_work_item_ids_round_trip_parent_and_child_refs(self) -> None:
+        parent_ref = parse_work_item_id(parent_work_item_id(execution_id="exec-parent"))
+        child_ref = parse_work_item_id(child_work_item_id(execution_id="exec-parent", issue_key="MAB-244"))
+
+        self.assertEqual(parent_ref.kind, "parent")
+        self.assertEqual(parent_ref.execution_id, "exec-parent")
+        self.assertIsNone(parent_ref.issue_key)
+        self.assertEqual(child_ref.kind, "child")
+        self.assertEqual(child_ref.execution_id, "exec-parent")
+        self.assertEqual(child_ref.issue_key, "MAB-244")
+
+    def test_start_work_item_from_board_queues_only_requested_child_issue(self) -> None:
+        child = JiraIssueDetail(
+            key="MAB-244",
+            summary="Implement local auth binding",
+            status="To Do",
+            description="Story brief",
+            issue_type="Task",
+            labels=["engineering-child"],
+        )
+
+        class _FakeJiraAdapter:
+            access_token = "token"
+            cloud_id = "cloud"
+            site_url = "https://example.atlassian.net"
+            client = SimpleNamespace()
+
+            def list_child_issue_previews(self, *, project_key: str, parent_issue_key: str):  # noqa: ANN001
+                if parent_issue_key == "MAB-243":
+                    return [SimpleNamespace(key="MAB-244")]
+                return []
+
+            def get_issue_detail(self, *, issue_id_or_key: str):  # noqa: ANN001
+                if issue_id_or_key == "MAB-244":
+                    return child
+                if issue_id_or_key == "MAB-243":
+                    return JiraIssueDetail(
+                        key="MAB-243",
+                        summary="Identity redesign",
+                        status="To Do",
+                        description="Parent brief",
+                        issue_type="Epic",
+                        labels=["pm-parent"],
+                    )
+                raise AssertionError(f"unexpected issue lookup: {issue_id_or_key}")
+
+        fake_router = SimpleNamespace(jira=lambda **_kwargs: _FakeJiraAdapter())
+
+        with self.session_factory() as session:
+            now = _now()
+            session.add(
+                WorkflowExecutableWorkItem(
+                    work_item_id=child_work_item_id(execution_id="exec-parent", issue_key="MAB-244"),
+                    item_kind="child",
+                    tenant_id="route25",
+                    project_id="route25-default",
+                    parent_workflow_id="parent_planning:MAB-243",
+                    parent_execution_id="exec-parent",
+                    issue_key="MAB-244",
+                    parent_issue_key="MAB-243",
+                    issue_summary="Implement local auth binding",
+                    issue_status="To Do",
+                    issue_type="Task",
+                    mb_work_state="planning_candidate",
+                    source_system="jira",
+                    source_external_id="10002",
+                    source_payload_json={},
+                    created_at=now,
+                    updated_at=now,
+                    last_seen_at=now,
+                )
+            )
+            session.commit()
+            result = start_work_item_from_board(
+                session=session,
+                work_item_id=child_work_item_id(execution_id="exec-parent", issue_key="MAB-244"),
+                principal=AuthenticatedPrincipal(principal_type="platform_super_admin", username="admin"),
+                integration_router=fake_router,
+            )
+            runs = session.execute(select(Run)).scalars().all()
+
+        self.assertEqual(result.action, "engineering")
+        self.assertEqual([run.issue_key for run in runs], ["MAB-244"])
+        self.assertEqual([item.issue_key for item in result.queued], ["MAB-244"])
 
 
 class StartWorkCommentCommandTests(unittest.TestCase):

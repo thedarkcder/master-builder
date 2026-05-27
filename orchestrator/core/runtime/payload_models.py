@@ -292,16 +292,45 @@ class GoodToDo:
 
 
 @dataclass(frozen=True)
-class DecisionReplyAnswer:
-    question_id: str
-    status: Literal["ignored", "answered", "accepted"]
-    answer: str
-    notes: str
+class InteractionAction:
+    type: str
+    payload: dict[str, object]
+
+    @classmethod
+    def from_payload(cls, payload: object, *, context: str) -> InteractionAction:
+        if not isinstance(payload, dict):
+            raise RuntimeError(f"{context} must be an object")
+        action_type = _require_string(payload, "type", context=context)
+        action_payload = payload.get("payload")
+        if not isinstance(action_payload, dict):
+            raise RuntimeError(f"{context} missing payload")
+        return cls(
+            type=action_type,
+            payload=action_payload,
+        )
 
 
 @dataclass(frozen=True)
-class DecisionReply:
-    answers: tuple[DecisionReplyAnswer, ...]
+class InteractionResponse:
+    message: str
+    actions: tuple[InteractionAction, ...]
+
+    @classmethod
+    def from_payload(cls, payload: object, *, context: str = "Interaction response") -> InteractionResponse:
+        if not isinstance(payload, dict):
+            raise RuntimeError(f"{context} returned non-object payload")
+        message = _require_string(payload, "message", context=context)
+        raw_actions = payload.get("actions")
+        if not isinstance(raw_actions, list):
+            raise RuntimeError(f"{context} missing actions")
+        actions = tuple(
+            InteractionAction.from_payload(raw_action, context=f"{context} actions[{index}]")
+            for index, raw_action in enumerate(raw_actions)
+        )
+        return cls(
+            message=message,
+            actions=actions,
+        )
 
 
 @dataclass(frozen=True)

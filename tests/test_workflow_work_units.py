@@ -9,7 +9,11 @@ from orchestrator.core.parent_feature_workflow.operations import (
     PARENT_WU_BACKLOG_ARCHITECTURE_MODEL,
     PARENT_WU_BACKLOG_SECURITY_MODEL,
 )
-from orchestrator.core.workflow.work_units import WorkflowWorkUnitContractError, run_work_unit
+from orchestrator.core.workflow.work_units import (
+    WorkflowWorkUnitContractError,
+    WorkflowWorkUnitRetryExhaustedError,
+    run_work_unit,
+)
 from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.models import (
     WorkflowExecution,
@@ -254,3 +258,64 @@ class WorkflowWorkUnitTests(SqliteTemplateDbTestCase):
             assert reused == {"architecture": "done"}
             assert recovered == {"security": "done"}
             assert calls == {"architecture": 1, "security": 2}
+
+    def test_exhausted_failed_unit_can_run_on_new_operation_attempt(self) -> None:
+        now = datetime.now(timezone.utc)
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            workflow = _workflow(now)
+            operation = _operation(now)
+            attempt_1 = _attempt(now, attempt_id="attempt-1", attempt_number=1)
+            session.add_all([workflow, operation, attempt_1])
+            session.commit()
+
+            calls = {"security": 0}
+            for _ in range(3):
+                with pytest.raises(RuntimeError, match="temporary projection failure"):
+                    run_work_unit(
+                        session,
+                        operation=operation,
+                        operation_attempt=attempt_1,
+                        unit_key=PARENT_WU_BACKLOG_SECURITY_MODEL,
+                        idempotency_key="MAB-900:security",
+                        input_payload={"brief": "same"},
+                        execute=lambda _context: calls.__setitem__("security", calls["security"] + 1)
+                        or (_ for _ in ()).throw(RuntimeError("temporary projection failure")),
+                        serialize=lambda result: {"result": result},
+                        deserialize=lambda payload: dict(payload["result"]),
+                    )
+                session.commit()
+
+            with pytest.raises(WorkflowWorkUnitRetryExhaustedError, match="exhausted 3 attempts"):
+                run_work_unit(
+                    session,
+                    operation=operation,
+                    operation_attempt=attempt_1,
+                    unit_key=PARENT_WU_BACKLOG_SECURITY_MODEL,
+                    idempotency_key="MAB-900:security",
+                    input_payload={"brief": "same"},
+                    execute=lambda _context: {"security": "should-not-run"},
+                    serialize=lambda result: {"result": result},
+                    deserialize=lambda payload: dict(payload["result"]),
+                )
+
+            attempt_1.status = "failed"
+            attempt_1.finished_at = now
+            attempt_2 = _attempt(now, attempt_id="attempt-2", attempt_number=2)
+            session.add(attempt_2)
+            session.commit()
+
+            recovered = run_work_unit(
+                session,
+                operation=operation,
+                operation_attempt=attempt_2,
+                unit_key=PARENT_WU_BACKLOG_SECURITY_MODEL,
+                idempotency_key="MAB-900:security",
+                input_payload={"brief": "same"},
+                execute=lambda _context: {"security": "done"},
+                serialize=lambda result: {"result": result},
+                deserialize=lambda payload: dict(payload["result"]),
+            )
+
+            assert recovered == {"security": "done"}
+            assert calls["security"] == 3

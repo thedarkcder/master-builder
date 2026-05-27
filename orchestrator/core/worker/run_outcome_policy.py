@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 from orchestrator.core.runs.service import RUN_STATUS_WAITING_FOR_INPUT
 from orchestrator.core.worker.finalization import CompletionTailExecutor, WorkflowFinalizer
 from orchestrator.core.worker.capabilities import worker_label_for_capability
@@ -118,6 +120,14 @@ class RunOutcomePolicy:
             self._session.refresh(run)
             if str(getattr(run, "status", "") or "").strip().lower() == RUN_STATUS_WAITING_FOR_INPUT:
                 return run
+            workflow_result = replace(
+                workflow_result,
+                outcome="blocked",
+                blocker_message=(
+                    workflow_result.blocker_message
+                    or "Workflow requested human input, but no pending human-input request was created."
+                ),
+            )
         if workflow_result.outcome in {"blocked", "failed"} and self._deps.stage_updates.run_failed_update_fn is not None:
             error_text = (
                 workflow_result.blocker_message

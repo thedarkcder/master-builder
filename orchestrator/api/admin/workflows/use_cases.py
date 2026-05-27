@@ -8,7 +8,8 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 from temporalio.client import WorkflowUpdateFailedError
 
-from orchestrator.api.admin.schema_mappers import run_to_schema, workflow_to_schema
+from orchestrator.api.admin.schema_mappers import run_to_schema, workflow_operation_attempt_to_schema, workflow_to_schema
+from orchestrator.api.admin.workflows.execution_read_service import workflow_schema
 from orchestrator.api.admin.workflows.live_stream_service import (
     list_workflow_operation_live_events as list_workflow_operation_live_events_impl,
     stream_workflow_operation_live_events_ndjson as stream_workflow_operation_live_events_ndjson_impl,
@@ -30,9 +31,11 @@ from orchestrator.api.admin.workflows.service import (
     preview_start_engineering as preview_start_engineering_impl,
     start_engineering_from_action as start_engineering_from_action_impl,
     start_parent_planning as start_parent_planning_impl,
+    start_work_item_from_board as start_work_item_from_board_impl,
     start_work_result_to_schema,
 )
 from orchestrator.api.schemas import (
+    StartWorkIssueRead,
     RunRead,
     WorkflowExecutionStartRead,
     WorkflowExecutionStartRequest,
@@ -42,6 +45,7 @@ from orchestrator.api.schemas import (
     WorkflowOperationRetryRead,
     WorkflowRead,
     WorkflowStartWorkRead,
+    WorkflowWorkItemStartRead,
     StartEngineeringPreviewRead,
     WorkflowStepAttemptTranscriptRead,
     WorkflowStepTranscriptRead,
@@ -50,6 +54,7 @@ from orchestrator.api.schemas import (
 )
 from orchestrator.core.runtime.agent_runtime_resolver import build_runtime_for_selector
 from orchestrator.core.config import get_settings
+from orchestrator.core.development.executable_work_items import parse_work_item_id
 from orchestrator.core.jira_project_reconciliation.start import start_jira_project_reconciliation
 from orchestrator.core.platform.admin_notifications import (
     ADMIN_NOTIFICATION_KIND_JIRA_CONNECTION_REAUTH_REQUIRED,
@@ -67,6 +72,7 @@ from orchestrator.storage.models import (
     AtlassianOAuthConnection,
     Project,
     Tenant,
+    WorkflowExecutableWorkItem,
     WorkflowExecution,
     WorkflowOperation,
     WorkflowOperationAttempt,
@@ -184,6 +190,104 @@ def start_parent_planning(*, session: Session, principal: AuthenticatedPrincipal
         execution_id=execution_id,
         integration_router=workflow_integration_router,
         workflow_to_schema_fn=workflow_to_schema,
+    )
+
+
+def start_work_item_from_board(
+    *,
+    session: Session,
+    principal: AuthenticatedPrincipal,
+    work_item_id: str,
+) -> WorkflowWorkItemStartRead:
+    try:
+        ref = parse_work_item_id(work_item_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    work_item = session.get(WorkflowExecutableWorkItem, work_item_id)
+    if work_item is None or work_item.item_kind != ref.kind:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Executable work item not found")
+    workflow = _require_workflow_access(session=session, principal=principal, execution_id=ref.execution_id)
+    if work_item.parent_workflow_id != workflow.workflow_id:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Executable work item does not match workflow")
+    require_tenant_permission(
+        principal=principal,
+        tenant_id=workflow.tenant_id,
+        permission_key=PERMISSION_PROJECTS_MANAGE,
+    )
+    if ref.kind == "parent":
+        workflow_status = str(workflow.status or "").strip().casefold()
+        if workflow_status in {"queued", "pending"}:
+            refreshed_workflow = start_parent_planning_impl(
+                session=session,
+                execution_id=ref.execution_id,
+                integration_router=workflow_integration_router,
+                workflow_to_schema_fn=workflow_to_schema,
+            )
+            return WorkflowWorkItemStartRead(
+                work_item_id=work_item_id,
+                action="planning",
+                workflow=refreshed_workflow,
+            )
+        if workflow_status != "completed":
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail=f"Parent work item cannot be started from status {workflow.status}",
+            )
+        board_result = start_work_item_from_board_impl(
+            session=session,
+            work_item_id=work_item_id,
+            principal=principal,
+            integration_router=workflow_integration_router,
+        )
+        return WorkflowWorkItemStartRead(
+            work_item_id=work_item_id,
+            action="engineering",
+            workflow=workflow_schema(
+                session=session,
+                workflow=board_result.workflow,
+                workflow_to_schema_fn=workflow_to_schema,
+                run_to_schema_fn=run_to_schema,
+            ),
+            queued=[
+                StartWorkIssueRead(issue_key=item.issue_key, run_id=item.run_id, status=item.status, reason=item.reason)
+                for item in board_result.queued
+            ],
+            skipped=[
+                StartWorkIssueRead(issue_key=item.issue_key, run_id=item.run_id, status=item.status, reason=item.reason)
+                for item in board_result.skipped
+            ],
+            promoted_issue_keys=list(board_result.result.promoted_issue_keys),
+            started_attempt=workflow_operation_attempt_to_schema(board_result.started_attempt)
+            if board_result.started_attempt is not None
+            else None,
+        )
+    board_result = start_work_item_from_board_impl(
+        session=session,
+        work_item_id=work_item_id,
+        principal=principal,
+        integration_router=workflow_integration_router,
+    )
+    return WorkflowWorkItemStartRead(
+        work_item_id=board_result.work_item_id,
+        action=board_result.action,
+        workflow=workflow_schema(
+            session=session,
+            workflow=board_result.workflow,
+            workflow_to_schema_fn=workflow_to_schema,
+            run_to_schema_fn=run_to_schema,
+        ),
+        queued=[
+            StartWorkIssueRead(issue_key=item.issue_key, run_id=item.run_id, status=item.status, reason=item.reason)
+            for item in board_result.queued
+        ],
+        skipped=[
+            StartWorkIssueRead(issue_key=item.issue_key, run_id=item.run_id, status=item.status, reason=item.reason)
+            for item in board_result.skipped
+        ],
+        promoted_issue_keys=list(board_result.result.promoted_issue_keys),
+        started_attempt=workflow_operation_attempt_to_schema(board_result.started_attempt)
+        if board_result.started_attempt is not None
+        else None,
     )
 
 
