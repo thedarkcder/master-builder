@@ -1,11 +1,14 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 from sqlalchemy import desc, or_, select
 
 from orchestrator.api.admin.workflows.execution_state_read_model import build_workflow_execution_state_read_model
 from orchestrator.api.admin.workflows.queries import (
     active_followup_contexts,
     audit_events_by_operation,
+    latest_resumable_checkpoint,
     pending_input_request,
     workflow_checkpoint_kinds,
     workflow_operation_attempts_by_operation,
@@ -20,6 +23,10 @@ from orchestrator.api.schemas import (
     WorkflowLinkRead,
 )
 from orchestrator.core.integrations.atlassian.links import tenant_jira_issue_url
+from orchestrator.core.workflow.execution_artifacts import (
+    MissingDurableExecutionArtifactError,
+    require_durable_execution_artifact_for_checkpoint,
+)
 from orchestrator.storage.models import (
     Run,
     RunHumanInputRequest,
@@ -277,6 +284,22 @@ def workflow_schema(
         checkpoint_kinds=checkpoint_kinds,
         runs=runs,
     )
+    if workflow_state.can_resume:
+        selected_resume_checkpoint = latest_resumable_checkpoint(session=session, workflow_id=workflow.workflow_id)
+        try:
+            if selected_resume_checkpoint is None:
+                workflow_state = replace(
+                    workflow_state,
+                    can_resume=False,
+                    resume_unavailable_reason="No resumable execution state is available.",
+                )
+            else:
+                require_durable_execution_artifact_for_checkpoint(
+                    session=session,
+                    checkpoint=selected_resume_checkpoint,
+                )
+        except MissingDurableExecutionArtifactError as exc:
+            workflow_state = replace(workflow_state, can_resume=False, resume_unavailable_reason=str(exc))
     tenant = session.get(Tenant, workflow.tenant_id)
     followup_contexts = (
         active_followup_contexts(session=session, tenant_id=workflow.tenant_id, issue_key=workflow.source_ref)

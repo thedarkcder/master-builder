@@ -26,6 +26,17 @@ class PrReviewFindingsResult:
     findings: tuple[ReviewFinding, ...]
 
 
+_FINDINGS_EVALUATION_FAILURE_STATES = frozenset({"review_failed", "failed", "error"})
+
+
+def pr_review_findings_clear(findings_result: object) -> bool:
+    findings = tuple(getattr(findings_result, "findings", ()) or ())
+    if findings:
+        return False
+    state = str(getattr(findings_result, "state", "") or "").strip().lower()
+    return state not in _FINDINGS_EVALUATION_FAILURE_STATES
+
+
 def _workflow_checks_payload(workflow_checks: list[WorkflowCheckSuite]) -> list[dict[str, str | None]]:
     return [
         {
@@ -118,6 +129,10 @@ def evaluate_pr_review_findings(
                     suggestion=suggestion_raw or None,
                 )
             )
+    if findings:
+        state = "blocked"
+    elif state not in _FINDINGS_EVALUATION_FAILURE_STATES:
+        state = "ready"
 
     return PrReviewFindingsResult(
         state=state,

@@ -47,7 +47,18 @@ async def ingest_github_webhook_event(
             envelope=envelope,
         )
     queued_jobs = []
-    for pr_number, review_summary_present in resolved_context.pr_targets:
+    pr_targets = list(resolved_context.pr_targets)
+    if not pr_targets:
+        pr_targets = [(None, False)]
+    for pr_number, review_summary_present in pr_targets:
+        subject_key = (
+            f"github_pr:{resolved_context.tenant.tenant_id}:{resolved_context.repo_full_name}:{pr_number}"
+            if pr_number is not None
+            else (
+                f"github_ref:{resolved_context.tenant.tenant_id}:"
+                f"{resolved_context.repo_full_name}:{resolved_context.ref_name or resolved_context.github_event}"
+            )
+        )
         enqueue_result = enqueue_webhook_job(
             session,
             request=WebhookJobEnqueueRequest(
@@ -55,12 +66,9 @@ async def ingest_github_webhook_event(
                 request_id=envelope.request_id,
                 tenant_id=resolved_context.tenant.tenant_id,
                 project_id=resolved_context.project.project_id,
-                subject_key=(
-                    f"github_pr:{resolved_context.tenant.tenant_id}:"
-                    f"{resolved_context.repo_full_name}:{pr_number}"
-                ),
+                subject_key=subject_key,
                 dedupe_key=(
-                    f"{resolved_context.delivery_id}:{pr_number}"
+                    f"{resolved_context.delivery_id}:{pr_number if pr_number is not None else resolved_context.ref_name or 'repo'}"
                     if str(resolved_context.delivery_id or "").strip()
                     else None
                 ),
@@ -76,6 +84,7 @@ async def ingest_github_webhook_event(
                     "repo_full_name": resolved_context.repo_full_name,
                     "pr_number": pr_number,
                     "review_summary_present": bool(review_summary_present),
+                    "ref_name": resolved_context.ref_name,
                 },
             ),
         )
@@ -107,7 +116,11 @@ async def ingest_github_webhook_event(
                         "queued": bool(created_jobs),
                         "queued_job_count": len(created_jobs),
                         "repository": resolved_context.repo_full_name,
-                        "pr_numbers": [context_job.job.context_json["pr_number"] for context_job in queued_jobs],
+                        "pr_numbers": [
+                            context_job.job.context_json["pr_number"]
+                            for context_job in queued_jobs
+                            if context_job.job.context_json.get("pr_number") is not None
+                        ],
                     },
                 ),
             ),

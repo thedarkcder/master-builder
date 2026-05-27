@@ -214,3 +214,47 @@ class GitHubIngressContractTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(response.status_code, 200)
         enqueue_mock.assert_not_called()
+
+    async def test_ingest_github_push_without_pr_targets_enqueues_repo_job(self) -> None:
+        request = SimpleNamespace(headers={"X-GitHub-Event": "push", "X-GitHub-Delivery": "delivery-1"})
+        session = MagicMock()
+        context = GitHubWebhookContext(
+            request_id="req-1",
+            delivery_id="delivery-1",
+            github_event="push",
+            payload={"ref": "refs/heads/staging"},
+            normalized_action=None,
+            installation_id=12345,
+            tenant=SimpleNamespace(tenant_id="example"),
+            project=SimpleNamespace(project_id="example-default"),
+            repo_full_name="org/repo",
+            pr_targets=[],
+            ref_name="refs/heads/staging",
+        )
+        enqueue_mock = MagicMock(
+            return_value=SimpleNamespace(
+                created=True,
+                job=SimpleNamespace(
+                    job_id="job-1",
+                    dedupe_key="delivery-1:refs/heads/staging",
+                    subject_key="github_ref:example:org/repo:refs/heads/staging",
+                    context_json={"pr_number": None},
+                ),
+            )
+        )
+
+        with (
+            patch("orchestrator.api.webhooks.github_ingress.resolve_github_webhook_context", AsyncMock(return_value=context)),
+            patch("orchestrator.api.webhooks.github_ingress.enqueue_webhook_job", enqueue_mock),
+            patch("orchestrator.api.webhooks.github_ingress.notify_webhook_job_enqueued"),
+        ):
+            response = await ingest_github_webhook_event(
+                request=request,
+                session=session,
+                settings=SimpleNamespace(),
+                request_id="req-1",
+            )
+
+        self.assertEqual(response.status_code, 202)
+        enqueue_mock.assert_called_once()
+        self.assertIn("github_ref:example:org/repo:refs/heads/staging", enqueue_mock.call_args.kwargs["request"].subject_key)

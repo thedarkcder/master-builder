@@ -17,6 +17,11 @@ from orchestrator.core.workflow.checkpoints import (
     checkpoint_kind_for_stage,
     upsert_workflow_checkpoint,
 )
+from orchestrator.core.workflow.execution_artifacts import (
+    MissingDurableExecutionArtifactError,
+    latest_pushed_execution_artifact_for_run,
+    snapshot_requires_durable_execution_artifact,
+)
 from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 from orchestrator.core.workflow.execution_snapshot import SnapshotWorkflow
 from orchestrator.core.worker.stage_events import WorkerStageUpdate
@@ -512,6 +517,13 @@ def persist_stage_checkpoint(
     snapshot = _load_or_init_snapshot(run.plan)
     snapshot.apply_stage_checkpoint(checkpoint)
     snapshot.apply_execution_context(execution_context)
+    if snapshot_requires_durable_execution_artifact(snapshot.dump()) and latest_pushed_execution_artifact_for_run(
+        session=session,
+        run_id=run.run_id,
+    ) is None:
+        raise MissingDurableExecutionArtifactError(
+            f"{checkpoint.stage.upper()} checkpoint is not reusable until the execution branch is pushed."
+        )
     run.plan = snapshot.dump()
     if checkpoint.stage == "dev" and checkpoint.dev_result is not None:
         run.pr_url = checkpoint.dev_result.pr_url

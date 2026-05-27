@@ -464,3 +464,41 @@ class RunLifecycleTests(unittest.TestCase):
                         ).dump(),
                     ),
                 )
+
+    def test_resume_attempt_ignores_stale_blocked_active_run_pointer(self) -> None:
+        with self.session_factory() as session:
+            enqueue = enqueue_run(
+                session,
+                tenant_id="tenant-runs",
+                project_id=None,
+                issue_key="TP-914",
+                precheck_outcome="ready_for_agent",
+            )
+            mark_run_terminal(
+                session,
+                run_id=enqueue.run.run_id,
+                terminal_status=RUN_STATUS_BLOCKED,
+                last_error="human_input_expired",
+            )
+            workflow = self._get_workflow(session, issue_key="TP-914")
+            assert workflow is not None
+            workflow.status = "running"
+            workflow.active_run_id = enqueue.run.run_id
+            session.commit()
+
+            result = enqueue_attempt_for_workflow_uncommitted(
+                session,
+                workflow_id=workflow.workflow_id,
+                bootstrap=RunBootstrap(
+                    workflow_id=workflow.workflow_id,
+                    parent_run_id=enqueue.run.run_id,
+                    entry_mode="resume",
+                    entry_stage="pm",
+                    precheck_outcome="ready_for_agent",
+                    plan=ExecutionSnapshot.empty().dump(),
+                ),
+            )
+
+        self.assertTrue(result.enqueued)
+        self.assertEqual(result.run.parent_run_id, enqueue.run.run_id)
+        self.assertEqual(result.run.entry_mode, "resume")

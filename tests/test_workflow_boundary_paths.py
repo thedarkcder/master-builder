@@ -19,13 +19,17 @@ from orchestrator.core.workflow.type_catalog import ISSUE_EXECUTION_STEP_RUN_ATT
 from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.models import WorkflowExecution, WorkflowOperation, WorkflowOperationAttempt
 from orchestrator.storage.models import Run
-from orchestrator.temporal.activities.run_execution import execute_claimed_run_activity
-from orchestrator.temporal.payloads import DevelopmentTeamRunWorkflowInput
+from orchestrator.temporal.activities.run_execution import (
+    _WorkflowOperationAttemptHeartbeatController,
+    execute_claimed_run_activity,
+    resume_human_input_activity,
+)
+from orchestrator.temporal.payloads import DevelopmentTeamRunWorkflowInput, HumanInputResumeInput
 from tests.test_support.admin_api_harness import AdminApiTestHarness
 from tests.test_support.jira_parent_workflow_boundary import JiraParentWorkflowBoundaryHarness
 from tests.test_support.jira_webhook_api_harness import JiraWebhookTestsHarness
 from tests.test_support.product_events import RecordingProductEventRepository
-from tests.workflow_test_support import add_workflow_attempt
+from tests.workflow_test_support import add_human_input_request, add_workflow_attempt
 
 
 class WorkflowBoundaryPathTests(JiraWebhookTestsHarness):
@@ -133,6 +137,9 @@ class RunTemporalStreamBoundaryTests(AdminApiTestHarness):
             session.commit()
 
         def _process_claimed_run(*, session, selection, **_kwargs):  # noqa: ANN001, ANN003
+            self.assertIs(selection.claimed_run.run, selection.run)
+            self.assertEqual(selection.claimed_run.claim_id, claim_id)
+            self.assertEqual(selection.claimed_run.worker_service_instance_id, "worker:test")
             run = selection.run
             operation = session.execute(
                 select(WorkflowOperation).where(
@@ -232,3 +239,264 @@ class RunTemporalStreamBoundaryTests(AdminApiTestHarness):
         self.assertTrue(any(row.get("event_type") == "TASK_STARTED" for row in rows))
         self.assertTrue(any(row.get("event_kind") == "runtime_log" for row in rows))
         self.assertTrue(any(row.get("message") == "temporal activity emitted run log" for row in rows))
+
+    def test_run_temporal_activity_failure_terminalizes_dispatching_run(self) -> None:
+        self._insert_jira_connection()
+        tenant_response = self.client.post(
+            "/api/admin/tenants",
+            json=self._tenant_payload(),
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(tenant_response.status_code, 201)
+        now = datetime.now(timezone.utc)
+        claim_id = "claim-run-temporal-failure"
+        workflow_id = "workflow-run-temporal-failure"
+        run_id = "run-temporal-failure"
+        session_factory = create_session_factory(self.database_url)
+
+        with session_factory() as session:
+            add_workflow_attempt(
+                session,
+                workflow_id=workflow_id,
+                run_id=run_id,
+                tenant_id="tenant-a",
+                project_id="tenant-a-default",
+                issue_key="TP-612",
+                issue_summary="Temporal failure boundary",
+                issue_description="Prove activity failure terminalizes run.",
+                repo_url="https://github.com/example/repo",
+                branch="feature/temporal-failure",
+                workflow_type_key="issue_execution",
+                workflow_status="running",
+                run_status="dispatching",
+                attempt_number=1,
+                claim_id=claim_id,
+                worker_service_instance_id="worker:test",
+                dispatch_claimed_at=now,
+                now=now,
+            )
+            session.commit()
+
+        def _process_claimed_run(**_kwargs):  # noqa: ANN003
+            raise RuntimeError("dispatcher exploded")
+
+        with (
+            patch("orchestrator.temporal.activities.run_execution.build_workflow_runner_for_session", return_value=object()),
+            patch("orchestrator.temporal.activities.run_execution.process_claimed_run", side_effect=_process_claimed_run),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "dispatcher exploded"):
+                execute_claimed_run_activity(
+                    DevelopmentTeamRunWorkflowInput(
+                        workflow_id=workflow_id,
+                        run_id=run_id,
+                        claim_id=claim_id,
+                        tenant_id="tenant-a",
+                        project_id="tenant-a-default",
+                        issue_key="TP-612",
+                        workflow_execution_timeout_seconds=86400,
+                        workflow_run_timeout_seconds=43200,
+                        activity_start_to_close_timeout_seconds=300,
+                        human_input_resume_timeout_seconds=600,
+                    )
+                )
+
+        with session_factory() as session:
+            run = session.get(Run, run_id)
+            assert run is not None
+            operation = session.execute(
+                select(WorkflowOperation).where(
+                    WorkflowOperation.workflow_id == workflow_id,
+                    WorkflowOperation.operation_type == ISSUE_EXECUTION_STEP_RUN_ATTEMPT_EXECUTION,
+                )
+            ).scalar_one()
+
+        self.assertEqual(run.status, "failed")
+        self.assertIsNone(run.claim_id)
+        self.assertIn("Temporal run activity failed: dispatcher exploded", run.last_error or "")
+        self.assertEqual(operation.status, "failed")
+
+    def test_resume_temporal_activity_processes_existing_temporal_claimed_resume_run(self) -> None:
+        self._insert_jira_connection()
+        tenant_response = self.client.post(
+            "/api/admin/tenants",
+            json=self._tenant_payload(),
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(tenant_response.status_code, 201)
+        now = datetime.now(timezone.utc)
+        workflow_id = "workflow-resume-temporal-existing-claim"
+        source_run_id = "source-run-existing-claim"
+        resume_run_id = "resume-run-existing-claim"
+        request_id = "input-existing-claim"
+        claim_id = "claim-existing-resume"
+        worker_owner = f"temporal:{workflow_id}"
+        session_factory = create_session_factory(self.database_url)
+
+        with session_factory() as session:
+            add_workflow_attempt(
+                session,
+                workflow_id=workflow_id,
+                run_id=source_run_id,
+                tenant_id="tenant-a",
+                project_id="tenant-a-default",
+                issue_key="TP-613",
+                issue_summary="Temporal resume boundary",
+                workflow_type_key="issue_execution",
+                workflow_status="failed",
+                run_status="failed",
+                attempt_number=1,
+                entry_checkpoint_id="checkpoint-existing-claim",
+                checkpoint_kind="stage",
+                checkpoint_stage="pm",
+                checkpoint_payload={},
+                pre_check_outcome="ready_for_agent",
+                now=now,
+            )
+            resume_run = Run(
+                run_id=resume_run_id,
+                workflow_id=workflow_id,
+                tenant_id="tenant-a",
+                project_id="tenant-a-default",
+                issue_key="TP-613",
+                issue_summary="Temporal resume boundary",
+                attempt_number=2,
+                parent_run_id=source_run_id,
+                entry_mode="resume",
+                entry_stage="pm",
+                entry_checkpoint_id="checkpoint-existing-claim",
+                dedupe_scope="issue_execution",
+                status="dispatching",
+                pre_check_outcome="ready_for_agent",
+                claim_id=claim_id,
+                dispatch_claimed_at=now,
+                worker_service_instance_id=worker_owner,
+                created_at=now,
+            )
+            session.add(resume_run)
+            add_human_input_request(
+                session,
+                request_id=request_id,
+                tenant_id="tenant-a",
+                project_id="tenant-a-default",
+                workflow_id=workflow_id,
+                checkpoint_id="checkpoint-existing-claim",
+                source_run_id=source_run_id,
+                consumed_by_run_id=resume_run_id,
+                issue_key="TP-613",
+                source_stage="pm",
+                request_type="install_request",
+                status="consumed",
+                answered_at=now,
+                answer_source_ref="test",
+                now=now,
+            )
+            session.commit()
+
+        def _process_claimed_run(**kwargs):  # noqa: ANN003
+            selection = kwargs["selection"]
+            self.assertEqual(selection.claimed_run.run_id, resume_run_id)
+            self.assertEqual(selection.claimed_run.claim_id, claim_id)
+            self.assertEqual(selection.claimed_run.worker_service_instance_id, worker_owner)
+            selection.claimed_run.run.status = "succeeded"
+            selection.claimed_run.run.finished_at = now
+            return selection.claimed_run.run
+
+        with (
+            patch("orchestrator.temporal.activities.run_execution.build_workflow_runner_for_session", return_value=object()),
+            patch("orchestrator.temporal.activities.run_execution.process_claimed_run", side_effect=_process_claimed_run),
+        ):
+            result = resume_human_input_activity(HumanInputResumeInput(request_id=request_id))
+
+        self.assertEqual(result.run_id, resume_run_id)
+        self.assertEqual(result.status, "succeeded")
+
+        with session_factory() as session:
+            operation = session.execute(
+                select(WorkflowOperation).where(
+                    WorkflowOperation.workflow_id == workflow_id,
+                    WorkflowOperation.operation_type == "human_input_resume",
+                )
+            ).scalar_one()
+            self.assertEqual(operation.run_id, resume_run_id)
+            self.assertEqual(operation.status, "completed")
+
+    def test_operation_attempt_heartbeat_controller_touches_active_attempt(self) -> None:
+        self._insert_jira_connection()
+        tenant_response = self.client.post(
+            "/api/admin/tenants",
+            json=self._tenant_payload(),
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(tenant_response.status_code, 201)
+        now = datetime.now(timezone.utc)
+        workflow_id = "workflow-operation-heartbeat"
+        run_id = "run-operation-heartbeat"
+        session_factory = create_session_factory(self.database_url)
+
+        with session_factory() as session:
+            add_workflow_attempt(
+                session,
+                workflow_id=workflow_id,
+                run_id=run_id,
+                tenant_id="tenant-a",
+                project_id="tenant-a-default",
+                issue_key="TP-614",
+                issue_summary="Operation heartbeat",
+                workflow_type_key="issue_execution",
+                workflow_status="running",
+                run_status="dispatching",
+                attempt_number=1,
+                claim_id="claim-operation-heartbeat",
+                worker_service_instance_id="worker:test",
+                dispatch_claimed_at=now,
+                now=now,
+            )
+            operation = WorkflowOperation(
+                operation_id="operation-heartbeat",
+                workflow_id=workflow_id,
+                run_id=run_id,
+                operation_type="run_attempt_execution",
+                idempotency_key="run-attempt:run-operation-heartbeat",
+                status="running",
+                target_system="workflow_engine",
+                target_ref=run_id,
+                summary="Execute run",
+                created_at=now,
+                started_at=now,
+                finished_at=None,
+                updated_at=now,
+            )
+            attempt = WorkflowOperationAttempt(
+                attempt_id="attempt-heartbeat",
+                operation_id=operation.operation_id,
+                attempt_number=1,
+                status="running",
+                error_category=None,
+                error_message=None,
+                retryable=False,
+                next_retry_at=None,
+                status_detail=None,
+                last_heartbeat_at=now,
+                lease_expires_at=now,
+                lease_owner="old-owner",
+                created_at=now,
+                started_at=now,
+                finished_at=None,
+            )
+            session.add_all([operation, attempt])
+            session.commit()
+
+        controller = _WorkflowOperationAttemptHeartbeatController(
+            database_url=self.database_url,
+            attempt_id="attempt-heartbeat",
+            lease_owner="new-owner",
+            heartbeat_interval_seconds=5,
+        )
+        controller._run_once()
+
+        with session_factory() as session:
+            attempt = session.get(WorkflowOperationAttempt, "attempt-heartbeat")
+            assert attempt is not None
+            self.assertEqual(attempt.lease_owner, "new-owner")
+            self.assertIsNotNone(attempt.lease_expires_at)
+            self.assertNotEqual(attempt.lease_expires_at, now)

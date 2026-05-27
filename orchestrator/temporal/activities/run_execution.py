@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 from types import SimpleNamespace
 from uuid import uuid4
 
@@ -9,6 +10,11 @@ from temporalio import activity
 
 from orchestrator.core.config import get_settings
 from orchestrator.core.runs.human_input_service import resume_run_from_human_input_answer
+from orchestrator.core.runs.service import mark_run_terminal
+from orchestrator.core.workflow.operation_service import (
+    ACTIVE_OPERATION_ATTEMPT_STATUSES,
+    touch_workflow_operation_attempt_heartbeat,
+)
 from orchestrator.core.workflow.execution_projection import WorkflowExecutionProjection
 from orchestrator.core.workflow.step_runner import (
     complete_workflow_step_attempt,
@@ -26,7 +32,7 @@ from orchestrator.core.worker.run_lifecycle import claim_run_for_dispatch
 from orchestrator.core.worker.runtime_factory import build_workflow_runner_for_session
 from orchestrator.core.worker.process_service import process_claimed_run
 from orchestrator.storage.db import create_session_factory
-from orchestrator.storage.models import Run, RunHumanInputRequest, Tenant, WorkflowExecution
+from orchestrator.storage.models import Run, RunHumanInputRequest, Tenant, WorkflowExecution, WorkflowOperationAttempt
 from orchestrator.temporal.payloads import (
     DevelopmentTeamRunActivityResult,
     DevelopmentTeamRunWorkflowInput,
@@ -34,6 +40,113 @@ from orchestrator.temporal.payloads import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+class _CompositeHeartbeatController:
+    def __init__(self, *controllers) -> None:  # noqa: ANN001
+        self._controllers = controllers
+
+    def start(self) -> None:
+        for controller in self._controllers:
+            controller.start()
+
+    def stop(self) -> None:
+        for controller in reversed(self._controllers):
+            controller.stop()
+
+
+class _WorkflowOperationAttemptHeartbeatController:
+    def __init__(
+        self,
+        *,
+        database_url: str,
+        attempt_id: str,
+        lease_owner: str,
+        heartbeat_interval_seconds: int,
+    ) -> None:
+        self._session_factory = create_session_factory(database_url)
+        self._attempt_id = attempt_id
+        self._lease_owner = lease_owner
+        self._heartbeat_interval_seconds = heartbeat_interval_seconds
+        self._stop_event = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        if self._thread is not None and self._thread.is_alive():
+            return
+        self._stop_event.clear()
+        self._thread = threading.Thread(
+            target=self._run,
+            name=f"workflow-operation-heartbeat-{self._attempt_id}",
+            daemon=True,
+        )
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop_event.set()
+        if self._thread is not None and self._thread.is_alive():
+            self._thread.join(timeout=max(1.0, float(self._heartbeat_interval_seconds)))
+
+    def _run(self) -> None:
+        interval_seconds = max(5, int(self._heartbeat_interval_seconds))
+        while not self._stop_event.wait(interval_seconds):
+            if not self._run_once():
+                return
+
+    def _run_once(self) -> bool:
+        try:
+            with self._session_factory() as session:
+                attempt = session.get(WorkflowOperationAttempt, self._attempt_id)
+                if attempt is None or str(attempt.status or "").strip().lower() not in ACTIVE_OPERATION_ATTEMPT_STATUSES:
+                    return False
+                touch_workflow_operation_attempt_heartbeat(
+                    session,
+                    attempt=attempt,
+                    lease_owner=self._lease_owner,
+                )
+                session.commit()
+                return True
+        except Exception as exc:  # noqa: BLE001
+            logger.exception(
+                "workflow_operation_attempt_heartbeat_failed attempt_id=%s error=%s",
+                self._attempt_id,
+                exc,
+            )
+            return True
+
+
+def _run_process_kwargs_with_operation_attempt_heartbeat(
+    *,
+    session,
+    settings,
+    step,
+    worker_service_instance_id: str | None,
+) -> dict[str, object]:  # noqa: ANN001
+    kwargs = build_run_process_kwargs(
+        session=session,
+        settings=settings,
+        worker_service_instance_id=worker_service_instance_id,
+    )
+    build_run_heartbeat_controller_fn = kwargs["build_run_heartbeat_controller_fn"]
+    attempt_id = str(step.attempt.attempt_id)
+
+    def _build_heartbeat_controller(*, run_id, worker_service_instance_id, claim_id, heartbeat_interval_seconds):  # noqa: ANN001
+        run_controller = build_run_heartbeat_controller_fn(
+            run_id=run_id,
+            worker_service_instance_id=worker_service_instance_id,
+            claim_id=claim_id,
+            heartbeat_interval_seconds=heartbeat_interval_seconds,
+        )
+        operation_controller = _WorkflowOperationAttemptHeartbeatController(
+            database_url=settings.database_url,
+            attempt_id=attempt_id,
+            lease_owner=f"temporal:{step.workflow_id}:{run_id}",
+            heartbeat_interval_seconds=heartbeat_interval_seconds,
+        )
+        return _CompositeHeartbeatController(run_controller, operation_controller)
+
+    kwargs["build_run_heartbeat_controller_fn"] = _build_heartbeat_controller
+    return kwargs
 
 
 def _pending_request_id(*, session, workflow_id: str) -> str | None:
@@ -122,10 +235,25 @@ def execute_claimed_run_activity(payload: DevelopmentTeamRunWorkflowInput) -> De
                     session=session,
                     runner=runner,
                     settings=settings,
-                    selection=SimpleNamespace(run=run, tenant=tenant, terminal_run=None),
-                    **build_run_process_kwargs(
+                    selection=SimpleNamespace(
+                        run=run,
+                        tenant=tenant,
+                        terminal_run=None,
+                        claimed_run=SimpleNamespace(
+                            run=run,
+                            tenant=tenant,
+                            project=None,
+                            effective_policy={},
+                            run_id=run.run_id,
+                            claim_id=str(payload.claim_id or run.claim_id or "").strip(),
+                            worker_service_instance_id=str(getattr(run, "worker_service_instance_id", "") or "").strip(),
+                            status=str(getattr(run, "status", "") or "").strip(),
+                        ),
+                    ),
+                    **_run_process_kwargs_with_operation_attempt_heartbeat(
                         session=session,
                         settings=settings,
+                        step=step,
                         worker_service_instance_id=str(getattr(run, "worker_service_instance_id", "") or "").strip()
                         or None,
                     ),
@@ -165,6 +293,16 @@ def execute_claimed_run_activity(payload: DevelopmentTeamRunWorkflowInput) -> De
                 category="run_execution_failed",
                 message=str(exc),
             )
+            if str(getattr(run, "status", "") or "").strip().lower() in {"dispatching", "running"}:
+                mark_run_terminal(
+                    session,
+                    run_id=run.run_id,
+                    terminal_status="failed",
+                    last_error=f"Temporal run activity failed: {exc}",
+                    expected_worker_service_instance_id=str(getattr(run, "worker_service_instance_id", "") or "").strip()
+                    or None,
+                    expected_claim_id=str(payload.claim_id or run.claim_id or "").strip() or None,
+                )
             session.commit()
             raise
 
@@ -200,27 +338,53 @@ def resume_human_input_activity(payload: HumanInputResumeInput) -> DevelopmentTe
                     settings=settings,
                     request=request,
                 )
-                claimed = claim_run_for_dispatch(
-                    session,
-                    run=resumed_run,
-                    expected_status="queued",
-                    worker_service_instance_id=f"temporal:{workflow.workflow_id}",
-                    claim_id=uuid4().hex,
-                )
+                temporal_owner = f"temporal:{workflow.workflow_id}"
+                claimed = None
+                if str(resumed_run.status or "").strip().lower() == "dispatching":
+                    existing_owner = str(getattr(resumed_run, "worker_service_instance_id", "") or "").strip()
+                    existing_claim_id = str(getattr(resumed_run, "claim_id", "") or "").strip()
+                    if existing_owner == temporal_owner and existing_claim_id:
+                        claimed = resumed_run
+                if claimed is None:
+                    claimed = claim_run_for_dispatch(
+                        session,
+                        run=resumed_run,
+                        expected_status="queued",
+                        worker_service_instance_id=temporal_owner,
+                        claim_id=uuid4().hex,
+                    )
                 if claimed is None:
                     raise RuntimeError(f"Unable to claim resumed run {resumed_run.run_id} for temporal execution")
+                step.operation.run_id = claimed.run_id
+                session.flush()
                 tenant = session.get(Tenant, claimed.tenant_id)
                 if tenant is None:
                     raise RuntimeError(f"Temporal resume activity missing tenant {claimed.tenant_id}")
                 runner = build_workflow_runner_for_session(session=session)
+                claimed_ref = SimpleNamespace(
+                    run=claimed,
+                    tenant=tenant,
+                    project=None,
+                    effective_policy={},
+                    run_id=claimed.run_id,
+                    claim_id=str(getattr(claimed, "claim_id", "") or "").strip(),
+                    worker_service_instance_id=str(getattr(claimed, "worker_service_instance_id", "") or "").strip(),
+                    status=str(getattr(claimed, "status", "") or "").strip(),
+                )
                 processed = process_claimed_run(
                     session=session,
                     runner=runner,
                     settings=settings,
-                    selection=SimpleNamespace(run=claimed, tenant=tenant, terminal_run=None),
-                    **build_run_process_kwargs(
+                    selection=SimpleNamespace(
+                        run=claimed,
+                        tenant=tenant,
+                        terminal_run=None,
+                        claimed_run=claimed_ref,
+                    ),
+                    **_run_process_kwargs_with_operation_attempt_heartbeat(
                         session=session,
                         settings=settings,
+                        step=step,
                         worker_service_instance_id=str(getattr(claimed, "worker_service_instance_id", "") or "").strip()
                         or None,
                     ),

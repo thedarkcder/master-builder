@@ -9,7 +9,7 @@ import logging
 from typing import Any, TypeVar
 from uuid import uuid4
 
-from sqlalchemy import desc, func, select
+from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 
 from orchestrator.core.workflow.definition import (
@@ -251,17 +251,21 @@ def _start_unit_attempt(
     return unit_attempt
 
 
-def _latest_unit_attempt(
+def _unit_attempt_count_for_operation_attempt(
     *,
     session: Session,
     work_unit: WorkflowOperationWorkUnit,
-) -> WorkflowOperationWorkUnitAttempt | None:
-    return session.execute(
-        select(WorkflowOperationWorkUnitAttempt)
-        .where(WorkflowOperationWorkUnitAttempt.work_unit_id == work_unit.work_unit_id)
-        .order_by(desc(WorkflowOperationWorkUnitAttempt.attempt_number))
-        .limit(1)
-    ).scalar_one_or_none()
+    operation_attempt: WorkflowOperationAttempt,
+) -> int:
+    return int(
+        session.execute(
+            select(func.count(WorkflowOperationWorkUnitAttempt.work_unit_attempt_id)).where(
+                WorkflowOperationWorkUnitAttempt.work_unit_id == work_unit.work_unit_id,
+                WorkflowOperationWorkUnitAttempt.operation_attempt_id == operation_attempt.attempt_id,
+            )
+        ).scalar_one()
+        or 0
+    )
 
 
 def run_work_unit(
@@ -327,8 +331,12 @@ def run_work_unit(
         session.flush()
         return output_loader(dict(work_unit.output_json))
 
-    latest_attempt = _latest_unit_attempt(session=session, work_unit=work_unit)
-    if latest_attempt is not None and latest_attempt.attempt_number >= definition.retry_policy.max_attempts:
+    operation_unit_attempt_count = _unit_attempt_count_for_operation_attempt(
+        session=session,
+        work_unit=work_unit,
+        operation_attempt=operation_attempt,
+    )
+    if operation_unit_attempt_count >= definition.retry_policy.max_attempts:
         raise WorkflowWorkUnitRetryExhaustedError(
             f"Workflow work unit {unit_key} exhausted {definition.retry_policy.max_attempts} attempts."
         )
@@ -364,7 +372,10 @@ def run_work_unit(
         message = str(exc) or exc.__class__.__name__
         next_delay = _backoff_seconds(definition=definition, attempt_number=unit_attempt.attempt_number)
         next_retry_at = timestamp + timedelta(seconds=next_delay) if next_delay > 0 else None
-        retrying = next_retry_at is not None and unit_attempt.attempt_number < definition.retry_policy.max_attempts
+        retrying = (
+            next_retry_at is not None
+            and operation_unit_attempt_count + 1 < definition.retry_policy.max_attempts
+        )
         unit_attempt.status = WORK_UNIT_STATUS_RETRYING if retrying else WORK_UNIT_STATUS_FAILED
         unit_attempt.error_category = "work_unit_failure"
         unit_attempt.error_message = message

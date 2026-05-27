@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Protocol
 
 from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
 from orchestrator.core.decision.types import PrecheckOutcome
+from orchestrator.core.development.self_executable_contract import resolve_self_executable_planning_contract
 from orchestrator.core.runs.enqueue_types import EnqueueFailureReason
 from orchestrator.core.runs.service import EnqueueRunResult, enqueue_run
 from orchestrator.core.workflow.operation_service import (
@@ -92,10 +93,12 @@ class StartWorkUseCase:
         session: Session,
         issue_gateway: StartWorkIssueGateway,
         enqueue_run_fn=enqueue_run,  # noqa: ANN001
+        self_executable_contract_resolver=resolve_self_executable_planning_contract,  # noqa: ANN001
     ) -> None:
         self._session = session
         self._issue_gateway = issue_gateway
         self._enqueue_run_fn = enqueue_run_fn
+        self._self_executable_contract_resolver = self_executable_contract_resolver
 
     def start(
         self,
@@ -131,7 +134,12 @@ class StartWorkUseCase:
             project_key=_project_key_for_issue(source_issue_key),
             parent_issue_key=source_issue_key,
         )
-        targets = self._execution_targets(source_issue=source_issue, child_issues=child_issues)
+        targets = self._execution_targets(
+            tenant=tenant,
+            source_workflow=source_workflow,
+            source_issue=source_issue,
+            child_issues=child_issues,
+        )
         if not targets:
             raise ValueError(f"No executable engineering work found for {source_issue_key}")
 
@@ -233,11 +241,31 @@ class StartWorkUseCase:
     def _execution_targets(
         self,
         *,
+        tenant: Tenant,
+        source_workflow: WorkflowExecution | None,
         source_issue: JiraIssueDetail,
         child_issues: list[JiraIssueDetail],
     ) -> tuple[JiraIssueDetail, ...]:
         if _is_pm_parent(source_issue):
-            return tuple(issue for issue in child_issues if _is_clean_engineering_issue(issue))
+            executable_children = tuple(issue for issue in child_issues if _is_clean_engineering_issue(issue))
+            if executable_children:
+                return executable_children
+            contract = self._self_executable_contract_resolver(
+                session=self._session,
+                tenant_id=tenant.tenant_id,
+                source_issue=source_issue,
+                source_workflow=source_workflow,
+            )
+            if contract is not None:
+                return (
+                    replace(
+                        source_issue,
+                        summary=contract.summary,
+                        description=contract.description,
+                        labels=list(contract.labels),
+                    ),
+                )
+            return ()
 
         executable_children = tuple(issue for issue in child_issues if _is_clean_engineering_issue(issue))
         if executable_children:

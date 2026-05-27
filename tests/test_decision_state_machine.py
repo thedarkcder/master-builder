@@ -226,4 +226,5 @@ def test_reduce_decision_planner_result_is_canonical() -> None:
 
     assert reduced.classification is DecisionClassification.DECISION_GATE
     assert reduced.question_set[0]["id"] == "dg_owner"
+    assert reduced.question_set[0]["unresolved"] is True
     assert reduced.decision.block_reason == "decision_gate_required"

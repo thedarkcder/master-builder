@@ -354,6 +354,19 @@ def _engineering_child_issue_type_for_parent(
     return subtask_issue_type
 
 
+def require_engineering_child_fanout_issue_type(
+    *,
+    parent_issue_type: str,
+    available_issue_types: list[str],
+    parent_issue_key: str,
+) -> str:
+    return _engineering_child_issue_type_for_parent(
+        parent_issue_type=parent_issue_type,
+        available_issue_types=available_issue_types,
+        parent_issue_key=parent_issue_key,
+    )
+
+
 def _actual_parent_issue_type(
     *,
     oauth: dict[str, Any],

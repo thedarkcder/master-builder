@@ -27,6 +27,7 @@ from orchestrator.core.runs.human_input_service import create_human_input_reques
 from orchestrator.core.platform.tenant_secret_service import resolve_scoped_secret_ref
 from orchestrator.core.platform.trusted_install_executor import run_install as execute_project_install
 from orchestrator.core.worker.workspace import resolve_worker_workspace_key
+from orchestrator.core.workflow.execution_artifacts import record_pushed_execution_artifact
 from orchestrator.core.workflow.execution_snapshot import load_parsed_trigger_context_from_plan
 from orchestrator.core.workflow.trigger_context import GithubPrRemediationTriggerContext
 from orchestrator.storage.models import (
@@ -1265,7 +1266,21 @@ def _execute_github_tool(
             ["push", "-u", "origin", push_ref],
             token=github_client.get_installation_token(),
         )
-        return {"branch_name": branch_name}
+        pushed_sha = _run_git(context.repo_dir, ["rev-parse", "HEAD"]).strip()
+        if context.run is None:
+            raise ValueError("github.push_branch requires an active run context")
+        artifact = record_pushed_execution_artifact(
+            session,
+            run=context.run,
+            repo_url=github_repository,
+            branch=branch_name,
+            commit_sha=pushed_sha,
+            diff_stat={
+                "base_branch": default_base_branch,
+                "head_branch": branch_name,
+            },
+        )
+        return {"branch_name": branch_name, "commit_sha": pushed_sha, "artifact_id": artifact.artifact_id}
 
     if tool_name == "github.open_pr":
         title = str(args.get("title") or f"{context.issue_key}: update").strip()

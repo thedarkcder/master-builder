@@ -30,6 +30,8 @@ class ProjectPolicyHelpersTests(unittest.TestCase):
                 "require_agents_md": True,
                 "codex_model": " gpt-5.4-mini ",
                 "codex_reasoning_effort": " high ",
+                "staging_admission_enabled": True,
+                "staging_branch": " stage ",
                 "ignored": "x",
             }
         )
@@ -47,6 +49,8 @@ class ProjectPolicyHelpersTests(unittest.TestCase):
         self.assertEqual(normalized["require_agents_md"], True)
         self.assertEqual(normalized["codex_model"], "gpt-5.4-mini")
         self.assertEqual(normalized["codex_reasoning_effort"], "high")
+        self.assertEqual(normalized["staging_admission_enabled"], True)
+        self.assertEqual(normalized["staging_branch"], "stage")
 
     def test_normalize_project_policy_overrides_includes_execution_profiles(self) -> None:
         normalized = project_policy.normalize_project_policy_overrides(
@@ -100,6 +104,8 @@ class ProjectPolicyHelpersTests(unittest.TestCase):
                 "require_agents_md": True,
                 "codex_model": "gpt-5.4-mini",
                 "codex_reasoning_effort": "high",
+                "staging_admission_enabled": True,
+                "staging_branch": "staging",
             },
             default_codex_model="gpt-5.4",
             default_codex_reasoning_effort="medium",
@@ -116,6 +122,8 @@ class ProjectPolicyHelpersTests(unittest.TestCase):
         self.assertEqual(effective["require_agents_md"], True)
         self.assertEqual(effective["codex_model"], "gpt-5.4-mini")
         self.assertEqual(effective["codex_reasoning_effort"], "high")
+        self.assertEqual(effective["staging_admission_enabled"], True)
+        self.assertEqual(effective["staging_branch"], "staging")
 
     def test_resolve_agent_execution_profile_prefers_selector_specific_profile(self) -> None:
         settings = SimpleNamespace(

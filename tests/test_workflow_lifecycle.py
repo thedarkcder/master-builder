@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
+from fastapi import HTTPException, status
 from sqlalchemy import select
 
 from orchestrator.core.workflow.execution_projection import WorkflowExecutionReference, WorkflowSourceReference
@@ -324,6 +325,38 @@ class WorkflowLifecycleTests(SqliteTemplateDbTestCase):
 
         assert recovered == 1
         assert restarted_operation_ids == [running_operation_id]
+
+    def test_stale_operation_recovery_skips_unsupported_restart_without_crashing_startup(self) -> None:
+        with self.session_factory() as session:
+            workflow_type = get_workflow_type(session, workflow_type_key="parent_planning")
+            running_request = self._request(issue_key="MAB-401")
+            lifecycle = DurableWorkflowLifecycle(
+                session=session,
+                workflow_type=workflow_type,
+                tenant_id=running_request.tenant_id,
+                project_id=running_request.project_id,
+                execution=running_request.execution,
+            )
+            lifecycle.ensure_execution(display_name="Unsupported stale", description="Skip unsupported restart.")
+            _running_operation, running_attempt = lifecycle.start_operation_attempt(operation_type="jira_child_fanout")
+            running_attempt.last_heartbeat_at = datetime.now(timezone.utc) - timedelta(minutes=20)
+            running_attempt.lease_expires_at = datetime.now(timezone.utc) - timedelta(minutes=15)
+            session.commit()
+
+        def _unsupported_restart(**_kwargs):  # noqa: ANN001
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Workflow operation restart is disabled by policy",
+            )
+
+        recovered = recover_stale_workflow_operation_attempts(
+            session_factory=self.session_factory,
+            stale_timeout_seconds=300,
+            actor="test-sweeper",
+            restart_workflow_operation_fn=_unsupported_restart,
+        )
+
+        assert recovered == 0
 
 
 class PersistedWorkflowValidationTests(SqliteTemplateDbTestCase):

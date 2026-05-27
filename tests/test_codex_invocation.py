@@ -8,8 +8,8 @@ from orchestrator.core.knowledge.base import KnowledgeEmbeddingAccessMode
 from orchestrator.core.runtime.invocation import (
     AgentInvocationContext,
     _AsyncRuntimeLogWriter,
+    NativeToolPolicyError,
     RuntimeJsonContractError,
-    ToolBridgeExhaustedError,
     ToolBridgeProtocolError,
     ToolExecutionError,
     invoke_runtime_json,
@@ -965,6 +965,67 @@ class CodexInvocationTests(unittest.TestCase):
         self.assertIn('"tool_name": "decision.read_state"', str(runtime_calls[1]["user_prompt"]))
         self.assertIn('"ok": true', str(runtime_calls[1]["user_prompt"]).lower())
 
+    def test_invoke_runtime_json_fails_when_disallowed_native_tool_is_observed(self) -> None:
+        class _Runtime:
+            command = "codex"
+
+            def run_json(self, **kwargs):  # noqa: ANN003
+                on_log_line = kwargs.get("on_log_line")
+                if callable(on_log_line):
+                    on_log_line("stdout", '{"type":"web_search_call","query":"jira api"}')
+                return {"ok": True}
+
+        context = AgentInvocationContext(
+            channel="system",
+            tenant_id="tenant-1",
+            project_id=None,
+            command="policy",
+            stage="decision_planner",
+            working_dir=".",
+        )
+
+        with (
+            patch("orchestrator.core.runtime.invocation._get_log_writer", return_value=self._Writer()),
+            self.assertRaises(NativeToolPolicyError) as raised,
+        ):
+            invoke_runtime_json(
+                runtime=_Runtime(),  # type: ignore[arg-type]
+                context=context,
+                system_prompt="system",
+                user_prompt="user",
+            )
+
+        self.assertIn("web.search", str(raised.exception))
+
+    def test_invoke_runtime_json_allows_stage_allowed_native_tool_observation(self) -> None:
+        class _Runtime:
+            command = "codex"
+
+            def run_json(self, **kwargs):  # noqa: ANN003
+                on_log_line = kwargs.get("on_log_line")
+                if callable(on_log_line):
+                    on_log_line("stdout", '{"type":"web_search_call","query":"jira api"}')
+                return {"ok": True}
+
+        context = AgentInvocationContext(
+            channel="worker",
+            tenant_id="tenant-1",
+            project_id="proj-1",
+            command="workflow",
+            stage="dev",
+            working_dir=".",
+        )
+
+        with patch("orchestrator.core.runtime.invocation._get_log_writer", return_value=self._Writer()):
+            payload = invoke_runtime_json(
+                runtime=_Runtime(),  # type: ignore[arg-type]
+                context=context,
+                system_prompt="system",
+                user_prompt="user",
+            )
+
+        self.assertEqual(payload, {"ok": True})
+
     def test_invoke_runtime_json_preserves_operation_id_in_runtime_log_sink(self) -> None:
         captured: dict[str, object] = {}
         live_lines: list[tuple[str | None, str | None, str]] = []
@@ -1145,8 +1206,9 @@ class CodexInvocationTests(unittest.TestCase):
         self.assertIn("disallowed tool", str(raised.exception).lower())
         self.assertEqual(len(runtime_calls), 1)
 
-    def test_invoke_runtime_json_with_tools_fails_after_tool_hop_limit(self) -> None:
+    def test_invoke_runtime_json_with_tools_requests_final_response_after_tool_hop_limit(self) -> None:
         runtime_calls: list[dict[str, object]] = []
+        test_case = self
 
         class _Runtime:
             def run_json(self, **kwargs):  # noqa: ANN003
@@ -1157,6 +1219,8 @@ class CodexInvocationTests(unittest.TestCase):
                         "tool_name": "decision.read_state",
                         "tool_args": {},
                     }
+                test_case.assertIn("Runtime tool hop limit 1 reached", kwargs["user_prompt"])
+                test_case.assertIn("Return a final_response now", kwargs["user_prompt"])
                 return {
                     "type": "final_response",
                     "result": {"message": "continued after hop limit"},
@@ -1171,11 +1235,8 @@ class CodexInvocationTests(unittest.TestCase):
             working_dir=".",
         )
 
-        with (
-            patch("orchestrator.core.runtime.invocation._get_log_writer", return_value=self._Writer()),
-            self.assertRaises(ToolBridgeExhaustedError) as raised,
-        ):
-            invoke_runtime_json_with_tools(
+        with patch("orchestrator.core.runtime.invocation._get_log_writer", return_value=self._Writer()):
+            result = invoke_runtime_json_with_tools(
                 runtime=_Runtime(),  # type: ignore[arg-type]
                 context=context,
                 system_prompt="system",
@@ -1185,8 +1246,8 @@ class CodexInvocationTests(unittest.TestCase):
                 max_tool_hops=1,
             )
 
-        self.assertIn("tool hop limit exceeded", str(raised.exception).lower())
-        self.assertEqual(len(runtime_calls), 2)
+        self.assertEqual(result, {"message": "continued after hop limit"})
+        self.assertEqual(len(runtime_calls), 3)
 
     def test_invoke_runtime_json_with_tools_fails_when_bridge_never_finalizes(self) -> None:
         class _Runtime:
@@ -1220,6 +1281,53 @@ class CodexInvocationTests(unittest.TestCase):
             )
 
         self.assertIn("disallowed tool", str(raised.exception).lower())
+
+    def test_invoke_runtime_json_with_tools_returns_correctable_tool_errors_to_runtime(self) -> None:
+        runtime_calls: list[dict[str, object]] = []
+        test_case = self
+
+        class _Runtime:
+            def run_json(self, **kwargs):  # noqa: ANN003
+                runtime_calls.append(kwargs)
+                if len(runtime_calls) == 1:
+                    return {
+                        "type": "tool_request",
+                        "tool_name": "repo.read",
+                        "tool_args": {"command": "rg foo . | head"},
+                    }
+                test_case.assertIn("\"ok\": false", kwargs["user_prompt"])
+                test_case.assertIn("no shell operators", kwargs["user_prompt"])
+                test_case.assertIn("corrected allowed tool_request", kwargs["user_prompt"])
+                test_case.assertNotIn("Tool failures are advisory", kwargs["user_prompt"])
+                return {
+                    "type": "final_response",
+                    "result": {"message": "corrected"},
+                }
+
+        context = AgentInvocationContext(
+            channel="system",
+            tenant_id="tenant-1",
+            project_id=None,
+            command="policy",
+            stage="decision_planner",
+            working_dir=".",
+        )
+
+        def _reject_tool_request(_tool_name: str, _tool_args: dict[str, object]) -> dict[str, object]:
+            raise PermissionError("repo.read only allows a single command (no shell operators)")
+
+        with patch("orchestrator.core.runtime.invocation._get_log_writer", return_value=self._Writer()):
+            result = invoke_runtime_json_with_tools(
+                runtime=_Runtime(),  # type: ignore[arg-type]
+                context=context,
+                system_prompt="system",
+                user_prompt="user",
+                allowed_tools={"repo.read"},
+                execute_tool=_reject_tool_request,
+            )
+
+        self.assertEqual(result, {"message": "corrected"})
+        self.assertEqual(len(runtime_calls), 2)
 
     def test_invoke_runtime_json_with_tools_fails_when_tool_executor_fails(self) -> None:
         class _Runtime:

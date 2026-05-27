@@ -475,7 +475,7 @@ test("workspace home summarizes projects and project overview shows parent Jira 
   await expect(page.getByText("Recent Delivery")).toHaveCount(0);
 });
 
-test("project overview moves queued parent work from awaiting planning into planning", async ({ page }) => {
+test("project overview moves queued parent work from awaiting planning into active work", async ({ page }) => {
   const principal = makeTenantUserPrincipal({
     email: "product-planning@example.com",
     full_name: "Product Planning",
@@ -536,7 +536,19 @@ test("project overview moves queued parent work from awaiting planning into plan
     runs: [],
   });
   const startedExecutionIds: string[] = [];
-  let workflows = [...queuedParents, waitingParent];
+  let workflows = [...queuedParents, waitingParent].map((workflow) => ({
+    ...workflow,
+    work_item_id: `parent:${workflow.execution_id}`,
+    startable: workflow.status === "queued",
+    start_label: workflow.status === "queued" ? "Start planning" : null,
+    start_blocked_reason: workflow.status === "queued" ? null : "waiting_for_input",
+    run_count: 0,
+    active_run_count: 0,
+    failed_run_count: 0,
+    latest_run: null,
+    latest_activity_at: workflow.finished_at ?? workflow.started_at ?? workflow.created_at,
+    children: [],
+  }));
 
   await seedTenantSession(page, { principal, userEmail: principal.email, userName: principal.full_name });
   await installBffApiMocks(page, [
@@ -576,9 +588,10 @@ test("project overview moves queued parent work from awaiting planning into plan
     },
     {
       method: "POST",
-      pathname: /^\/api\/bff\/api\/admin\/workflows\/[^/]+\/start-planning$/,
-      handler: (route, url) => {
-        const executionId = decodeURIComponent(url.pathname.split("/").at(-2) ?? "");
+      pathname: "/api/bff/api/admin/workflows/work-items/start",
+      handler: async (route) => {
+        const payload = await route.request().postDataJSON();
+        const executionId = String(payload.work_item_id ?? "").replace(/^parent:/, "");
         startedExecutionIds.push(executionId);
         workflows = workflows.map((workflow) =>
           workflow.execution_id === executionId
@@ -586,13 +599,25 @@ test("project overview moves queued parent work from awaiting planning into plan
                 ...workflow,
                 status: "running",
                 current_state: "running",
+                startable: false,
+                start_label: null,
+                start_blocked_reason: "not_ready",
                 started_at: "2026-05-23T10:55:00Z",
                 updated_at: "2026-05-23T10:55:00Z",
+                latest_activity_at: "2026-05-23T10:55:00Z",
               }
             : workflow,
         );
         const started = workflows.find((workflow) => workflow.execution_id === executionId);
-        return fulfillJson(route, started);
+        return fulfillJson(route, {
+          work_item_id: payload.work_item_id,
+          action: "planning",
+          workflow: started,
+          queued: [],
+          skipped: [],
+          promoted_issue_keys: [],
+          started_attempt: null,
+        });
       },
     },
   ]);
@@ -600,21 +625,22 @@ test("project overview moves queued parent work from awaiting planning into plan
   await page.goto("/example/projects/example-default");
 
   const awaitingPlanningLane = page.getByRole("region", { name: "Awaiting planning" });
-  const planningLane = page.getByRole("region", { name: "Planning" });
+  const engineeringLane = page.getByRole("region", { name: "Engineering active" });
 
   await expect(page.getByRole("heading", { name: "Awaiting planning" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Planning", exact: true })).toHaveCount(0);
   await expect(awaitingPlanningLane.getByRole("checkbox", { name: "Select MAB-252 for planning start" })).toBeVisible();
   await page.getByRole("checkbox", { name: "Select MAB-252 for planning start" }).check();
   await page.getByRole("checkbox", { name: "Select MAB-253 for planning start" }).check();
-  await expect(awaitingPlanningLane.getByRole("button", { name: "Move selected to planning (2)" })).toBeEnabled();
+  await expect(awaitingPlanningLane.getByRole("button", { name: "Start selected planning (2)" })).toBeEnabled();
   await expect(page.getByText("Waiting on you")).toBeVisible();
 
-  await awaitingPlanningLane.getByRole("button", { name: "Move selected to planning (2)" }).click();
+  await awaitingPlanningLane.getByRole("button", { name: "Start selected planning (2)" }).click();
 
   await expect.poll(() => startedExecutionIds).toEqual(["wfexec-mab-252", "wfexec-mab-253"]);
   await expect(awaitingPlanningLane.getByText("MAB-252")).toHaveCount(0);
-  await expect(awaitingPlanningLane.getByRole("button", { name: "Move selected to planning" })).toBeDisabled();
-  await expect(planningLane.getByText("MAB-252")).toBeVisible();
+  await expect(awaitingPlanningLane.getByRole("button", { name: "Start selected planning" })).toBeDisabled();
+  await expect(engineeringLane.getByText("MAB-252")).toBeVisible();
 });
 
 test("workspace home shows configured projects even when no active work exists", async ({ page }) => {
@@ -1434,6 +1460,102 @@ test("redirects platform super admins to the tenant selector after archiving a p
   await expect(page.getByRole("link", { name: "All projects" })).toHaveCount(0);
   await expect(page.locator('a[href="/example/projects/route-web/runs"]').last()).toHaveCount(0);
   await expect(page.locator('a[href="/example/projects/route-web"]').last()).toHaveCount(0);
+});
+
+test("lets project managers configure the staging merge check in project settings", async ({ page }) => {
+  const principal = makePlatformAdminPrincipal();
+  const tenant = makeTenant({
+    tenant_id: "example",
+    name: "Route 25",
+    github: {
+      webhook_secret_ref: null,
+      installation_id: "12345",
+    },
+  });
+  let project = makeProject({
+    project_id: "route-web",
+    tenant_id: "example",
+    name: "Route Web",
+    github_repository: "https://github.com/example/route-web",
+    jira_project_key: "WEB",
+    policy_overrides: {
+      staging_admission_enabled: true,
+      staging_branch: "staging",
+    },
+    effective_policy: {
+      ...makeTenant().policy,
+    },
+    is_archived: false,
+  });
+  let savedPolicyPayload: Record<string, unknown> | null = null;
+
+  await seedAdminSession(page);
+  await installBffApiMocks(page, [
+    {
+      method: "GET",
+      pathname: "/api/bff/api/app/auth/me",
+      handler: (route) => fulfillJson(route, principal),
+    },
+    {
+      method: "GET",
+      pathname: "/api/bff/api/admin/tenants/example",
+      handler: (route) => fulfillJson(route, tenant),
+    },
+    {
+      method: "GET",
+      pathname: "/api/bff/api/admin/tenants/example/projects",
+      handler: (route) => fulfillJson(route, [project]),
+    },
+    {
+      method: "GET",
+      pathname: "/api/bff/api/admin/tenants/example/projects/route-web",
+      handler: (route) => fulfillJson(route, project),
+    },
+    {
+      method: "GET",
+      pathname: "/api/bff/api/admin/tenants/example/github/repositories",
+      handler: (route) =>
+        fulfillJson(route, [
+          {
+            full_name: "example/route-web",
+            html_url: "https://github.com/example/route-web",
+            default_branch: "main",
+            private: true,
+          },
+        ]),
+    },
+    {
+      method: "GET",
+      pathname: /^\/api\/bff\/api\/admin\/tenants\/example\/jira-projects(?:\?.*)?$/,
+      handler: (route) => fulfillJson(route, [{ key: "WEB", name: "Route Web" }]),
+    },
+    {
+      method: "PATCH",
+      pathname: "/api/bff/api/admin/tenants/example/projects/route-web/policy",
+      handler: async (route) => {
+        const payload = route.request().postDataJSON() as { policy_overrides: Record<string, unknown> };
+        savedPolicyPayload = payload.policy_overrides;
+        project = makeProject({
+          ...project,
+          policy_overrides: payload.policy_overrides,
+        });
+        await fulfillJson(route, project);
+      },
+    },
+  ]);
+
+  await page.goto("/example/projects/route-web/settings");
+  await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
+  await page.getByRole("button", { name: "Automation" }).click();
+  await expect(page.getByText("Staging merge check")).toBeVisible();
+  await page.getByPlaceholder("staging").fill("stage");
+  await page.getByRole("button", { name: "Save settings" }).click();
+
+  await expect(page.getByText("Project policy saved")).toBeVisible();
+  await expect.poll(() => savedPolicyPayload).toEqual({
+    staging_admission_enabled: true,
+    staging_branch: "stage",
+  });
 });
 
 test("shows a standalone tenant archive confirmation page and moves the tenant into the archived workspace list", async ({

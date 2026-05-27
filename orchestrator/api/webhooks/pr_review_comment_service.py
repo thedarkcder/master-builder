@@ -13,7 +13,11 @@ from orchestrator.api.webhooks.pr_review_publication_state import (
     mark_review_publication_failed,
     mark_review_publication_published,
 )
-from orchestrator.core.review.pr_review_findings import PrReviewFindingsResult, ReviewFinding
+from orchestrator.core.review.pr_review_findings import (
+    PrReviewFindingsResult,
+    ReviewFinding,
+    pr_review_findings_clear,
+)
 from orchestrator.core.review.reviewer import ReviewerSignal
 from orchestrator.tools.github_app import (
     GitHubAppClient,
@@ -88,12 +92,14 @@ def format_sticky_review_comment(
     action: str | None,
     marker: str,
 ) -> str:
-    status = "READY" if signal.ready and not findings_result.findings else "BLOCKED"
+    findings_clear = pr_review_findings_clear(findings_result)
+    status = "READY" if findings_clear else "BLOCKED"
+    state = "ready" if findings_clear else signal.state
     lines = [
         "## Codex PR Review",
         "",
         f"Status: {status}",
-        f"State: {signal.state}",
+        f"State: {state}",
         f"Summary: {findings_result.summary or signal.message}",
         f"Event: {event}/{str(action or 'none').strip() or 'none'}",
     ]
@@ -104,15 +110,15 @@ def format_sticky_review_comment(
             if finding.path and finding.line:
                 location = f" ({finding.path}:{finding.line})"
             lines.append(f"- [{finding.severity}] {finding.message}{location}")
-    compose_url = f"https://github.com/{repo_full_name}/pull/{pr_number}#issuecomment-new"
-    lines.extend(
-        [
-            "",
-            "### Queue Fix",
-            "Comment on this PR with `@mb <what to change>`.",
-            f"[Open comment box]({compose_url})",
-        ]
-    )
+        compose_url = f"https://github.com/{repo_full_name}/pull/{pr_number}#issuecomment-new"
+        lines.extend(
+            [
+                "",
+                "### Queue Fix",
+                "Comment on this PR with `@mb <what to change>`.",
+                f"[Open comment box]({compose_url})",
+            ]
+        )
     lines.extend(["", marker])
     return "\n".join(lines).strip()
 
@@ -139,6 +145,19 @@ def upsert_sticky_review_comment(
         repo_full_name=repo_full_name,
         pr_number=pr_number,
     )
+    comments = github_client.list_pull_request_issue_comments(
+        repo_full_name=repo_full_name,
+        pr_number=pr_number,
+    )
+    existing = next((comment for comment in comments if marker in comment.body), None)
+    if pr_review_findings_clear(findings_result):
+        if existing is None:
+            return StickyReviewCommentResult(action="skipped", comment_id=None)
+        github_client.delete_issue_comment(
+            repo_full_name=repo_full_name,
+            comment_id=existing.comment_id,
+        )
+        return StickyReviewCommentResult(action="deleted", comment_id=existing.comment_id)
     body = format_sticky_review_comment(
         signal=signal,
         findings_result=findings_result,
@@ -173,12 +192,7 @@ def upsert_sticky_review_comment(
             acquisition.reason or "duplicate_signature",
         )
         return StickyReviewCommentResult(action="skipped", comment_id=None)
-    comments = github_client.list_pull_request_issue_comments(
-        repo_full_name=repo_full_name,
-        pr_number=pr_number,
-    )
     try:
-        existing = next((comment for comment in comments if marker in comment.body), None)
         if existing is None:
             created = github_client.create_pull_request_issue_comment(
                 repo_full_name=repo_full_name,

@@ -1334,6 +1334,114 @@ class WorkerProcessServiceTests(unittest.TestCase):
         self.assertTrue(heartbeat.started)
         self.assertTrue(heartbeat.stopped)
 
+    def test_process_next_queued_run_blocks_waiting_outcome_without_pending_input(self) -> None:
+        now = datetime.now(timezone.utc)
+        run = SimpleNamespace(
+            run_id="run-1",
+            tenant_id="tenant-1",
+            issue_key="GP-126",
+            project_id="project-1",
+            status="running",
+            worker_service_instance_id="node-a:1234",
+            claim_id="claim-1",
+            created_at=now,
+            started_at=now,
+            plan={},
+            pr_url=None,
+            last_error=None,
+        )
+        tenant = SimpleNamespace(tenant_id="tenant-1", policy_config={})
+        project = SimpleNamespace(project_id="project-1", policy_overrides={}, is_archived=False)
+        heartbeat = _FakeHeartbeatController()
+        session = MagicMock()
+        session.refresh.side_effect = lambda _target, **_kwargs: None
+        finalized_run = SimpleNamespace(
+            run_id=run.run_id,
+            tenant_id=run.tenant_id,
+            issue_key=run.issue_key,
+            project_id=run.project_id,
+            status="blocked",
+            plan={},
+            last_error="Install support is missing.",
+        )
+        finalized_results: list[WorkflowResult] = []
+
+        def _finalize(_session, *, run, workflow_result, **_kwargs):  # noqa: ANN001, ANN003
+            finalized_results.append(workflow_result)
+            return finalized_run
+
+        result = process_next_queued_run(
+            session=session,
+            runner=SimpleNamespace(
+                run=MagicMock(
+                    return_value=WorkflowResult(
+                        outcome="waiting_for_input",
+                        plan=None,
+                        pr_url=None,
+                        summary=[],
+                        test_guidance=[],
+                        attempts=1,
+                        blocker_message="Install support is missing.",
+                    )
+                )
+            ),
+            logger=MagicMock(),
+            settings_fn=lambda: SimpleNamespace(
+                worker_capabilities="linux",
+                worker_workspace_key="worker-a",
+                project_repo_checkout_base_dir="/tmp/workdirs",
+                admin_ui_base_url="http://localhost:4100",
+                worker_run_heartbeat_interval_seconds=30,
+                tenant_id="tenant-1",
+            ),
+            claim_next_queued_run_fn=lambda *_args, **_kwargs: _claim_result(
+                run=run,
+                tenant=tenant,
+                project=project,
+            ),
+            send_discord_message_fn=MagicMock(return_value=SimpleNamespace(sent=True, reason=None)),
+            send_jira_message_fn=MagicMock(),
+            resolve_project_for_run_fn=MagicMock(return_value=project),
+            fail_missing_project_mapping_fn=MagicMock(),
+            block_archived_project_fn=MagicMock(),
+            ensure_project_repository_checkout_fn=MagicMock(),
+            fail_project_repository_checkout_fn=MagicMock(),
+            fail_project_repository_setup_fn=MagicMock(),
+            requeue_run_for_repo_setup_fn=MagicMock(),
+            cleanup_run_workspaces_fn=MagicMock(),
+            build_run_heartbeat_controller_fn=lambda **_: heartbeat,
+            promote_run_to_running_fn=_promote_claimed_run,
+            bind_run_project_fn=MagicMock(),
+            workflow_request_for_run_fn=MagicMock(return_value=SimpleNamespace(start_point_ref=None, start_point_sha=None)),
+            fail_guardrail_violation_fn=MagicMock(),
+            tenant_jira_issue_url_fn=MagicMock(return_value="https://jira.test/GP-126"),
+            lock_acquired_update_fn=_stage_update_mock("lock_acquired"),
+            plan_posted_update_fn=_stage_update_mock("plan_posted"),
+            pr_opened_update_fn=_stage_update_mock("pr_opened"),
+            run_failed_update_fn=_stage_update_mock("run_failed"),
+            run_requeued_capability_update_fn=_stage_update_mock("run_requeued_capability_mismatch"),
+            run_requeued_stale_snapshot_update_fn=_stage_update_mock("run_requeued_stale_snapshot"),
+            finalize_cancelled_run_fn=MagicMock(),
+            finalize_workflow_result_fn=_finalize,
+            persist_stage_checkpoint_fn=MagicMock(),
+            requeue_workflow_result_for_capability_fn=MagicMock(),
+            requeue_workflow_result_for_stale_snapshot_fn=MagicMock(),
+            check_run_snapshot_freshness_fn=MagicMock(),
+            transition_issue_status_fn=MagicMock(),
+            emit_agent_event_fn=MagicMock(),
+            resolve_agent_id_fn=lambda: "worker-linux-local",
+            resolve_worker_service_instance_id_fn=lambda: "node-a:1234",
+            run_status_queued="queued",
+            run_status_running="running",
+            run_status_failed="failed",
+            run_status_blocked="blocked",
+            run_status_cancelled="cancelled",
+        )
+
+        self.assertIs(result, finalized_run)
+        self.assertEqual(finalized_results[0].outcome, "blocked")
+        self.assertEqual(finalized_results[0].blocker_message, "Install support is missing.")
+
     def test_process_next_queued_run_persists_stage_checkpoint_before_finalize(self) -> None:
         now = datetime.now(timezone.utc)
         run = SimpleNamespace(
@@ -1587,10 +1695,10 @@ class WorkerProcessServiceTests(unittest.TestCase):
                 run_status_failed="failed",
                 run_status_blocked="blocked",
                 run_status_cancelled="cancelled",
-            )
+        )
 
         self.assertIs(result, finalized_run)
-        cleanup.assert_called_once()
+        cleanup.assert_not_called()
         finalize_run.assert_called_once()
         finalized_workflow_result = finalize_run.call_args.kwargs["workflow_result"]
         self.assertEqual(finalized_workflow_result.outcome, "success")

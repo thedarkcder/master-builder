@@ -9,6 +9,7 @@ from unittest.mock import MagicMock, patch
 from jwt.exceptions import InvalidKeyError
 
 from orchestrator.tools.github_app import (
+    CheckRunResult,
     GitHubApiError,
     GitHubAppClient,
     GitHubAppConfig,
@@ -20,6 +21,7 @@ from orchestrator.tools.github_app import (
     PullRequestReviewComment,
     PullRequestResult,
     PullRequestSummary,
+    ReactionSummary,
     WorkflowCheckSuite,
     github_client_from_tenant_config,
 )
@@ -189,6 +191,57 @@ class GitHubAppClientTests(unittest.TestCase):
         self.assertEqual(payload["head"], "jira/MAB-8-add-github-client")
         self.assertEqual(payload["base"], "main")
         self.assertEqual(payload["body"], "PR body")
+        self.assertEqual(requests[1].get_header("Authorization"), "Bearer inst_token_2")
+
+    def test_create_check_run_uses_installation_token_and_payload(self) -> None:
+        config = GitHubAppConfig(
+            app_id="12345",
+            installation_id="999",
+            private_key_pem="unused",
+        )
+        client = GitHubAppClient(config)
+
+        requests: list = []
+        responses = [
+            {
+                "token": "inst_token_2",
+                "expires_at": "2099-01-01T00:00:00Z",
+            },
+            {
+                "id": 71,
+                "html_url": "https://github.com/example/repo/runs/71",
+            },
+        ]
+
+        def fake_urlopen(request, timeout=30):  # noqa: ANN001
+            requests.append(request)
+            return _FakeHTTPResponse(responses.pop(0))
+
+        with patch.object(client, "create_app_jwt", return_value="app.jwt"), patch(
+            "orchestrator.tools.github_app.urlopen",
+            side_effect=fake_urlopen,
+        ):
+            result = client.create_check_run(
+                repo_full_name="example/repo",
+                head_sha="abc123",
+                name="MB Staging Merge Check",
+                status="completed",
+                conclusion="success",
+                title="Staging merge check",
+                summary="Validated against staging@abcdef0.",
+            )
+
+        self.assertEqual(
+            result,
+            CheckRunResult(check_run_id=71, html_url="https://github.com/example/repo/runs/71"),
+        )
+        payload = json.loads(requests[1].data.decode("utf-8"))
+        self.assertEqual(payload["name"], "MB Staging Merge Check")
+        self.assertEqual(payload["head_sha"], "abc123")
+        self.assertEqual(payload["status"], "completed")
+        self.assertEqual(payload["conclusion"], "success")
+        self.assertEqual(payload["output"]["title"], "Staging merge check")
+        self.assertEqual(payload["output"]["summary"], "Validated against staging@abcdef0.")
         self.assertEqual(requests[1].get_header("Authorization"), "Bearer inst_token_2")
 
     def test_create_pull_request_rejects_repo_outside_tenant_repository(self) -> None:
@@ -1049,12 +1102,20 @@ class GitHubAppClientTests(unittest.TestCase):
         self.assertEqual(review_reaction.content, "eyes")
         self.assertEqual(request_json.call_count, 2)
 
-    def test_sync_pull_request_reaction_uses_reaction_create_without_actor_lookup(self) -> None:
+    def test_sync_pull_request_reaction_clears_existing_app_status_reactions_first(self) -> None:
         config = GitHubAppConfig(app_id="12345", installation_id="999", private_key_pem="unused")
         client = GitHubAppClient(config)
         with (
-            patch.object(client, "get_actor_login") as get_actor_login,
-            patch.object(client, "list_pull_request_reactions") as list_reactions,
+            patch.object(client, "get_app_bot_login", return_value="master-builder[bot]") as get_app_bot_login,
+            patch.object(
+                client,
+                "list_pull_request_reactions",
+                return_value=[
+                    ReactionSummary(reaction_id=301, content="eyes", user_login="master-builder[bot]"),
+                    ReactionSummary(reaction_id=302, content="confused", user_login="master-builder[bot]"),
+                    ReactionSummary(reaction_id=303, content="+1", user_login="human-reviewer"),
+                ],
+            ) as list_reactions,
             patch.object(client, "delete_issue_reaction") as delete_reaction,
             patch.object(
                 client,
@@ -1068,9 +1129,15 @@ class GitHubAppClientTests(unittest.TestCase):
                 content="+1",
             )
 
-        get_actor_login.assert_not_called()
-        list_reactions.assert_not_called()
-        delete_reaction.assert_not_called()
+        get_app_bot_login.assert_called_once_with()
+        list_reactions.assert_called_once_with(repo_full_name="example/repo", pr_number=10)
+        self.assertEqual(
+            [call.kwargs for call in delete_reaction.call_args_list],
+            [
+                {"repo_full_name": "example/repo", "reaction_id": 301},
+                {"repo_full_name": "example/repo", "reaction_id": 302},
+            ],
+        )
         add_reaction.assert_called_once_with(
             repo_full_name="example/repo",
             pr_number=10,

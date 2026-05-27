@@ -130,6 +130,7 @@ def start_workflow_operation_attempt(
     now = _now()
     operation.status = OPERATION_STATUS_RUNNING
     operation.started_at = operation.started_at or now
+    operation.finished_at = None
     operation.updated_at = now
     attempt = WorkflowOperationAttempt(
         attempt_id=uuid4().hex,

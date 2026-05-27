@@ -229,12 +229,16 @@ class JiraWebhookProductionPathTests(ProductionPathApiTestCase):
 
         runtime = unittest.mock.MagicMock()
         runtime.run_json.return_value = {
-            "answers": [
+            "message": "Captured.",
+            "actions": [
                 {
-                    "question_id": "q1",
-                    "status": "accepted",
-                    "answer": "Reject relink; the device_id stays bound to the original user.",
-                    "notes": "",
+                    "type": "capture_decision_answer",
+                    "payload": {
+                        "question_id": "q1",
+                        "status": "accepted",
+                        "answer": "Reject relink; the device_id stays bound to the original user.",
+                        "notes": "",
+                    },
                 }
             ]
         }

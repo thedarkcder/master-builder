@@ -19,6 +19,9 @@ class GitHubApiError(RuntimeError):
     pass
 
 
+_PULL_REQUEST_STATUS_REACTIONS = frozenset({"+1", "confused", "eyes"})
+
+
 @dataclass(frozen=True)
 class GitHubAppConfig:
     app_id: str
@@ -42,7 +45,11 @@ class PullRequestDetails:
     state: str
     head_ref: str | None = None
     base_ref: str | None = None
+    base_sha: str | None = None
     body: str | None = None
+    draft: bool = False
+    mergeable: bool | None = None
+    mergeable_state: str | None = None
 
 
 @dataclass(frozen=True)
@@ -134,6 +141,12 @@ class PullRequestMergeResult:
 
 
 @dataclass(frozen=True)
+class CheckRunResult:
+    check_run_id: int | None
+    html_url: str | None
+
+
+@dataclass(frozen=True)
 class InstallationRepository:
     full_name: str
     html_url: str
@@ -216,6 +229,7 @@ class GitHubAppClient:
         self._config = config
         self._cached_installation_token: _InstallationToken | None = None
         self._cached_actor_login: str | None = None
+        self._cached_app_bot_login: str | None = None
 
     def create_app_jwt(self) -> str:
         private_key_pem = self._normalize_private_key(self._config.private_key_pem)
@@ -330,6 +344,21 @@ class GitHubAppClient:
         self._cached_actor_login = login.strip()
         return self._cached_actor_login
 
+    def get_app_bot_login(self) -> str:
+        if self._cached_app_bot_login is not None:
+            return self._cached_app_bot_login
+        app_jwt = self.create_app_jwt()
+        response = self._request_json(
+            method="GET",
+            path="/app",
+            bearer_token=app_jwt,
+        )
+        slug = response.get("slug")
+        if not isinstance(slug, str) or not slug.strip():
+            raise GitHubApiError("GitHub app response did not include slug")
+        self._cached_app_bot_login = f"{slug.strip()}[bot]"
+        return self._cached_app_bot_login
+
     def create_pull_request(
         self,
         *,
@@ -377,8 +406,16 @@ class GitHubAppClient:
         head_sha = head.get("sha") if isinstance(head, dict) else None
         head_ref = head.get("ref") if isinstance(head, dict) else None
         base_ref = base.get("ref") if isinstance(base, dict) else None
+        base_sha = base.get("sha") if isinstance(base, dict) else None
         title = response.get("title")
         state = response.get("state")
+        draft = bool(response.get("draft"))
+        mergeable = response.get("mergeable")
+        if mergeable is not None and not isinstance(mergeable, bool):
+            mergeable = None
+        mergeable_state = response.get("mergeable_state")
+        if mergeable_state is not None and not isinstance(mergeable_state, str):
+            mergeable_state = None
         raw_body = response.get("body")
         body = raw_body.strip() if isinstance(raw_body, str) and raw_body.strip() else None
 
@@ -401,7 +438,75 @@ class GitHubAppClient:
             state=state.strip(),
             head_ref=head_ref.strip() if isinstance(head_ref, str) and head_ref.strip() else None,
             base_ref=base_ref.strip() if isinstance(base_ref, str) and base_ref.strip() else None,
+            base_sha=base_sha.strip() if isinstance(base_sha, str) and base_sha.strip() else None,
             body=body,
+            draft=draft,
+            mergeable=mergeable,
+            mergeable_state=mergeable_state.strip() if isinstance(mergeable_state, str) and mergeable_state.strip() else None,
+        )
+
+    def get_branch_head_sha(self, *, repo_full_name: str, branch: str) -> str:
+        installation_token = self.get_installation_token()
+        normalized_branch = str(branch or "").strip()
+        if not normalized_branch:
+            raise GitHubApiError("GitHub branch head lookup requires a branch")
+        response = self._request_json(
+            method="GET",
+            path=f"/repos/{repo_full_name}/branches/{quote(normalized_branch, safe='')}",
+            bearer_token=installation_token,
+        )
+        if not isinstance(response, dict):
+            raise GitHubApiError("GitHub branch response was not an object")
+        commit = response.get("commit")
+        sha = commit.get("sha") if isinstance(commit, dict) else None
+        if not isinstance(sha, str) or not sha.strip():
+            raise GitHubApiError("GitHub branch response did not include head SHA")
+        return sha.strip()
+
+    def create_check_run(
+        self,
+        *,
+        repo_full_name: str,
+        head_sha: str,
+        name: str,
+        status: str,
+        conclusion: str | None = None,
+        title: str | None = None,
+        summary: str | None = None,
+    ) -> CheckRunResult:
+        installation_token = self.get_installation_token()
+        normalized_name = str(name or "").strip()
+        normalized_status = str(status or "").strip()
+        if not normalized_name:
+            raise GitHubApiError("GitHub check run requires a name")
+        if not normalized_status:
+            raise GitHubApiError("GitHub check run requires a status")
+        payload: dict[str, object] = {
+            "name": normalized_name,
+            "head_sha": str(head_sha or "").strip(),
+            "status": normalized_status,
+        }
+        normalized_conclusion = str(conclusion or "").strip() or None
+        normalized_title = str(title or "").strip() or None
+        normalized_summary = str(summary or "").strip() or None
+        if normalized_conclusion is not None:
+            payload["conclusion"] = normalized_conclusion
+        if normalized_title or normalized_summary:
+            payload["output"] = {
+                "title": normalized_title or normalized_name,
+                "summary": normalized_summary or normalized_name,
+            }
+        response = self._request_json(
+            method="POST",
+            path=f"/repos/{repo_full_name}/check-runs",
+            bearer_token=installation_token,
+            payload=payload,
+        )
+        check_run_id = response.get("id")
+        html_url = response.get("html_url")
+        return CheckRunResult(
+            check_run_id=check_run_id if isinstance(check_run_id, int) else None,
+            html_url=html_url.strip() if isinstance(html_url, str) and html_url.strip() else None,
         )
 
     def list_check_suites(self, *, repo_full_name: str, ref: str) -> list[WorkflowCheckSuite]:
@@ -768,6 +873,20 @@ class GitHubAppClient:
             raise GitHubApiError("GitHub update issue comment response was not valid")
         return comment
 
+    def delete_issue_comment(
+        self,
+        *,
+        repo_full_name: str,
+        comment_id: int,
+    ) -> None:
+        installation_token = self.get_installation_token()
+        self._request_json(
+            method="DELETE",
+            path=f"/repos/{repo_full_name}/issues/comments/{comment_id}",
+            bearer_token=installation_token,
+            accepted_statuses=(204,),
+        )
+
     def update_pull_request_review_comment(
         self,
         *,
@@ -905,7 +1024,10 @@ class GitHubAppClient:
         pr_number: int,
         content: str,
     ) -> CommentReactionResult:
-        # Installation tokens cannot call GET /user. Use idempotent create-reaction behavior instead.
+        app_bot_login = self.get_app_bot_login()
+        for reaction in self.list_pull_request_reactions(repo_full_name=repo_full_name, pr_number=pr_number):
+            if reaction.user_login == app_bot_login and reaction.content in _PULL_REQUEST_STATUS_REACTIONS:
+                self.delete_issue_reaction(repo_full_name=repo_full_name, reaction_id=reaction.reaction_id)
         return self.add_pull_request_reaction(
             repo_full_name=repo_full_name,
             pr_number=pr_number,

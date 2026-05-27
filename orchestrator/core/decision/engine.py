@@ -6,6 +6,10 @@ from typing import Any, Callable
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from orchestrator.core.decision.account_policy import (
+    enforce_decision_owner_account_policy,
+    tenant_has_multiple_active_members,
+)
 from orchestrator.core.decision.precheck_mapping import (
     apply_frozen_cycle_to_precheck as apply_frozen_cycle_to_precheck_state,
     decision_result_for_duplicate_event as decision_result_for_duplicate_event_state,
@@ -63,7 +67,6 @@ from orchestrator.core.decision.types import (
     IngressDecision,
     PrecheckOutcome,
     WorkerDecision,
-    tenant_ready_label,
 )
 from orchestrator.core.knowledge.base import SlotResolution, resolve_missing_slots_from_knowledge
 from orchestrator.core.precheck.pre_run_check import (
@@ -83,17 +86,35 @@ from orchestrator.storage.models import (
 )
 from orchestrator.tools.project_repo_checkout import project_repo_dir
 
-def _terminally_closed_gate_decision(
+
+def _apply_decision_owner_account_policy(
+    *,
+    session: Session,
+    tenant: Tenant,
+    planner_result,
+):  # noqa: ANN001
+    if planner_result is None:
+        return None
+    return enforce_decision_owner_account_policy(
+        planner_result=planner_result,
+        decision_owner_required=tenant_has_multiple_active_members(session=session, tenant_id=tenant.tenant_id),
+    )
+
+
+def _evaluate_terminal_execution_readiness_ingress(
     *,
     source: DecisionSource,
-    tenant_id: str,
-    project_id: str,
-    issue_key: str,
+    tenant_id: str | None,
+    project_id: str | None,
+    issue_key: str | None,
     issue_summary: str | None,
     issue_description: str | None,
+    recorded_answers: list[dict[str, str]] | None = None,
     issue_labels: list[str] | None,
     ready_label: str | None,
+    evaluate_pre_run_check_fn: Callable[..., object] | None = None,
 ) -> IngressDecision:
+    del recorded_answers, evaluate_pre_run_check_fn
     pre_check = evaluate_execution_readiness_only(
         tenant_id=tenant_id,
         project_id=project_id,
@@ -107,6 +128,34 @@ def _terminally_closed_gate_decision(
         source=source,
         pre_check=pre_check,
         label_actions=derive_label_actions(pre_check),
+    )
+
+
+def _terminally_closed_gate_evaluation(
+    *,
+    session: Session,
+    settings,  # noqa: ANN001
+    tenant: Tenant,
+    project: Project,
+    event: DecisionEventInput,
+    tenant_atlassian_oauth_context_fn: Callable[..., Any],
+    oauth_context: Any | None,
+):
+    return evaluate_with_labels_state(
+        session=session,
+        tenant=tenant,
+        project=project,
+        source=event.source,
+        issue_key=event.issue_key,
+        issue_summary=event.issue_summary,
+        issue_description=event.issue_description,
+        recorded_answers=None,
+        issue_labels=event.issue_labels,
+        settings=settings,
+        tenant_atlassian_oauth_context_fn=tenant_atlassian_oauth_context_fn,
+        evaluate_ingress_precheck_fn=_evaluate_terminal_execution_readiness_ingress,
+        oauth_context=oauth_context,
+        evaluate_pre_run_check_fn=evaluate_execution_readiness_only,
     )
 
 
@@ -206,6 +255,8 @@ def _handle_open_cycle_blocked_transition(
     existing_case: DecisionCase,
     existing_cycle: DecisionCycle,
     unresolved_question_ids: set[str],
+    tenant_atlassian_oauth_context_fn: Callable[..., Any],
+    oauth_context: Any | None,
     publish_jira_comment_fn: Callable[[str], tuple[bool, str | None]] | None,
 ) -> DecisionEngineResult:
     snapshot_classification = classification_for_cycle_questions(
@@ -237,6 +288,11 @@ def _handle_open_cycle_blocked_transition(
         case=existing_case,
         cycle=existing_cycle,
     )
+    planner_result = _apply_decision_owner_account_policy(
+        session=session,
+        tenant=tenant,
+        planner_result=planner_result,
+    )
     question_set_override = None
     question_reason_override = None
     classification = snapshot_classification
@@ -244,6 +300,11 @@ def _handle_open_cycle_blocked_transition(
         session=session,
         cycle_id=existing_cycle.cycle_id,
     )
+    issue_labels = [
+        str(label).strip()
+        for label in event.issue_labels or []
+        if str(label).strip()
+    ]
     if planner_result is not None:
         reduced = reduce_decision_planner_result(
             decision=decision,
@@ -264,13 +325,20 @@ def _handle_open_cycle_blocked_transition(
         )
         accepted_question_ids = set(accepted_ids)
         outbox_effect_ids = tuple(effect_ids)
+        if not classification.blocks_execution:
+            terminal = _terminally_closed_gate_evaluation(
+                session=session,
+                settings=settings,
+                tenant=tenant,
+                project=project,
+                event=event,
+                tenant_atlassian_oauth_context_fn=tenant_atlassian_oauth_context_fn,
+                oauth_context=oauth_context,
+            )
+            decision = terminal.decision
+            issue_labels = terminal.issue_labels
     else:
         outbox_effect_ids = ()
-    issue_labels = [
-        str(label).strip()
-        for label in event.issue_labels or []
-        if str(label).strip()
-    ]
     issue_description = event.issue_description
     case, cycle, persist_effect_ids = persist_decision_state_repo(
         session=session,
@@ -322,10 +390,15 @@ def _persist_terminal_clear_result(
     idempotency_key: str,
     decision: IngressDecision,
     accepted_question_ids: set[str],
+    issue_labels_override: list[str] | None = None,
     terminal_gate_closed_cycle_id: str | None = None,
     publish_jira_comment_fn: Callable[[str], tuple[bool, str | None]] | None,
 ) -> DecisionEngineResult:
-    issue_labels = [str(label).strip() for label in event.issue_labels or [] if str(label).strip()]
+    issue_labels = [
+        str(label).strip()
+        for label in (issue_labels_override if issue_labels_override is not None else event.issue_labels or [])
+        if str(label).strip()
+    ]
     issue_description = event.issue_description
     case, cycle, outbox_effect_ids = persist_decision_state_repo(
         session=session,
@@ -380,6 +453,8 @@ def _handle_transition_result_or_none(
     existing_case: DecisionCase | None,
     existing_cycle: DecisionCycle | None,
     unresolved_question_ids: set[str],
+    tenant_atlassian_oauth_context_fn: Callable[..., Any],
+    oauth_context: Any | None,
     publish_jira_comment_fn: Callable[[str], tuple[bool, str | None]] | None,
 ) -> DecisionEngineResult | None:
     if transition == DecisionStateTransition.OPEN_CYCLE_BLOCKED and existing_case is not None and existing_cycle is not None:
@@ -394,6 +469,8 @@ def _handle_transition_result_or_none(
             existing_case=existing_case,
             existing_cycle=existing_cycle,
             unresolved_question_ids=unresolved_question_ids,
+            tenant_atlassian_oauth_context_fn=tenant_atlassian_oauth_context_fn,
+            oauth_context=oauth_context,
             publish_jira_comment_fn=publish_jira_comment_fn,
         )
 
@@ -403,15 +480,14 @@ def _handle_transition_result_or_none(
         existing_cycle.updated_at = occurred_at
         existing_case.active_cycle_id = None
         existing_case.updated_at = occurred_at
-        decision = _terminally_closed_gate_decision(
-            source=event.source,
-            tenant_id=tenant.tenant_id,
-            project_id=project.project_id,
-            issue_key=event.issue_key,
-            issue_summary=event.issue_summary,
-            issue_description=event.issue_description,
-            issue_labels=event.issue_labels,
-            ready_label=tenant_ready_label(tenant),
+        terminal = _terminally_closed_gate_evaluation(
+            session=session,
+            settings=settings,
+            tenant=tenant,
+            project=project,
+            event=event,
+            tenant_atlassian_oauth_context_fn=tenant_atlassian_oauth_context_fn,
+            oauth_context=oauth_context,
         )
         return _persist_terminal_clear_result(
             session=session,
@@ -420,25 +496,25 @@ def _handle_transition_result_or_none(
             event=event,
             occurred_at=occurred_at,
             idempotency_key=idempotency_key,
-            decision=decision,
+            decision=terminal.decision,
             accepted_question_ids=accepted_question_ids_for_cycle(
                 session=session,
                 cycle_id=existing_cycle.cycle_id,
             ),
+            issue_labels_override=terminal.issue_labels,
             terminal_gate_closed_cycle_id=existing_cycle.cycle_id,
             publish_jira_comment_fn=publish_jira_comment_fn,
         )
 
     if transition == DecisionStateTransition.TERMINAL_GATE_CLOSED_CLEAR and existing_case is not None:
-        decision = _terminally_closed_gate_decision(
-            source=event.source,
-            tenant_id=tenant.tenant_id,
-            project_id=project.project_id,
-            issue_key=event.issue_key,
-            issue_summary=event.issue_summary,
-            issue_description=event.issue_description,
-            issue_labels=event.issue_labels,
-            ready_label=tenant_ready_label(tenant),
+        terminal = _terminally_closed_gate_evaluation(
+            session=session,
+            settings=settings,
+            tenant=tenant,
+            project=project,
+            event=event,
+            tenant_atlassian_oauth_context_fn=tenant_atlassian_oauth_context_fn,
+            oauth_context=oauth_context,
         )
         return _persist_terminal_clear_result(
             session=session,
@@ -447,8 +523,9 @@ def _handle_transition_result_or_none(
             event=event,
             occurred_at=occurred_at,
             idempotency_key=idempotency_key,
-            decision=decision,
+            decision=terminal.decision,
             accepted_question_ids=set(),
+            issue_labels_override=terminal.issue_labels,
             terminal_gate_closed_cycle_id=decision_gate_closed_cycle_id_state(case=existing_case),
             publish_jira_comment_fn=publish_jira_comment_fn,
         )
@@ -582,6 +659,8 @@ def evaluate_decision_event(
         existing_case=existing_case,
         existing_cycle=existing_cycle,
         unresolved_question_ids=unresolved_question_ids,
+        tenant_atlassian_oauth_context_fn=tenant_atlassian_oauth_context_fn,
+        oauth_context=oauth_context,
         publish_jira_comment_fn=publish_jira_comment_fn,
     )
     if transition_result is not None:
@@ -684,6 +763,11 @@ def evaluate_decision_event(
             block_reason=decision.block_reason,
             case=existing_case,
             cycle=existing_cycle,
+        )
+        planner_result = _apply_decision_owner_account_policy(
+            session=session,
+            tenant=tenant,
+            planner_result=planner_result,
         )
         if planner_result is not None:
             reduced = reduce_decision_planner_result(

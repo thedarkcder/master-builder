@@ -77,7 +77,17 @@ def build_command_followup_message(
     elif command_name == "link":
         lines[0] = f"{lines[0]} Here are the links."
     elif command_name in {"run", "retry"}:
-        lines[0] = f"{lines[0]} Run queued."
+        run_id = str(response_data.get("run_id") or "").strip()
+        recheck_required = bool(response_data.get("recheck_required"))
+        if recheck_required:
+            if response_message:
+                lines[0] = f"{lines[0]} {_linkify_issue_mentions(response_message)}"
+            else:
+                lines[0] = f"{lines[0]} Action needed before execution."
+        elif run_id:
+            lines[0] = f"{lines[0]} Run queued."
+        else:
+            raise ValueError(f"{command_name} response must include run_id unless recheck_required is true")
     elif response_message:
         if command_name in {"ask", "gap", "pm"}:
             response_message = _linkify_issue_mentions(response_message)
@@ -106,7 +116,7 @@ def build_command_followup_message(
             if issue_key and not jira_url:
                 lines.append(f"- Issue: {_issue_link(issue_key)}")
 
-    if command_name in {"run", "retry"}:
+    if command_name in {"run", "retry"} and not bool(response_data.get("recheck_required")):
         issue_key = str(response_data.get("issue_key") or "").strip().upper()
         run_id = str(response_data.get("run_id") or "").strip()
         if issue_key or run_id:

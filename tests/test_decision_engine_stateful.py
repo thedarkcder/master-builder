@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-from unittest.mock import patch
+from types import SimpleNamespace
+from unittest.mock import MagicMock, patch
 
 from orchestrator.core.config import get_settings
 from orchestrator.core.decision.planner import DecisionPlannerQuestion, DecisionPlannerResult
@@ -11,7 +12,16 @@ from orchestrator.core.decision.gate import DecisionGateResult
 from orchestrator.core.gtd import GoodToDoValidationResult
 from orchestrator.core.precheck.pre_run_check import PreRunCheckResult
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
-from orchestrator.storage.models import DecisionCase, DecisionCycle, DecisionEffectOutbox, DecisionEvent, Project, Tenant
+from orchestrator.storage.models import (
+    DecisionCase,
+    DecisionCycle,
+    DecisionEffectOutbox,
+    DecisionEvent,
+    Project,
+    Tenant,
+    TenantMembership,
+    TenantUser,
+)
 from tests.test_support.db_harness import SqliteTemplateDbTestCase
 
 
@@ -94,6 +104,37 @@ def _planner_result(
         missing_items=(),
         captured_answer_summary=None,
     )
+
+
+def _add_active_tenant_member(*, session, tenant_id: str, user_id: str, email: str) -> None:  # noqa: ANN001
+    now = datetime.now(timezone.utc)
+    session.add(
+        TenantUser(
+            user_id=user_id,
+            email=email,
+            full_name=user_id,
+            is_active=True,
+            created_at=now,
+            updated_at=now,
+        )
+    )
+    session.add(
+        TenantMembership(
+            membership_id=f"membership-{user_id}",
+            tenant_id=tenant_id,
+            user_id=user_id,
+            role="tenant_admin",
+            mode_override=None,
+            onboarding_kind="member_join",
+            first_signed_in_at=now,
+            onboarding_completed_at=now,
+            onboarding_version=None,
+            discord_state={},
+            created_at=now,
+            updated_at=now,
+        )
+    )
+    session.flush()
 
 
 class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
@@ -319,9 +360,313 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
                     "text": "What entitlement/capability values are required for production and staging?",
                     "status": "answered",
                     "detail": "Bundle IDs and redirect URI were captured; entitlement values are still missing.",
+                    "unresolved": True,
                 }
             ],
         )
+
+    def test_decision_owner_question_is_suppressed_for_single_member_account(self) -> None:
+        precheck = _precheck_result(
+            outcome="decision_gate_required",
+            decision_gate_triggered=True,
+            decision_gate_reason="Need business owner and rollout decision",
+            decision_gate_questions=("Who owns this decision?", "What is the rollout policy?"),
+            decision_gate_missing_sections=("decision_owner", "rollout_constraints"),
+        )
+
+        with self.session_factory() as session, patch(
+            "orchestrator.core.decision.engine.plan_decision_questions",
+            return_value=_planner_result(
+                gate_status="blocked_decision_gate",
+                reason="Need business owner and rollout decision",
+                questions=(
+                    ("decision_owner", "Who is the accountable decision owner approving MAB-248 (name and role)?"),
+                    ("rollout_constraints", "What rollout constraints apply?"),
+                ),
+                question_states=(
+                    ("decision_owner", "Who is the accountable decision owner approving MAB-248 (name and role)?"),
+                    ("rollout_constraints", "What rollout constraints apply?"),
+                ),
+            ),
+        ):
+            tenant = session.get(Tenant, "tenant-stateful")
+            project = session.get(Project, "project-stateful")
+            assert tenant is not None and project is not None
+            _add_active_tenant_member(
+                session=session,
+                tenant_id=tenant.tenant_id,
+                user_id="single-member",
+                email="single@example.com",
+            )
+            result = evaluate_decision_event(
+                session=session,
+                tenant=tenant,
+                project=project,
+                event=DecisionEventInput(
+                    source="discord_run",
+                    event_type="discord_discord_run",
+                    idempotency_key="single-owner-policy-1",
+                    issue_key="MAB-248",
+                    issue_summary="Summary",
+                    issue_description="Description",
+                    issue_labels=[],
+                ),
+                settings=self.settings,
+                tenant_atlassian_oauth_context_fn=lambda **__: None,
+                evaluate_pre_run_check_fn=lambda **__: precheck,
+            )
+            cycle = session.get(DecisionCycle, result.cycle_id)
+
+        assert cycle is not None
+        self.assertEqual(tuple(result.decision.pre_check.decision_gate.questions), ("What rollout constraints apply?",))
+        self.assertEqual(cycle.unresolved_question_ids_json, ["rollout_constraints"])
+        owner_state = next(item for item in cycle.question_set_json if item["id"] == "decision_owner")
+        self.assertEqual(owner_state["status"], "accepted")
+        self.assertFalse(owner_state["unresolved"])
+
+    def test_decision_owner_question_is_required_for_multi_member_account(self) -> None:
+        precheck = _precheck_result(
+            outcome="decision_gate_required",
+            decision_gate_triggered=True,
+            decision_gate_reason="Need business owner",
+            decision_gate_questions=("Who owns this decision?",),
+            decision_gate_missing_sections=("decision_owner",),
+        )
+
+        with self.session_factory() as session, patch(
+            "orchestrator.core.decision.engine.plan_decision_questions",
+            return_value=_planner_result(
+                gate_status="blocked_decision_gate",
+                reason="Need business owner",
+                questions=(("decision_owner", "Who is the accountable decision owner approving MAB-248 (name and role)?"),),
+                question_states=(
+                    ("decision_owner", "Who is the accountable decision owner approving MAB-248 (name and role)?"),
+                ),
+            ),
+        ):
+            tenant = session.get(Tenant, "tenant-stateful")
+            project = session.get(Project, "project-stateful")
+            assert tenant is not None and project is not None
+            _add_active_tenant_member(
+                session=session,
+                tenant_id=tenant.tenant_id,
+                user_id="first-member",
+                email="first@example.com",
+            )
+            _add_active_tenant_member(
+                session=session,
+                tenant_id=tenant.tenant_id,
+                user_id="second-member",
+                email="second@example.com",
+            )
+            result = evaluate_decision_event(
+                session=session,
+                tenant=tenant,
+                project=project,
+                event=DecisionEventInput(
+                    source="discord_run",
+                    event_type="discord_discord_run",
+                    idempotency_key="multi-owner-policy-1",
+                    issue_key="MAB-248",
+                    issue_summary="Summary",
+                    issue_description="Description",
+                    issue_labels=[],
+                ),
+                settings=self.settings,
+                tenant_atlassian_oauth_context_fn=lambda **__: None,
+                evaluate_pre_run_check_fn=lambda **__: precheck,
+            )
+            cycle = session.get(DecisionCycle, result.cycle_id)
+
+        assert cycle is not None
+        self.assertEqual(
+            tuple(result.decision.pre_check.decision_gate.questions),
+            ("Who is the accountable decision owner approving MAB-248 (name and role)?",),
+        )
+        self.assertEqual(cycle.unresolved_question_ids_json, ["decision_owner"])
+
+    def test_cycle_transitions_from_open_to_answered_unresolved_to_accepted_clear(self) -> None:
+        precheck = _precheck_result(
+            outcome="decision_gate_required",
+            decision_gate_triggered=True,
+            decision_gate_reason="Need subscription decisions",
+            decision_gate_questions=("What is in scope?", "What rollout constraints apply?"),
+            decision_gate_missing_sections=("scope", "rollout_constraints"),
+        )
+        precheck_calls = 0
+
+        def _evaluate_pre_run_check_stub(**_: object) -> PreRunCheckResult:
+            nonlocal precheck_calls
+            precheck_calls += 1
+            return precheck
+
+        with self.session_factory() as session, patch(
+            "orchestrator.core.decision.engine.plan_decision_questions",
+            side_effect=[
+                _planner_result(
+                    gate_status="blocked_decision_gate",
+                    reason="Need subscription decisions",
+                    questions=(
+                        ("scope", "What is in scope?"),
+                        ("rollout_constraints", "What rollout constraints apply?"),
+                    ),
+                ),
+                _planner_result(
+                    gate_status="blocked_decision_gate",
+                    reason="Need remaining rollout decision",
+                    questions=(
+                        ("scope", "Which HubSpot information should drive subscription access?"),
+                        ("rollout_constraints", "What rollout constraints apply?"),
+                    ),
+                    question_states=(
+                        ("scope", "What is in scope?"),
+                        ("rollout_constraints", "What rollout constraints apply?"),
+                    ),
+                    statuses={"scope": "answered", "rollout_constraints": "open"},
+                    details={"scope": "HubSpot invoices are in scope; subscription access rules are still missing."},
+                ),
+                _planner_result(
+                    gate_status="clear",
+                    reason="All decisions accepted",
+                    questions=(
+                        ("scope", "Which HubSpot information should drive subscription access?"),
+                        ("rollout_constraints", "What rollout constraints apply?"),
+                    ),
+                    question_states=(
+                        ("scope", "What is in scope?"),
+                        ("rollout_constraints", "What rollout constraints apply?"),
+                    ),
+                    statuses={"scope": "accepted", "rollout_constraints": "accepted"},
+                    details={
+                        "scope": "Required HubSpot subscription rules accepted.",
+                        "rollout_constraints": "No rollout constraints.",
+                    },
+                ),
+            ],
+        ):
+            tenant = session.get(Tenant, "tenant-stateful")
+            project = session.get(Project, "project-stateful")
+            assert tenant is not None and project is not None
+
+            first = evaluate_decision_event(
+                session=session,
+                tenant=tenant,
+                project=project,
+                event=DecisionEventInput(
+                    source="discord_run",
+                    event_type="discord_discord_run",
+                    idempotency_key="full-cycle-1",
+                    issue_key="MAB-249",
+                    issue_summary="Summary",
+                    issue_description="Description",
+                    issue_labels=[],
+                ),
+                settings=self.settings,
+                tenant_atlassian_oauth_context_fn=lambda **__: None,
+                evaluate_pre_run_check_fn=_evaluate_pre_run_check_stub,
+            )
+            cycle = session.get(DecisionCycle, str(first.cycle_id))
+            assert cycle is not None
+
+            from orchestrator.storage.models import DecisionAnswer
+
+            session.add(
+                DecisionAnswer(
+                    answer_id="ans-full-cycle-scope-partial",
+                    case_id=first.case_id,
+                    cycle_id=str(first.cycle_id),
+                    tenant_id=tenant.tenant_id,
+                    project_id=project.project_id,
+                    issue_key="MAB-249",
+                    question_id="scope",
+                    question_kind="decision_gate",
+                    question_text="What is in scope?",
+                    status="answered",
+                    normalized_answer="HubSpot invoices are in scope.",
+                    source_transport="discord",
+                    source_ref=None,
+                    evidence_ids_json=[],
+                    metadata_json={},
+                    answered_at=datetime.now(timezone.utc),
+                    created_at=datetime.now(timezone.utc),
+                    updated_at=datetime.now(timezone.utc),
+                )
+            )
+            session.commit()
+
+            second = evaluate_decision_event(
+                session=session,
+                tenant=tenant,
+                project=project,
+                event=DecisionEventInput(
+                    source="discord_reply",
+                    event_type="reply_added",
+                    idempotency_key="full-cycle-2",
+                    issue_key="MAB-249",
+                    issue_summary="Summary",
+                    issue_description="Description",
+                    issue_labels=[],
+                ),
+                settings=self.settings,
+                tenant_atlassian_oauth_context_fn=lambda **__: None,
+                evaluate_pre_run_check_fn=_evaluate_pre_run_check_stub,
+            )
+            cycle_after_partial = session.get(DecisionCycle, str(first.cycle_id))
+            assert cycle_after_partial is not None
+            partial_unresolved_question_ids = list(cycle_after_partial.unresolved_question_ids_json)
+            partial_question_set = list(cycle_after_partial.question_set_json)
+
+            scope_answer = (
+                session.query(DecisionAnswer)
+                .filter_by(cycle_id=str(first.cycle_id), question_id="scope")
+                .one()
+            )
+            scope_answer.status = "accepted"
+            scope_answer.normalized_answer = "Required HubSpot subscription rules accepted."
+            scope_answer.accepted_at = datetime.now(timezone.utc)
+            scope_answer.updated_at = datetime.now(timezone.utc)
+            rollout_answer = (
+                session.query(DecisionAnswer)
+                .filter_by(cycle_id=str(first.cycle_id), question_id="rollout_constraints")
+                .one()
+            )
+            rollout_answer.status = "accepted"
+            rollout_answer.normalized_answer = "No rollout constraints."
+            rollout_answer.accepted_at = datetime.now(timezone.utc)
+            rollout_answer.updated_at = datetime.now(timezone.utc)
+            session.commit()
+
+            third = evaluate_decision_event(
+                session=session,
+                tenant=tenant,
+                project=project,
+                event=DecisionEventInput(
+                    source="discord_reply",
+                    event_type="reply_added",
+                    idempotency_key="full-cycle-3",
+                    issue_key="MAB-249",
+                    issue_summary="Summary",
+                    issue_description="Description",
+                    issue_labels=[],
+                ),
+                settings=self.settings,
+                tenant_atlassian_oauth_context_fn=lambda **__: None,
+                evaluate_pre_run_check_fn=_evaluate_pre_run_check_stub,
+            )
+            case = session.query(DecisionCase).filter_by(issue_key="MAB-249").one()
+            closed_cycle = session.get(DecisionCycle, str(first.cycle_id))
+
+        self.assertEqual(first.classification, "decision_gate")
+        self.assertEqual(second.classification, "decision_gate")
+        self.assertEqual(partial_unresolved_question_ids, ["scope", "rollout_constraints"])
+        by_id = {item["id"]: item for item in partial_question_set}
+        self.assertEqual(by_id["scope"]["status"], "answered")
+        self.assertTrue(by_id["scope"]["unresolved"])
+        self.assertEqual(third.classification, "clear")
+        self.assertEqual(third.case_state, "ready_for_execution")
+        self.assertEqual(closed_cycle.status, "resolved")
+        self.assertIsNone(case.active_cycle_id)
+        self.assertEqual(precheck_calls, 1)
 
     def test_idempotency_key_deduplicates_event_rows(self) -> None:
         precheck = _precheck_result(outcome="ready_for_agent")
@@ -947,7 +1292,7 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
         self.assertIsNone(case.active_cycle_id)
         self.assertEqual(cycle_count, 1)
 
-    def test_closed_cycle_can_block_on_missing_ready_label_without_reopening_gate(self) -> None:
+    def test_closed_cycle_applies_missing_ready_label_without_reopening_gate(self) -> None:
         prechecks = [
             _precheck_result(
                 outcome="decision_gate_required",
@@ -964,6 +1309,12 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
             precheck_calls += 1
             return prechecks.pop(0)
 
+        oauth_client = SimpleNamespace(add_issue_labels=MagicMock())
+        oauth_context = {
+            "connection": SimpleNamespace(cloud_id="cloud-1"),
+            "access_token": "token-1",
+            "client": oauth_client,
+        }
         with self.session_factory() as session, patch(
             "orchestrator.core.decision.engine.plan_decision_questions",
             side_effect=[
@@ -985,6 +1336,7 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
             project = session.get(Project, "project-stateful")
             assert tenant is not None and project is not None
             tenant.jira_config = {"ready_label": "agent:ready"}
+            tenant.policy_config = {**tenant.policy_config, "allow_label_mutations": True}
 
             first = evaluate_decision_event(
                 session=session,
@@ -997,10 +1349,10 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
                     issue_key="MAB-171",
                     issue_summary="Summary",
                     issue_description="Description",
-                    issue_labels=["agent:ready"],
+                    issue_labels=["agent:ready", "worker:linux"],
                 ),
                 settings=self.settings,
-                tenant_atlassian_oauth_context_fn=lambda **__: None,
+                tenant_atlassian_oauth_context_fn=lambda **__: oauth_context,
                 evaluate_pre_run_check_fn=_evaluate_pre_run_check_stub,
             )
             self.assertEqual(first.classification, "decision_gate")
@@ -1044,10 +1396,10 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
                     issue_key="MAB-171",
                     issue_summary="Summary",
                     issue_description="Description",
-                    issue_labels=["agent:ready"],
+                    issue_labels=["worker:linux"],
                 ),
                 settings=self.settings,
-                tenant_atlassian_oauth_context_fn=lambda **__: None,
+                tenant_atlassian_oauth_context_fn=lambda **__: oauth_context,
                 evaluate_pre_run_check_fn=_evaluate_pre_run_check_stub,
             )
             rerun = evaluate_decision_event(
@@ -1061,22 +1413,31 @@ class DecisionEngineStatefulTests(SqliteTemplateDbTestCase):
                     issue_key="MAB-171",
                     issue_summary="Summary changed",
                     issue_description="Description changed",
-                    issue_labels=["ios", "payments"],
+                    issue_labels=cleared.issue_labels,
                 ),
                 settings=self.settings,
-                tenant_atlassian_oauth_context_fn=lambda **__: None,
+                tenant_atlassian_oauth_context_fn=lambda **__: oauth_context,
                 evaluate_pre_run_check_fn=_evaluate_pre_run_check_stub,
             )
             case = session.query(DecisionCase).filter_by(issue_key="MAB-171").one()
             cycle_count = session.query(DecisionCycle).filter_by(issue_key="MAB-171").count()
 
         self.assertEqual(cleared.classification, "clear")
+        self.assertIn("agent:ready", cleared.issue_labels)
+        self.assertIsNone(cleared.decision.block_reason)
+        self.assertTrue(cleared.decision.pre_check.ready_label_present)
         self.assertEqual(rerun.classification, "clear")
-        self.assertEqual(rerun.decision.block_reason, "missing_ready_label")
+        self.assertIsNone(rerun.decision.block_reason)
         self.assertFalse(rerun.decision.pre_check.decision_gate.triggered)
         self.assertEqual(precheck_calls, 1)
         self.assertIsNone(case.active_cycle_id)
         self.assertEqual(cycle_count, 1)
+        oauth_client.add_issue_labels.assert_called_once_with(
+            access_token="token-1",
+            cloud_id="cloud-1",
+            issue_id_or_key="MAB-171",
+            labels=["agent:ready"],
+        )
 
     def test_existing_case_load_does_not_mutate_stale_clear_snapshot(self) -> None:
         with self.session_factory() as session:

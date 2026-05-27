@@ -174,6 +174,91 @@ class WorkflowExecutionProjectionTests(SqliteTemplateDbTestCase):
             self.assertEqual(operation.status, "waiting_for_input")
             self.assertEqual(attempt.status, "waiting_for_input")
 
+    def test_complete_waiting_operation_attempt_resumes_existing_attempt(self) -> None:
+        with self.session_factory() as session:
+            workflow_type = get_workflow_type(session, workflow_type_key="parent_planning")
+            self.assertIsNotNone(workflow_type)
+            assert workflow_type is not None
+
+            projection = ensure_workflow_execution(
+                session=session,
+                workflow_type=workflow_type,
+                tenant_id="tenant-a",
+                project_id="tenant-a-default",
+                execution=WorkflowExecutionReference(
+                    key="MAB-243",
+                    source=WorkflowSourceReference(
+                        source_system="jira",
+                        source_ref="MAB-243",
+                        display_name="Resume waiting brief",
+                        description="Need PM clarification",
+                    ),
+                ),
+                display_name="Resume waiting brief",
+                description="Need PM clarification",
+            )
+            operation, attempt = projection.start_operation_attempt(operation_type="brief_normalization")
+            projection.wait_started_operation(
+                operation=operation,
+                attempt=attempt,
+                summary="Need PM clarification.",
+            )
+
+            resumed_operation, resumed_attempt = projection.complete_waiting_operation_attempt(
+                operation_type="brief_normalization",
+                summary="Parent brief normalized from product clarification.",
+            )
+
+            self.assertEqual(resumed_operation.operation_id, operation.operation_id)
+            self.assertEqual(resumed_attempt.attempt_id, attempt.attempt_id)
+            self.assertEqual(operation.status, "completed")
+            self.assertEqual(attempt.status, "completed")
+            self.assertEqual(session.query(WorkflowOperationAttempt).count(), 1)
+
+    def test_complete_waiting_operation_attempt_is_idempotent_after_completion(self) -> None:
+        with self.session_factory() as session:
+            workflow_type = get_workflow_type(session, workflow_type_key="parent_planning")
+            self.assertIsNotNone(workflow_type)
+            assert workflow_type is not None
+
+            projection = ensure_workflow_execution(
+                session=session,
+                workflow_type=workflow_type,
+                tenant_id="tenant-a",
+                project_id="tenant-a-default",
+                execution=WorkflowExecutionReference(
+                    key="MAB-244",
+                    source=WorkflowSourceReference(
+                        source_system="jira",
+                        source_ref="MAB-244",
+                        display_name="Replay waiting brief",
+                        description="Need PM clarification",
+                    ),
+                ),
+                display_name="Replay waiting brief",
+                description="Need PM clarification",
+            )
+            operation, attempt = projection.start_operation_attempt(operation_type="brief_normalization")
+            projection.wait_started_operation(
+                operation=operation,
+                attempt=attempt,
+                summary="Need PM clarification.",
+            )
+            projection.complete_waiting_operation_attempt(
+                operation_type="brief_normalization",
+                summary="Parent brief normalized from product clarification.",
+            )
+
+            replayed_operation, replayed_attempt = projection.complete_waiting_operation_attempt(
+                operation_type="brief_normalization",
+                summary="Parent brief normalized from duplicate clarification webhook.",
+            )
+
+            self.assertEqual(replayed_operation.operation_id, operation.operation_id)
+            self.assertEqual(replayed_attempt.attempt_id, attempt.attempt_id)
+            self.assertEqual(operation.summary, "Parent brief normalized from product clarification.")
+            self.assertEqual(session.query(WorkflowOperationAttempt).count(), 1)
+
     def test_waiting_operation_emits_attempt_scoped_waiting_event(self) -> None:
         with self.session_factory() as session:
             workflow_type = get_workflow_type(session, workflow_type_key="parent_planning")
@@ -242,6 +327,42 @@ class WorkflowExecutionProjectionTests(SqliteTemplateDbTestCase):
             self.assertEqual(operation.status, "completed")
             self.assertEqual(attempt.status, "completed")
             self.assertEqual(operation.summary, "Parent brief normalized from the source issue.")
+
+    def test_restarting_completed_operation_clears_terminal_timestamp(self) -> None:
+        with self.session_factory() as session:
+            workflow_type = get_workflow_type(session, workflow_type_key="parent_planning")
+            projection = ensure_workflow_execution(
+                session=session,
+                workflow_type=workflow_type,
+                tenant_id="tenant-a",
+                project_id="tenant-a-default",
+                execution=WorkflowExecutionReference(
+                    key="MAB-245",
+                    source=WorkflowSourceReference(
+                        source_system="jira",
+                        source_ref="MAB-245",
+                        display_name="Restart operation after completion",
+                        description="A replay should not expose running plus finished state.",
+                    ),
+                ),
+                display_name="Restart operation after completion",
+                description="A replay should not expose running plus finished state.",
+            )
+            operation, first_attempt = projection.start_operation_attempt(operation_type="brief_normalization")
+            projection.complete_started_operation(
+                operation=operation,
+                attempt=first_attempt,
+                summary="Parent brief normalized.",
+            )
+            self.assertEqual(operation.status, "completed")
+            self.assertIsNotNone(operation.finished_at)
+
+            restarted_operation, restarted_attempt = projection.start_operation_attempt(operation_type="brief_normalization")
+
+            self.assertEqual(restarted_operation.operation_id, operation.operation_id)
+            self.assertEqual(restarted_operation.status, "running")
+            self.assertIsNone(restarted_operation.finished_at)
+            self.assertEqual(restarted_attempt.attempt_number, 2)
 
     def test_started_failed_operation_records_attempt_history(self) -> None:
         with self.session_factory() as session:

@@ -107,7 +107,11 @@ def test_upsert_sticky_review_comment_creates_and_updates() -> None:
             project_id="p1",
             head_sha="sha-1",
             signal=_signal(ready=False),
-            findings_result=PrReviewFindingsResult(state="blocked", summary="needs fixes", findings=()),
+            findings_result=PrReviewFindingsResult(
+                state="blocked",
+                summary="needs fixes",
+                findings=(ReviewFinding(severity="high", message="Fix this"),),
+            ),
             event="pull_request",
             action="opened",
             logger=SimpleNamespace(info=lambda *args, **kwargs: None),
@@ -130,8 +134,12 @@ def test_upsert_sticky_review_comment_creates_and_updates() -> None:
             tenant_id="t1",
             project_id="p1",
             head_sha="sha-2",
-            signal=_signal(ready=True),
-            findings_result=PrReviewFindingsResult(state="ready", summary="all clear", findings=()),
+            signal=_signal(ready=False),
+            findings_result=PrReviewFindingsResult(
+                state="blocked",
+                summary="still needs fixes",
+                findings=(ReviewFinding(severity="medium", message="Still broken"),),
+            ),
             event="pull_request",
             action="synchronize",
             logger=SimpleNamespace(info=lambda *args, **kwargs: None),
@@ -140,10 +148,47 @@ def test_upsert_sticky_review_comment_creates_and_updates() -> None:
         assert updated.comment_id == 101
 
 
+def test_upsert_sticky_review_comment_deletes_existing_comment_when_review_is_clear() -> None:
+    deleted: dict[str, object] = {}
+
+    with _review_session() as session:
+        github_client = SimpleNamespace(
+            list_pull_request_issue_comments=lambda **_kwargs: [
+                SimpleNamespace(comment_id=101, body="<!-- codex:pr-review:t1:p1:org/repo:10 -->")
+            ],
+            delete_issue_comment=lambda **kwargs: deleted.update(kwargs),
+            create_pull_request_issue_comment=lambda **_kwargs: SimpleNamespace(comment_id=999),
+            update_issue_comment=lambda **_kwargs: SimpleNamespace(comment_id=999),
+        )
+        result = upsert_sticky_review_comment(
+            session=session,
+            request_id="req-clear",
+            github_client=github_client,
+            repo_full_name="org/repo",
+            pr_number=10,
+            tenant_id="t1",
+            project_id="p1",
+            head_sha="sha-clear",
+            signal=_signal(ready=True),
+            findings_result=PrReviewFindingsResult(state="ready", summary="all clear", findings=()),
+            event="pull_request",
+            action="synchronize",
+            logger=SimpleNamespace(info=lambda *args, **kwargs: None),
+        )
+
+    assert result.action == "deleted"
+    assert result.comment_id == 101
+    assert deleted == {"repo_full_name": "org/repo", "comment_id": 101}
+
+
 def test_format_sticky_review_comment_includes_manual_fix_quick_action() -> None:
     body = format_sticky_review_comment(
         signal=_signal(ready=False),
-        findings_result=PrReviewFindingsResult(state="blocked", summary="needs fixes", findings=()),
+        findings_result=PrReviewFindingsResult(
+            state="blocked",
+            summary="needs fixes",
+            findings=(ReviewFinding(severity="high", message="Fix this", path=None, line=None),),
+        ),
         repo_full_name="org/repo",
         pr_number=10,
         event="pull_request_review",
@@ -152,6 +197,41 @@ def test_format_sticky_review_comment_includes_manual_fix_quick_action() -> None
     )
     assert "@mb <what to change>" in body
     assert "https://github.com/org/repo/pull/10#issuecomment-new" in body
+
+
+def test_format_sticky_review_comment_marks_empty_findings_ready_without_queue_fix() -> None:
+    signal = ReviewerSignal(
+        ready=False,
+        state="missing_checks",
+        message="PR checks missing: CI, Security",
+        readiness=PrReadinessResult(
+            ready=False,
+            state="missing_checks",
+            reason="Required checks are missing",
+            missing_workflows=("CI", "Security"),
+            pending_workflows=(),
+            failing_workflows=(),
+        ),
+    )
+
+    body = format_sticky_review_comment(
+        signal=signal,
+        findings_result=PrReviewFindingsResult(
+            state="ready",
+            summary="No actionable findings identified in the provided patch set.",
+            findings=(),
+        ),
+        repo_full_name="org/repo",
+        pr_number=10,
+        event="pull_request",
+        action="ready_for_review",
+        marker="<!-- marker -->",
+    )
+
+    assert "Status: READY" in body
+    assert "State: ready" in body
+    assert "Queue Fix" not in body
+    assert "@mb <what to change>" not in body
 
 
 def test_publish_inline_review_batch_filters_to_valid_locations() -> None:

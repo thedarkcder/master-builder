@@ -12,6 +12,7 @@ from orchestrator.api.webhooks.pr_remediation_service import (
     count_pr_remediation_attempts,
     enqueue_pr_remediation_if_needed,
 )
+from orchestrator.core.review.pr_review_findings import PrReviewFindingsResult
 from orchestrator.core.runs.service import EnqueueRunResult
 from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 
@@ -49,6 +50,7 @@ class PrRemediationServiceTests(unittest.TestCase):
         github_client.list_pull_request_reviews.return_value = []
         github_client.list_pull_request_review_comments.return_value = []
         github_client.list_pull_request_issue_comments.return_value = []
+        github_client.list_pull_request_files.return_value = []
         payload = {
             "pull_request": {
                 "number": 11,
@@ -217,6 +219,14 @@ class PrRemediationServiceTests(unittest.TestCase):
 
         with (
             patch(
+                "orchestrator.api.webhooks.pr_remediation_service.evaluate_pr_review_findings",
+                return_value=PrReviewFindingsResult(
+                    state="blocked",
+                    summary="Fix the failing checks.",
+                    findings=(SimpleNamespace(severity="high", message="Fix the failing checks."),),
+                ),
+            ),
+            patch(
                 "orchestrator.api.webhooks.pr_remediation_policy.find_existing_issue_key_for_pr_head",
                 return_value="GP-122",
             ),
@@ -270,6 +280,14 @@ class PrRemediationServiceTests(unittest.TestCase):
 
         with (
             patch(
+                "orchestrator.api.webhooks.pr_remediation_service.evaluate_pr_review_findings",
+                return_value=PrReviewFindingsResult(
+                    state="blocked",
+                    summary="Fix the failing checks.",
+                    findings=(SimpleNamespace(severity="high", message="Fix the failing checks."),),
+                ),
+            ),
+            patch(
                 "orchestrator.api.webhooks.pr_remediation_policy.find_existing_issue_key_for_pr_head",
                 return_value="GP-122",
             ),
@@ -301,6 +319,86 @@ class PrRemediationServiceTests(unittest.TestCase):
         self.assertEqual(result.reason, "existing_issue_already_tracked")
         self.assertIs(result.run, existing_run)
         latest_run_mock.assert_called_once()
+        enqueue_run_mock.assert_not_called()
+
+    def test_check_trigger_with_clear_review_does_not_create_bug(self) -> None:
+        session, tenant, project, github_client, payload, settings = self._base_context()
+        payload = {
+            **payload,
+            "comment": {"id": 777, "body": "plain comment"},
+            "check_run": {"conclusion": "failure"},
+        }
+
+        with (
+            patch(
+                "orchestrator.api.webhooks.pr_remediation_service.evaluate_pr_review_findings",
+                return_value=PrReviewFindingsResult(
+                    state="ready",
+                    summary="No actionable findings.",
+                    findings=(),
+                ),
+            ),
+            patch(
+                "orchestrator.api.webhooks.pr_remediation_policy.create_pr_remediation_bug_issue_key",
+            ) as create_bug_mock,
+            patch("orchestrator.api.webhooks.pr_remediation_enqueue.enqueue_run") as enqueue_run_mock,
+        ):
+            result = enqueue_pr_remediation_if_needed(
+                session=session,
+                tenant=tenant,
+                project=project,
+                github_client=github_client,
+                event="check_run",
+                action="completed",
+                payload=payload,
+                pr_number=11,
+                repo_full_name="org/repo",
+                settings=settings,
+            )
+
+        self.assertTrue(result.triggered)
+        self.assertFalse(result.enqueued)
+        self.assertIsNone(result.issue_key)
+        self.assertEqual(result.reason, "review_clear_no_actionable_findings")
+        create_bug_mock.assert_not_called()
+        enqueue_run_mock.assert_not_called()
+
+    def test_check_trigger_fails_hard_when_findings_cannot_be_evaluated(self) -> None:
+        session, tenant, project, github_client, payload, settings = self._base_context()
+        payload = {
+            **payload,
+            "comment": {"id": 777, "body": "plain comment"},
+            "check_run": {"conclusion": "failure"},
+        }
+
+        with (
+            patch(
+                "orchestrator.api.webhooks.pr_remediation_service.evaluate_pr_review_findings",
+                side_effect=RuntimeError("review service unavailable"),
+            ),
+            patch(
+                "orchestrator.api.webhooks.pr_remediation_policy.create_pr_remediation_bug_issue_key",
+            ) as create_bug_mock,
+            patch("orchestrator.api.webhooks.pr_remediation_enqueue.enqueue_run") as enqueue_run_mock,
+        ):
+            result = enqueue_pr_remediation_if_needed(
+                session=session,
+                tenant=tenant,
+                project=project,
+                github_client=github_client,
+                event="check_run",
+                action="completed",
+                payload=payload,
+                pr_number=11,
+                repo_full_name="org/repo",
+                settings=settings,
+            )
+
+        self.assertTrue(result.triggered)
+        self.assertFalse(result.enqueued)
+        self.assertIsNone(result.issue_key)
+        self.assertEqual(result.reason, "review_findings_evaluation_failed:review service unavailable")
+        create_bug_mock.assert_not_called()
         enqueue_run_mock.assert_not_called()
 
     def test_manual_fix_request_still_enqueues_when_issue_already_exists(self) -> None:

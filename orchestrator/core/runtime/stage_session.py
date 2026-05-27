@@ -154,6 +154,11 @@ class RuntimeStageSession:
                 context=self.context,
                 system_prompt=system_prompt,
                 user_prompt=user_prompt,
+                allowed_native_tools={
+                    str(item.get("tool_name") or "").strip()
+                    for item in self.tooling.native_catalog
+                    if str(item.get("tool_name") or "").strip()
+                },
             )
         return invoke_runtime_json_with_tools(
             runtime=self.runtime,
@@ -164,4 +169,9 @@ class RuntimeStageSession:
             execute_tool=self.execute_tool,
             max_tool_hops=max_tool_hops,
             extra_on_log_line=extra_on_log_line,
+            allowed_native_tools={
+                str(item.get("tool_name") or "").strip()
+                for item in self.tooling.native_catalog
+                if str(item.get("tool_name") or "").strip()
+            },
         )

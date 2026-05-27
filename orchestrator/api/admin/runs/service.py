@@ -94,9 +94,12 @@ def get_run(*, session, run_id: str, run_model, run_to_schema_fn, tenant_model, 
 
 
 def _workflow_execution_id_for_run(*, session, run) -> str | None:  # noqa: ANN001
+    workflow_id = str(getattr(run, "workflow_id", "") or "").strip()
+    if not workflow_id:
+        return None
     execution_id = session.execute(
         select(WorkflowExecution.execution_id)
-        .where(WorkflowExecution.workflow_id == run.workflow_id)
+        .where(WorkflowExecution.workflow_id == workflow_id)
         .limit(1)
     ).scalar_one_or_none()
     return str(execution_id or "").strip() or None

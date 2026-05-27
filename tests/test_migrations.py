@@ -65,7 +65,35 @@ class MigrationTests(unittest.TestCase):
 
         duplicates = {revision_id: count for revision_id, count in Counter(revision_ids).items() if count > 1}
         self.assertEqual(duplicates, {})
-        self.assertEqual(script.get_heads(), ["20260505_0106"])
+        self.assertEqual(script.get_heads(), ["20260527_0113"])
+
+    def test_project_install_request_label_normalization_migration_canonicalizes_provider_labels(self) -> None:
+        module = self._load_migration_module(
+            "20260526_0111_normalize_project_install_request_labels.py",
+            "migration_20260526_0111_project_install_request_labels",
+        )
+
+        self.assertEqual(
+            module._canonical_project_install_request_label(
+                kind="integration",
+                label="ap248_hubspot_install",
+            ),
+            "hubspot",
+        )
+        self.assertEqual(
+            module._canonical_project_install_request_label(
+                kind="integration",
+                label="AP-248 HubSpot setup",
+            ),
+            "hubspot",
+        )
+        self.assertEqual(
+            module._canonical_project_install_request_label(
+                kind="fastlane_lane",
+                label="iOS Beta Lane",
+            ),
+            "iOS Beta Lane",
+        )
 
     def test_run_migrations_repairs_orphaned_database_stamp_when_schema_is_at_head(self) -> None:
         with TemporaryDirectory() as tmpdir:
@@ -82,7 +110,7 @@ class MigrationTests(unittest.TestCase):
             with engine.connect() as connection:
                 versions = connection.execute(text("SELECT version_num FROM alembic_version")).scalars().all()
 
-            self.assertEqual(versions, ["20260505_0106"])
+            self.assertEqual(versions, ["20260527_0113"])
 
     def test_workflow_execution_source_external_id_index_is_composite_in_metadata(self) -> None:
         expected_columns = ["tenant_id", "source_system", "source_external_id", "dedupe_scope"]
@@ -141,6 +169,364 @@ class MigrationTests(unittest.TestCase):
             if index["name"] == "ix_workflow_executions_source_external_id"
         }
         self.assertEqual(index_columns, {"ix_workflow_executions_source_external_id": expected_columns})
+
+    def test_executable_work_items_migration_marks_completed_parents_startable_for_self_execution(self) -> None:
+        migration = self._load_migration_module(
+            "20260523_0107_executable_work_items.py",
+            "migration_20260523_0107",
+        )
+
+        with TemporaryDirectory() as tmpdir:
+            database_url = f"sqlite:///{Path(tmpdir) / 'executable-work-items-backfill.sqlite'}"
+            engine = create_engine(database_url)
+            with engine.begin() as connection:
+                connection.execute(
+                    text(
+                        """
+                        CREATE TABLE tenants (
+                            tenant_id VARCHAR PRIMARY KEY
+                        )
+                        """
+                    )
+                )
+                connection.execute(
+                    text(
+                        """
+                        CREATE TABLE projects (
+                            project_id VARCHAR PRIMARY KEY,
+                            tenant_id VARCHAR NOT NULL
+                        )
+                        """
+                    )
+                )
+                connection.execute(
+                    text(
+                        """
+                        CREATE TABLE workflow_executions (
+                            workflow_id VARCHAR PRIMARY KEY,
+                            execution_id VARCHAR NOT NULL,
+                            workflow_type_key VARCHAR NOT NULL,
+                            tenant_id VARCHAR NOT NULL,
+                            project_id VARCHAR,
+                            source_system VARCHAR NOT NULL,
+                            source_ref VARCHAR NOT NULL,
+                            source_external_id VARCHAR,
+                            display_name VARCHAR,
+                            status VARCHAR NOT NULL,
+                            created_at DATETIME NOT NULL,
+                            updated_at DATETIME NOT NULL
+                        )
+                        """
+                    )
+                )
+                connection.execute(text("INSERT INTO tenants (tenant_id) VALUES ('tenant-a')"))
+                connection.execute(text("INSERT INTO projects (project_id, tenant_id) VALUES ('tenant-a-default', 'tenant-a')"))
+                connection.execute(
+                    text(
+                        """
+                        INSERT INTO workflow_executions (
+                            workflow_id, execution_id, workflow_type_key, tenant_id, project_id, source_system,
+                            source_ref, source_external_id, display_name, status, created_at, updated_at
+                        )
+                        VALUES (
+                            'parent_planning:TP-255', 'exec-parent-255', 'parent_planning', 'tenant-a',
+                            'tenant-a-default', 'jira', 'TP-255', 'tp-255', 'Self executable task',
+                            'completed', '2026-05-23 12:00:00', '2026-05-23 12:00:00'
+                        )
+                        """
+                    )
+                )
+                context = MigrationContext.configure(connection)
+                operations = Operations(context)
+                with patch.object(migration, "op", operations):
+                    migration.upgrade()
+
+                row = connection.execute(
+                    text(
+                        """
+                        SELECT work_item_id, item_kind, issue_key, mb_work_state
+                        FROM workflow_executable_work_items
+                        """
+                    )
+                ).mappings().one()
+
+        self.assertEqual(row["work_item_id"], "parent:exec-parent-255")
+        self.assertEqual(row["item_kind"], "parent")
+        self.assertEqual(row["issue_key"], "TP-255")
+        self.assertEqual(row["mb_work_state"], "planning_candidate")
+
+    def test_discord_interaction_webhook_project_scope_backfill(self) -> None:
+        migration = self._load_migration_module(
+            "20260526_0108_backfill_discord_interaction_webhook_project_ids.py",
+            "migration_20260526_0108",
+        )
+
+        with TemporaryDirectory() as tmpdir:
+            database_url = f"sqlite:///{Path(tmpdir) / 'discord-interaction-project-backfill.sqlite'}"
+            engine = create_engine(database_url)
+            with engine.begin() as connection:
+                connection.execute(
+                    text(
+                        """
+                        CREATE TABLE tenants (
+                            tenant_id VARCHAR PRIMARY KEY,
+                            discord_config JSON NOT NULL
+                        )
+                        """
+                    )
+                )
+                connection.execute(
+                    text(
+                        """
+                        CREATE TABLE projects (
+                            project_id VARCHAR PRIMARY KEY,
+                            tenant_id VARCHAR NOT NULL,
+                            discord_config JSON NOT NULL,
+                            is_archived BOOLEAN NOT NULL
+                        )
+                        """
+                    )
+                )
+                connection.execute(
+                    text(
+                        """
+                        CREATE TABLE webhook_jobs (
+                            job_id VARCHAR PRIMARY KEY,
+                            transport VARCHAR NOT NULL,
+                            tenant_id VARCHAR NOT NULL,
+                            project_id VARCHAR,
+                            payload_json JSON NOT NULL,
+                            updated_at DATETIME NOT NULL
+                        )
+                        """
+                    )
+                )
+                connection.execute(
+                    text("INSERT INTO tenants (tenant_id, discord_config) VALUES ('tenant-a', :discord_config)"),
+                    {"discord_config": json.dumps({"channel_id": "tenant-channel"})},
+                )
+                connection.execute(
+                    text(
+                        """
+                        INSERT INTO projects (project_id, tenant_id, discord_config, is_archived)
+                        VALUES ('tenant-a-default', 'tenant-a', :discord_config, 0)
+                        """
+                    ),
+                    {"discord_config": json.dumps({"channel_id": "project-channel"})},
+                )
+                connection.execute(
+                    text(
+                        """
+                        INSERT INTO webhook_jobs (
+                            job_id, transport, tenant_id, project_id, payload_json, updated_at
+                        )
+                        VALUES (
+                            'job-1', 'discord_interaction', 'tenant-a', NULL, :payload_json, '2026-05-26 10:00:00'
+                        )
+                        """
+                    ),
+                    {"payload_json": json.dumps({"channel_id": "project-channel"})},
+                )
+                context = MigrationContext.configure(connection)
+                operations = Operations(context)
+                with patch.object(migration, "op", operations):
+                    migration.upgrade()
+
+                project_id = connection.execute(
+                    text("SELECT project_id FROM webhook_jobs WHERE job_id = 'job-1'")
+                ).scalar_one()
+
+        self.assertEqual(project_id, "tenant-a-default")
+
+    def test_single_member_decision_owner_question_backfill(self) -> None:
+        migration = self._load_migration_module(
+            "20260526_0109_backfill_single_member_decision_owner_questions.py",
+            "migration_20260526_0109",
+        )
+
+        with TemporaryDirectory() as tmpdir:
+            database_url = f"sqlite:///{Path(tmpdir) / 'single-member-owner-question-backfill.sqlite'}"
+            engine = create_engine(database_url)
+            with engine.begin() as connection:
+                connection.execute(
+                    text(
+                        """
+                        CREATE TABLE tenant_users (
+                            user_id VARCHAR PRIMARY KEY,
+                            is_active BOOLEAN NOT NULL
+                        )
+                        """
+                    )
+                )
+                connection.execute(
+                    text(
+                        """
+                        CREATE TABLE tenant_memberships (
+                            membership_id VARCHAR PRIMARY KEY,
+                            tenant_id VARCHAR NOT NULL,
+                            user_id VARCHAR NOT NULL
+                        )
+                        """
+                    )
+                )
+                connection.execute(
+                    text(
+                        """
+                        CREATE TABLE decision_cycles (
+                            cycle_id VARCHAR PRIMARY KEY,
+                            tenant_id VARCHAR NOT NULL,
+                            status VARCHAR NOT NULL,
+                            question_set_json JSON NOT NULL,
+                            unresolved_question_ids_json JSON NOT NULL,
+                            updated_at DATETIME NOT NULL
+                        )
+                        """
+                    )
+                )
+                connection.execute(text("INSERT INTO tenant_users (user_id, is_active) VALUES ('user-1', 1)"))
+                connection.execute(
+                    text(
+                        """
+                        INSERT INTO tenant_memberships (membership_id, tenant_id, user_id)
+                        VALUES ('membership-1', 'tenant-a', 'user-1')
+                        """
+                    )
+                )
+                connection.execute(
+                    text(
+                        """
+                        INSERT INTO decision_cycles (
+                            cycle_id, tenant_id, status, question_set_json, unresolved_question_ids_json, updated_at
+                        )
+                        VALUES (
+                            'cycle-1',
+                            'tenant-a',
+                            'open',
+                            :question_set_json,
+                            :unresolved_question_ids_json,
+                            '2026-05-26 13:00:00'
+                        )
+                        """
+                    ),
+                    {
+                        "question_set_json": json.dumps(
+                            [
+                                {
+                                    "id": "decision_owner",
+                                    "kind": "decision_gate",
+                                    "text": "Who is the accountable decision owner?",
+                                    "status": "open",
+                                    "unresolved": True,
+                                },
+                                {
+                                    "id": "rollout_constraints",
+                                    "kind": "decision_gate",
+                                    "text": "What rollout constraints apply?",
+                                    "status": "open",
+                                    "unresolved": True,
+                                },
+                            ]
+                        ),
+                        "unresolved_question_ids_json": json.dumps(["decision_owner", "rollout_constraints"]),
+                    },
+                )
+                context = MigrationContext.configure(connection)
+                operations = Operations(context)
+                with patch.object(migration, "op", operations):
+                    migration.upgrade()
+
+                row = connection.execute(
+                    text(
+                        """
+                        SELECT question_set_json, unresolved_question_ids_json
+                        FROM decision_cycles
+                        WHERE cycle_id = 'cycle-1'
+                        """
+                    )
+                ).mappings().one()
+
+        question_set = json.loads(row["question_set_json"])
+        unresolved_ids = json.loads(row["unresolved_question_ids_json"])
+        owner_question = next(item for item in question_set if item["id"] == "decision_owner")
+        self.assertEqual(owner_question["status"], "accepted")
+        self.assertFalse(owner_question["unresolved"])
+        self.assertEqual(unresolved_ids, ["rollout_constraints"])
+
+    def test_decision_cycle_unresolved_question_normalization_migration(self) -> None:
+        migration = self._load_migration_module(
+            "20260526_0110_normalize_decision_cycle_unresolved_questions.py",
+            "migration_20260526_0110",
+        )
+
+        with TemporaryDirectory() as tmpdir:
+            database_url = f"sqlite:///{Path(tmpdir) / 'decision-cycle-unresolved-normalization.sqlite'}"
+            engine = create_engine(database_url)
+            with engine.begin() as connection:
+                connection.execute(
+                    text(
+                        """
+                        CREATE TABLE decision_cycles (
+                            cycle_id VARCHAR PRIMARY KEY,
+                            status VARCHAR NOT NULL,
+                            question_set_json JSON NOT NULL,
+                            unresolved_question_ids_json JSON NOT NULL,
+                            updated_at DATETIME NOT NULL
+                        )
+                        """
+                    )
+                )
+                connection.execute(
+                    text(
+                        """
+                        INSERT INTO decision_cycles (
+                            cycle_id, status, question_set_json, unresolved_question_ids_json, updated_at
+                        )
+                        VALUES (
+                            'cycle-1',
+                            'open',
+                            :question_set_json,
+                            :unresolved_question_ids_json,
+                            '2026-05-26 14:00:00'
+                        )
+                        """
+                    ),
+                    {
+                        "question_set_json": json.dumps(
+                            [
+                                {"id": "accepted_topic", "status": "accepted"},
+                                {"id": "partial_topic", "status": "answered"},
+                                {"id": "resolved_answered_topic", "status": "answered", "unresolved": False},
+                                {"id": "open_topic", "status": "open"},
+                            ]
+                        ),
+                        "unresolved_question_ids_json": json.dumps(
+                            ["accepted_topic", "stale_topic", "partial_topic"]
+                        ),
+                    },
+                )
+                context = MigrationContext.configure(connection)
+                operations = Operations(context)
+                with patch.object(migration, "op", operations):
+                    migration.upgrade()
+
+                row = connection.execute(
+                    text(
+                        """
+                        SELECT question_set_json, unresolved_question_ids_json
+                        FROM decision_cycles
+                        WHERE cycle_id = 'cycle-1'
+                        """
+                    )
+                ).mappings().one()
+
+        question_set = json.loads(row["question_set_json"])
+        by_id = {item["id"]: item for item in question_set}
+        unresolved_ids = json.loads(row["unresolved_question_ids_json"])
+        self.assertFalse(by_id["accepted_topic"]["unresolved"])
+        self.assertTrue(by_id["partial_topic"]["unresolved"])
+        self.assertFalse(by_id["resolved_answered_topic"]["unresolved"])
+        self.assertTrue(by_id["open_topic"]["unresolved"])
+        self.assertEqual(unresolved_ids, ["partial_topic", "open_topic"])
 
     def test_failed_attempt_retryability_repair_migration(self) -> None:
         with TemporaryDirectory() as tmpdir:
@@ -1457,13 +1843,13 @@ class MigrationTests(unittest.TestCase):
 
             with engine.begin() as connection:
                 versions = connection.execute(text("SELECT version_num FROM alembic_version")).scalars().all()
-            self.assertEqual(versions, ["20260505_0106"])
+            self.assertEqual(versions, ["20260527_0113"])
 
     def test_run_migrations_disables_alembic_logger_reconfiguration(self) -> None:
         fake_config = MagicMock()
         fake_config.attributes = {}
         fake_script_directory = MagicMock()
-        fake_script_directory.get_heads.return_value = ["20260505_0106"]
+        fake_script_directory.get_heads.return_value = ["20260526_0110"]
         with (
             patch("orchestrator.storage.migrations._normalize_repaired_top_revisions") as normalize_mock,
             patch("orchestrator.storage.migrations._repair_stamp_if_schema_ahead_of_version") as repair_mock,
@@ -1479,7 +1865,7 @@ class MigrationTests(unittest.TestCase):
 
         normalize_mock.assert_called_once_with("sqlite:///tmp/test.db")
         repair_mock.assert_called_once_with("sqlite:///tmp/test.db")
-        orphaned_repair_mock.assert_called_once_with("sqlite:///tmp/test.db", "20260505_0106")
+        orphaned_repair_mock.assert_called_once_with("sqlite:///tmp/test.db", "20260526_0110")
         self.assertEqual(fake_config.attributes.get("configure_logger"), False)
         upgrade_mock.assert_called_once_with(fake_config, "head")
 
@@ -1496,6 +1882,7 @@ class MigrationTests(unittest.TestCase):
             self.assertIn("atlassian_oauth_connections", inspector.get_table_names())
             self.assertIn("runs", inspector.get_table_names())
             self.assertIn("workflow_executions", inspector.get_table_names())
+            self.assertIn("workflow_executable_work_items", inspector.get_table_names())
             self.assertIn("workflow_checkpoints", inspector.get_table_names())
             self.assertIn("webhook_deliveries", inspector.get_table_names())
             self.assertIn("repo_bootstrap_states", inspector.get_table_names())

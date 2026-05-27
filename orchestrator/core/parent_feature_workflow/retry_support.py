@@ -18,14 +18,18 @@ from orchestrator.core.pm.followup_context_service import (
 )
 from orchestrator.core.integrations.atlassian.parent_child_sync_publishers import (
     post_pm_product_clarification_questions_to_jira,
+    update_issue_sync_label,
 )
 from orchestrator.core.integrations.atlassian.parent_child_sync_shared import JiraParentChildSyncContext, extract_created_comment_id
 from orchestrator.core.parent_feature_workflow.adapters import _ParentChildSyncGateway
 from orchestrator.core.parent_feature_workflow.dependencies import ParentFeatureWorkflowHandlerDeps
 from orchestrator.core.parent_feature_workflow.operations import (
     PARENT_OP_JIRA_CHILD_FANOUT,
+    PARENT_OP_JIRA_CHILD_PROMOTION,
     PARENT_OP_JIRA_COMMENT_PROJECTION,
+    PARENT_OP_JIRA_PARENT_UPDATE,
 )
+from orchestrator.core.parent_feature_workflow.issue_types import is_self_executable_parent_issue_type
 from orchestrator.core.planning.decision_records import PlanningDecisionRecordStore
 from orchestrator.core.projects.parent_planning_clarification_service import (
     ClarificationPublishEffects,
@@ -163,9 +167,59 @@ def execute_child_fanout_on_started_attempt(
     attempt,
     parent_issue_key: str,
     parent_detail,
+    product_brief: dict[str, Any],
     planning_result,
     planning_package: dict[str, Any],
 ) -> WorkflowOperationHandle:
+    if is_self_executable_parent_issue_type(getattr(parent_detail, "issue_type", None)):
+        lifecycle.complete_started_operation(
+            operation=operation,
+            attempt=attempt,
+            summary=(
+                f"Child fanout not required because {parent_issue_key} "
+                f"is a self-executable {getattr(parent_detail, 'issue_type', 'issue')}."
+            ),
+        )
+        parent_update_operation, parent_update_attempt = lifecycle.start_operation_attempt(
+            operation_type=PARENT_OP_JIRA_PARENT_UPDATE
+        )
+        jira_adapter = deps.integration_router.jira(
+            session=context.session,
+            tenant=context.tenant,
+            settings=context.settings,
+        )
+        try:
+            update_issue_sync_label(
+                oauth=jira_adapter.oauth_context,
+                issue_detail=parent_detail,
+                target_label="sync-current",
+            )
+        except Exception as exc:  # noqa: BLE001
+            lifecycle.fail_started_operation(
+                operation=parent_update_operation,
+                attempt=parent_update_attempt,
+                category=classify_external_workflow_failure(error=exc),
+                message=str(exc),
+            )
+            return operation_handle(context=context, operation=parent_update_operation)
+        lifecycle.complete_started_operation(
+            operation=parent_update_operation,
+            attempt=parent_update_attempt,
+            summary=(
+                f"Updated self-executable parent issue {parent_issue_key} sync label to sync-current."
+            ),
+        )
+        promotion_operation, promotion_attempt = lifecycle.start_operation_attempt(
+            operation_type=PARENT_OP_JIRA_CHILD_PROMOTION
+        )
+        lifecycle.complete_started_operation(
+            operation=promotion_operation,
+            attempt=promotion_attempt,
+            summary=f"Child promotion not required because {parent_issue_key} will be started directly.",
+        )
+        lifecycle.mark_completed_if_ready()
+        return operation_handle(context=context, operation=operation)
+
     child_sync_gateway = _ParentChildSyncGateway(
         session=context.session,
         context=child_sync_context(
@@ -204,6 +258,7 @@ def start_child_fanout_from_planning(
     lifecycle: WorkflowExecutionProjection,
     parent_issue_key: str,
     parent_detail,
+    product_brief: dict[str, Any],
     planning_result,
     planning_package: dict[str, Any],
 ) -> WorkflowOperationHandle:
@@ -216,6 +271,7 @@ def start_child_fanout_from_planning(
         attempt=attempt,
         parent_issue_key=parent_issue_key,
         parent_detail=parent_detail,
+        product_brief=product_brief,
         planning_result=planning_result,
         planning_package=planning_package,
     )

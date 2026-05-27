@@ -136,7 +136,9 @@ class WorkflowFinalizer:
                 workflow_result=workflow_result,
                 persisted_status=str(getattr(finalized_run, "status", "") or "").strip().lower(),
             ),
-            tail_steps=("orchestration_trace", "jira_feedback", "manual_pr_reporting", "workspace_cleanup"),
+            tail_steps=_tail_steps_for_status(
+                persisted_status=str(getattr(finalized_run, "status", "") or "").strip().lower()
+            ),
         )
 
 
@@ -246,6 +248,13 @@ def _event_types_for(*, workflow_result: WorkflowResult, persisted_status: str) 
     if diagnostics_stage == "TEST":
         event_types.append("TEST_FAILED")
     return tuple(event_types)
+
+
+def _tail_steps_for_status(*, persisted_status: str) -> tuple[str, ...]:
+    steps = ["orchestration_trace", "jira_feedback", "manual_pr_reporting"]
+    if persisted_status == "succeeded":
+        steps.append("workspace_cleanup")
+    return tuple(steps)
 
 
 def _run_completion_step(

@@ -230,10 +230,10 @@ def _sync_agent_workspace_files(*, repo_dir: Path) -> None:
     agents_src = source_root / "AGENTS.md"
     codex_src = source_root / ".codex"
 
-    if agents_src.exists():
+    if agents_src.exists() and not _is_git_path_tracked(repo_dir=repo_dir, path="AGENTS.md"):
         shutil.copy2(agents_src, repo_dir / "AGENTS.md")
 
-    if codex_src.exists() and codex_src.is_dir():
+    if codex_src.exists() and codex_src.is_dir() and not _is_git_path_tracked(repo_dir=repo_dir, path=".codex"):
         shutil.copytree(codex_src, repo_dir / ".codex", dirs_exist_ok=True)
         _restrict_external_tool_surfaces_in_project_codex(repo_dir=repo_dir)
 
@@ -261,6 +261,17 @@ def _sync_agent_workspace_files(*, repo_dir: Path) -> None:
         prefix = "\n" if exclude_path.exists() and exclude_path.read_text(encoding="utf-8") else ""
         with exclude_path.open("a", encoding="utf-8") as handle:
             handle.write(prefix + "\n".join(missing_lines) + "\n")
+
+
+def _is_git_path_tracked(*, repo_dir: Path, path: str) -> bool:
+    process = subprocess.run(
+        ["git", "ls-files", "--error-unmatch", "--", path],
+        cwd=str(repo_dir),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return process.returncode == 0
 
 
 def _run_metadata_path(*, repo_dir: Path | str) -> Path:

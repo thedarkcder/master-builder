@@ -16,6 +16,7 @@ from orchestrator.core.decision.reply_service import (
     serialize_recorded_answers_for_policy,
     sync_cycle_answers_from_planner,
     unresolved_question_feedback_for_cycle,
+    unresolved_question_ids_for_cycle,
 )
 from orchestrator.core.decision.presentation import build_cycle_comment
 from orchestrator.core.gtd import GoodToDoValidationResult
@@ -250,12 +251,16 @@ class DecisionReplyServiceTests(unittest.TestCase):
             unittest.mock.patch(
                 "orchestrator.core.decision.reply_service.invoke_runtime_json",
                 return_value={
-                    "answers": [
+                    "message": "Captured.",
+                    "actions": [
                         {
-                            "question_id": "dg_1",
-                            "status": "accepted",
-                            "answer": "Reject relink; device_id stays bound to one user only.",
-                            "notes": "Cross-account relink policy confirmed.",
+                            "type": "capture_decision_answer",
+                            "payload": {
+                                "question_id": "dg_1",
+                                "status": "accepted",
+                                "answer": "Reject relink; device_id stays bound to one user only.",
+                                "notes": "Cross-account relink policy confirmed.",
+                            },
                         }
                     ]
                 },
@@ -321,14 +326,18 @@ class DecisionReplyServiceTests(unittest.TestCase):
                     return_value=object(),
                 ),
                 unittest.mock.patch(
-                    "orchestrator.core.decision.reply_service.invoke_runtime_json",
-                    return_value={
-                        "answers": [
+                "orchestrator.core.decision.reply_service.invoke_runtime_json",
+                return_value={
+                    "message": "Captured.",
+                    "actions": [
                             {
-                                "question_id": "dg_1",
-                                "status": "answered",
-                                "answer": "Use the production bundle id.",
-                                "notes": "Entitlement confirmation is still missing.",
+                                "type": "capture_decision_answer",
+                                "payload": {
+                                    "question_id": "dg_1",
+                                    "status": "answered",
+                                    "answer": "Use the production bundle id.",
+                                    "notes": "Entitlement confirmation is still missing.",
+                                },
                             }
                         ]
                     },
@@ -416,14 +425,18 @@ class DecisionReplyServiceTests(unittest.TestCase):
                     return_value=object(),
                 ),
                 unittest.mock.patch(
-                    "orchestrator.core.decision.reply_service.invoke_runtime_json",
-                    return_value={
-                        "answers": [
+                "orchestrator.core.decision.reply_service.invoke_runtime_json",
+                return_value={
+                    "message": "Captured.",
+                    "actions": [
                             {
-                                "question_id": "gtd_dependencies_risks",
-                                "status": "answered",
-                                "answer": "Dependencies / Risks: CI signing depends on a valid provisioning profile; risk is TestFlight build failure until signing is configured.",
-                                "notes": "Concrete final dependencies/risks entry.",
+                                "type": "capture_decision_answer",
+                                "payload": {
+                                    "question_id": "gtd_dependencies_risks",
+                                    "status": "answered",
+                                    "answer": "Dependencies / Risks: CI signing depends on a valid provisioning profile; risk is TestFlight build failure until signing is configured.",
+                                    "notes": "Concrete final dependencies/risks entry.",
+                                },
                             }
                         ]
                     },
@@ -606,3 +619,43 @@ class DecisionReplyServiceTests(unittest.TestCase):
             resolved = apply_frozen_cycle_to_precheck(pre_check=pre_check, cycle=cycle, classification="decision_gate")
 
         self.assertEqual(resolved.decision_gate.questions, ())
+
+    def test_question_set_resolved_status_is_not_unresolved_without_answer_row(self) -> None:
+        with self.session_factory() as session:
+            cycle = session.get(DecisionCycle, "cycle-1")
+            assert cycle is not None
+            session.delete(session.get(DecisionAnswer, "answer-1"))
+            cycle.question_set_json = [
+                {
+                    "id": "objective",
+                    "kind": "decision_gate",
+                    "text": "What is the objective?",
+                    "status": "accepted",
+                    "detail": "Already present in Jira.",
+                },
+                {
+                    "id": "scope",
+                    "kind": "decision_gate",
+                    "text": "What is in scope?",
+                    "status": "answered",
+                    "detail": "Already present in Jira.",
+                    "unresolved": False,
+                },
+                {
+                    "id": "owner",
+                    "kind": "decision_gate",
+                    "text": "Who owns approval?",
+                    "status": "open",
+                    "detail": "Owner is missing.",
+                    "unresolved": True,
+                },
+            ]
+            cycle.unresolved_question_ids_json = ["objective", "scope", "owner"]
+            session.commit()
+
+            unresolved_ids = unresolved_question_ids_for_cycle(session=session, cycle=cycle)
+            cycle.unresolved_question_ids_json = list(unresolved_ids)
+            feedback = unresolved_question_feedback_for_cycle(session=session, cycle_id=cycle.cycle_id)
+
+        self.assertEqual(unresolved_ids, ("owner",))
+        self.assertEqual([item["question_id"] for item in feedback], ["owner"])
