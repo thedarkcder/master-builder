@@ -379,6 +379,98 @@ class RunTemporalStreamBoundaryTests(AdminApiTestHarness):
         self.assertEqual(result.status, "failed")
         self.assertEqual(result.last_error, "already failed")
         process_mock.assert_not_called()
+        with session_factory() as session:
+            operations = session.execute(
+                select(WorkflowOperation).where(
+                    WorkflowOperation.workflow_id == workflow_id,
+                    WorkflowOperation.operation_type == ISSUE_EXECUTION_STEP_RUN_ATTEMPT_EXECUTION,
+                )
+            ).scalars().all()
+            self.assertEqual(operations, [])
+
+    def test_run_temporal_activity_marks_operation_failed_when_run_blocks(self) -> None:
+        self._insert_jira_connection()
+        tenant_response = self.client.post(
+            "/api/admin/tenants",
+            json=self._tenant_payload(),
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(tenant_response.status_code, 201)
+        now = datetime.now(timezone.utc)
+        workflow_id = "workflow-run-temporal-blocked-result"
+        run_id = "run-temporal-blocked-result"
+        session_factory = create_session_factory(self.database_url)
+
+        with session_factory() as session:
+            project = session.get(Project, "tenant-a-default")
+            assert project is not None
+            project.policy_overrides = {"max_dev_test_review_loops": 1}
+            add_workflow_attempt(
+                session,
+                workflow_id=workflow_id,
+                run_id=run_id,
+                tenant_id="tenant-a",
+                project_id="tenant-a-default",
+                issue_key="TP-614",
+                issue_summary="Temporal blocked result boundary",
+                issue_description="Prove blocked runs fail the workflow operation instead of completing it.",
+                repo_url="https://github.com/example/repo",
+                branch="feature/temporal-blocked-result",
+                workflow_type_key="issue_execution",
+                workflow_status="running",
+                run_status="queued",
+                attempt_number=1,
+                now=now,
+            )
+            session.commit()
+
+        def _process_claimed_run(*, session, selection, **_kwargs):  # noqa: ANN001, ANN003
+            run = selection.run
+            run.status = "blocked"
+            run.last_error = "governed tools unavailable"
+            run.finished_at = now
+            session.flush()
+            return run
+
+        payload = DevelopmentTeamRunWorkflowInput(
+            workflow_id=workflow_id,
+            run_id=run_id,
+            claim_id="",
+            tenant_id="tenant-a",
+            project_id="tenant-a-default",
+            issue_key="TP-614",
+            workflow_execution_timeout_seconds=86400,
+            workflow_run_timeout_seconds=43200,
+            activity_start_to_close_timeout_seconds=300,
+            human_input_resume_timeout_seconds=600,
+        )
+
+        with (
+            patch("orchestrator.temporal.activities.run_execution.build_workflow_runner_for_session", return_value=object()),
+            patch("orchestrator.temporal.activities.run_execution.process_claimed_run", side_effect=_process_claimed_run),
+        ):
+            result = execute_claimed_run_activity(payload)
+
+        self.assertEqual(result.status, "blocked")
+        with session_factory() as session:
+            workflow = session.get(WorkflowExecution, workflow_id)
+            assert workflow is not None
+            operation = session.execute(
+                select(WorkflowOperation).where(
+                    WorkflowOperation.workflow_id == workflow_id,
+                    WorkflowOperation.operation_type == ISSUE_EXECUTION_STEP_RUN_ATTEMPT_EXECUTION,
+                )
+            ).scalar_one()
+            attempt = session.execute(
+                select(WorkflowOperationAttempt).where(
+                    WorkflowOperationAttempt.operation_id == operation.operation_id
+                )
+            ).scalar_one()
+
+        self.assertEqual(workflow.status, "failed")
+        self.assertEqual(operation.status, "failed")
+        self.assertEqual(attempt.status, "failed")
+        self.assertIn("governed tools unavailable", operation.summary or "")
 
     def test_run_temporal_activity_reclaims_queued_retry_and_does_not_reuse_old_work_unit(self) -> None:
         self._insert_jira_connection()
