@@ -753,6 +753,40 @@ export function makeStageInvocationLogs(options: {
   return rows;
 }
 
+export function makeRuntimeStageLogs(options: {
+  runId?: string;
+  stage: "pm" | "dev" | "test" | "review";
+  invocationId: string;
+  command?: string;
+  recordedAt: string;
+  count?: number;
+}): RuntimeLogEventRecord[] {
+  const runId = options.runId ?? "5de2cedf-b7ae-400c-a53c-3beecf078a51";
+  const count = Math.max(1, options.count ?? 1);
+  return Array.from({ length: count }, (_, index) => ({
+    event_id: `${options.invocationId}:runtime:${index}`,
+    run_id: runId,
+    issue_key: "GP-124",
+    project_id: "route25-default",
+    agent_id: options.stage,
+    invocation_id: options.invocationId,
+    channel: null,
+    command: options.command ?? `workflow.${options.stage}`,
+    working_dir: "/tmp/worktree",
+    stage: options.stage,
+    attempt: 1,
+    stream: "stdout",
+    message: JSON.stringify({
+      type: "item.completed",
+      item: {
+        type: "agent_message",
+        text: `${options.stage} output ${index + 1}`,
+      },
+    }),
+    recorded_at: new Date(new Date(options.recordedAt).getTime() + index * 1000).toISOString(),
+  }));
+}
+
 export async function mockRunDetailApis(
   page: Page,
   options: {

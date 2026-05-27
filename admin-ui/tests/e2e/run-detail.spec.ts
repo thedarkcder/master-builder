@@ -3,6 +3,7 @@ import { expect, test } from "@playwright/test";
 import {
   makeExecutionSnapshotPlan,
   makeRun,
+  makeRuntimeStageLogs,
   makeStageInvocationLogs,
   mockRunDetailApis,
   seedAdminSession,
@@ -98,6 +99,37 @@ test("keeps one run event stream while active run logs arrive", async ({ page })
   await expect(page.getByText("Loading run details...")).toHaveCount(0, { timeout: 15000 });
   await expect.poll(() => streamRequests, { timeout: 15000 }).toBe(1);
   expect(streamRequests).toBe(1);
+});
+
+test("marks an active stage as running when stage output exists without invocation telemetry", async ({ page }) => {
+  const run = makeRun({
+    status: "running",
+    plan: makeExecutionSnapshotPlan({
+      stages: {
+        pm: {
+          status: "completed",
+          completed_at: "2026-03-27T16:55:00Z",
+          summary: "PM plan captured.",
+        },
+      },
+    }),
+  });
+  const logs = makeRuntimeStageLogs({
+    runId: run.run_id,
+    stage: "dev",
+    invocationId: "dev-runtime-output",
+    recordedAt: "2026-03-27T17:00:00Z",
+    count: 3,
+  });
+
+  await seedAdminSession(page);
+  await mockRunDetailApis(page, { run, logs });
+
+  await page.goto(`/runs/${run.run_id}`);
+
+  await expect(page.getByText("Loading run details...")).toHaveCount(0, { timeout: 15000 });
+  await expect(page.getByTestId("run-stage-dev")).toHaveAttribute("data-stage-status", "running");
+  await expect(page.getByTestId("run-stage-dev-detail")).not.toHaveText("not started");
 });
 
 test("refreshes active run checkpoints when live events advance the run", async ({ page }) => {

@@ -1150,6 +1150,29 @@ export default function RunDetailPage() {
     }
     return snapshots;
   }, [logs]);
+  const stageLogActivity = useMemo(() => {
+    const activity = new Map<AgentStage, { firstAt: string; lastAt: string }>();
+    const validStages = new Set<AgentStage>(["pm", "dev", "test", "review"]);
+    const ordered = logs
+      .slice()
+      .sort((a, b) => new Date(a.recorded_at).getTime() - new Date(b.recorded_at).getTime());
+    for (const entry of ordered) {
+      const stage = String(entry.stage ?? "").trim().toLowerCase() as AgentStage;
+      if (!validStages.has(stage)) {
+        continue;
+      }
+      const recordedAt = String(entry.recorded_at ?? "").trim();
+      if (!recordedAt) {
+        continue;
+      }
+      const current = activity.get(stage);
+      activity.set(stage, {
+        firstAt: current?.firstAt ?? recordedAt,
+        lastAt: recordedAt,
+      });
+    }
+    return activity;
+  }, [logs]);
   const stageProgress = useMemo(() => {
     const stages: Record<AgentStage, StageProgressEntry> = {
       pm: { status: "not_started", tileDetail: "not started", detail: "not started", sortKey: 0 },
@@ -1232,8 +1255,45 @@ export default function RunDetailPage() {
         };
       }
     }
+    let latestLogStage: AgentStage | null = null;
+    let latestLogRank = 0;
+    for (const [stage, activity] of stageLogActivity.entries()) {
+      const rank = timeOf(activity.lastAt);
+      if (rank >= latestLogRank) {
+        latestLogRank = rank;
+        latestLogStage = stage;
+      }
+    }
+    for (const [stage, activity] of stageLogActivity.entries()) {
+      if (stageCheckpoints[stage]?.status === "completed") {
+        continue;
+      }
+      const current = stages[stage];
+      const rowRank = Math.max(timeOf(activity.lastAt), timeOf(activity.firstAt));
+      if (rowRank < current.sortKey) {
+        continue;
+      }
+      if (isActiveRun && stage === latestLogStage) {
+        const startMs = new Date(activity.firstAt).getTime();
+        const runningMs = Number.isFinite(startMs) ? Math.max(0, Date.now() - startMs) : 0;
+        const runtimeLabel = `${formatDuration(runningMs)}`;
+        stages[stage] = {
+          status: "running",
+          tileDetail: runtimeLabel,
+          detail: `running · ${runtimeLabel}`,
+          sortKey: rowRank,
+        };
+        continue;
+      }
+      stages[stage] = {
+        status: "interrupted",
+        tileDetail: "interrupted",
+        detail: "agent output captured, checkpoint missing",
+        sortKey: rowRank,
+      };
+    }
     return stages;
-  }, [invocationSessionRows, isActiveRun, stageCheckpoints]);
+  }, [invocationSessionRows, isActiveRun, stageCheckpoints, stageLogActivity]);
   const runTimeline = useMemo(() => {
     if (!run) {
       return null;
