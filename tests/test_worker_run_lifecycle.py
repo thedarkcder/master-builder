@@ -5,7 +5,6 @@ from unittest.mock import patch
 from orchestrator.core.runs.service import RUN_DEDUPE_SCOPE_ISSUE_EXECUTION, enqueue_run
 from orchestrator.core.worker.capability_normalization import WorkerCapability
 from orchestrator.core.workflow.execution_artifacts import (
-    MissingDurableExecutionArtifactError,
     record_pushed_execution_artifact,
 )
 from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
@@ -428,7 +427,7 @@ class WorkerRunLifecycleTests(SqliteTemplateDbTestCase):
             self.assertEqual(finalized.plan["stages"]["pm"]["status"], "completed")
             self.assertEqual(finalized.plan["context"]["trigger_context"], {"source": "manual"})
 
-    def test_persist_execution_checkpoint_requires_pushed_artifact(self) -> None:
+    def test_persist_execution_checkpoint_without_pushed_artifact_is_not_reusable(self) -> None:
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
             _, run, _ = add_workflow_attempt(
@@ -461,18 +460,24 @@ class WorkerRunLifecycleTests(SqliteTemplateDbTestCase):
                 summary="Dev completed",
                 dev_result=DevResult(change_summary=["changed"], pr_url=None),
             )
-            with self.assertRaisesRegex(
-                MissingDurableExecutionArtifactError,
+            persisted_without_artifact = persist_stage_checkpoint(
+                session,
+                run=run,
+                checkpoint=dev_checkpoint,
+                execution_context={"execution_branch": "run/ta-206/run-dev-artifact"},
+                expected_worker_service_instance_id="node-a:1234",
+                expected_claim_id="claim-1",
+            )
+
+            self.assertEqual(persisted_without_artifact.plan["stages"]["dev"]["status"], "completed")
+            self.assertFalse(
+                persisted_without_artifact.plan["context"]["execution_context"]["execution_checkpoint_reusable"]
+            )
+            self.assertIn(
                 "not reusable until the execution branch is pushed",
-            ):
-                persist_stage_checkpoint(
-                    session,
-                    run=run,
-                    checkpoint=dev_checkpoint,
-                    execution_context={"execution_branch": "run/ta-206/run-dev-artifact"},
-                    expected_worker_service_instance_id="node-a:1234",
-                    expected_claim_id="claim-1",
-                )
+                persisted_without_artifact.plan["context"]["execution_context"]["execution_checkpoint_reusable_reason"],
+            )
+            self.assertIsNone(session.get(WorkflowCheckpoint, "run-dev-artifact-execution"))
 
             record_pushed_execution_artifact(
                 session,
@@ -492,6 +497,11 @@ class WorkerRunLifecycleTests(SqliteTemplateDbTestCase):
             )
 
             self.assertEqual(persisted.plan["stages"]["dev"]["status"], "completed")
+            self.assertTrue(persisted.plan["context"]["execution_context"]["execution_checkpoint_reusable"])
+            self.assertNotIn(
+                "execution_checkpoint_reusable_reason",
+                persisted.plan["context"]["execution_context"],
+            )
             checkpoint = session.get(WorkflowCheckpoint, "run-dev-artifact-execution")
             self.assertIsNotNone(checkpoint)
 

@@ -68,6 +68,29 @@ class WorkflowRequestFactoryTests(unittest.TestCase):
                     settings=settings,
                 )
 
+    def test_build_requires_explicit_loop_policy(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            tenant, run, _effective_policy, settings = self._base_inputs(tmp_dir)
+            project = SimpleNamespace(
+                project_id="project-1",
+                name="Project",
+                github_repository="https://github.com/example/repo",
+                jira_project_key="TP",
+                environment={},
+            )
+            with self.assertRaisesRegex(
+                ValueError,
+                "max_dev_test_review_loops must be a positive integer",
+            ):
+                build_workflow_request(
+                    session=self._session_with_no_human_inputs(),
+                    tenant=tenant,
+                    run=run,
+                    project=project,
+                    effective_policy={"allowed_commands": [], "allow_pr_creation": True},
+                    settings=settings,
+                )
+
     def test_build_uses_prepared_repo(self) -> None:
         with TemporaryDirectory() as tmp_dir:
             tenant, run, effective_policy, settings = self._base_inputs(tmp_dir)
