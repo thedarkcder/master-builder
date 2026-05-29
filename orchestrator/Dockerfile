@@ -124,7 +124,8 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
     apt-get update && \
     apt-get install -y --no-install-recommends \
-      default-jdk-headless && \
+      default-jdk-headless \
+      maven && \
     mkdir -p "${ANDROID_SDK_ROOT}/cmdline-tools" && \
     curl -fsSL "https://dl.google.com/android/repository/commandlinetools-linux-${ANDROID_CMDLINE_TOOLS_VERSION}_latest.zip" \
       -o /tmp/android-cmdline-tools.zip && \

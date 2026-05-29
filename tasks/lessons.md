@@ -2,6 +2,7 @@
 
 - Temporal activity retries must be idempotent against terminal runs. If a run has already failed/blocked/succeeded, the activity should return the authoritative terminal state and must not re-enter `process_claimed_run` without worker ownership.
 - Workflow operation retries must be idempotent against terminal workflows too. Recovery/startup code should close active operation attempts on terminal workflows, and activity retry paths must check terminal state before creating new operation attempts.
+- Worker images must include the build tools required by the project types they advertise. If the run-worker claims Java/Android capability, it needs Java plus Maven/Gradle-compatible execution support, not just a JDK.
 - Requeue is a workflow control outcome, not a terminal failure. Generic `outcome="requeue"` without a capability target must reset the same run back to queued with the model-provided reason instead of falling through to unsupported-outcome terminalization.
 - Project checkout and branch freshness paths must use the GitHub App installation token for every GitHub network command. Do not let internal `git fetch` paths rely on ambient HTTPS credentials while governed `github.*` tools use app auth.
 - Live workflow pages must refresh the authoritative run/workflow snapshot when stream events arrive; appending logs and status alone leaves stage timelines stale because `run.plan` checkpoint state changes server-side after the initial page load.
