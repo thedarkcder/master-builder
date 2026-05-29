@@ -11,6 +11,7 @@ from temporalio.exceptions import ApplicationError
 from orchestrator.core.planning.specialist import RetryableSpecialistPlanningContractError
 from orchestrator.core.workflow.advance import WorkflowAdvanceOutcome
 from orchestrator.core.workflow.execution_projection import WorkflowExecutionReference, WorkflowSourceReference
+from orchestrator.core.workflow.operation_service import WorkflowOperationAttemptAlreadyRunningError
 from orchestrator.core.workflow.runtime import WorkflowAdvanceRequest, WorkflowTrigger
 from orchestrator.temporal.payloads import (
     DevelopmentTeamRunActivityResult,
@@ -768,6 +769,61 @@ def test_process_handler_workflow_advance_activity_raises_terminal_application_e
     assert exc_info.value.non_retryable is True
 
 
+def test_process_handler_workflow_advance_activity_returns_current_state_for_active_operation(monkeypatch):
+    workflow = SimpleNamespace(
+        workflow_id="parent_planning:MAB-232",
+        status="waiting_for_input",
+        active_run_id=None,
+        last_error=None,
+    )
+    fake_session = _FakeSession(
+        tenant=SimpleNamespace(tenant_id="tenant-a"),
+        workflow_type=SimpleNamespace(handler_key="jira_parent_feature"),
+        workflow=workflow,
+    )
+    monkeypatch.setattr(
+        "orchestrator.temporal.activities.handler_workflow.get_settings",
+        lambda: SimpleNamespace(),
+    )
+    monkeypatch.setattr(
+        "orchestrator.temporal.activities.handler_workflow.create_session_factory",
+        lambda: lambda: _FakeSessionContextManager(session=fake_session),
+    )
+    monkeypatch.setattr(
+        "orchestrator.temporal.activities.handler_workflow.get_workflow_type_by_handler_key",
+        lambda session, handler_key: session.workflow_type,
+    )
+    monkeypatch.setattr(
+        "orchestrator.temporal.activities.handler_workflow.execute_workflow_advance",
+        lambda **kwargs: (_ for _ in ()).throw(
+            WorkflowOperationAttemptAlreadyRunningError(
+                "Workflow operation brief_normalization already has active attempt 1 (attempt-running)."
+            )
+        ),
+    )
+
+    payload = HandlerWorkflowAdvanceInput(
+        workflow_id=workflow.workflow_id,
+        workflow_handler_key="jira_parent_feature",
+        tenant_id="tenant-a",
+        project_id="project-a",
+        execution_key="MAB-232",
+        source_system="jira",
+        source_ref="MAB-232",
+    )
+
+    from orchestrator.temporal.activities.handler_workflow import process_handler_workflow_advance_activity
+
+    result = process_handler_workflow_advance_activity(payload)
+
+    assert fake_session.rollback_called is True
+    assert result.handled is True
+    assert result.reason == "workflow_operation_already_active"
+    assert result.status == "waiting_for_input"
+    assert result.active_run_id is None
+    assert result.last_error is None
+
+
 def test_process_handler_workflow_advance_activity_allows_explicit_no_persist_noop(monkeypatch):
     monkeypatch.setattr(
         "orchestrator.temporal.activities.handler_workflow.get_settings",
@@ -953,18 +1009,25 @@ def test_temporal_registry_includes_parent_planning_and_pr_remediation():
 
 
 class _FakeSession:
-    def __init__(self, *, tenant, workflow_type) -> None:
+    def __init__(self, *, tenant, workflow_type, workflow=None) -> None:
         self.tenant = tenant
         self.workflow_type = workflow_type
+        self.workflow = workflow
+        self.rollback_called = False
 
     def get(self, model, key):
         model_name = getattr(model, "__name__", "")
         if model_name == "Tenant":
             return self.tenant
+        if model_name == "WorkflowExecution" and self.workflow is not None:
+            return self.workflow if key == self.workflow.workflow_id else None
         return None
 
     def commit(self):
         return None
+
+    def rollback(self):
+        self.rollback_called = True
 
 
 class _FakeSessionContextManager:

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections import Counter
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 from sqlalchemy import select
@@ -19,6 +19,7 @@ from orchestrator.core.workflow.type_catalog import get_workflow_type
 from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.models import (
     Project,
+    Run,
     Tenant,
     WorkflowExecutableWorkItem,
     WorkflowExecution,
@@ -239,8 +240,8 @@ class JiraProjectReconciliationWorkflowTests(SqliteTemplateDbTestCase):
             ("MAB-101", "Build local auth verification", "Backlog")
         ]
         assert parent_board_item.children[0].work_item_id == f"child:{parent_board_item.execution_id}:MAB-101"
-        assert parent_board_item.children[0].startable is False
-        assert parent_board_item.children[0].start_blocked_reason == "parent_not_completed"
+        assert parent_board_item.children[0].startable is True
+        assert parent_board_item.children[0].start_blocked_reason is None
         assert gateway.label_replacements == [
             ("MAB-100", ["customer-facing", "pm-parent"]),
             ("MAB-101", ["engineering-child", "parent-mab-100"]),
@@ -297,6 +298,297 @@ class JiraProjectReconciliationWorkflowTests(SqliteTemplateDbTestCase):
             )
 
         assert board_items == []
+
+    def test_board_includes_latest_standalone_issue_execution_without_work_item_projection(self) -> None:
+        now = _now()
+        later = now + timedelta(minutes=1)
+        with self.session_factory() as session:
+            old_workflow = WorkflowExecution(
+                workflow_id="issue-execution-mab-404-old",
+                execution_id="exec-mab-404-old",
+                workflow_type_key="issue_execution",
+                tenant_id="example",
+                project_id="example-default",
+                source_system="jira",
+                source_ref="MAB-404",
+                source_external_id="40401",
+                display_name="Old payment callback run",
+                source_description="Historical run",
+                repo_url="org/repo",
+                branch="feature/MAB-404",
+                pr_url=None,
+                orchestration_backend="temporal",
+                dedupe_scope="issue_execution",
+                status="failed",
+                last_error="Old failure",
+                active_run_id=None,
+                latest_checkpoint_id=None,
+                source_workflow_id=None,
+                source_run_id=None,
+                created_at=now,
+                started_at=now,
+                finished_at=now,
+                updated_at=now,
+            )
+            latest_workflow = WorkflowExecution(
+                workflow_id="issue-execution-mab-404-latest",
+                execution_id="exec-mab-404-latest",
+                workflow_type_key="issue_execution",
+                tenant_id="example",
+                project_id=None,
+                source_system="jira",
+                source_ref="MAB-404",
+                source_external_id="40401",
+                display_name="Payment callback run",
+                source_description="Current run",
+                repo_url="org/repo",
+                branch="feature/MAB-404",
+                pr_url=None,
+                orchestration_backend="temporal",
+                dedupe_scope="issue_execution",
+                status="running",
+                last_error=None,
+                active_run_id="run-mab-404-latest",
+                latest_checkpoint_id=None,
+                source_workflow_id=None,
+                source_run_id=None,
+                created_at=later,
+                started_at=later,
+                finished_at=None,
+                updated_at=later,
+            )
+            session.add_all([old_workflow, latest_workflow])
+            session.add_all(
+                [
+                    Run(
+                        run_id="run-mab-404-old",
+                        tenant_id="example",
+                        project_id="example-default",
+                        issue_key="MAB-404",
+                        issue_summary="Old payment callback run",
+                        repo_url="org/repo",
+                        branch="feature/MAB-404",
+                        pr_url=None,
+                        status="failed",
+                        last_error="Old failure",
+                        created_at=later,
+                        started_at=later,
+                        finished_at=now,
+                        dedupe_scope="issue_execution",
+                        workflow_id=old_workflow.workflow_id,
+                        attempt_number=1,
+                        entry_mode="dev",
+                        entry_stage="dev",
+                        required_runtime_kinds_json=[],
+                    ),
+                    Run(
+                        run_id="run-mab-404-latest",
+                        tenant_id="example",
+                        project_id="example-default",
+                        issue_key="MAB-404",
+                        issue_summary="Current payment callback run",
+                        repo_url="org/repo",
+                        branch="feature/MAB-404",
+                        pr_url=None,
+                        status="running",
+                        last_error=None,
+                        created_at=now,
+                        started_at=now,
+                        finished_at=None,
+                        dedupe_scope="issue_execution",
+                        workflow_id=latest_workflow.workflow_id,
+                        attempt_number=1,
+                        entry_mode="dev",
+                        entry_stage="dev",
+                        required_runtime_kinds_json=[],
+                    ),
+                ]
+            )
+            session.commit()
+            session.expire_all()
+
+            board_items = list_workflow_board_items(
+                session=session,
+                tenant_id="example",
+                project_id="example-default",
+                limit=100,
+                offset=0,
+            )
+
+        matching_items = [item for item in board_items if item.source_ref == "MAB-404"]
+        assert len(matching_items) == 1
+        item = matching_items[0]
+        assert item.workflow_id == "issue-execution-mab-404-latest"
+        assert item.work_item_id == "workflow:exec-mab-404-latest"
+        assert item.status == "running"
+        assert item.startable is False
+        assert item.start_blocked_reason == "already_started"
+        assert item.latest_run is not None
+        assert item.latest_run.run_id == "run-mab-404-latest"
+        assert item.display_name == "Current payment callback run"
+
+    def test_board_keeps_projected_children_startable_when_parent_is_waiting_for_input(self) -> None:
+        now = _now()
+        with self.session_factory() as session:
+            parent = WorkflowExecution(
+                workflow_id="parent_planning:MAB-460",
+                execution_id="exec-mab-460",
+                workflow_type_key="parent_planning",
+                tenant_id="example",
+                project_id="example-default",
+                source_system="jira",
+                source_ref="MAB-460",
+                source_external_id="46001",
+                display_name="Subscriptions parent",
+                source_description="Parent waiting for one clarification.",
+                repo_url="org/repo",
+                branch=None,
+                pr_url=None,
+                orchestration_backend="temporal",
+                dedupe_scope="parent_planning",
+                status="waiting_for_input",
+                last_error=None,
+                active_run_id=None,
+                latest_checkpoint_id=None,
+                source_workflow_id=None,
+                source_run_id=None,
+                created_at=now,
+                started_at=now,
+                finished_at=None,
+                updated_at=now,
+            )
+            failed_child_workflow = WorkflowExecution(
+                workflow_id="issue-execution-mab-461",
+                execution_id="exec-mab-461",
+                workflow_type_key="issue_execution",
+                tenant_id="example",
+                project_id="example-default",
+                source_system="jira",
+                source_ref="MAB-461",
+                source_external_id="46101",
+                display_name="HubSpot child",
+                source_description="Failed child run.",
+                repo_url="org/repo",
+                branch="feature/MAB-461",
+                pr_url=None,
+                orchestration_backend="temporal",
+                dedupe_scope="issue_execution",
+                status="failed",
+                last_error="Previous run failed",
+                active_run_id="run-mab-461",
+                latest_checkpoint_id=None,
+                source_workflow_id=None,
+                source_run_id=None,
+                created_at=now,
+                started_at=now,
+                finished_at=now,
+                updated_at=now,
+            )
+            session.add_all([parent, failed_child_workflow])
+            session.add_all(
+                [
+                    WorkflowExecutableWorkItem(
+                        work_item_id="parent:exec-mab-460",
+                        item_kind="parent",
+                        tenant_id="example",
+                        project_id="example-default",
+                        parent_workflow_id=parent.workflow_id,
+                        parent_execution_id=parent.execution_id,
+                        issue_key="MAB-460",
+                        parent_issue_key=None,
+                        issue_summary="Subscriptions parent",
+                        issue_status="Waiting",
+                        issue_type="Epic",
+                        mb_work_state="planning_candidate",
+                        source_system="jira",
+                        source_external_id="46001",
+                        source_payload_json={},
+                        created_at=now,
+                        updated_at=now,
+                        last_seen_at=now,
+                    ),
+                    WorkflowExecutableWorkItem(
+                        work_item_id="child:exec-mab-460:MAB-461",
+                        item_kind="child",
+                        tenant_id="example",
+                        project_id="example-default",
+                        parent_workflow_id=parent.workflow_id,
+                        parent_execution_id=parent.execution_id,
+                        issue_key="MAB-461",
+                        parent_issue_key="MAB-460",
+                        issue_summary="Retry failed HubSpot child",
+                        issue_status="Testing",
+                        issue_type="Task",
+                        mb_work_state="not_planning",
+                        source_system="jira",
+                        source_external_id="46101",
+                        source_payload_json={},
+                        created_at=now,
+                        updated_at=now,
+                        last_seen_at=now,
+                    ),
+                    WorkflowExecutableWorkItem(
+                        work_item_id="child:exec-mab-460:MAB-462",
+                        item_kind="child",
+                        tenant_id="example",
+                        project_id="example-default",
+                        parent_workflow_id=parent.workflow_id,
+                        parent_execution_id=parent.execution_id,
+                        issue_key="MAB-462",
+                        parent_issue_key="MAB-460",
+                        issue_summary="Start untouched child",
+                        issue_status="Testing",
+                        issue_type="Task",
+                        mb_work_state="not_planning",
+                        source_system="jira",
+                        source_external_id="46201",
+                        source_payload_json={},
+                        created_at=now,
+                        updated_at=now,
+                        last_seen_at=now,
+                    ),
+                    Run(
+                        run_id="run-mab-461",
+                        tenant_id="example",
+                        project_id="example-default",
+                        issue_key="MAB-461",
+                        issue_summary="Retry failed HubSpot child",
+                        repo_url="org/repo",
+                        branch="feature/MAB-461",
+                        pr_url=None,
+                        status="failed",
+                        last_error="Previous run failed",
+                        created_at=now,
+                        started_at=now,
+                        finished_at=now,
+                        dedupe_scope="issue_execution",
+                        workflow_id=failed_child_workflow.workflow_id,
+                        attempt_number=1,
+                        entry_mode="dev",
+                        entry_stage="dev",
+                        required_runtime_kinds_json=[],
+                    ),
+                ]
+            )
+            session.commit()
+            session.expire_all()
+
+            board_items = list_workflow_board_items(
+                session=session,
+                tenant_id="example",
+                project_id="example-default",
+                limit=100,
+                offset=0,
+            )
+
+        parent_item = next(item for item in board_items if item.source_ref == "MAB-460")
+        children_by_key = {child.issue_key: child for child in parent_item.children}
+        assert children_by_key["MAB-461"].startable is True
+        assert children_by_key["MAB-461"].start_label == "Retry"
+        assert children_by_key["MAB-461"].start_blocked_reason is None
+        assert children_by_key["MAB-462"].startable is True
+        assert children_by_key["MAB-462"].start_label == "Start"
+        assert children_by_key["MAB-462"].start_blocked_reason is None
 
     def test_limited_scan_updates_seen_projection_without_pruning_unseen_work_items(self) -> None:
         gateway = _FakeGateway(

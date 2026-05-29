@@ -211,9 +211,9 @@ def start_work_item_from_board(
     workflow = session.get(WorkflowExecution, work_item.parent_workflow_id)
     if workflow is None:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Executable work item parent workflow is missing")
-    if str(workflow.status or "").strip().casefold() != "completed":
-        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Parent planning must complete before work can start")
     if work_item.item_kind == "parent":
+        if str(workflow.status or "").strip().casefold() != "completed":
+            raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Parent planning must complete before parent work can start")
         existing_children = session.execute(
             select(WorkflowExecutableWorkItem.work_item_id)
             .where(
@@ -226,7 +226,7 @@ def start_work_item_from_board(
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Start child work items individually")
     elif work_item.item_kind != "child":
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Unsupported executable work item kind")
-    if str(work_item.mb_work_state or "").strip() != "planning_candidate":
+    if str(work_item.issue_status or "").strip().casefold() in {"done", "closed", "released", "release ready", "ready to release"}:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Executable work item is not ready to start")
     result, workflow, started_attempt = _start_projected_issue_from_board(
         session=session,
