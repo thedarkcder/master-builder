@@ -12,6 +12,7 @@ class DockerBuildContractTests(unittest.TestCase):
         expected_targets = {
             "api:": "app-runtime-base",
             "run-worker:": "android-runtime",
+            "temporal-worker:": "android-runtime",
             "webhook-worker:": "voice-runtime",
             "knowledge-sync:": "app-runtime-base",
             "discord-gateway:": "voice-runtime",
@@ -118,6 +119,7 @@ class DockerBuildContractTests(unittest.TestCase):
         self.assertIn("ANDROID_SDK_ROOT", android_target)
         self.assertIn("sdkmanager", android_target)
         self.assertIn("default-jdk-headless", android_target)
+        self.assertIn("maven", android_target)
 
     def test_dockerignore_excludes_local_workdirs_from_build_context(self) -> None:
         dockerignore = (ROOT / ".dockerignore").read_text(encoding="utf-8").splitlines()

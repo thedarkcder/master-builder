@@ -473,7 +473,7 @@ services:
     build:
       context: .
       dockerfile: orchestrator/Dockerfile
-      target: app-runtime-base
+      target: android-runtime
       args:
         CODEX_NPM_VERSION: ${CODEX_NPM_VERSION:-latest}
     container_name: master-builder-temporal-worker

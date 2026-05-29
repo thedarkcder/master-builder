@@ -17,9 +17,11 @@ from orchestrator.core.worker.capabilities import (
 )
 from orchestrator.core.worker.run_lifecycle import claim_run_for_dispatch
 from orchestrator.core.worker.run_execution_context import resolve_run_execution_policy_context
-from orchestrator.storage.models import Project, Run, Tenant, TenantRunClaim
+from orchestrator.storage.models import Project, Run, Tenant, TenantRunClaim, WorkflowExecution
 
 logger = logging.getLogger(__name__)
+
+LEGACY_WORKER_ORCHESTRATION_BACKEND = "legacy"
 
 
 @dataclass(frozen=True)
@@ -130,9 +132,14 @@ def _is_postgres(session: Session) -> bool:
 
 
 def _lock_queued_run_for_claim(session: Session, *, run_id: str, queued_status: str) -> Run | None:
-    claim_query = select(Run).where(
-        Run.run_id == run_id,
-        Run.status == queued_status,
+    claim_query = (
+        select(Run)
+        .join(WorkflowExecution, WorkflowExecution.workflow_id == Run.workflow_id)
+        .where(
+            Run.run_id == run_id,
+            Run.status == queued_status,
+            WorkflowExecution.orchestration_backend == LEGACY_WORKER_ORCHESTRATION_BACKEND,
+        )
     )
     if _is_postgres(session):
         claim_query = claim_query.with_for_update(skip_locked=True)
@@ -300,7 +307,13 @@ def _claimability_for_selection(
 
 def _queued_run_ids(session: Session, *, queued_status: str) -> list[str]:
     return session.execute(
-        select(Run.run_id).where(Run.status == queued_status).order_by(Run.created_at.asc())
+        select(Run.run_id)
+        .join(WorkflowExecution, WorkflowExecution.workflow_id == Run.workflow_id)
+        .where(
+            Run.status == queued_status,
+            WorkflowExecution.orchestration_backend == LEGACY_WORKER_ORCHESTRATION_BACKEND,
+        )
+        .order_by(Run.created_at.asc())
     ).scalars().all()
 
 
