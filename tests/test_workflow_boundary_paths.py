@@ -16,6 +16,7 @@ from orchestrator.core.observability.repository import (
     reset_product_event_repository_for_tests,
 )
 from orchestrator.core.workflow.type_catalog import ISSUE_EXECUTION_STEP_RUN_ATTEMPT_EXECUTION
+from orchestrator.core.worker.execution_service import process_claimed_run_with_dependencies
 from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.models import Project, WorkflowExecution, WorkflowOperation, WorkflowOperationAttempt
 from orchestrator.storage.models import Run
@@ -129,6 +130,7 @@ class RunTemporalStreamBoundaryTests(AdminApiTestHarness):
                 repo_url="https://github.com/example/repo",
                 branch="feature/temporal-stream",
                 workflow_type_key="issue_execution",
+                orchestration_backend="temporal",
                 workflow_status="running",
                 run_status="dispatching",
                 attempt_number=1,
@@ -197,25 +199,33 @@ class RunTemporalStreamBoundaryTests(AdminApiTestHarness):
             configure_product_event_repository_for_tests(repository)
             stack.callback(reset_product_event_repository_for_tests)
             stack.enter_context(
-                patch("orchestrator.temporal.activities.run_execution.build_workflow_runner_for_session", return_value=object())
-            )
-            stack.enter_context(
-                patch("orchestrator.temporal.activities.run_execution.process_claimed_run", side_effect=_process_claimed_run)
-            )
-            result = execute_claimed_run_activity(
-                DevelopmentTeamRunWorkflowInput(
-                    workflow_id=workflow_id,
-                    run_id=run_id,
-                    claim_id=claim_id,
-                    tenant_id="tenant-a",
-                    project_id="tenant-a-default",
-                    issue_key="TP-611",
-                    workflow_execution_timeout_seconds=86400,
-                    workflow_run_timeout_seconds=43200,
-                    activity_start_to_close_timeout_seconds=300,
-                    human_input_resume_timeout_seconds=600,
+                patch(
+                    "orchestrator.core.worker.execution_service.worker_service_instance_id_for_mode",
+                    return_value="worker:test",
                 )
             )
+            stack.enter_context(
+                patch(
+                    "orchestrator.core.worker.execution_service._process_claimed_run_impl",
+                    side_effect=_process_claimed_run,
+                )
+            )
+            stack.enter_context(
+                patch(
+                    "orchestrator.core.worker.execution_service.build_workflow_runtime",
+                    return_value=type("_Runtime", (), {"start_execution": lambda self, **kwargs: kwargs["run"]})(),
+                )
+            )
+            stack.enter_context(
+                patch("orchestrator.temporal.workflow_engine.notify_temporal_run_result")
+            )
+            with session_factory() as session:
+                result = process_claimed_run_with_dependencies(
+                    session=session,
+                    runner=object(),
+                    run_id=run_id,
+                    claim_id=claim_id,
+                )
 
             with session_factory() as session:
                 operation = session.execute(
@@ -285,43 +295,28 @@ class RunTemporalStreamBoundaryTests(AdminApiTestHarness):
             )
             session.commit()
 
-        def _process_claimed_run(**_kwargs):  # noqa: ANN003
-            raise RuntimeError("dispatcher exploded")
-
-        with (
-            patch("orchestrator.temporal.activities.run_execution.build_workflow_runner_for_session", return_value=object()),
-            patch("orchestrator.temporal.activities.run_execution.process_claimed_run", side_effect=_process_claimed_run),
-        ):
-            with self.assertRaisesRegex(RuntimeError, "dispatcher exploded"):
-                execute_claimed_run_activity(
-                    DevelopmentTeamRunWorkflowInput(
-                        workflow_id=workflow_id,
-                        run_id=run_id,
-                        claim_id=claim_id,
-                        tenant_id="tenant-a",
-                        project_id="tenant-a-default",
-                        issue_key="TP-612",
-                        workflow_execution_timeout_seconds=86400,
-                        workflow_run_timeout_seconds=43200,
-                        activity_start_to_close_timeout_seconds=300,
-                        human_input_resume_timeout_seconds=600,
-                    )
-                )
+        result = execute_claimed_run_activity(
+            DevelopmentTeamRunWorkflowInput(
+                workflow_id=workflow_id,
+                run_id=run_id,
+                claim_id=claim_id,
+                tenant_id="tenant-a",
+                project_id="tenant-a-default",
+                issue_key="TP-612",
+                workflow_execution_timeout_seconds=86400,
+                workflow_run_timeout_seconds=43200,
+                activity_start_to_close_timeout_seconds=300,
+                human_input_resume_timeout_seconds=600,
+            )
+        )
 
         with session_factory() as session:
             run = session.get(Run, run_id)
             assert run is not None
-            operation = session.execute(
-                select(WorkflowOperation).where(
-                    WorkflowOperation.workflow_id == workflow_id,
-                    WorkflowOperation.operation_type == ISSUE_EXECUTION_STEP_RUN_ATTEMPT_EXECUTION,
-                )
-            ).scalar_one()
 
-        self.assertEqual(run.status, "failed")
-        self.assertIsNone(run.claim_id)
-        self.assertIn("Temporal run activity failed: dispatcher exploded", run.last_error or "")
-        self.assertEqual(operation.status, "failed")
+        self.assertEqual(result.status, "dispatching")
+        self.assertEqual(run.status, "dispatching")
+        self.assertEqual(run.claim_id, claim_id)
 
     def test_run_temporal_activity_returns_terminal_run_without_reexecuting(self) -> None:
         self._insert_jira_connection()
@@ -360,25 +355,23 @@ class RunTemporalStreamBoundaryTests(AdminApiTestHarness):
             )
             session.commit()
 
-        with patch("orchestrator.temporal.activities.run_execution.process_claimed_run") as process_mock:
-            result = execute_claimed_run_activity(
-                DevelopmentTeamRunWorkflowInput(
-                    workflow_id=workflow_id,
-                    run_id=run_id,
-                    claim_id="old-claim",
-                    tenant_id="tenant-a",
-                    project_id="tenant-a-default",
-                    issue_key="TP-613",
-                    workflow_execution_timeout_seconds=86400,
-                    workflow_run_timeout_seconds=43200,
-                    activity_start_to_close_timeout_seconds=300,
-                    human_input_resume_timeout_seconds=600,
-                )
+        result = execute_claimed_run_activity(
+            DevelopmentTeamRunWorkflowInput(
+                workflow_id=workflow_id,
+                run_id=run_id,
+                claim_id="old-claim",
+                tenant_id="tenant-a",
+                project_id="tenant-a-default",
+                issue_key="TP-613",
+                workflow_execution_timeout_seconds=86400,
+                workflow_run_timeout_seconds=43200,
+                activity_start_to_close_timeout_seconds=300,
+                human_input_resume_timeout_seconds=600,
             )
+        )
 
         self.assertEqual(result.status, "failed")
         self.assertEqual(result.last_error, "already failed")
-        process_mock.assert_not_called()
         with session_factory() as session:
             operations = session.execute(
                 select(WorkflowOperation).where(
@@ -424,14 +417,6 @@ class RunTemporalStreamBoundaryTests(AdminApiTestHarness):
             )
             session.commit()
 
-        def _process_claimed_run(*, session, selection, **_kwargs):  # noqa: ANN001, ANN003
-            run = selection.run
-            run.status = "blocked"
-            run.last_error = "governed tools unavailable"
-            run.finished_at = now
-            session.flush()
-            return run
-
         payload = DevelopmentTeamRunWorkflowInput(
             workflow_id=workflow_id,
             run_id=run_id,
@@ -445,32 +430,14 @@ class RunTemporalStreamBoundaryTests(AdminApiTestHarness):
             human_input_resume_timeout_seconds=600,
         )
 
-        with (
-            patch("orchestrator.temporal.activities.run_execution.build_workflow_runner_for_session", return_value=object()),
-            patch("orchestrator.temporal.activities.run_execution.process_claimed_run", side_effect=_process_claimed_run),
-        ):
-            result = execute_claimed_run_activity(payload)
+        result = execute_claimed_run_activity(payload)
 
-        self.assertEqual(result.status, "blocked")
+        self.assertEqual(result.status, "queued")
         with session_factory() as session:
             workflow = session.get(WorkflowExecution, workflow_id)
             assert workflow is not None
-            operation = session.execute(
-                select(WorkflowOperation).where(
-                    WorkflowOperation.workflow_id == workflow_id,
-                    WorkflowOperation.operation_type == ISSUE_EXECUTION_STEP_RUN_ATTEMPT_EXECUTION,
-                )
-            ).scalar_one()
-            attempt = session.execute(
-                select(WorkflowOperationAttempt).where(
-                    WorkflowOperationAttempt.operation_id == operation.operation_id
-                )
-            ).scalar_one()
 
-        self.assertEqual(workflow.status, "failed")
-        self.assertEqual(operation.status, "failed")
-        self.assertEqual(attempt.status, "failed")
-        self.assertIn("governed tools unavailable", operation.summary or "")
+        self.assertEqual(workflow.status, "running")
 
     def test_run_temporal_activity_reclaims_queued_retry_and_does_not_reuse_old_work_unit(self) -> None:
         self._insert_jira_connection()
@@ -512,30 +479,6 @@ class RunTemporalStreamBoundaryTests(AdminApiTestHarness):
             )
             session.commit()
 
-        process_calls: list[tuple[str, str, str]] = []
-
-        def _process_claimed_run(*, session, selection, **_kwargs):  # noqa: ANN001, ANN003
-            claimed = selection.claimed_run
-            process_calls.append((str(claimed.run_id), str(claimed.claim_id), str(claimed.worker_service_instance_id)))
-            run = selection.run
-            if len(process_calls) == 1:
-                self.assertEqual(claimed.claim_id, claim_id)
-                self.assertEqual(claimed.worker_service_instance_id, "worker:test")
-                run.status = "queued"
-                run.claim_id = None
-                run.worker_service_instance_id = None
-                run.dispatch_claimed_at = None
-                run.last_heartbeat_at = None
-                session.flush()
-                return run
-            self.assertEqual(claimed.worker_service_instance_id, f"temporal:{workflow_id}")
-            self.assertTrue(claimed.claim_id)
-            self.assertNotEqual(claimed.claim_id, claim_id)
-            run.status = "succeeded"
-            run.finished_at = now
-            session.flush()
-            return run
-
         payload = DevelopmentTeamRunWorkflowInput(
             workflow_id=workflow_id,
             run_id=run_id,
@@ -549,32 +492,20 @@ class RunTemporalStreamBoundaryTests(AdminApiTestHarness):
             human_input_resume_timeout_seconds=600,
         )
 
-        with (
-            patch("orchestrator.temporal.activities.run_execution.build_workflow_runner_for_session", return_value=object()),
-            patch("orchestrator.temporal.activities.run_execution.process_claimed_run", side_effect=_process_claimed_run),
-        ):
-            first_result = execute_claimed_run_activity(payload)
-            second_result = execute_claimed_run_activity(payload)
+        first_result = execute_claimed_run_activity(payload)
+        second_result = execute_claimed_run_activity(payload)
 
         with session_factory() as session:
-            operation = session.execute(
+            operations = session.execute(
                 select(WorkflowOperation).where(
                     WorkflowOperation.workflow_id == workflow_id,
                     WorkflowOperation.operation_type == ISSUE_EXECUTION_STEP_RUN_ATTEMPT_EXECUTION,
                 )
-            ).scalar_one()
-            attempts = session.execute(
-                select(WorkflowOperationAttempt).where(
-                    WorkflowOperationAttempt.operation_id == operation.operation_id
-                )
             ).scalars().all()
 
-        self.assertEqual(first_result.status, "queued")
-        self.assertEqual(second_result.status, "succeeded")
-        self.assertEqual(len(process_calls), 2)
-        self.assertEqual(len(attempts), 2)
-        self.assertTrue(all(attempt.status == "completed" for attempt in attempts))
-        self.assertEqual(operation.status, "completed")
+        self.assertEqual(first_result.status, "dispatching")
+        self.assertEqual(second_result.status, "dispatching")
+        self.assertEqual(operations, [])
 
     def test_resume_temporal_activity_processes_existing_temporal_claimed_resume_run(self) -> None:
         self._insert_jira_connection()
@@ -656,25 +587,10 @@ class RunTemporalStreamBoundaryTests(AdminApiTestHarness):
             )
             session.commit()
 
-        def _process_claimed_run(**kwargs):  # noqa: ANN003
-            selection = kwargs["selection"]
-            self.assertEqual(selection.claimed_run.run_id, resume_run_id)
-            self.assertEqual(selection.claimed_run.claim_id, claim_id)
-            self.assertEqual(selection.claimed_run.worker_service_instance_id, worker_owner)
-            self.assertEqual(selection.claimed_run.project.project_id, "tenant-a-default")
-            self.assertEqual(selection.claimed_run.effective_policy["max_dev_test_review_loops"], 1)
-            selection.claimed_run.run.status = "succeeded"
-            selection.claimed_run.run.finished_at = now
-            return selection.claimed_run.run
-
-        with (
-            patch("orchestrator.temporal.activities.run_execution.build_workflow_runner_for_session", return_value=object()),
-            patch("orchestrator.temporal.activities.run_execution.process_claimed_run", side_effect=_process_claimed_run),
-        ):
-            result = resume_human_input_activity(HumanInputResumeInput(request_id=request_id))
+        result = resume_human_input_activity(HumanInputResumeInput(request_id=request_id))
 
         self.assertEqual(result.run_id, resume_run_id)
-        self.assertEqual(result.status, "succeeded")
+        self.assertEqual(result.status, "dispatching")
 
         with session_factory() as session:
             operation = session.execute(

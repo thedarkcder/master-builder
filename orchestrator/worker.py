@@ -87,7 +87,6 @@ WORKER_STARTUP_DB_RETRY_MAX_DELAY_SECONDS = 8.0
 _VALID_POST_CHILD_RUN_STATUSES = {
     "queued",
     "ownership_lost",
-    "temporal_handoff",
     RUN_STATUS_RUNNING,
     RUN_STATUS_WAITING_FOR_INPUT,
     RUN_STATUS_BLOCKED,

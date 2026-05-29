@@ -7,6 +7,7 @@ from unittest.mock import MagicMock
 
 import pytest
 
+from orchestrator.core.runtime import tools as runtime_tools
 from orchestrator.core.runtime.tools import (
     allowed_tools_for_stage,
     execute_agent_tool,
@@ -163,6 +164,35 @@ def test_tool_catalog_for_stage_returns_structured_entries() -> None:
     browser_tool = next(item for item in tools if item["tool_name"] == "browser.snapshot")
     assert browser_tool["category"] == "browser"
     assert "UI inspection" in str(browser_tool["description"])
+    assert browser_tool["platforms"] == ["linux", "macos"]
+
+
+def test_tool_catalog_filters_by_worker_platform(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(runtime_tools._TOOL_PLATFORM_SCOPES, "repo.read", frozenset({"linux"}))
+
+    linux_tools = tool_catalog_for_stage("dev", worker_platform="linux")
+    macos_tools = tool_catalog_for_stage("dev", worker_platform="macos")
+
+    assert "repo.read" in {str(item["tool_name"]) for item in linux_tools}
+    assert "repo.read" not in {str(item["tool_name"]) for item in macos_tools}
+
+
+def test_native_and_governed_allowlists_filter_by_worker_platform(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setitem(runtime_tools._TOOL_PLATFORM_SCOPES, "web.search", frozenset({"linux"}))
+    monkeypatch.setitem(runtime_tools._TOOL_PLATFORM_SCOPES, "repo.read", frozenset({"linux"}))
+
+    assert "web.search" in native_model_tools_for_stage(
+        "pr_review_findings",
+        runtime_command="codex",
+        worker_platform="linux",
+    )
+    assert "web.search" not in native_model_tools_for_stage(
+        "pr_review_findings",
+        runtime_command="codex",
+        worker_platform="macos",
+    )
+    assert "repo.read" in governed_allowed_tools_for_stage("dev", worker_platform="linux")
+    assert "repo.read" not in governed_allowed_tools_for_stage("dev", worker_platform="macos")
 
 
 def test_governed_and_native_tool_catalogs_split_for_codex_runtime() -> None:

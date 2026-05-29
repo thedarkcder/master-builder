@@ -335,6 +335,37 @@ _DEV_STAGE_BLOCKED_GIT_SUBCOMMANDS = {
     "push",
 }
 _NATIVE_CODEX_TOOL_NAMES = frozenset({"web.search", "web.fetch", "browser.open", "browser.snapshot"})
+_SUPPORTED_TOOL_PLATFORMS = frozenset({"linux", "macos"})
+_TOOL_PLATFORM_SCOPES: dict[str, frozenset[str]] = {
+    # Keep platform support explicit so future Mac-only/Linux-only tools cannot leak
+    # into the wrong execution worker prompt or governed bridge.
+    tool_name: _SUPPORTED_TOOL_PLATFORMS
+    for stage_tools in TOOL_ALLOWLIST.values()
+    for tool_name in stage_tools
+}
+
+
+def _normalize_worker_platform(worker_platform: str | None) -> str | None:
+    normalized = str(worker_platform or "").strip().lower()
+    if not normalized:
+        return None
+    if normalized not in _SUPPORTED_TOOL_PLATFORMS:
+        allowed = ", ".join(sorted(_SUPPORTED_TOOL_PLATFORMS))
+        raise ValueError(f"Unsupported worker platform '{normalized}'. Allowed values: {allowed}.")
+    return normalized
+
+
+def _tool_platforms(tool_name: str) -> frozenset[str]:
+    return _TOOL_PLATFORM_SCOPES.get(str(tool_name or "").strip(), _SUPPORTED_TOOL_PLATFORMS)
+
+
+def _tool_allowed_on_platform(tool_name: str, *, worker_platform: str | None) -> bool:
+    normalized_platform = _normalize_worker_platform(worker_platform)
+    if normalized_platform is None:
+        return True
+    return normalized_platform in _tool_platforms(tool_name)
+
+
 @dataclass(frozen=True)
 class AgentToolContext:
     tenant: Tenant
@@ -344,6 +375,7 @@ class AgentToolContext:
     run_id: str | None
     repo_dir: Path
     checkout_root: Path
+    worker_platform: str | None = None
     run: Run | None = None
 
 
@@ -356,8 +388,16 @@ def _ensure_repo_checkout_exists(repo_dir: Path) -> None:
         raise ValueError(f"Repository checkout missing at {repo_dir}")
 
 
-def allowed_tools_for_stage(stage: str) -> set[str]:
-    return set(TOOL_ALLOWLIST.get(str(stage or "").strip().lower(), set()))
+def allowed_tools_for_stage(stage: str, *, worker_platform: str | None = None) -> set[str]:
+    normalized_platform = _normalize_worker_platform(worker_platform)
+    tools = set(TOOL_ALLOWLIST.get(str(stage or "").strip().lower(), set()))
+    if normalized_platform is None:
+        return tools
+    return {
+        tool_name
+        for tool_name in tools
+        if _tool_allowed_on_platform(tool_name, worker_platform=normalized_platform)
+    }
 
 
 def _runtime_supports_native_codex_tools(runtime_command: str | None) -> bool:
@@ -367,16 +407,26 @@ def _runtime_supports_native_codex_tools(runtime_command: str | None) -> bool:
     return "codex" in normalized
 
 
-def native_model_tools_for_stage(stage: str, *, runtime_command: str | None = None) -> set[str]:
+def native_model_tools_for_stage(
+    stage: str,
+    *,
+    runtime_command: str | None = None,
+    worker_platform: str | None = None,
+) -> set[str]:
     if not _runtime_supports_native_codex_tools(runtime_command):
         return set()
     normalized_stage = str(stage or "").strip().lower()
-    return allowed_tools_for_stage(normalized_stage) & set(_NATIVE_CODEX_TOOL_NAMES)
+    return allowed_tools_for_stage(normalized_stage, worker_platform=worker_platform) & set(_NATIVE_CODEX_TOOL_NAMES)
 
 
-def governed_allowed_tools_for_stage(stage: str, *, runtime_command: str | None = None) -> set[str]:
+def governed_allowed_tools_for_stage(
+    stage: str,
+    *,
+    runtime_command: str | None = None,
+    worker_platform: str | None = None,
+) -> set[str]:
     _ = runtime_command
-    return allowed_tools_for_stage(stage) - set(_NATIVE_CODEX_TOOL_NAMES)
+    return allowed_tools_for_stage(stage, worker_platform=worker_platform) - set(_NATIVE_CODEX_TOOL_NAMES)
 
 
 def list_implemented_tools() -> list[dict[str, object]]:
@@ -395,30 +445,58 @@ def list_implemented_tools() -> list[dict[str, object]]:
                 "description": TOOL_DESCRIPTIONS.get(tool_name, "Implemented governed tool."),
                 "args_schema": TOOL_ARGUMENT_SCHEMAS.get(tool_name, {}),
                 "stages": tool_stage_membership[tool_name],
+                "platforms": sorted(_tool_platforms(tool_name)),
             }
         )
     return tools
 
 
-def tool_catalog_for_stage(stage: str) -> list[dict[str, object]]:
+def tool_catalog_for_stage(stage: str, *, worker_platform: str | None = None) -> list[dict[str, object]]:
     normalized_stage = str(stage or "").strip().lower()
     if not normalized_stage:
         return []
+    allowed = allowed_tools_for_stage(normalized_stage, worker_platform=worker_platform)
     return [
         tool
         for tool in list_implemented_tools()
-        if normalized_stage in tool.get("stages", [])
+        if normalized_stage in tool.get("stages", []) and str(tool.get("tool_name") or "") in allowed
     ]
 
 
-def governed_tool_catalog_for_stage(stage: str, *, runtime_command: str | None = None) -> list[dict[str, object]]:
-    allowed = governed_allowed_tools_for_stage(stage, runtime_command=runtime_command)
-    return [tool for tool in tool_catalog_for_stage(stage) if str(tool.get("tool_name") or "") in allowed]
+def governed_tool_catalog_for_stage(
+    stage: str,
+    *,
+    runtime_command: str | None = None,
+    worker_platform: str | None = None,
+) -> list[dict[str, object]]:
+    allowed = governed_allowed_tools_for_stage(
+        stage,
+        runtime_command=runtime_command,
+        worker_platform=worker_platform,
+    )
+    return [
+        tool
+        for tool in tool_catalog_for_stage(stage, worker_platform=worker_platform)
+        if str(tool.get("tool_name") or "") in allowed
+    ]
 
 
-def native_tool_catalog_for_stage(stage: str, *, runtime_command: str | None = None) -> list[dict[str, object]]:
-    allowed = native_model_tools_for_stage(stage, runtime_command=runtime_command)
-    return [tool for tool in tool_catalog_for_stage(stage) if str(tool.get("tool_name") or "") in allowed]
+def native_tool_catalog_for_stage(
+    stage: str,
+    *,
+    runtime_command: str | None = None,
+    worker_platform: str | None = None,
+) -> list[dict[str, object]]:
+    allowed = native_model_tools_for_stage(
+        stage,
+        runtime_command=runtime_command,
+        worker_platform=worker_platform,
+    )
+    return [
+        tool
+        for tool in tool_catalog_for_stage(stage, worker_platform=worker_platform)
+        if str(tool.get("tool_name") or "") in allowed
+    ]
 
 
 def build_agent_tool_command(
@@ -428,6 +506,7 @@ def build_agent_tool_command(
     run_id: str | None,
     issue_key: str,
     stage: str,
+    worker_platform: str | None = None,
 ) -> str:
     command = [
         sys.executable,
@@ -443,6 +522,9 @@ def build_agent_tool_command(
     normalized_run_id = str(run_id or "").strip()
     if normalized_run_id:
         command.extend(["--run", normalized_run_id])
+    normalized_worker_platform = _normalize_worker_platform(worker_platform)
+    if normalized_worker_platform:
+        command.extend(["--worker-platform", normalized_worker_platform])
     command.extend(
         [
             "--issue",
@@ -469,6 +551,7 @@ def execute_agent_tool(
     stage: str,
     tool_name: str,
     tool_args: dict[str, Any] | None,
+    worker_platform: str | None = None,
 ) -> dict[str, Any]:  # noqa: ANN401
     context = _resolve_context(
         session=session,
@@ -478,8 +561,12 @@ def execute_agent_tool(
         run_id=run_id,
         issue_key=issue_key,
         stage=stage,
+        worker_platform=worker_platform,
     )
-    allowed = allowed_tools_for_stage(context.stage)
+    allowed = allowed_tools_for_stage(
+        context.stage,
+        worker_platform=getattr(context, "worker_platform", None),
+    )
     if tool_name not in allowed:
         raise PermissionError(f"Tool '{tool_name}' is not allowed in stage '{context.stage}'")
     if tool_name in _NATIVE_CODEX_TOOL_NAMES:
@@ -543,6 +630,7 @@ def _resolve_context(
     run_id: str | None,
     issue_key: str,
     stage: str,
+    worker_platform: str | None = None,
 ) -> AgentToolContext:  # noqa: ANN001
     tenant = session.get(Tenant, tenant_id)
     if tenant is None:
@@ -600,6 +688,7 @@ def _resolve_context(
         run_id=str(run_id).strip() if run_id else None,
         repo_dir=repo_dir,
         checkout_root=checkout_root,
+        worker_platform=_normalize_worker_platform(worker_platform),
         run=run,
     )
 

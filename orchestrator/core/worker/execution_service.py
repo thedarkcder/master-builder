@@ -14,6 +14,15 @@ from orchestrator.core.integrations.atlassian.links import tenant_jira_issue_url
 from orchestrator.core.platform.secret_service import resolve_platform_secret_ref
 from orchestrator.core.platform.tenant_secret_service import resolve_scoped_secret_ref
 from orchestrator.core.workflow.runtime import build_workflow_runtime
+from orchestrator.core.workflow.execution_projection import WorkflowExecutionProjection
+from orchestrator.core.workflow.step_runner import (
+    complete_workflow_step_attempt,
+    fail_workflow_step_attempt,
+    start_workflow_step_attempt,
+    wait_workflow_step_attempt,
+)
+from orchestrator.core.workflow.type_catalog import ISSUE_EXECUTION_STEP_RUN_ATTEMPT_EXECUTION, get_workflow_type
+from orchestrator.core.workflow.work_units import run_work_unit
 from orchestrator.core.worker.webhook_job_service import process_next_webhook_job
 from orchestrator.core.worker.jira_stage_service import send_stage_update_to_jira as _send_stage_update_to_jira
 from orchestrator.core.worker.jira_stage_service import transition_issue_status as _transition_issue_status
@@ -69,6 +78,8 @@ logger = logging.getLogger(__name__)
 RUN_STATUS_QUEUED = "queued"
 RUN_STATUS_DISPATCHING = "dispatching"
 RUN_STATUS_RUNNING = "running"
+RUN_STATUS_WAITING_FOR_INPUT = "waiting_for_input"
+RUN_STATUS_SUCCEEDED = "succeeded"
 RUN_STATUS_FAILED = "failed"
 RUN_STATUS_BLOCKED = "blocked"
 RUN_STATUS_CANCELLED = "cancelled"
@@ -144,6 +155,145 @@ def process_next_webhook_job_with_dependencies(
         )
 
 
+def _run_result_payload(*, workflow: WorkflowExecution, run: Run, claim_id: str | None) -> dict[str, object]:
+    return {
+        "workflow_id": workflow.workflow_id,
+        "run_id": run.run_id,
+        "status": str(run.status),
+        "issue_key": str(run.issue_key),
+        "claim_id": str(claim_id or "").strip() or None,
+        "last_error": str(getattr(run, "last_error", "") or "").strip() or None,
+    }
+
+
+def _finish_workflow_step_for_run(
+    *,
+    lifecycle: WorkflowExecutionProjection,
+    step,
+    run: Run,
+) -> None:  # noqa: ANN001
+    result_status = str(run.status or "").strip().lower()
+    summary = f"Run attempt {run.run_id} finished with status {result_status}"
+    if result_status == RUN_STATUS_SUCCEEDED:
+        complete_workflow_step_attempt(lifecycle=lifecycle, step=step, summary=summary)
+        return
+    if result_status == RUN_STATUS_WAITING_FOR_INPUT:
+        wait_workflow_step_attempt(lifecycle=lifecycle, step=step, summary=summary)
+        return
+    if result_status in {RUN_STATUS_BLOCKED, RUN_STATUS_FAILED, RUN_STATUS_CANCELLED}:
+        fail_workflow_step_attempt(
+            lifecycle=lifecycle,
+            step=step,
+            category=f"run_attempt_{result_status}",
+            message=run.last_error or summary,
+        )
+        return
+    complete_workflow_step_attempt(lifecycle=lifecycle, step=step, summary=summary)
+
+
+def _process_claimed_run_impl_with_temporal_projection(
+    *,
+    session: Session,
+    runner: WorkflowRunner,
+    settings: Settings,
+    workflow: WorkflowExecution,
+    claimed_run: Run,
+    tenant: Tenant,
+    expected_owner: str,
+    expected_claim_id: str,
+    send_discord_message_fn: TransportActionSender,
+) -> Run:
+    workflow_type = get_workflow_type(session, workflow_type_key=workflow.workflow_type_key)
+    lifecycle = WorkflowExecutionProjection(session=session, workflow=workflow, workflow_type=workflow_type)
+    step = start_workflow_step_attempt(
+        lifecycle=lifecycle,
+        run_id=claimed_run.run_id,
+        operation_type=ISSUE_EXECUTION_STEP_RUN_ATTEMPT_EXECUTION,
+        idempotency_key=f"run-attempt:{claimed_run.run_id}",
+        target_system="execution_worker",
+        target_ref=claimed_run.run_id,
+        summary=f"Execute run attempt {claimed_run.attempt_number}",
+    )
+
+    policy_context = resolve_run_execution_policy_context(
+        session,
+        tenant=tenant,
+        run=claimed_run,
+    )
+
+    def _execute(_context) -> dict[str, object]:  # noqa: ANN001
+        processed = _process_claimed_run_impl(
+            session=session,
+            runner=runner,
+            settings=settings,
+            selection=SimpleNamespace(
+                claimed_run=ClaimedRun(
+                    run=claimed_run,
+                    tenant=tenant,
+                    project=policy_context.project,
+                    effective_policy=policy_context.effective_policy,
+                    run_id=claimed_run.run_id,
+                    claim_id=expected_claim_id,
+                    worker_service_instance_id=expected_owner,
+                    status=RUN_STATUS_DISPATCHING,
+                ),
+                run=claimed_run,
+                terminal_run=None,
+            ),
+            **build_run_process_kwargs(
+                session=session,
+                settings=settings,
+                worker_service_instance_id=expected_owner,
+                send_discord_message_fn=send_discord_message_fn,
+            ),
+        )
+        if processed is None:
+            raise RuntimeError(f"Execution worker returned no run for workflow_id={workflow.workflow_id}")
+        return _run_result_payload(workflow=workflow, run=processed, claim_id=expected_claim_id)
+
+    try:
+        result_payload = run_work_unit(
+            session,
+            operation=step.operation,
+            operation_attempt=step.attempt,
+            unit_key="run_attempt_execution.runtime_invocation",
+            idempotency_key=f"run:{claimed_run.run_id}:runtime_invocation:{step.attempt.attempt_id}",
+            input_payload={
+                "workflow_id": workflow.workflow_id,
+                "run_id": claimed_run.run_id,
+                "attempt_number": claimed_run.attempt_number,
+                "operation_attempt_id": step.attempt.attempt_id,
+                "issue_key": claimed_run.issue_key,
+                "worker_service_instance_id": expected_owner,
+            },
+            execute=_execute,
+            serialize=lambda payload: dict(payload),
+            deserialize=lambda payload: dict(payload),
+        )
+        processed_run = session.get(Run, str(result_payload["run_id"]))
+        if processed_run is None:
+            raise RuntimeError(f"Execution worker result referenced missing run {result_payload['run_id']}")
+        _finish_workflow_step_for_run(lifecycle=lifecycle, step=step, run=processed_run)
+        from orchestrator.temporal.workflow_engine import notify_temporal_run_result
+
+        notify_temporal_run_result(
+            session=session,
+            settings=settings,
+            workflow=workflow,
+            run=processed_run,
+        )
+        return processed_run
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("execution_worker_temporal_run_failed workflow_id=%s run_id=%s", workflow.workflow_id, claimed_run.run_id)
+        fail_workflow_step_attempt(
+            lifecycle=lifecycle,
+            step=step,
+            category="run_execution_failed",
+            message=str(exc),
+        )
+        raise
+
+
 def process_claimed_run_with_dependencies(
     *,
     session: Session,
@@ -196,12 +346,12 @@ def process_claimed_run_with_dependencies(
             send_discord_message_fn=send_discord_message_fn,
         ),
     )
+    policy_context = resolve_run_execution_policy_context(
+        session,
+        tenant=tenant,
+        run=claimed_run,
+    )
     if str(getattr(workflow, "orchestration_backend", "") or "").strip().lower() == "legacy":
-        policy_context = resolve_run_execution_policy_context(
-            session,
-            tenant=tenant,
-            run=claimed_run,
-        )
         return _process_claimed_run_impl(
             session=session,
             runner=runner,
@@ -217,20 +367,32 @@ def process_claimed_run_with_dependencies(
                     worker_service_instance_id=expected_owner,
                     status=RUN_STATUS_DISPATCHING,
                 ),
+                run=claimed_run,
                 terminal_run=None,
             ),
             **build_run_process_kwargs(
                 session=session,
                 settings=settings,
+                worker_service_instance_id=expected_owner,
                 send_discord_message_fn=send_discord_message_fn,
             ),
         )
-    result = runtime.start_execution(
+    runtime.start_execution(
         workflow=workflow,
         run=claimed_run,
         claim_id=expected_claim_id,
     )
-    return result
+    return _process_claimed_run_impl_with_temporal_projection(
+        session=session,
+        runner=runner,
+        settings=settings,
+        workflow=workflow,
+        claimed_run=claimed_run,
+        tenant=tenant,
+        expected_owner=expected_owner,
+        expected_claim_id=expected_claim_id,
+        send_discord_message_fn=send_discord_message_fn,
+    )
 
 
 def build_run_process_kwargs(
