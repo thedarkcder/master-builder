@@ -5,6 +5,7 @@ import threading
 from dataclasses import dataclass
 from datetime import timedelta
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from orchestrator.core.config import Settings
@@ -55,6 +56,19 @@ def _temporal_workflow_handle_id(*, workflow_id: str) -> str:
     return f"workflow:{workflow_id}"
 
 
+def _pending_request_id(*, session: Session, workflow_id: str) -> str | None:
+    request_id = session.execute(
+        select(RunHumanInputRequest.request_id)
+        .where(
+            RunHumanInputRequest.workflow_id == workflow_id,
+            RunHumanInputRequest.status == "pending",
+        )
+        .order_by(RunHumanInputRequest.created_at.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+    return str(request_id or "").strip() or None
+
+
 def _run_sync(awaitable):  # noqa: ANN001, ANN201
     try:
         asyncio.get_running_loop()
@@ -94,6 +108,7 @@ def notify_temporal_run_result(
             config.workflow_defn,
             _temporal_workflow_handle_id(workflow_id=workflow.workflow_id),
         )
+        normalized_status = str(run.status or "").strip().lower()
         await handle.execute_update(
             config.workflow_defn.record_run_result,
             DevelopmentTeamRunActivityResult(
@@ -102,6 +117,11 @@ def notify_temporal_run_result(
                 status=str(run.status),
                 issue_key=str(run.issue_key),
                 claim_id=str(getattr(run, "claim_id", "") or "").strip() or None,
+                pending_request_id=(
+                    _pending_request_id(session=session, workflow_id=workflow.workflow_id)
+                    if normalized_status == "waiting_for_input"
+                    else None
+                ),
                 last_error=str(getattr(run, "last_error", "") or "").strip() or None,
             ),
         )

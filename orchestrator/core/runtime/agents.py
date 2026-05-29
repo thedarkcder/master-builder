@@ -240,9 +240,9 @@ class CodexWorkflowAgents:
             attempt=attempt,
             reasoning_effort=reasoning_effort,
             issue_description_chars=len(request.issue_description or ""),
-                codex_session_id=self._resume_session_id_for_stage(request=request, stage=stage),
-                worker_platform=request.current_worker_capability.value,
-            )
+            codex_session_id=self._resume_session_id_for_stage(request=request, stage=stage),
+            worker_platform=request.current_worker_capability.value,
+        )
         stage_session = RuntimeStageSession.create(
             runtime=runtime,
             context=context,

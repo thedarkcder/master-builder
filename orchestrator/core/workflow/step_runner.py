@@ -81,6 +81,21 @@ def fail_workflow_step_attempt(
     )
 
 
+def retry_workflow_step_attempt(
+    *,
+    lifecycle,  # noqa: ANN001
+    step: WorkflowStepAttempt,
+    category: str,
+    message: str,
+) -> None:
+    lifecycle.retry_started_operation(
+        operation=step.operation,
+        attempt=step.attempt,
+        category=category,
+        message=message,
+    )
+
+
 def wait_workflow_step_attempt(*, lifecycle, step: WorkflowStepAttempt, summary: str) -> None:  # noqa: ANN001
     lifecycle.wait_started_operation(operation=step.operation, attempt=step.attempt, summary=summary)
 
