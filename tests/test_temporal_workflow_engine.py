@@ -21,7 +21,11 @@ from orchestrator.temporal.payloads import (
     WorkflowOperationRetryInput,
     WorkflowOperationRetryResult,
 )
-from orchestrator.temporal.workflow_engine import TemporalWorkflowConfig, TemporalWorkflowEngine
+from orchestrator.temporal.workflow_engine import (
+    TemporalWorkflowConfig,
+    TemporalWorkflowEngine,
+    notify_temporal_run_result,
+)
 from orchestrator.temporal.workflows.development_team_run import DevelopmentTeamRunWorkflow
 from orchestrator.temporal.workflows.handler_backed_workflow import HandlerBackedWorkflow
 
@@ -216,6 +220,88 @@ def test_development_team_run_workflow_records_execution_worker_result_update(mo
     )
     assert updated_run_id == "run-789"
     assert workflow_defn.describe_state().status == "failed"
+
+
+def test_development_team_run_workflow_rejects_mismatched_pending_request_id():
+    workflow_defn = DevelopmentTeamRunWorkflow()
+    workflow_defn._apply_result(
+        DevelopmentTeamRunActivityResult(
+            workflow_id="workflow-123",
+            run_id="run-123",
+            status="waiting_for_input",
+            issue_key="MAB-215",
+            pending_request_id="request-123",
+        )
+    )
+
+    with pytest.raises(ValueError, match="request-123"):
+        asyncio.run(workflow_defn.resume_human_input(HumanInputResumeInput(request_id="request-456")))
+
+
+def test_notify_temporal_run_result_includes_pending_request_id(monkeypatch):
+    captured: dict[str, object] = {}
+
+    class _FakeResult:
+        def scalar_one_or_none(self):
+            return "request-123"
+
+    class _FakeSession:
+        def execute(self, _query):
+            return _FakeResult()
+
+    class _FakeHandle:
+        async def execute_update(self, update_method, payload):
+            captured["update_method"] = update_method
+            captured["payload"] = payload
+
+    class _FakeClient:
+        def get_workflow_handle_for(self, workflow_defn, workflow_id):
+            captured["workflow_defn"] = workflow_defn
+            captured["workflow_id"] = workflow_id
+            return _FakeHandle()
+
+    async def _connect(_settings):
+        return _FakeClient()
+
+    workflow_defn = SimpleNamespace(record_run_result="record-result-update")
+    config = TemporalWorkflowConfig(
+        workflow_defn=workflow_defn,
+        execution_mode="run",
+        task_queue="custom-queue",
+        workflow_execution_timeout_seconds=111,
+        workflow_run_timeout_seconds=222,
+        activity_start_to_close_timeout_seconds=333,
+        human_input_resume_timeout_seconds=444,
+        retry_max_attempts=4,
+        retry_initial_interval_seconds=5,
+        retry_max_interval_seconds=30,
+        retry_backoff_coefficient=2.0,
+    )
+
+    monkeypatch.setattr("orchestrator.temporal.workflow_engine.connect_temporal_client", _connect)
+    monkeypatch.setattr(
+        "orchestrator.temporal.workflow_engine._temporal_config_for_workflow",
+        lambda **_kwargs: config,
+    )
+
+    notify_temporal_run_result(
+        session=_FakeSession(),  # type: ignore[arg-type]
+        settings=SimpleNamespace(),
+        workflow=SimpleNamespace(workflow_id="workflow-123"),
+        run=SimpleNamespace(
+            run_id="run-123",
+            status="waiting_for_input",
+            issue_key="MAB-215",
+            claim_id="claim-123",
+            last_error=None,
+        ),
+    )
+
+    payload = captured["payload"]
+    assert isinstance(payload, DevelopmentTeamRunActivityResult)
+    assert captured["workflow_id"] == "workflow:workflow-123"
+    assert captured["update_method"] == "record-result-update"
+    assert payload.pending_request_id == "request-123"
 
 
 def test_temporal_engine_advances_handler_backed_workflow_through_temporal_update(monkeypatch):

@@ -4,6 +4,7 @@ import logging
 from collections.abc import Callable
 from types import SimpleNamespace
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 from sqlalchemy.orm import sessionmaker
 
@@ -18,6 +19,7 @@ from orchestrator.core.workflow.execution_projection import WorkflowExecutionPro
 from orchestrator.core.workflow.step_runner import (
     complete_workflow_step_attempt,
     fail_workflow_step_attempt,
+    retry_workflow_step_attempt,
     start_workflow_step_attempt,
     wait_workflow_step_attempt,
 )
@@ -68,7 +70,7 @@ from orchestrator.core.worker.workflow_request_service import (
 )
 from orchestrator.core.workflow.runner import WorkflowRequest, WorkflowRunner
 from orchestrator.api.admin.route_helpers import ensure_project_repository_checkout
-from orchestrator.storage.models import Project, Run, Tenant, WorkflowExecution
+from orchestrator.storage.models import Project, Run, RunHumanInputRequest, Tenant, WorkflowExecution
 from orchestrator.tools.project_repo_checkout import check_run_snapshot_freshness
 from orchestrator.tools.project_repo_checkout import cleanup_run_workspaces
 from orchestrator.tools.github_app import github_client_from_tenant_config
@@ -83,6 +85,7 @@ RUN_STATUS_SUCCEEDED = "succeeded"
 RUN_STATUS_FAILED = "failed"
 RUN_STATUS_BLOCKED = "blocked"
 RUN_STATUS_CANCELLED = "cancelled"
+ACTIVE_RUN_STATUSES = {RUN_STATUS_QUEUED, RUN_STATUS_DISPATCHING, RUN_STATUS_RUNNING}
 TransportActionSender = Callable[..., object]
 
 
@@ -155,13 +158,32 @@ def process_next_webhook_job_with_dependencies(
         )
 
 
-def _run_result_payload(*, workflow: WorkflowExecution, run: Run, claim_id: str | None) -> dict[str, object]:
+def _pending_request_id(*, session: Session, workflow_id: str) -> str | None:
+    request_id = session.execute(
+        select(RunHumanInputRequest.request_id)
+        .where(
+            RunHumanInputRequest.workflow_id == workflow_id,
+            RunHumanInputRequest.status == "pending",
+        )
+        .order_by(RunHumanInputRequest.created_at.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+    return str(request_id or "").strip() or None
+
+
+def _run_result_payload(*, session: Session, workflow: WorkflowExecution, run: Run, claim_id: str | None) -> dict[str, object]:
+    normalized_status = str(run.status or "").strip().lower()
     return {
         "workflow_id": workflow.workflow_id,
         "run_id": run.run_id,
         "status": str(run.status),
         "issue_key": str(run.issue_key),
         "claim_id": str(claim_id or "").strip() or None,
+        "pending_request_id": (
+            _pending_request_id(session=session, workflow_id=workflow.workflow_id)
+            if normalized_status == RUN_STATUS_WAITING_FOR_INPUT
+            else None
+        ),
         "last_error": str(getattr(run, "last_error", "") or "").strip() or None,
     }
 
@@ -174,6 +196,14 @@ def _finish_workflow_step_for_run(
 ) -> None:  # noqa: ANN001
     result_status = str(run.status or "").strip().lower()
     summary = f"Run attempt {run.run_id} finished with status {result_status}"
+    if result_status in ACTIVE_RUN_STATUSES:
+        retry_workflow_step_attempt(
+            lifecycle=lifecycle,
+            step=step,
+            category=f"run_attempt_{result_status}",
+            message=summary,
+        )
+        return
     if result_status == RUN_STATUS_SUCCEEDED:
         complete_workflow_step_attempt(lifecycle=lifecycle, step=step, summary=summary)
         return
@@ -249,7 +279,12 @@ def _process_claimed_run_impl_with_temporal_projection(
         )
         if processed is None:
             raise RuntimeError(f"Execution worker returned no run for workflow_id={workflow.workflow_id}")
-        return _run_result_payload(workflow=workflow, run=processed, claim_id=expected_claim_id)
+        return _run_result_payload(
+            session=session,
+            workflow=workflow,
+            run=processed,
+            claim_id=expected_claim_id,
+        )
 
     try:
         result_payload = run_work_unit(
@@ -273,7 +308,6 @@ def _process_claimed_run_impl_with_temporal_projection(
         processed_run = session.get(Run, str(result_payload["run_id"]))
         if processed_run is None:
             raise RuntimeError(f"Execution worker result referenced missing run {result_payload['run_id']}")
-        _finish_workflow_step_for_run(lifecycle=lifecycle, step=step, run=processed_run)
         from orchestrator.temporal.workflow_engine import notify_temporal_run_result
 
         notify_temporal_run_result(
@@ -282,6 +316,7 @@ def _process_claimed_run_impl_with_temporal_projection(
             workflow=workflow,
             run=processed_run,
         )
+        _finish_workflow_step_for_run(lifecycle=lifecycle, step=step, run=processed_run)
         return processed_run
     except Exception as exc:  # noqa: BLE001
         logger.exception("execution_worker_temporal_run_failed workflow_id=%s run_id=%s", workflow.workflow_id, claimed_run.run_id)

@@ -262,6 +262,25 @@ class WorkflowExecutionProjection:
         mark_workflow_failed(workflow=self.workflow, message=message, now=_now())
         self.session.commit()
 
+    def retry_started_operation(
+        self,
+        *,
+        operation: WorkflowOperation,
+        attempt: WorkflowOperationAttempt,
+        category: str,
+        message: str,
+    ) -> None:
+        fail_workflow_operation(
+            self.session,
+            operation=operation,
+            attempt=attempt,
+            category=category,
+            message=message,
+            next_retry_at=_now(),
+        )
+        mark_workflow_running(workflow=self.workflow, now=_now())
+        self.session.commit()
+
     def wait_started_operation(
         self,
         *,
