@@ -220,17 +220,11 @@ class OrchestratedRunRunnerTests(unittest.TestCase):
         self.assertEqual(checkpoints[2].test_result.outcome, "continue")
         self.assertEqual(checkpoints[3].review_result.outcome, "continue")
 
-    def test_review_approved_without_pr_loops_back_when_pr_creation_required(self) -> None:
+    def test_review_approved_without_pr_publishes_with_governed_github_tools_when_pr_creation_required(self) -> None:
         stage_agents = _StubStageAgents(
             plan=PmPlan(plan_steps=["plan"], acceptance_criteria=["ac1"], risks=[]),
-            dev_results=[
-                DevResult(change_summary=["implemented attempt 1"], pr_url=None),
-                DevResult(change_summary=["implemented attempt 2"], pr_url="https://example/pull/2"),
-            ],
-            test_results=[
-                TestResult(guidance=["pytest -q"]),
-                TestResult(guidance=["pytest -q"]),
-            ],
+            dev_results=[DevResult(change_summary=["implemented attempt 1"], pr_url=None)],
+            test_results=[TestResult(guidance=["pytest -q"])],
             review_results=[
                 ReviewResult(
                     outcome="continue",
@@ -238,26 +232,47 @@ class OrchestratedRunRunnerTests(unittest.TestCase):
                     feedback=None,
                     pr_url=None,
                 ),
-                ReviewResult(
-                    outcome="continue",
-                    summary=["Looks good"],
-                    feedback=None,
-                    pr_url="https://example/pull/2",
-                ),
             ],
         )
+        tool_calls: list[tuple[str, str, dict[str, object]]] = []
 
-        result = self._executor(stage_agents).execute(replace(self._request(), allow_pr_creation=True))
+        def _execute_tool(
+            _tenant_id,  # noqa: ANN001
+            _project_id,  # noqa: ANN001
+            _run_id,  # noqa: ANN001
+            _issue_key,  # noqa: ANN001
+            stage,  # noqa: ANN001
+            tool_name,  # noqa: ANN001
+            tool_args,  # noqa: ANN001
+            _worker_platform,  # noqa: ANN001
+        ):
+            tool_calls.append((stage, tool_name, dict(tool_args)))
+            if tool_name == "github.push_branch":
+                return {"branch_name": "feature/MAB-100", "commit_sha": "abc123"}
+            if tool_name == "github.open_pr":
+                return {"pr_number": 2, "pr_url": "https://example/pull/2"}
+            raise AssertionError(f"unexpected tool {tool_name}")
+
+        result = self._executor(stage_agents, execute_tool=_execute_tool).execute(
+            replace(self._request(), allow_pr_creation=True)
+        )
 
         self.assertEqual(result.outcome, "success")
-        self.assertEqual(result.attempts, 2)
+        self.assertEqual(result.attempts, 1)
         self.assertEqual(
             stage_agents.dev_feedback,
-            [None, "Review approved the changes, but no PR was created even though allow_pr_creation is enabled."],
+            [None],
         )
         self.assertEqual(result.pr_url, "https://example/pull/2")
+        self.assertEqual(
+            [(stage, tool_name) for stage, tool_name, _tool_args in tool_calls],
+            [("review", "github.push_branch"), ("review", "github.open_pr")],
+        )
+        self.assertEqual(tool_calls[0][2]["branch_name"], "feature/MAB-100")
+        self.assertEqual(tool_calls[1][2]["head_branch"], "feature/MAB-100")
+        self.assertEqual(tool_calls[1][2]["base_branch"], "main")
 
-    def test_review_approved_without_pr_fails_when_pr_creation_required_and_loops_exhausted(self) -> None:
+    def test_review_approved_without_pr_blocks_when_pr_creation_required_and_tool_executor_missing(self) -> None:
         stage_agents = _StubStageAgents(
             plan=PmPlan(plan_steps=["plan"], acceptance_criteria=["ac1"], risks=[]),
             dev_results=[DevResult(change_summary=["implemented"], pr_url=None)],
@@ -276,10 +291,10 @@ class OrchestratedRunRunnerTests(unittest.TestCase):
             replace(self._request(), allow_pr_creation=True, max_dev_test_review_loops=1)
         )
 
-        self.assertEqual(result.outcome, "failed")
         self.assertIsNotNone(result.diagnostics)
         self.assertEqual(result.diagnostics.stage, "review")
-        self.assertIn("no PR was created", result.diagnostics.message)
+        self.assertEqual(result.outcome, "blocked")
+        self.assertIn("no governed GitHub tool executor", result.diagnostics.message)
 
     def test_test_failure_retries_and_emits_feedback_hook(self) -> None:
         stage_agents = _StubStageAgents(
@@ -646,6 +661,70 @@ class OrchestratedRunRunnerTests(unittest.TestCase):
         self.assertEqual(stage_agents.dev_calls, 0)
         self.assertEqual(stage_agents.test_calls, 0)
         self.assertEqual(stage_agents.review_calls, 1)
+
+    def test_review_resume_without_pr_publishes_with_governed_github_tools_when_pr_creation_required(self) -> None:
+        stage_agents = _StubStageAgents(
+            plan=PmPlan(plan_steps=["unused"], acceptance_criteria=["unused"], risks=[]),
+            dev_results=[],
+            test_results=[],
+            review_results=[
+                ReviewResult(
+                    outcome="continue",
+                    summary=["Looks good after clarification"],
+                    feedback=None,
+                    pr_url=None,
+                )
+            ],
+        )
+        tool_calls: list[tuple[str, str, dict[str, object]]] = []
+
+        def _execute_tool(
+            _tenant_id,  # noqa: ANN001
+            _project_id,  # noqa: ANN001
+            _run_id,  # noqa: ANN001
+            _issue_key,  # noqa: ANN001
+            stage,  # noqa: ANN001
+            tool_name,  # noqa: ANN001
+            tool_args,  # noqa: ANN001
+            _worker_platform,  # noqa: ANN001
+        ):
+            tool_calls.append((stage, tool_name, dict(tool_args)))
+            if tool_name == "github.push_branch":
+                return {"branch_name": "feature/MAB-100", "commit_sha": "abc123"}
+            if tool_name == "github.open_pr":
+                return {"pr_number": 10, "pr_url": "https://example/pull/10"}
+            raise AssertionError(f"unexpected tool {tool_name}")
+
+        result = self._executor(stage_agents, execute_tool=_execute_tool).execute(
+            replace(
+                self._request(),
+                allow_pr_creation=True,
+                entry_mode="resume",
+                entry_stage="review",
+                checkpoint_kind="execution",
+                checkpoint_session_id="dev-session-123",
+                checkpoint_payload=self._resume_payload(
+                    plan=PmPlan(plan_steps=["plan"], acceptance_criteria=["ac1"], risks=[]),
+                    dev_result=DevResult(
+                        outcome="continue",
+                        change_summary=["Implemented onboarding flow"],
+                        pr_url=None,
+                    ),
+                    test_result=TestResult(
+                        outcome="continue",
+                        guidance=["pytest -q"],
+                        feedback=None,
+                    ),
+                ),
+            ),
+        )
+
+        self.assertEqual(result.outcome, "success")
+        self.assertEqual(result.pr_url, "https://example/pull/10")
+        self.assertEqual(
+            [(stage, tool_name) for stage, tool_name, _tool_args in tool_calls],
+            [("review", "github.push_branch"), ("review", "github.open_pr")],
+        )
 
     def test_resume_from_test_uses_persisted_dev_result_and_restarts_at_test(self) -> None:
         stage_agents = _StubStageAgents(

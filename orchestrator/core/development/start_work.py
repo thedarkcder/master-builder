@@ -23,6 +23,18 @@ from orchestrator.tools.atlassian_oauth import JiraIssueDetail
 DEVELOPMENT_START_OPERATION = "development_start"
 _ACTIONABLE_STATUSES = {"to do", "ready for agent"}
 _BLOCKING_LABELS = {"sync-blocked", "sync-stale"}
+_RUN_STATUSES_BLOCKING_START = {
+    "queued",
+    "dispatching",
+    "running",
+    "processing",
+    "retrying",
+    "review",
+    "in_review",
+    "waiting_for_input",
+    "blocked",
+    "succeeded",
+}
 
 
 class StartWorkIssueGateway(Protocol):
@@ -348,23 +360,15 @@ class StartWorkUseCase:
         )
 
     def _existing_run_for_issue(self, *, tenant: Tenant, issue: JiraIssueDetail) -> Run | None:
-        workflow = self._session.execute(
-            select(WorkflowExecution)
-            .where(
-                WorkflowExecution.tenant_id == tenant.tenant_id,
-                WorkflowExecution.source_system == "jira",
-                WorkflowExecution.source_ref == _normalized_key(issue.key),
-                WorkflowExecution.dedupe_scope == "issue_execution",
-            )
-            .order_by(desc(WorkflowExecution.created_at))
-            .limit(1)
-        ).scalar_one_or_none()
-        if workflow is None:
-            return None
         return self._session.execute(
             select(Run)
-            .where(Run.workflow_id == workflow.workflow_id)
-            .order_by(desc(Run.attempt_number))
+            .where(
+                Run.tenant_id == tenant.tenant_id,
+                Run.issue_key == _normalized_key(issue.key),
+                Run.dedupe_scope == "issue_execution",
+                Run.status.in_(_RUN_STATUSES_BLOCKING_START),
+            )
+            .order_by(desc(Run.created_at))
             .limit(1)
         ).scalar_one_or_none()
 

@@ -325,6 +325,96 @@ class StartWorkUseCaseTests(unittest.TestCase):
         self.assertEqual(second.skipped[0].reason, "already_started")
         self.assertEqual(len(attempts), 1)
 
+    def test_failed_existing_run_does_not_block_restart(self) -> None:
+        gateway = _FakeIssueGateway(
+            parent=JiraIssueDetail(
+                key="MAB-243",
+                summary="Identity redesign",
+                status="To Do",
+                description="Parent brief",
+                issue_type="Epic",
+                labels=["pm-parent"],
+            ),
+            children=[
+                JiraIssueDetail(
+                    key="MAB-244",
+                    summary="Implement local auth binding",
+                    status="To Do",
+                    description="Story brief",
+                    issue_type="Task",
+                    labels=["engineering-child"],
+                ),
+            ],
+        )
+        with self.session_factory() as session:
+            now = _now()
+            session.add(
+                WorkflowExecution(
+                    workflow_id="issue-execution-mab-244-failed",
+                    execution_id="exec-mab-244-failed",
+                    workflow_type_key="issue_execution",
+                    tenant_id="route25",
+                    project_id="route25-default",
+                    source_system="jira",
+                    source_ref="MAB-244",
+                    display_name="Failed child run",
+                    source_description="Previous failed run",
+                    repo_url="org/repo",
+                    branch="feature/MAB-244",
+                    pr_url=None,
+                    orchestration_backend="temporal",
+                    dedupe_scope="issue_execution",
+                    status="failed",
+                    last_error="Previous failure",
+                    active_run_id="run-mab-244-failed",
+                    latest_checkpoint_id=None,
+                    source_workflow_id=None,
+                    source_run_id=None,
+                    created_at=now,
+                    started_at=now,
+                    finished_at=now,
+                    updated_at=now,
+                )
+            )
+            session.add(
+                Run(
+                    run_id="run-mab-244-failed",
+                    tenant_id="route25",
+                    project_id="route25-default",
+                    issue_key="MAB-244",
+                    issue_summary="Failed child run",
+                    repo_url="org/repo",
+                    branch="feature/MAB-244",
+                    pr_url=None,
+                    status="failed",
+                    last_error="Previous failure",
+                    created_at=now,
+                    started_at=now,
+                    finished_at=now,
+                    dedupe_scope="issue_execution",
+                    workflow_id="issue-execution-mab-244-failed",
+                    attempt_number=1,
+                    entry_mode="dev",
+                    entry_stage="dev",
+                    required_runtime_kinds_json=[],
+                )
+            )
+            session.commit()
+
+            result = StartWorkUseCase(session=session, issue_gateway=gateway).start(
+                tenant=session.get(Tenant, "route25"),
+                project=session.get(Project, "route25-default"),
+                issue_key="MAB-243",
+                target_status="To Do",
+                actor="admin",
+                reason="operator_start",
+                source_workflow_id="parent_planning:MAB-243",
+            )
+            runs = session.execute(select(Run).where(Run.issue_key == "MAB-244").order_by(Run.created_at)).scalars().all()
+
+        self.assertEqual([item.issue_key for item in result.queued], ["MAB-244"])
+        self.assertEqual([run.status for run in runs], ["failed", "queued"])
+
     def test_start_story_without_engineering_children_queues_the_story(self) -> None:
         gateway = _FakeIssueGateway(
             parent=JiraIssueDetail(
@@ -433,7 +523,9 @@ class StartWorkUseCaseTests(unittest.TestCase):
             access_token = "token"
             cloud_id = "cloud"
             site_url = "https://example.atlassian.net"
-            client = SimpleNamespace()
+
+            def __init__(self) -> None:
+                self.client = self
 
             def list_child_issue_previews(self, *, project_key: str, parent_issue_key: str):  # noqa: ANN001
                 if parent_issue_key == "MAB-243":
@@ -481,6 +573,90 @@ class StartWorkUseCaseTests(unittest.TestCase):
                 )
             )
             session.commit()
+            result = start_work_item_from_board(
+                session=session,
+                work_item_id=child_work_item_id(execution_id="exec-parent", issue_key="MAB-244"),
+                principal=AuthenticatedPrincipal(principal_type="platform_super_admin", username="admin"),
+                integration_router=fake_router,
+            )
+            runs = session.execute(select(Run)).scalars().all()
+
+        self.assertEqual(result.action, "engineering")
+        self.assertEqual([run.issue_key for run in runs], ["MAB-244"])
+        self.assertEqual([item.issue_key for item in result.queued], ["MAB-244"])
+
+    def test_start_work_item_from_board_allows_projected_child_before_parent_completion(self) -> None:
+        child = JiraIssueDetail(
+            key="MAB-244",
+            summary="Implement local auth binding",
+            status="Testing",
+            description="Story brief",
+            issue_type="Task",
+            labels=["engineering-child"],
+        )
+
+        class _FakeJiraAdapter:
+            access_token = "token"
+            cloud_id = "cloud"
+            site_url = "https://example.atlassian.net"
+
+            def __init__(self) -> None:
+                self.client = self
+
+            def list_child_issue_previews(self, *, project_key: str, parent_issue_key: str):  # noqa: ANN001
+                if parent_issue_key == "MAB-243":
+                    return [SimpleNamespace(key="MAB-244")]
+                return []
+
+            def get_issue_detail(self, *, issue_id_or_key: str):  # noqa: ANN001
+                if issue_id_or_key == "MAB-244":
+                    return child
+                if issue_id_or_key == "MAB-243":
+                    return JiraIssueDetail(
+                        key="MAB-243",
+                        summary="Identity redesign",
+                        status="In Progress",
+                        description="Parent brief",
+                        issue_type="Epic",
+                        labels=["pm-parent"],
+                    )
+                raise AssertionError(f"unexpected issue lookup: {issue_id_or_key}")
+
+            def transition_issue(self, **kwargs):  # noqa: ANN001
+                assert kwargs["issue_id_or_key"] == "MAB-244"
+                assert kwargs["target_status"] == "To Do"
+
+        fake_router = SimpleNamespace(jira=lambda **_kwargs: _FakeJiraAdapter())
+
+        with self.session_factory() as session:
+            now = _now()
+            parent_workflow = session.get(WorkflowExecution, "parent_planning:MAB-243")
+            parent_workflow.status = "waiting_for_input"
+            parent_workflow.finished_at = None
+            session.add(
+                WorkflowExecutableWorkItem(
+                    work_item_id=child_work_item_id(execution_id="exec-parent", issue_key="MAB-244"),
+                    item_kind="child",
+                    tenant_id="route25",
+                    project_id="route25-default",
+                    parent_workflow_id="parent_planning:MAB-243",
+                    parent_execution_id="exec-parent",
+                    issue_key="MAB-244",
+                    parent_issue_key="MAB-243",
+                    issue_summary="Implement local auth binding",
+                    issue_status="Testing",
+                    issue_type="Task",
+                    mb_work_state="not_planning",
+                    source_system="jira",
+                    source_external_id="10002",
+                    source_payload_json={},
+                    created_at=now,
+                    updated_at=now,
+                    last_seen_at=now,
+                )
+            )
+            session.commit()
+
             result = start_work_item_from_board(
                 session=session,
                 work_item_id=child_work_item_id(execution_id="exec-parent", issue_key="MAB-244"),

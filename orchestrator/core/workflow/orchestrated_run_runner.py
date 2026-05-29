@@ -348,7 +348,17 @@ class OrchestratedRunWorkflowExecutor:
             state.review_feedback = review_result.feedback
             review_message = _summarize_review_result(review_result)
             if review_result.outcome == "continue":
-                pr_url = review_result.pr_url or resumed_dev_result.pr_url
+                pr_url, publication_failure = self._ensure_required_pull_request(
+                    request=request,
+                    state=state,
+                    plan=plan,
+                    dev_result=resumed_dev_result,
+                    test_result=resumed_test_result,
+                    review_result=review_result,
+                    attempt=1,
+                )
+                if publication_failure is not None:
+                    return publication_failure
                 checkpoint_failure = _persist_stage_checkpoint(
                     WorkflowStageCheckpoint(stage="review", attempt=1, status="completed", summary=review_message, review_result=review_result)
                 )
@@ -651,27 +661,22 @@ class OrchestratedRunWorkflowExecutor:
             state.review_feedback = review_result.feedback
             review_message = _summarize_review_result(review_result)
             if review_result.outcome == "continue":
+                pr_url, publication_failure = self._ensure_required_pull_request(
+                    request=request,
+                    state=state,
+                    plan=plan,
+                    dev_result=dev_result,
+                    test_result=test_result,
+                    review_result=review_result,
+                    attempt=attempt,
+                )
+                if publication_failure is not None:
+                    return publication_failure
                 checkpoint_failure = _persist_stage_checkpoint(
                     WorkflowStageCheckpoint(stage="review", attempt=attempt, status="completed", summary=review_message, review_result=review_result)
                 )
                 if checkpoint_failure is not None:
                     return checkpoint_failure
-                pr_url = review_result.pr_url or dev_result.pr_url
-                if request.allow_pr_creation and not pr_url:
-                    review_message = "Review approved the changes, but no PR was created even though allow_pr_creation is enabled."
-                    history.append({"stage": "review", "attempt": str(attempt), "event": review_message})
-                    stage_trace.append(_stage_trace_entry(stage="review", status="failed", attempt=attempt, summary=review_message))
-                    if attempt >= max_loops:
-                        return self._failure_result(
-                            request=request,
-                            state=state,
-                            stage="review",
-                            attempts=attempt,
-                            message=review_message,
-                            outcome="failed",
-                        )
-                    next_feedback = review_message
-                    continue
                 stage_trace.append(_stage_trace_entry(stage="review", status="completed", attempt=attempt, summary=review_message))
                 return WorkflowResult(
                     outcome="success",
@@ -736,6 +741,98 @@ class OrchestratedRunWorkflowExecutor:
             message="Workflow ended without approval.",
             outcome="failed",
         )
+
+    def _ensure_required_pull_request(
+        self,
+        *,
+        request: WorkflowRequest,
+        state: _ExecutionState,
+        plan: PmPlan,
+        dev_result: DevResult,
+        test_result: TestResult,
+        review_result: ReviewResult,
+        attempt: int,
+    ) -> tuple[str | None, WorkflowResult | None]:
+        pr_url = review_result.pr_url or dev_result.pr_url
+        if pr_url or not request.allow_pr_creation:
+            return pr_url, None
+
+        if self._execute_tool is None:
+            message = "PR creation is required, but the workflow runner has no governed GitHub tool executor configured."
+            state.history.append({"stage": "review", "attempt": str(attempt), "event": message})
+            state.stage_trace.append(_stage_trace_entry(stage="review", status="blocked", attempt=attempt, summary=message))
+            return None, self._failure_result(
+                request=request,
+                state=state,
+                stage="review",
+                attempts=attempt,
+                message=message,
+                outcome="blocked",
+            )
+
+        try:
+            push_result = self._execute_tool(
+                request.tenant_id,
+                request.project_id,
+                request.run_id,
+                request.issue_key,
+                "review",
+                "github.push_branch",
+                {"branch_name": request.integration_branch or request.execution_branch or ""},
+                request.current_worker_capability.value,
+            )
+            head_branch = str(
+                push_result.get("branch_name") or request.integration_branch or request.execution_branch or ""
+            ).strip()
+            pr_result = self._execute_tool(
+                request.tenant_id,
+                request.project_id,
+                request.run_id,
+                request.issue_key,
+                "review",
+                "github.open_pr",
+                {
+                    "title": _required_pr_title(request),
+                    "head_branch": head_branch,
+                    "base_branch": request.pr_target_branch or request.base_branch or "main",
+                    "body": _required_pr_body(
+                        request=request,
+                        plan=plan,
+                        dev_result=dev_result,
+                        test_result=test_result,
+                        review_result=review_result,
+                    ),
+                },
+                request.current_worker_capability.value,
+            )
+        except Exception as exc:  # noqa: BLE001
+            message = f"Mandatory PR publication failed through governed GitHub tools: {type(exc).__name__}: {exc}"
+            state.history.append({"stage": "review", "attempt": str(attempt), "event": message})
+            state.stage_trace.append(_stage_trace_entry(stage="review", status="blocked", attempt=attempt, summary=message))
+            return None, self._failure_result(
+                request=request,
+                state=state,
+                stage="review",
+                attempts=attempt,
+                message=message,
+                outcome="blocked",
+            )
+
+        pr_url = str(pr_result.get("pr_url") or "").strip()
+        if not pr_url:
+            message = "Mandatory PR publication completed without a pr_url from github.open_pr."
+            state.history.append({"stage": "review", "attempt": str(attempt), "event": message})
+            state.stage_trace.append(_stage_trace_entry(stage="review", status="blocked", attempt=attempt, summary=message))
+            return None, self._failure_result(
+                request=request,
+                state=state,
+                stage="review",
+                attempts=attempt,
+                message=message,
+                outcome="blocked",
+            )
+
+        return pr_url, None
 
     def _failure_result(
         self,
@@ -893,6 +990,44 @@ def _summarize_review_result(result: ReviewResult) -> str:
     if result.outcome == "continue":
         return "Review approved the workflow."
     return "Review requested changes."
+
+
+def _required_pr_title(request: WorkflowRequest) -> str:
+    issue_key = str(request.issue_key or "").strip()
+    summary = str(request.issue_summary or "").strip()
+    if issue_key and summary:
+        return f"{issue_key}: {summary}"
+    return issue_key or summary or "Automated implementation"
+
+
+def _required_pr_body(
+    *,
+    request: WorkflowRequest,
+    plan: PmPlan,
+    dev_result: DevResult,
+    test_result: TestResult,
+    review_result: ReviewResult,
+) -> str:
+    lines = [
+        "## Summary",
+        f"- Issue: {request.issue_key}",
+    ]
+    for item in dev_result.change_summary[:3]:
+        lines.append(f"- {item}")
+    if review_result.summary:
+        lines.append("")
+        lines.append("## Review")
+        for item in review_result.summary[:3]:
+            lines.append(f"- {item}")
+    lines.append("")
+    lines.append("## Acceptance Criteria")
+    for item in plan.acceptance_criteria[:5]:
+        lines.append(f"- {item}")
+    lines.append("")
+    lines.append("## How To Test")
+    for item in test_result.guidance[:5]:
+        lines.append(f"- {item}")
+    return "\n".join(lines).strip()
 
 
 def _workflow_outcome_for_stage_outcome(outcome: StageOutcome) -> WorkflowOutcome:

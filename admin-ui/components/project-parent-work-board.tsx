@@ -366,11 +366,7 @@ export function ProjectParentWorkBoard({
     }
   }
 
-  const parentWorkflows = useMemo(
-    () => allWorkflows.filter(isParentPlanningWorkflow),
-    [allWorkflows],
-  );
-  const cards = useMemo(() => parentWorkflows.map(buildParentWorkCard), [parentWorkflows]);
+  const cards = useMemo(() => allWorkflows.map(buildParentWorkCard), [allWorkflows]);
   const startablePlanningCards = useMemo(
     () => cards.filter((card) => canStartPlanning(card.workflow) && card.workflow.startable),
     [cards],
@@ -563,7 +559,7 @@ function BoardColumn({
           </>
         ) : cards.length === 0 ? (
           <p className="rounded-xl border border-dashed bg-background/60 px-3 py-8 text-center text-xs text-muted-foreground">
-            No parent work here.
+            No work here.
           </p>
         ) : (
           cards.map((card) => (
@@ -768,7 +764,7 @@ function ParentWorkDetailsDrawer({
               </div>
             ) : (
               <p className="mt-3 rounded-xl border border-dashed px-4 py-5 text-sm text-muted-foreground">
-                No child tickets were found for this parent item in the latest Jira sync.
+                No child tickets are linked to this item in the latest Jira sync.
               </p>
             )}
           </section>
