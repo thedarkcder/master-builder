@@ -468,15 +468,15 @@ services:
       - huggingface-cache:/root/.cache/huggingface
       - pocket-tts-cache:/root/.cache/pocket_tts
 
-  temporal-worker:
+  temporal-orchestrator:
     <<: *extra_hosts_host_gateway
     build:
       context: .
       dockerfile: orchestrator/Dockerfile
-      target: android-runtime
+      target: app-runtime-base
       args:
         CODEX_NPM_VERSION: ${CODEX_NPM_VERSION:-latest}
-    container_name: master-builder-temporal-worker
+    container_name: master-builder-temporal-orchestrator
     restart: unless-stopped
     depends_on:
       migrate:
@@ -512,7 +512,7 @@ services:
       - -ceu
       - |
         if [ -f /app/AGENTS.md ]; then cp /app/AGENTS.md /root/AGENTS.md; fi
-        python -m orchestrator temporal-worker
+        python -m orchestrator temporal-orchestrator
     volumes:
       - codex-home:/root/.codex
       - ./.workdirs:/tmp/master-builder-project-repos

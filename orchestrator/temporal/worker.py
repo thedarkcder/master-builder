@@ -31,9 +31,9 @@ async def run_temporal_worker() -> None:
         settings.log_level,
         environment=settings.sentry_environment,
         platform_version=settings.sentry_release or "dev-local",
-        default_agent_id="temporal-worker",
+        default_agent_id="temporal-orchestrator",
     )
-    initialize_telemetry(settings=settings, service_name="temporal-worker")
+    initialize_telemetry(settings=settings, service_name="temporal-orchestrator")
     client = await connect_temporal_client(settings)
     worker = Worker(
         client,

@@ -9,7 +9,7 @@ LONG_RUNNING_SERVICES = (
     "webhook-worker",
     "project-automation",
     "discord-gateway",
-    "temporal-worker",
+    "temporal-orchestrator",
     "discord-live-voice",
     "knowledge-sync",
 )

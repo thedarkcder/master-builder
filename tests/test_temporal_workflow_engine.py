@@ -111,23 +111,14 @@ def test_temporal_engine_uses_workflow_type_timeouts(monkeypatch):
     assert captured["kwargs"]["run_timeout"] == timedelta(seconds=222)
 
 
-def test_development_team_run_workflow_uses_configured_activity_timeouts(monkeypatch):
-    initial_captured: dict[str, object] = {}
+def test_development_team_run_workflow_waits_for_execution_worker_result_and_uses_resume_timeout(monkeypatch):
     resume_captured: dict[str, object] = {}
     workflow_defn = DevelopmentTeamRunWorkflow()
+    wait_calls = 0
 
     async def _fake_execute_activity(fn, payload, *, start_to_close_timeout):
         target_name = getattr(fn, "__name__", "")
-        if target_name == "execute_claimed_run_activity":
-            initial_captured["payload"] = payload
-            initial_captured["timeout"] = start_to_close_timeout
-            return DevelopmentTeamRunActivityResult(
-                workflow_id="workflow-123",
-                run_id="run-123",
-                status="waiting_for_input",
-                issue_key="MAB-215",
-                pending_request_id="request-123",
-            )
+        assert target_name == "resume_human_input_activity"
         resume_captured["payload"] = payload
         resume_captured["timeout"] = start_to_close_timeout
         return DevelopmentTeamRunActivityResult(
@@ -138,8 +129,28 @@ def test_development_team_run_workflow_uses_configured_activity_timeouts(monkeyp
         )
 
     async def _fake_wait_condition(predicate):
+        nonlocal wait_calls
+        wait_calls += 1
         assert predicate() is False
-        workflow_defn._status = "completed"
+        if wait_calls == 1:
+            workflow_defn._apply_result(
+                DevelopmentTeamRunActivityResult(
+                    workflow_id="workflow-123",
+                    run_id="run-123",
+                    status="waiting_for_input",
+                    issue_key="MAB-215",
+                    pending_request_id="request-123",
+                )
+            )
+            return
+        workflow_defn._apply_result(
+            DevelopmentTeamRunActivityResult(
+                workflow_id="workflow-123",
+                run_id="run-123",
+                status="succeeded",
+                issue_key="MAB-215",
+            )
+        )
 
     monkeypatch.setattr(
         "orchestrator.temporal.workflows.development_team_run.workflow.execute_activity",
@@ -153,52 +164,58 @@ def test_development_team_run_workflow_uses_configured_activity_timeouts(monkeyp
     payload = _workflow_input()
     state = asyncio.run(workflow_defn.run(payload))
 
-    assert state.status == "completed"
-    assert initial_captured["payload"] == payload
-    assert initial_captured["timeout"] == timedelta(seconds=321)
+    assert state.status == "succeeded"
+    assert wait_calls == 2
+    assert workflow_defn._activity_timeout_seconds == 321
 
-    resumed_run_id = asyncio.run(workflow_defn.resume_human_input(HumanInputResumeInput(request_id="request-123")))
-    assert resumed_run_id == "run-123"
-    assert "timeout" not in resume_captured
-
-
-def test_development_team_run_workflow_keeps_dispatching_intermediate_queued_results(monkeypatch):
-    captured: dict[str, object] = {"initial_calls": 0}
-    workflow_defn = DevelopmentTeamRunWorkflow()
-
-    async def _fake_execute_activity(fn, payload, *, start_to_close_timeout):
-        target_name = getattr(fn, "__name__", "")
-        assert target_name == "execute_claimed_run_activity"
-        captured["payload"] = payload
-        captured["timeout"] = start_to_close_timeout
-        captured["initial_calls"] = int(captured["initial_calls"]) + 1
-        if captured["initial_calls"] == 1:
-            return DevelopmentTeamRunActivityResult(
-                workflow_id="workflow-123",
-                run_id="run-123",
-                status="queued",
-                issue_key="MAB-215",
-                last_error="Repo setup retry required",
-            )
-        return DevelopmentTeamRunActivityResult(
+    workflow_defn._apply_result(
+        DevelopmentTeamRunActivityResult(
             workflow_id="workflow-123",
             run_id="run-123",
-            status="succeeded",
+            status="waiting_for_input",
             issue_key="MAB-215",
+            pending_request_id="request-123",
+        )
+    )
+    resumed_run_id = asyncio.run(workflow_defn.resume_human_input(HumanInputResumeInput(request_id="request-123")))
+    assert resumed_run_id == "run-456"
+    assert resume_captured["payload"] == HumanInputResumeInput(request_id="request-123")
+    assert resume_captured["timeout"] == timedelta(seconds=654)
+
+
+def test_development_team_run_workflow_records_execution_worker_result_update(monkeypatch):
+    workflow_defn = DevelopmentTeamRunWorkflow()
+
+    async def _fake_wait_condition(predicate):
+        assert predicate() is False
+        workflow_defn._apply_result(
+            DevelopmentTeamRunActivityResult(
+                workflow_id="workflow-123",
+                run_id="run-123",
+                status="succeeded",
+                issue_key="MAB-215",
+            )
         )
 
-    monkeypatch.setattr(
-        "orchestrator.temporal.workflows.development_team_run.workflow.execute_activity",
-        _fake_execute_activity,
-    )
+    monkeypatch.setattr("orchestrator.temporal.workflows.development_team_run.workflow.wait_condition", _fake_wait_condition)
 
     payload = _workflow_input()
     state = asyncio.run(workflow_defn.run(payload))
 
     assert state.status == "succeeded"
-    assert captured["initial_calls"] == 2
-    assert captured["payload"] == payload
-    assert captured["timeout"] == timedelta(seconds=321)
+    updated_run_id = asyncio.run(
+        workflow_defn.record_run_result(
+            DevelopmentTeamRunActivityResult(
+                workflow_id="workflow-123",
+                run_id="run-789",
+                status="failed",
+                issue_key="MAB-215",
+                last_error="failed after external execution",
+            )
+        )
+    )
+    assert updated_run_id == "run-789"
+    assert workflow_defn.describe_state().status == "failed"
 
 
 def test_temporal_engine_advances_handler_backed_workflow_through_temporal_update(monkeypatch):

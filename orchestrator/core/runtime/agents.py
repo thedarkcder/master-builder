@@ -39,18 +39,45 @@ from orchestrator.core.workflow.runner import (
 )
 
 
-def _stage_prompt_tool_context(*, tool_stage: str, runtime_command: str | None) -> dict[str, str]:
-    tooling = build_runtime_stage_tooling(policy_stage=tool_stage, runtime_command=runtime_command)
+def _stage_prompt_tool_context(
+    *,
+    tool_stage: str,
+    runtime_command: str | None,
+    worker_platform: str | None = None,
+) -> dict[str, str]:
+    tooling = build_runtime_stage_tooling(
+        policy_stage=tool_stage,
+        runtime_command=runtime_command,
+        worker_platform=worker_platform,
+    )
     return tooling.governed_native_prompt_context()
 
 
-def _stage_has_governed_tools(*, tool_stage: str, runtime_command: str | None) -> bool:
-    tooling = build_runtime_stage_tooling(policy_stage=tool_stage, runtime_command=runtime_command)
+def _stage_has_governed_tools(
+    *,
+    tool_stage: str,
+    runtime_command: str | None,
+    worker_platform: str | None = None,
+) -> bool:
+    tooling = build_runtime_stage_tooling(
+        policy_stage=tool_stage,
+        runtime_command=runtime_command,
+        worker_platform=worker_platform,
+    )
     return bool(tooling.governed_tools)
 
 
-def _discord_tool_bridge_suffix(*, tool_stage: str, runtime_command: str | None = None) -> str:
-    tooling = build_runtime_stage_tooling(policy_stage=tool_stage, runtime_command=runtime_command)
+def _discord_tool_bridge_suffix(
+    *,
+    tool_stage: str,
+    runtime_command: str | None = None,
+    worker_platform: str | None = None,
+) -> str:
+    tooling = build_runtime_stage_tooling(
+        policy_stage=tool_stage,
+        runtime_command=runtime_command,
+        worker_platform=worker_platform,
+    )
     if not tooling.governed_tools:
         return ""
     return "\n\n" + render_prompt(
@@ -106,6 +133,7 @@ def _invoke_discord_json_maybe_tools(
         bridged_user += _discord_tool_bridge_suffix(
             tool_stage=tool_stage,
             runtime_command=runtime_command,
+            worker_platform=context.worker_platform,
         )
     return stage_session.invoke_json(
         system_prompt=system_prompt,
@@ -212,8 +240,9 @@ class CodexWorkflowAgents:
             attempt=attempt,
             reasoning_effort=reasoning_effort,
             issue_description_chars=len(request.issue_description or ""),
-            codex_session_id=self._resume_session_id_for_stage(request=request, stage=stage),
-        )
+                codex_session_id=self._resume_session_id_for_stage(request=request, stage=stage),
+                worker_platform=request.current_worker_capability.value,
+            )
         stage_session = RuntimeStageSession.create(
             runtime=runtime,
             context=context,
@@ -303,7 +332,11 @@ class CodexWorkflowAgents:
                     [capability.value for capability in request.available_worker_capabilities]
                 ),
                 human_inputs_json=json.dumps(request.human_inputs),
-                **_stage_prompt_tool_context(tool_stage="pm", runtime_command=runtime_command),
+                **_stage_prompt_tool_context(
+                    tool_stage="pm",
+                    runtime_command=runtime_command,
+                    worker_platform=request.current_worker_capability.value,
+                ),
             ),
             runtime_override=runtime,
         )
@@ -384,7 +417,11 @@ class CodexWorkflowAgents:
                 unresolved_prerequisites_json=json.dumps(plan.unresolved_prerequisites),
                 pm_outcome=plan.outcome,
                 human_inputs_json=json.dumps(request.human_inputs),
-                **_stage_prompt_tool_context(tool_stage="dev", runtime_command=runtime_command),
+                **_stage_prompt_tool_context(
+                    tool_stage="dev",
+                    runtime_command=runtime_command,
+                    worker_platform=request.current_worker_capability.value,
+                ),
             ),
             runtime_override=runtime,
         )
@@ -438,7 +475,11 @@ class CodexWorkflowAgents:
                 unresolved_prerequisites_json=json.dumps(plan.unresolved_prerequisites),
                 dev_outcome=dev_result.outcome,
                 human_inputs_json=json.dumps(request.human_inputs),
-                **_stage_prompt_tool_context(tool_stage="test", runtime_command=runtime_command),
+                **_stage_prompt_tool_context(
+                    tool_stage="test",
+                    runtime_command=runtime_command,
+                    worker_platform=request.current_worker_capability.value,
+                ),
             ),
             runtime_override=runtime,
         )
@@ -500,7 +541,11 @@ class CodexWorkflowAgents:
                 human_inputs_json=json.dumps(request.human_inputs),
                 previous_review_summary_json=json.dumps(resume_source_state.get("review_summary") or []),
                 previous_review_feedback=str(resume_source_state.get("review_feedback") or "").strip() or "none",
-                **_stage_prompt_tool_context(tool_stage="review", runtime_command=runtime_command),
+                **_stage_prompt_tool_context(
+                    tool_stage="review",
+                    runtime_command=runtime_command,
+                    worker_platform=request.current_worker_capability.value,
+                ),
             ),
             runtime_override=runtime,
         )

@@ -475,3 +475,4 @@
 
 - Correction: runtime log sinks should remain async for performance, but async must be best-effort. Do not make workflow success depend on enqueue, background persistence, or final flush success.
 - 2026-05-27: Platform-owned GitHub network operations must use the installed GitHub App authentication path, not ambient git credentials. Agent-authored repository changes can use governed GitHub tools, but checkout/fetch/freshness code must inject the GitHub App installation token into every git command.
+- 2026-05-29: Do not make the Temporal service satisfy execution-worker toolchains. Temporal owns orchestration state only; Mac/Linux execution workers own repo setup, platform tools, and coding agents. Keep names explicit (`temporal-orchestrator` vs execution worker) and route tools by worker platform.

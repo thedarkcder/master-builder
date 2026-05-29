@@ -61,6 +61,7 @@ class AgentInvocationContext:
     reasoning_effort: str | None = None
     issue_description_chars: int | None = None
     codex_session_id: str | None = None
+    worker_platform: str | None = None
     db_session: Session | None = None
 
 
@@ -797,6 +798,7 @@ def invoke_runtime_json(
                 allowed_native_tools=allowed_native_tools,
                 stage=context.stage,
                 runtime_command=str(getattr(runtime, "command", "") or ""),
+                worker_platform=context.worker_platform,
             ),
             extra_on_log_line=extra_on_log_line,
             allowed_native_tools=allowed_native_tools,
@@ -847,6 +849,7 @@ def invoke_runtime_json_with_tools(
                     reasoning_effort=context.reasoning_effort,
                     issue_description_chars=context.issue_description_chars,
                     codex_session_id=resume_session_id,
+                    worker_platform=context.worker_platform,
                     db_session=context.db_session,
                 ),
                 system_prompt=system_prompt,
@@ -864,6 +867,7 @@ def invoke_runtime_json_with_tools(
                 allowed_native_tools=allowed_native_tools,
                 stage=context.stage,
                 runtime_command=str(getattr(runtime, "command", "") or ""),
+                worker_platform=context.worker_platform,
             )
             continue
         if observed_session_id:
@@ -1057,6 +1061,7 @@ def _invoke_runtime_json_once(
         allowed_native_tools=allowed_native_tools,
         stage=context.stage,
         runtime_command=runtime_command,
+        worker_platform=context.worker_platform,
     )
     if runtime_command.startswith("http:") and runtime_model:
         resolved_model_override = runtime_model
@@ -1234,12 +1239,14 @@ def _build_native_tool_policy_repair_prompt(
     allowed_native_tools: set[str] | None,
     stage: str,
     runtime_command: str,
+    worker_platform: str | None = None,
 ) -> str:
     resolved_allowed_native_tools = sorted(
         _resolve_allowed_native_tools(
             allowed_native_tools=allowed_native_tools,
             stage=stage,
             runtime_command=runtime_command,
+            worker_platform=worker_platform,
         )
     )
     return (
@@ -1352,12 +1359,17 @@ def _resolve_allowed_native_tools(
     allowed_native_tools: set[str] | None,
     stage: str,
     runtime_command: str,
+    worker_platform: str | None = None,
 ) -> set[str]:
     if allowed_native_tools is not None:
         return {str(tool).strip() for tool in allowed_native_tools if str(tool).strip()}
     from orchestrator.core.runtime.tools import native_model_tools_for_stage
 
-    return native_model_tools_for_stage(stage, runtime_command=runtime_command)
+    return native_model_tools_for_stage(
+        stage,
+        runtime_command=runtime_command,
+        worker_platform=worker_platform,
+    )
 
 
 def _native_tool_names_from_log_payload(payload: object) -> set[str]:

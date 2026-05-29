@@ -27,6 +27,7 @@ AgentToolExecutor = Callable[[str, dict[str, object]], dict[str, object]]
 class RuntimeStageTooling:
     policy_stage: str
     runtime_command: str | None
+    worker_platform: str | None
     governed_tools: frozenset[str]
     governed_catalog: tuple[dict[str, object], ...]
     native_catalog: tuple[dict[str, object], ...]
@@ -54,18 +55,36 @@ class RuntimeStageTooling:
         }
 
 
-def build_runtime_stage_tooling(*, policy_stage: str, runtime_command: str | None) -> RuntimeStageTooling:
+def build_runtime_stage_tooling(
+    *,
+    policy_stage: str,
+    runtime_command: str | None,
+    worker_platform: str | None = None,
+) -> RuntimeStageTooling:
     return RuntimeStageTooling(
         policy_stage=policy_stage,
         runtime_command=runtime_command,
+        worker_platform=worker_platform,
         governed_tools=frozenset(
-            governed_allowed_tools_for_stage(policy_stage, runtime_command=runtime_command)
+            governed_allowed_tools_for_stage(
+                policy_stage,
+                runtime_command=runtime_command,
+                worker_platform=worker_platform,
+            )
         ),
         governed_catalog=tuple(
-            governed_tool_catalog_for_stage(policy_stage, runtime_command=runtime_command)
+            governed_tool_catalog_for_stage(
+                policy_stage,
+                runtime_command=runtime_command,
+                worker_platform=worker_platform,
+            )
         ),
         native_catalog=tuple(
-            native_tool_catalog_for_stage(policy_stage, runtime_command=runtime_command)
+            native_tool_catalog_for_stage(
+                policy_stage,
+                runtime_command=runtime_command,
+                worker_platform=worker_platform,
+            )
         ),
     )
 
@@ -95,6 +114,7 @@ def build_governed_tool_executor(
             stage=policy_stage,
             tool_name=tool_name,
             tool_args=dict(tool_args),
+            worker_platform=context.worker_platform,
         )
         return dict(raw)
 
@@ -136,6 +156,7 @@ class RuntimeStageSession:
             tooling=build_runtime_stage_tooling(
                 policy_stage=policy_stage,
                 runtime_command=runtime_command,
+                worker_platform=context.worker_platform,
             ),
             execute_tool=tool_executor,
         )

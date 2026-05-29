@@ -12,7 +12,7 @@ class DockerBuildContractTests(unittest.TestCase):
         expected_targets = {
             "api:": "app-runtime-base",
             "run-worker:": "android-runtime",
-            "temporal-worker:": "android-runtime",
+            "temporal-orchestrator:": "app-runtime-base",
             "webhook-worker:": "voice-runtime",
             "knowledge-sync:": "app-runtime-base",
             "discord-gateway:": "voice-runtime",

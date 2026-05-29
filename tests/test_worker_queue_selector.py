@@ -15,7 +15,7 @@ from orchestrator.core.runs.service import resolve_required_worker_capability_fr
 from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
-from orchestrator.storage.models import Project, Run, Tenant, TenantRunClaim
+from orchestrator.storage.models import Project, Tenant, TenantRunClaim
 from tests.workflow_test_support import add_run_with_workflow, make_run
 
 
@@ -193,7 +193,7 @@ class WorkerQueueSelectorTests(unittest.TestCase):
             claim_row = session.get(TenantRunClaim, "tenant-b")
             self.assertIsNotNone(claim_row)
 
-    def test_claim_next_queued_run_ignores_temporal_backend_runs(self) -> None:
+    def test_claim_next_queued_run_claims_temporal_backend_runs_for_execution_worker(self) -> None:
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
             session.add(
@@ -227,23 +227,6 @@ class WorkerQueueSelectorTests(unittest.TestCase):
                 finished_at=None,
                 orchestration_backend="temporal",
             )
-            _add_run(
-                session,
-                now=now + timedelta(seconds=1),
-                run_id="run-legacy",
-                tenant_id="tenant-a",
-                issue_key="MAB-914",
-                issue_summary="Legacy queued",
-                issue_description="queued",
-                repo_url="https://github.com/example/a",
-                branch=None,
-                pr_url=None,
-                status="queued",
-                plan=_plan_for_capability("linux"),
-                started_at=None,
-                finished_at=None,
-                orchestration_backend="legacy",
-            )
             session.commit()
 
             result = claim_next_queued_run(
@@ -257,10 +240,8 @@ class WorkerQueueSelectorTests(unittest.TestCase):
 
             self.assertIsNotNone(result.claimed_run)
             assert result.claimed_run is not None
-            self.assertEqual(result.claimed_run.run_id, "run-legacy")
-            temporal_run = session.get(Run, "run-temporal")
-            self.assertIsNotNone(temporal_run)
-            self.assertEqual(temporal_run.status, "queued")
+            self.assertEqual(result.claimed_run.run_id, "run-temporal")
+            self.assertEqual(result.claimed_run.status, "dispatching")
 
     def test_claim_next_queued_run_ignores_stale_running_run_for_concurrency(self) -> None:
         now = datetime.now(timezone.utc)
@@ -664,7 +645,7 @@ class WorkerQueueSelectorTests(unittest.TestCase):
             self.assertEqual(probe.tenant_id, "tenant-b")
             self.assertEqual(probe.issue_key, "MAB-912")
 
-    def test_probe_claimable_queued_run_treats_temporal_runs_as_not_legacy_claimable(self) -> None:
+    def test_probe_claimable_queued_run_reports_temporal_run_claimable_for_execution_worker(self) -> None:
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
             session.add(
@@ -707,9 +688,9 @@ class WorkerQueueSelectorTests(unittest.TestCase):
                 worker_capabilities={"linux"},
             )
 
-            self.assertFalse(probe.claimable)
-            self.assertEqual(probe.reason, QueueClaimabilityReason.NO_QUEUED_RUNS)
-            self.assertIsNone(probe.run_id)
+            self.assertTrue(probe.claimable)
+            self.assertEqual(probe.reason, QueueClaimabilityReason.CLAIMABLE)
+            self.assertEqual(probe.run_id, "run-temporal")
 
     def test_probe_claimable_queued_run_ignores_stale_running_run_for_concurrency(self) -> None:
         now = datetime.now(timezone.utc)

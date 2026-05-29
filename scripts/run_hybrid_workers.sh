@@ -62,7 +62,7 @@ DOCKER_BASE_RUNTIME_SERVICES=(
   run-worker
   project-automation
   knowledge-sync
-  temporal-worker
+  temporal-orchestrator
 )
 
 DOCKER_POST_API_SERVICES=(
@@ -74,7 +74,7 @@ DOCKER_BASE_APP_SERVICES=(
   run-worker
   project-automation
   knowledge-sync
-  temporal-worker
+  temporal-orchestrator
 )
 
 DOCKER_VOICE_SERVICES=(

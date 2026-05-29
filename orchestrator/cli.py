@@ -25,7 +25,7 @@ def _build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("worker-webhooks", help="Run background webhook worker loop")
     subparsers.add_parser("worker-child-runs", help="Run one child issue-execution job")
     subparsers.add_parser("worker-child-webhooks", help="Run one child webhook job")
-    subparsers.add_parser("temporal-worker", help="Run Temporal workflow worker loop")
+    subparsers.add_parser("temporal-orchestrator", help="Run Temporal workflow orchestrator loop")
     subparsers.add_parser("discord-gateway", help="Run Discord gateway leader loop")
     subparsers.add_parser("discord-live-voice", help="Run Discord live voice leader loop")
     subparsers.add_parser("knowledge-jira-sync", help="Run Jira knowledge sync leader loop")
@@ -53,6 +53,12 @@ def _build_parser() -> argparse.ArgumentParser:
     tool_parser.add_argument("--tenant", required=True, help="Tenant identifier")
     tool_parser.add_argument("--project", default=None, help="Project identifier")
     tool_parser.add_argument("--run", default=None, help="Run identifier")
+    tool_parser.add_argument(
+        "--worker-platform",
+        default=None,
+        choices=["linux", "macos"],
+        help="Execution worker platform for platform-scoped tools",
+    )
     tool_parser.add_argument("--issue", required=True, help="Issue key")
     tool_parser.add_argument("--stage", required=True, help="Workflow stage (pm|dev|test|review)")
     tool_parser.add_argument("--tool", required=True, help="Tool name")
@@ -197,6 +203,7 @@ def _handle_agent_tool(
     stage: str,
     tool_name: str,
     args_json: str,
+    worker_platform: str | None = None,
 ) -> int:
     from orchestrator.core.config import get_settings
     from orchestrator.core.runtime.tools import execute_agent_tool, print_tool_event
@@ -232,6 +239,7 @@ def _handle_agent_tool(
                 stage=stage,
                 tool_name=tool_name,
                 tool_args=parsed_args,
+                worker_platform=worker_platform,
             )
             print_tool_event(stage=stage, tool_name=tool_name, args=parsed_args, outcome="succeeded")
             print(json.dumps({"ok": True, "tool": tool_name, "result": result}))
@@ -311,7 +319,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
         return int(run_worker_child_once(mode="webhooks"))
 
-    if args.command == "temporal-worker":
+    if args.command == "temporal-orchestrator":
         from orchestrator.temporal.worker import run_temporal_worker
 
         asyncio.run(run_temporal_worker())
@@ -376,6 +384,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             stage=args.stage,
             tool_name=args.tool,
             args_json=args.args,
+            worker_platform=args.worker_platform,
         )
 
     parser.error(f"Unknown command: {args.command}")

@@ -85,7 +85,7 @@ class OrchestratedRunWorkflowExecutor:
         log_sink: Callable[[dict], None] | None = None,
         stage_agents: StageAgents | None = None,
         execute_tool: Callable[
-            [str, str | None, str | None, str, str, str, dict[str, object]],
+            [str, str | None, str | None, str, str, str, dict[str, object], str | None],
             dict[str, Any],
         ] | None = None,
     ):
@@ -117,6 +117,7 @@ class OrchestratedRunWorkflowExecutor:
                     context.stage,
                     tool_name,
                     tool_args,
+                    context.worker_platform,
                 )
             ),
         )

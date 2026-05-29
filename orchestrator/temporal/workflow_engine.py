@@ -18,6 +18,7 @@ from orchestrator.core.workflow.type_catalog import get_workflow_type, normalize
 from orchestrator.storage.models import Run, RunHumanInputRequest, WorkflowExecution, WorkflowOperation
 from orchestrator.temporal.client import connect_temporal_client
 from orchestrator.temporal.payloads import (
+    DevelopmentTeamRunActivityResult,
     DevelopmentTeamRunWorkflowInput,
     HandlerWorkflowAdvanceInput,
     HandlerWorkflowRunInput,
@@ -75,6 +76,37 @@ def _run_sync(awaitable):  # noqa: ANN001, ANN201
     if "value" in error:
         raise error["value"]
     return result.get("value")
+
+
+def notify_temporal_run_result(
+    *,
+    session: Session,
+    settings: Settings,
+    workflow: WorkflowExecution,
+    run: Run,
+) -> None:
+    async def _notify() -> None:
+        client = await connect_temporal_client(settings)
+        config = _temporal_config_for_workflow(session=session, workflow=workflow, settings=settings)
+        if config.execution_mode != "run":
+            return
+        handle = client.get_workflow_handle_for(
+            config.workflow_defn,
+            _temporal_workflow_handle_id(workflow_id=workflow.workflow_id),
+        )
+        await handle.execute_update(
+            config.workflow_defn.record_run_result,
+            DevelopmentTeamRunActivityResult(
+                workflow_id=workflow.workflow_id,
+                run_id=run.run_id,
+                status=str(run.status),
+                issue_key=str(run.issue_key),
+                claim_id=str(getattr(run, "claim_id", "") or "").strip() or None,
+                last_error=str(getattr(run, "last_error", "") or "").strip() or None,
+            ),
+        )
+
+    _run_sync(_notify())
 
 
 def _require_positive_temporal_timeout(*, workflow_type_key: str, temporal: dict, field_name: str) -> int:
