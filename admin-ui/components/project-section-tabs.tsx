@@ -13,6 +13,7 @@ type ProjectSectionTab = {
 const PROJECT_SECTION_TABS: ProjectSectionTab[] = [
   { id: "overview", label: "Overview", visibility: "all" },
   { id: "knowledge", label: "Knowledge", visibility: "all" },
+  { id: "installs", label: "Plugins", visibility: "manager" },
   { id: "settings", label: "Settings", visibility: "manager" },
   { id: "runs", label: "Runs", visibility: "platform" },
   { id: "webhooks", label: "Webhooks", visibility: "manager" },

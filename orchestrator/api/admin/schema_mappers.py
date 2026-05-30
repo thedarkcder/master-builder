@@ -53,10 +53,12 @@ def tenant_to_schema(tenant: Tenant) -> TenantRead:
     )
 
 
-def run_to_schema(run: Run) -> RunRead:
+def run_to_schema(run: Run, *, workflow_execution_id: str | None = None) -> RunRead:
+    normalized_workflow_execution_id = str(workflow_execution_id or "").strip()
     return RunRead(
         run_id=run.run_id,
         workflow_id=run.workflow_id,
+        workflow_execution_id=normalized_workflow_execution_id or run.workflow_id,
         attempt_number=run.attempt_number,
         parent_run_id=run.parent_run_id,
         entry_mode=run.entry_mode,

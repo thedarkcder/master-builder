@@ -29,6 +29,8 @@ POLICY_OVERRIDE_FIELDS = {
     "codex_reasoning_effort",
     "execution_profiles",
     "execution_profile_routing",
+    "staging_admission_enabled",
+    "staging_branch",
 }
 
 _BOOLEAN_CAP_FIELDS = {
@@ -81,6 +83,15 @@ def normalize_project_policy_overrides(raw: Mapping[str, Any] | None) -> dict[st
         if key in _BOOLEAN_CAP_FIELDS or key == "require_agents_md":
             if isinstance(value, bool):
                 normalized[key] = value
+            continue
+        if key == "staging_admission_enabled":
+            if isinstance(value, bool):
+                normalized[key] = value
+            continue
+        if key == "staging_branch":
+            normalized_value = str(value or "").strip()
+            if normalized_value:
+                normalized[key] = normalized_value
             continue
         if key == "knowledge_auto_answer_mode":
             normalized_value = str(value or "").strip().lower()
@@ -153,6 +164,11 @@ def resolve_effective_policy(
             effective[field] = tenant_value and override_value
         else:
             effective[field] = tenant_value
+
+    if "staging_branch" in overrides:
+        effective["staging_branch"] = overrides["staging_branch"]
+    if "staging_admission_enabled" in overrides:
+        effective["staging_admission_enabled"] = bool(overrides["staging_admission_enabled"])
 
     if "allowed_commands" in overrides:
         tenant_commands = [str(item).strip() for item in effective.get("allowed_commands") or [] if str(item).strip()]

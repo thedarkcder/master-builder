@@ -14,6 +14,7 @@ from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 from orchestrator.storage.models import Project, Run, Tenant
 from orchestrator.tools.project_repo_checkout import (
     PreparedExecutionRepo,
+    ProjectRepoCheckoutError,
     execution_branch_name,
     project_checkout_root_dir,
     project_repo_dir,
@@ -115,32 +116,83 @@ def prepare_execution_repo_for_run(
         settings=settings,
         issue_key=run.issue_key,
     )
+    prompt_context = {
+        "tenant_id": tenant.tenant_id,
+        "project_id": project.project_id,
+        "project_name": project.name,
+        "github_repository": project.github_repository,
+        "run_id": run.run_id,
+        "issue_key": run.issue_key,
+        "issue_summary": run.issue_summary or "",
+        "issue_description": run.issue_description or "",
+        "checkout_root": str(checkout_root),
+        "shared_repo_dir": str(shared_repo_dir),
+        "expected_run_repo_dir": str(expected_run_repo_dir),
+        "workspace_key": workspace_key,
+        "execution_branch": execution_branch,
+        "base_branch": base_branch,
+        "integration_branch": integration_branch,
+        **stage_session.tooling.governed_prompt_context(),
+    }
+    original_user_prompt = render_prompt("repo_setup/prepare_user.j2", **prompt_context)
     try:
         payload = stage_session.invoke_json(
             system_prompt=render_prompt("repo_setup/prepare_system.j2"),
-            user_prompt=render_prompt(
-                "repo_setup/prepare_user.j2",
-                tenant_id=tenant.tenant_id,
-                project_id=project.project_id,
-                project_name=project.name,
-                github_repository=project.github_repository,
-                run_id=run.run_id,
-                issue_key=run.issue_key,
-                issue_summary=run.issue_summary or "",
-                issue_description=run.issue_description or "",
-                checkout_root=str(checkout_root),
-                shared_repo_dir=str(shared_repo_dir),
-                expected_run_repo_dir=str(expected_run_repo_dir),
-                workspace_key=workspace_key,
-                execution_branch=execution_branch,
-                base_branch=base_branch,
-                integration_branch=integration_branch,
-                **stage_session.tooling.governed_prompt_context(),
-            ),
+            user_prompt=original_user_prompt,
         )
     except (CodexRuntimeError, RuntimeInvocationError) as exc:
         raise RetryableRepoSetupError(f"Repo setup runtime failed: {exc}") from exc
 
+    payload, prepared_repo = _normalize_and_validate_repo_setup_payload(
+        checkout_root=checkout_root,
+        run=run,
+        payload=payload,
+        execution_branch=execution_branch,
+        workspace_key=workspace_key,
+    )
+    if prepared_repo is None:
+        try:
+            repair_payload = stage_session.invoke_json(
+                system_prompt=render_prompt("repo_setup/prepare_system.j2"),
+                user_prompt=render_prompt(
+                    "repo_setup/prepare_repair_user.j2",
+                    original_prompt=original_user_prompt,
+                    validation_error=str(payload["validation_error"]),
+                    previous_payload=payload["previous_payload"],
+                ),
+            )
+        except (CodexRuntimeError, RuntimeInvocationError) as exc:
+            raise RetryableRepoSetupError(f"Repo setup repair runtime failed: {exc}") from exc
+        payload, prepared_repo = _normalize_and_validate_repo_setup_payload(
+            checkout_root=checkout_root,
+            run=run,
+            payload=repair_payload,
+            execution_branch=execution_branch,
+            workspace_key=workspace_key,
+        )
+    if prepared_repo is None:
+        raise RetryableRepoSetupError(f"Repo setup validation failed: {payload['validation_error']}")
+    actions_taken = payload.get("actions_taken")
+    if not isinstance(actions_taken, list):
+        normalized_actions: tuple[str, ...] = ()
+    else:
+        normalized_actions = tuple(
+            text for text in (str(item or "").strip() for item in actions_taken) if text
+        )
+    return RepoSetupPreparation(
+        prepared_repo=prepared_repo,
+        actions_taken=normalized_actions,
+    )
+
+
+def _normalize_and_validate_repo_setup_payload(
+    *,
+    checkout_root: Path,
+    run: Run,
+    payload: object,
+    execution_branch: str,
+    workspace_key: str,
+) -> tuple[dict[str, object], PreparedExecutionRepo | None]:
     if not isinstance(payload, dict):
         raise RetryableRepoSetupError("Repo setup runtime did not return a JSON object")
 
@@ -157,21 +209,17 @@ def prepare_execution_repo_for_run(
     execution_repo_dir = str(payload.get("execution_repo_dir") or "").strip()
     if not execution_repo_dir:
         raise RetryableRepoSetupError("Repo setup did not return execution_repo_dir")
-    prepared_repo = validate_execution_repo(
-        checkout_root=checkout_root,
-        repo_dir=Path(execution_repo_dir),
-        run_id=run.run_id,
-        execution_branch=str(payload.get("execution_branch") or "").strip() or execution_branch,
-        workspace_key=str(payload.get("workspace_key") or "").strip() or workspace_key,
-    )
-    actions_taken = payload.get("actions_taken")
-    if not isinstance(actions_taken, list):
-        normalized_actions: tuple[str, ...] = ()
-    else:
-        normalized_actions = tuple(
-            text for text in (str(item or "").strip() for item in actions_taken) if text
+    try:
+        prepared_repo = validate_execution_repo(
+            checkout_root=checkout_root,
+            repo_dir=Path(execution_repo_dir),
+            run_id=run.run_id,
+            execution_branch=str(payload.get("execution_branch") or "").strip() or execution_branch,
+            workspace_key=str(payload.get("workspace_key") or "").strip() or workspace_key,
         )
-    return RepoSetupPreparation(
-        prepared_repo=prepared_repo,
-        actions_taken=normalized_actions,
-    )
+        return payload, prepared_repo
+    except ProjectRepoCheckoutError as exc:
+        return {
+            "previous_payload": payload,
+            "validation_error": str(exc),
+        }, None

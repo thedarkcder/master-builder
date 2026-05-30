@@ -122,6 +122,30 @@ class DiscordInteractionsRouteTests(unittest.IsolatedAsyncioTestCase):
         patched["notify_webhook_job_enqueued"].assert_called_once()
         session.commit.assert_called_once()
 
+    async def test_application_command_with_unresolved_scope_returns_discord_error_without_enqueue(self) -> None:
+        response, session, patched = await self._call(
+            {
+                "type": 2,
+                "id": "interaction-1",
+                "application_id": "app",
+                "token": "tok",
+                "channel_id": "thread-1",
+                "data": {"name": "run"},
+                "member": {"user": {"id": "u-1"}},
+            },
+            build_discord_interaction_ingress_result=AsyncMock(
+                return_value=self._result(body=b'{"type":5,"data":{"flags":64}}', deferred=True)
+            ),
+            _resolve_interaction_subject_scope=MagicMock(return_value=(None, None, "discord_channel::thread-1")),
+        )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn(b"could not map this Discord channel", response.body)
+        patched["enqueue_webhook_job"].assert_not_called()
+        patched["notify_webhook_job_enqueued"].assert_not_called()
+        session.commit.assert_not_called()
+        patched["_close_deferred_interaction_work"].assert_called_once()
+
     async def test_modal_submit_acknowledges_and_enqueues(self) -> None:
         response, session, patched = await self._call(
             {

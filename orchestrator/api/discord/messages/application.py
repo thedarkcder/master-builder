@@ -15,6 +15,7 @@ from orchestrator.core.communications import (
 )
 from orchestrator.api.discord.ask.context import tenant_project_keys
 from orchestrator.core.pm.followup_context_service import FollowupReaction
+from orchestrator.storage.models import Project
 
 _ROOM_VOICE_REPLY_COMMANDS = frozenset(
     {
@@ -42,6 +43,9 @@ class DiscordMessageIngressDeps:
     load_pending_human_input_request: object
     answer_human_input_request: object
     resume_workflow_from_human_input_answer: object
+    load_project_install_request: object
+    approve_install_request: object
+    reject_install_request: object
     resolve_followup_context_match: object
     resolve_followup_context: object
     resolve_followup_reaction: object
@@ -70,6 +74,15 @@ def discord_channel_message_action(
         content=content,
         components=components,
     )
+
+
+def _install_request_decision(raw_text: str) -> str | None:
+    normalized = raw_text.strip().lower()
+    if normalized in {"yes", "y", "approve", "approved"}:
+        return "approve"
+    if normalized in {"no", "n", "reject", "rejected", "stop"}:
+        return "reject"
+    return None
 
 
 def _log_ignored_message(
@@ -295,22 +308,73 @@ def build_discord_message_ingress_result(
         )
         if request is not None:
             try:
-                answered_request = deps.answer_human_input_request(
-                    session=session,
-                    settings=deps.settings,
-                    request=request,
-                    reply_text=content,
-                    source_ref=str(payload.get("id") or "").strip() or None,
-                )
-                resumed_run = deps.resume_workflow_from_human_input_answer(
-                    session=session,
-                    settings=deps.settings,
-                    request=answered_request,
-                )
-                message_content = (
-                    f"<@{user_id}> Captured input for `{request.issue_key}` "
-                    f"and queued workflow attempt `{resumed_run.run_id}`."
-                )
+                if str(getattr(request, "request_type", "") or "").strip().lower() == "install_request":
+                    decision = _install_request_decision(content)
+                    if decision is None:
+                        message_content = (
+                            f"<@{user_id}> Please reply `yes` to approve this install request "
+                            "or `no` to stop and replan."
+                        )
+                    else:
+                        context = getattr(request, "request_context_json", None)
+                        install_request_id = (
+                            str(context.get("install_request_id") or "").strip()
+                            if isinstance(context, dict)
+                            else ""
+                        )
+                        install_request = deps.load_project_install_request(
+                            session=session,
+                            request_id=install_request_id,
+                        )
+                        project_for_request = (
+                            session.get(Project, getattr(install_request, "project_id", None))
+                            if install_request is not None
+                            else None
+                        )
+                        if install_request is None or project_for_request is None:
+                            message_content = (
+                                f"<@{user_id}> I could not find the project install request for `{request.issue_key}`."
+                            )
+                        elif decision == "approve":
+                            deps.approve_install_request(
+                                session=session,
+                                settings=deps.settings,
+                                request=install_request,
+                                project=project_for_request,
+                                source_ref=str(payload.get("id") or "").strip() or None,
+                            )
+                            message_content = (
+                                f"<@{user_id}> Approved the install request for `{request.issue_key}` "
+                                "and resumed the run."
+                            )
+                        else:
+                            deps.reject_install_request(
+                                session=session,
+                                settings=deps.settings,
+                                request=install_request,
+                                source_ref=str(payload.get("id") or "").strip() or None,
+                            )
+                            message_content = (
+                                f"<@{user_id}> Rejected the install request for `{request.issue_key}` "
+                                "and resumed the run to replan."
+                            )
+                else:
+                    answered_request = deps.answer_human_input_request(
+                        session=session,
+                        settings=deps.settings,
+                        request=request,
+                        reply_text=content,
+                        source_ref=str(payload.get("id") or "").strip() or None,
+                    )
+                    resumed_run = deps.resume_workflow_from_human_input_answer(
+                        session=session,
+                        settings=deps.settings,
+                        request=answered_request,
+                    )
+                    message_content = (
+                        f"<@{user_id}> Captured input for `{request.issue_key}` "
+                        f"and queued workflow attempt `{resumed_run.run_id}`."
+                    )
             except Exception as exc:  # noqa: BLE001
                 deps.logger.exception(
                     "discord_gateway_human_input_resume_failed tenant_id=%s user_id=%s channel_id=%s request_id=%s error=%s",

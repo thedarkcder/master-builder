@@ -9,7 +9,7 @@ LONG_RUNNING_SERVICES = (
     "webhook-worker",
     "project-automation",
     "discord-gateway",
-    "temporal-worker",
+    "temporal-orchestrator",
     "discord-live-voice",
     "knowledge-sync",
 )
@@ -58,6 +58,24 @@ class DeploymentMigrationStartupTests(unittest.TestCase):
                     msg=f"{service_name} in {relative_path} must wait for migrations to complete.",
                 )
 
+    def test_postgres_healthcheck_rejects_crash_recovery(self) -> None:
+        for relative_path in ("docker-compose.yml", "deploy/hetzner/docker-compose.prod.yml"):
+            compose = (ROOT / relative_path).read_text(encoding="utf-8")
+            postgres_block = _service_block(compose, "postgres")
+
+            self.assertIn("pg_isready", postgres_block)
+            self.assertIn("psql", postgres_block)
+            self.assertIn("select not pg_is_in_recovery()", postgres_block)
+            self.assertIn("grep -qx t", postgres_block)
+
+    def test_api_healthcheck_allows_loaded_dev_api_to_respond(self) -> None:
+        for relative_path in ("docker-compose.yml", "deploy/hetzner/docker-compose.prod.yml"):
+            compose = (ROOT / relative_path).read_text(encoding="utf-8")
+            api_block = _service_block(compose, "api")
+
+            self.assertIn("urlopen('http://127.0.0.1:4000/health', timeout=10)", api_block)
+            self.assertIn("timeout: 15s", api_block)
+
     def test_dockerfile_default_commands_do_not_run_migrations(self) -> None:
         dockerfile = (ROOT / "orchestrator" / "Dockerfile").read_text(encoding="utf-8")
 
@@ -78,9 +96,15 @@ class DeploymentMigrationStartupTests(unittest.TestCase):
     def test_hybrid_worker_script_runs_migration_job_before_runtime_stack(self) -> None:
         script = (ROOT / "scripts" / "run_hybrid_workers.sh").read_text(encoding="utf-8")
 
-        migrate_index = script.index("up --build --force-recreate --exit-code-from migrate migrate")
-        stack_index = script.index("up --build -d --remove-orphans")
+        infra_index = script.index('"${DOCKER_BASE_SERVICES[@]}"')
+        migrate_index = script.index("docker_compose run --rm --no-deps migrate")
+        stack_index = script.index('"${DOCKER_RUNTIME_SERVICES[@]}"', migrate_index)
 
+        self.assertLess(
+            infra_index,
+            migrate_index,
+            msg="Hybrid worker launcher must start infrastructure before running migrations.",
+        )
         self.assertLess(
             migrate_index,
             stack_index,

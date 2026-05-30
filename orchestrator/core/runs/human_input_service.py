@@ -24,6 +24,9 @@ from orchestrator.core.runs.enqueue_types import EnqueueFailureReason
 from orchestrator.core.runs.service import (
     NON_TERMINAL_RUN_STATUSES,
     RUN_STATUS_BLOCKED,
+    RUN_STATUS_CANCELLED,
+    RUN_STATUS_FAILED,
+    RUN_STATUS_SUCCEEDED,
     RUN_STATUS_WAITING_FOR_INPUT,
     RunBootstrap,
     resolve_required_worker_capability_from_plan,
@@ -34,6 +37,10 @@ from orchestrator.core.workflow.checkpoints import (
     checkpoint_kind_for_stage,
     normalize_checkpoint_stage,
     snapshot_checkpoint_for_run,
+)
+from orchestrator.core.workflow.execution_artifacts import (
+    attach_artifact_to_resume_plan,
+    require_durable_execution_artifact_for_checkpoint,
 )
 from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 from orchestrator.core.workflow.runner import WorkflowStageCheckpoint
@@ -47,6 +54,15 @@ INPUT_STATUS_EXPIRED = "expired"
 
 def _now() -> datetime:
     return datetime.now(timezone.utc)
+
+
+def _is_expired(expires_at: object) -> bool:
+    if not isinstance(expires_at, datetime):
+        return False
+    comparable_expires_at = expires_at
+    if comparable_expires_at.tzinfo is None:
+        comparable_expires_at = comparable_expires_at.replace(tzinfo=timezone.utc)
+    return comparable_expires_at <= _now()
 
 
 def _request_questions(request_context: dict[str, Any] | None) -> list[dict[str, Any]]:
@@ -109,6 +125,33 @@ def _build_human_input_message(
         message_lines.extend(["", f"Reply format: {expected_reply_format}"])
     message_lines.extend(["", "Reply in this thread. The value is transient and will only be used to resume this workflow."])
     return "\n".join(message_lines)
+
+
+def _install_request_decision_components(request_context: dict[str, Any] | None) -> list[dict] | None:
+    if not isinstance(request_context, dict):
+        return None
+    install_request_id = str(request_context.get("install_request_id") or "").strip()
+    if len(install_request_id) != 32:
+        return None
+    return [
+        {
+            "type": 1,
+            "components": [
+                {
+                    "type": 2,
+                    "style": 3,
+                    "label": "Yes, approve",
+                    "custom_id": f"install_request.approve.{install_request_id}",
+                },
+                {
+                    "type": 2,
+                    "style": 4,
+                    "label": "No, stop",
+                    "custom_id": f"install_request.reject.{install_request_id}",
+                },
+            ],
+        }
+    ]
 
 
 def create_human_input_request(
@@ -288,8 +331,7 @@ def pending_human_input_for_thread(
     )
     if request is None:
         return None
-    expires_at = request.expires_at
-    if isinstance(expires_at, datetime) and expires_at <= _now():
+    if _is_expired(request.expires_at):
         _expire_human_input_request(session=session, request=request)
         return None
     return request
@@ -309,8 +351,7 @@ def pending_human_input_for_request_id(
         return None
     if str(request.status or "").strip().lower() != INPUT_STATUS_PENDING:
         return None
-    expires_at = request.expires_at
-    if isinstance(expires_at, datetime) and expires_at <= _now():
+    if _is_expired(request.expires_at):
         _expire_human_input_request(session=session, request=request)
         return None
     return request
@@ -389,18 +430,18 @@ def answer_human_input_request(
     request: RunHumanInputRequest,
     reply_text: str,
     source_ref: str | None,
+    allow_expired: bool = False,
 ) -> RunHumanInputRequest:
     if request.status == INPUT_STATUS_CONSUMED:
         return request
-    if request.status == INPUT_STATUS_EXPIRED:
+    if request.status == INPUT_STATUS_EXPIRED and not allow_expired:
         raise ValueError("Human input request has expired")
-    expires_at = request.expires_at
-    if isinstance(expires_at, datetime) and expires_at <= _now():
+    if _is_expired(request.expires_at) and not allow_expired:
         _expire_human_input_request(session=session, request=request)
         raise ValueError("Human input request has expired")
     if request.status == INPUT_STATUS_ANSWERED:
         return request
-    if request.status != INPUT_STATUS_PENDING:
+    if request.status not in {INPUT_STATUS_PENDING, INPUT_STATUS_EXPIRED}:
         raise ValueError("Human input request is not pending")
 
     encryption_key = str(getattr(settings, "secrets_encryption_key", "") or "").strip()
@@ -463,8 +504,17 @@ def resume_run_from_human_input_answer(
         raise ValueError("Human input request was not found")
     if request.status == INPUT_STATUS_CONSUMED and request.consumed_by_run_id:
         existing_run = session.get(Run, request.consumed_by_run_id)
-        if existing_run is not None:
+        if existing_run is None:
+            raise ValueError("Consumed human input request references a missing resume run")
+        if existing_run.status in NON_TERMINAL_RUN_STATUSES | {RUN_STATUS_SUCCEEDED}:
             return existing_run
+        if existing_run.status in {RUN_STATUS_FAILED, RUN_STATUS_CANCELLED}:
+            request.status = INPUT_STATUS_ANSWERED
+            request.consumed_by_run_id = None
+            request.updated_at = _now()
+            session.flush()
+        else:
+            raise ValueError(f"Consumed human input request references unsupported run status: {existing_run.status}")
     if request.status != INPUT_STATUS_ANSWERED:
         raise ValueError("Human input request is not answered")
     existing_resume_run = _existing_resume_run_for_request(session=session, request=request)
@@ -503,7 +553,10 @@ def resume_run_from_human_input_answer(
     if persisted_precheck_outcome is not None:
         checkpoint_plan_snapshot.context.execution_context["pre_check_outcome"] = persisted_precheck_outcome
     checkpoint_plan_snapshot.context.execution_context["human_input_request_id"] = request.request_id
-    checkpoint_plan = checkpoint_plan_snapshot.dump()
+    checkpoint_plan = attach_artifact_to_resume_plan(
+        plan=checkpoint_plan_snapshot.dump(),
+        artifact=require_durable_execution_artifact_for_checkpoint(session=session, checkpoint=checkpoint),
+    )
 
     runtime = build_workflow_runtime(
         session=session,
@@ -626,7 +679,16 @@ def _dispatch_human_input_request(
         event=None,
         open_thread=True,
         thread_name=f"{tenant.tenant_id}-{request.issue_key}-input",
-        thread_intro="Continue here with the requested input.",
+        thread_intro=(
+            "Approve or reject this install request here."
+            if request.request_type == "install_request"
+            else "Continue here with the requested input."
+        ),
+        thread_intro_components=(
+            _install_request_decision_components(request.request_context_json)
+            if request.request_type == "install_request"
+            else None
+        ),
     )
     if not send_result.sent or not str(send_result.thread_channel_id or "").strip():
         request.updated_at = _now()

@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 from orchestrator.core.decision.effect_service import publish_decision_effects
 from orchestrator.core.decision.engine import DecisionEngineResult, DecisionEventInput, evaluate_decision_event
 from orchestrator.core.decision.reply_service import DecisionReplyCaptureResult, capture_decision_reply
+from orchestrator.core.runtime.payload_models import InteractionResponse
 from orchestrator.storage.models import Project, Tenant
 
 
@@ -60,6 +61,7 @@ def capture_decision_reply_and_recheck(
     evaluate_pre_run_check_fn: Callable[..., object],
     oauth_context: Any | None = None,
     publish_jira_comment_fn: Callable[[str], tuple[bool, str | None]] | None = None,
+    interpreted_reply: InteractionResponse | None = None,
 ) -> DecisionReplyRecheckResult:
     capture = capture_decision_reply(
         session=session,
@@ -72,6 +74,7 @@ def capture_decision_reply_and_recheck(
         source_ref=source_ref,
         actor_ref=actor_ref,
         metadata=metadata,
+        interpreted_reply=interpreted_reply,
     )
     capture_effect_ids = tuple(getattr(capture, "effect_ids", ()) or ())
     if capture_effect_ids and publish_jira_comment_fn is not None:

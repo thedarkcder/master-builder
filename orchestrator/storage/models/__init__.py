@@ -23,6 +23,8 @@ from .platform import ManagedSecret
 from .platform import PlatformSetting
 from .workflows import WorkflowExecution
 from .workflows import WorkflowCheckpoint
+from .workflows import WorkflowExecutionArtifact
+from .workflows import WorkflowExecutableWorkItem
 from .runs import Run
 from .runs import RunHumanInputRequest
 from .operations import WorkflowOperation
@@ -78,6 +80,8 @@ __all__ = [
     "PlatformSetting",
     "WorkflowExecution",
     "WorkflowCheckpoint",
+    "WorkflowExecutionArtifact",
+    "WorkflowExecutableWorkItem",
     "Run",
     "RunHumanInputRequest",
     "WorkflowOperation",

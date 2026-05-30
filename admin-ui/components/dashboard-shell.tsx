@@ -320,7 +320,7 @@ export function DashboardShell({ children }: { children: React.ReactNode }) {
   const projectContextId = projectMatch?.[2] ? decodeURIComponent(projectMatch[2]) : runContext.projectId || null;
   const decodedTenantId = tenantId ? decodeURIComponent(tenantId) : null;
   const tenantBaseRoute = decodedTenantId ? getTenantWorkspaceRoute(decodedTenantId) : null;
-  const showProjectNavigation = Boolean(projectMatch && decodedTenantId && !isWizardRoute);
+  const showProjectNavigation = Boolean(decodedTenantId && !isWizardRoute);
   const isPlatformSuperAdmin = canAccessPlatformAdmin(principal);
   const isTenantTroubleshootingRoute =
     Boolean(tenantBaseRoute) &&

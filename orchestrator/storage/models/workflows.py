@@ -128,3 +128,92 @@ class WorkflowCheckpoint(Base):
     codex_session_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class WorkflowExecutionArtifact(Base):
+    __tablename__ = "workflow_execution_artifacts"
+    __table_args__ = (
+        Index("ix_workflow_execution_artifacts_tenant_project", "tenant_id", "project_id"),
+        Index("ix_workflow_execution_artifacts_workflow_id", "workflow_id"),
+        Index("ix_workflow_execution_artifacts_run_id", "run_id"),
+        Index("ix_workflow_execution_artifacts_status", "status"),
+        UniqueConstraint("run_id", "artifact_kind", name="uq_workflow_execution_artifacts_run_kind"),
+    )
+
+    artifact_id: Mapped[str] = mapped_column(String(64), primary_key=True, default=lambda: uuid4().hex)
+    tenant_id: Mapped[str] = mapped_column(
+        String(128),
+        ForeignKey("tenants.tenant_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    project_id: Mapped[str | None] = mapped_column(
+        String(128),
+        ForeignKey("projects.project_id", ondelete="SET NULL"),
+        nullable=True,
+    )
+    workflow_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("workflow_executions.workflow_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    run_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("runs.run_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    artifact_kind: Mapped[str] = mapped_column(String(64), nullable=False)
+    status: Mapped[str] = mapped_column(String(32), nullable=False)
+    repo_url: Mapped[str] = mapped_column(String(512), nullable=False)
+    branch: Mapped[str] = mapped_column(String(255), nullable=False)
+    commit_sha: Mapped[str] = mapped_column(String(64), nullable=False)
+    diff_stat_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    pushed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+
+
+class WorkflowExecutableWorkItem(Base):
+    __tablename__ = "workflow_executable_work_items"
+    __table_args__ = (
+        CheckConstraint("item_kind IN ('parent', 'child')", name="ck_workflow_executable_work_items_kind"),
+        Index("ix_workflow_executable_work_items_tenant_project", "tenant_id", "project_id"),
+        Index("ix_workflow_executable_work_items_parent_workflow", "parent_workflow_id"),
+        Index("ix_workflow_executable_work_items_issue", "tenant_id", "project_id", "issue_key"),
+        UniqueConstraint(
+            "parent_workflow_id",
+            "item_kind",
+            "issue_key",
+            name="uq_workflow_executable_work_items_parent_kind_issue",
+        ),
+    )
+
+    work_item_id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    item_kind: Mapped[str] = mapped_column(String(32), nullable=False)
+    tenant_id: Mapped[str] = mapped_column(
+        String(128),
+        ForeignKey("tenants.tenant_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    project_id: Mapped[str | None] = mapped_column(
+        String(128),
+        ForeignKey("projects.project_id", ondelete="CASCADE"),
+        nullable=True,
+    )
+    parent_workflow_id: Mapped[str] = mapped_column(
+        String(64),
+        ForeignKey("workflow_executions.workflow_id", ondelete="CASCADE"),
+        nullable=False,
+    )
+    parent_execution_id: Mapped[str] = mapped_column(String(64), nullable=False)
+    issue_key: Mapped[str] = mapped_column(String(64), nullable=False)
+    parent_issue_key: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    issue_summary: Mapped[str | None] = mapped_column(Text, nullable=True)
+    issue_status: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    issue_type: Mapped[str | None] = mapped_column(String(128), nullable=True)
+    mb_work_state: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    source_system: Mapped[str] = mapped_column(String(64), nullable=False, default="jira")
+    source_external_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    source_payload_json: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)

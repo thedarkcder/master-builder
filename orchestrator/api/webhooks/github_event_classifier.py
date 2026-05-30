@@ -64,8 +64,12 @@ def classify_github_trigger_state(
     payload: dict,
 ) -> GitHubTriggerState:
     normalized_event = str(github_event or "").strip().lower()
+    normalized_pr_action = str(normalized_action or "").strip().lower()
     return GitHubTriggerState(
-        full_review_trigger=normalized_event == "pull_request",
+        full_review_trigger=(
+            normalized_event == "pull_request"
+            and normalized_pr_action in {"opened", "reopened", "ready_for_review", "synchronize"}
+        ),
         remediation_trigger=_is_remediation_trigger(
             github_event=normalized_event,
             normalized_action=normalized_action,

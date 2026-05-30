@@ -11,6 +11,7 @@ from orchestrator.core.communications import (
     GitHubStickyReviewCommentAction,
     TransportAction,
 )
+from orchestrator.core.review.pr_review_findings import pr_review_findings_clear
 from orchestrator.core.workflow.execution_snapshot import require_github_pr_remediation_context_from_plan
 
 @dataclass(frozen=True)
@@ -55,14 +56,6 @@ def plan_pull_request_targets(
     for pr_number, _review_summary_present in pr_targets:
         signal = type("Signal", (), {"ready": False, "state": "not_triggered", "message": "review_not_triggered"})()
         review_publication_actions: list[TransportAction] = []
-        if full_review_trigger:
-            planned_actions.append(
-                GitHubPullRequestReactionAction(
-                    repo_full_name=repo_full_name,
-                    pr_number=pr_number,
-                    content="eyes",
-                )
-            )
         if full_review_trigger:
             try:
                 signal = reviewer_gate.evaluate_pr(
@@ -134,28 +127,6 @@ def plan_pull_request_targets(
                     exc,
                 )
 
-            review_publication_actions.append(
-                GitHubStickyReviewCommentAction(
-                    request_id=request_id,
-                    repo_full_name=repo_full_name,
-                    pr_number=pr_number,
-                    tenant_id=tenant.tenant_id,
-                    project_id=project.project_id,
-                    head_sha=str(getattr(pr_details, "head_sha", "") or "").strip() or "unknown",
-                    signal=signal,
-                    findings_result=findings_result,
-                    event=github_event,
-                    action_name=normalized_action,
-                )
-            )
-            review_comments.append(
-                {
-                    "pr_number": pr_number,
-                    "action": "planned",
-                    "comment_id": None,
-                }
-            )
-
             if pr_details is not None:
                 changed_paths = {
                     str(change.filename or "").strip()
@@ -183,8 +154,32 @@ def plan_pull_request_targets(
                     }
                 )
 
-        green = bool(signal.ready) and findings_evaluated and not findings_result.findings
+        review_clear = findings_evaluated and pr_review_findings_clear(findings_result)
+        merge_ready = review_clear and bool(signal.ready)
         if full_review_trigger:
+            review_comment_action = "skipped_clear_review" if review_clear else "planned"
+            if not review_clear:
+                review_publication_actions.append(
+                    GitHubStickyReviewCommentAction(
+                        request_id=request_id,
+                        repo_full_name=repo_full_name,
+                        pr_number=pr_number,
+                        tenant_id=tenant.tenant_id,
+                        project_id=project.project_id,
+                        head_sha=str(getattr(pr_details, "head_sha", "") or "").strip() or "unknown",
+                        signal=signal,
+                        findings_result=findings_result,
+                        event=github_event,
+                        action_name=normalized_action,
+                    )
+                )
+            review_comments.append(
+                {
+                    "pr_number": pr_number,
+                    "action": review_comment_action,
+                    "comment_id": None,
+                }
+            )
             signals.append(
                 {
                     "pr_number": pr_number,
@@ -194,19 +189,21 @@ def plan_pull_request_targets(
                     "summary": signal.message,
                     "findings_evaluated": findings_evaluated,
                     "findings_count": len(findings_result.findings),
-                    "green": green,
+                    "green": review_clear,
+                    "review_clear": review_clear,
+                    "merge_ready": merge_ready,
                 }
             )
             planned_actions.append(
                 GitHubPullRequestReactionAction(
                     repo_full_name=repo_full_name,
                     pr_number=pr_number,
-                    content=_resolve_pull_request_review_reaction(green=green),
+                    content=_resolve_pull_request_review_reaction(review_clear=review_clear),
                 )
             )
             planned_actions.extend(review_publication_actions)
 
-        if full_review_trigger and green and pr_details is not None:
+        if full_review_trigger and merge_ready and pr_details is not None:
             if allow_auto_merge:
                 planned_actions.append(
                     GitHubPullRequestMergeAction(
@@ -254,7 +251,7 @@ def plan_pull_request_targets(
                 should_attempt_remediation = allow_manual_pr_fix_requests
             elif remediation_trigger and allow_pr_remediation:
                 should_attempt_remediation = True
-            elif full_review_trigger and not green and allow_pr_remediation:
+            elif full_review_trigger and not review_clear and allow_pr_remediation:
                 should_attempt_remediation = True
             if should_attempt_remediation:
                 remediation_result = enqueue_pr_remediation_if_needed_fn(
@@ -300,7 +297,7 @@ def plan_pull_request_targets(
                 }
             )
             continue
-        if not manual_fix_requested and not green and not allow_pr_remediation:
+        if not manual_fix_requested and not review_clear and not allow_pr_remediation:
             remediation.append(
                 {
                     "pr_number": pr_number,
@@ -434,5 +431,5 @@ def valid_pr_details(details: object) -> bool:
     )
 
 
-def _resolve_pull_request_review_reaction(*, green: bool) -> str:
-    return "+1" if green else "confused"
+def _resolve_pull_request_review_reaction(*, review_clear: bool) -> str:
+    return "+1" if review_clear else "confused"

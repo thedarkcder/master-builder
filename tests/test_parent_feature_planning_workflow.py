@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
+from fastapi import HTTPException
 from orchestrator.core.parent_feature_workflow.planning import ParentFeaturePlanningWorkflow, ParentFeaturePlanningWorkflowDeps
 from orchestrator.core.projects.parent_planning_clarification_service import ClarificationPublishEffects, ParentPlanningClarificationService
 from orchestrator.core.projects.parent_planning_fanout_service import ParentPlanningFanoutService
@@ -80,10 +81,14 @@ class _FakeCompletingChildSyncGateway:
 
 
 class _FakeIssueGateway:
-    def __init__(self) -> None:
+    def __init__(self, *, issue_types: tuple[str, ...] = ("Epic", "Story", "Sub-task")) -> None:
+        self.issue_types = issue_types
         self.label_updates: list[str] = []
         self.published_questions: list[tuple[str, tuple[object, ...]]] = []
         self.start_development_links: list[tuple[str, str]] = []
+
+    def list_project_issue_types_for_create(self, *, project_key: str) -> list[str]:  # noqa: ARG002
+        return list(self.issue_types)
 
     def update_issue_sync_label(self, *, issue_detail, target_label: str) -> None:  # noqa: ANN001
         self.label_updates.append(f"{issue_detail.key}:{target_label}")
@@ -112,6 +117,96 @@ class ParentFeaturePlanningWorkflowTests(SqliteTemplateDbTestCase):
 
     def tearDown(self) -> None:
         self._cleanup_test_database()
+
+    def test_task_parent_planning_completes_without_child_fanout(self) -> None:
+        with self.session_factory() as session:
+            workflow_type = get_workflow_type(session, workflow_type_key="parent_planning")
+            lifecycle = ensure_workflow_execution(
+                session=session,
+                workflow_type=workflow_type,
+                tenant_id="tenant-task",
+                project_id="tenant-task-default",
+                execution=WorkflowExecutionReference(
+                    key="MAB-255",
+                    source=WorkflowSourceReference(
+                        source_system="jira",
+                        source_ref="MAB-255",
+                        display_name="Signed audit downloads",
+                        description="Generate signed downloads for queued audit export requests",
+                    ),
+                ),
+                display_name="Signed audit downloads",
+                description="Generate signed downloads for queued audit export requests",
+            )
+            issue_gateway = _FakeIssueGateway()
+            planner = _FakeBriefPlanner(
+                planning_results=[
+                    (
+                        SimpleNamespace(
+                            planning_state="planning_completed",
+                            pm_decision_requests=(),
+                            technical_decisions=(),
+                            stages=(),
+                        ),
+                        {"planning": "completed-package"},
+                    ),
+                ],
+            )
+            workflow = ParentFeaturePlanningWorkflow(
+                deps=ParentFeaturePlanningWorkflowDeps(
+                    issue_gateway=issue_gateway,
+                    brief_planner=planner,
+                    child_sync_gateway=_FakeChildSyncGateway(),
+                    clarification_service=ParentPlanningClarificationService(),
+                    fanout_service=ParentPlanningFanoutService(),
+                    workflow_type=workflow_type,
+                    project_key_for_issue_fn=lambda _issue_key: "MAB",
+                    extract_changed_fields_fn=lambda **_kwargs: [],
+                    extract_status_transition_fn=lambda **_kwargs: (None, None),
+                    material_parent_changed_fields_fn=lambda **_kwargs: [],
+                    parent_board_entry_target_status_fn=lambda **_kwargs: None,
+                )
+            )
+
+            fanout = workflow._plan_and_seed_with_attempts(
+                session=session,
+                settings=SimpleNamespace(
+                    admin_ui_base_url="https://mb.example.test",
+                    jira_action_token_secret="test-action-secret",
+                ),
+                tenant_id="tenant-task",
+                project_id="tenant-task-default",
+                lifecycle=lifecycle,
+                parent_detail=SimpleNamespace(
+                    key="MAB-255",
+                    issue_type="Task",
+                    summary="Signed audit downloads",
+                    status="To Do",
+                    description="Generate signed downloads for queued audit export requests",
+                    labels=["pm-parent"],
+                ),
+                product_brief={"objective": "Implement the task directly"},
+                project_key="MAB",
+                planning_summary="Backlog planning completed.",
+                fanout_summary="Child fanout completed.",
+            )
+            session.commit()
+
+            operations = {
+                operation.operation_type: operation
+                for operation in session.query(WorkflowOperation)
+                .filter(WorkflowOperation.workflow_id == lifecycle.workflow.workflow_id)
+                .all()
+            }
+
+            self.assertTrue(fanout.completed)
+            self.assertEqual(fanout.created_children, [])
+            self.assertEqual(fanout.seed_data["fanout_required"], False)
+            self.assertEqual(operations["backlog_planning"].status, "completed")
+            self.assertEqual(operations["jira_child_fanout"].status, "completed")
+            self.assertEqual(operations["jira_child_promotion"].status, "completed")
+            self.assertEqual(issue_gateway.label_updates, ["MAB-255:sync-current"])
+            self.assertEqual(issue_gateway.start_development_links[0][0], "MAB-255")
 
     def test_backlog_planning_waits_only_after_pm_escalates_and_records_jira_comment_id(self) -> None:
         with self.session_factory() as session:
@@ -194,6 +289,7 @@ class ParentFeaturePlanningWorkflowTests(SqliteTemplateDbTestCase):
                 lifecycle=lifecycle,
                 parent_detail=SimpleNamespace(
                     key="MAB-241",
+                    issue_type="Epic",
                     summary="Backlog question projection",
                     description="Planning needs product input",
                     labels=["pm-parent"],
@@ -235,6 +331,70 @@ class ParentFeaturePlanningWorkflowTests(SqliteTemplateDbTestCase):
                 attempts["jira_comment_projection"][-1].finished_at,
                 attempts["backlog_planning"][-1].finished_at,
             )
+
+    def test_plan_and_seed_rejects_unsupported_parent_issue_type_before_planning_runtime(self) -> None:
+        with self.session_factory() as session:
+            workflow_type = get_workflow_type(session, workflow_type_key="parent_planning")
+            lifecycle = ensure_workflow_execution(
+                session=session,
+                workflow_type=workflow_type,
+                tenant_id="tenant-admit",
+                project_id="tenant-admit-default",
+                execution=WorkflowExecutionReference(
+                    key="MAB-244",
+                    source=WorkflowSourceReference(
+                        source_system="jira",
+                        source_ref="MAB-244",
+                        display_name="Unsupported parent type",
+                        description="Initiative parent should fail before planning",
+                    ),
+                ),
+                display_name="Unsupported parent type",
+                description="Initiative parent should fail before planning",
+            )
+            planner = _FakeBriefPlanner(planning_results=[])
+            workflow = ParentFeaturePlanningWorkflow(
+                deps=ParentFeaturePlanningWorkflowDeps(
+                    issue_gateway=_FakeIssueGateway(),
+                    brief_planner=planner,
+                    child_sync_gateway=_FakeCompletingChildSyncGateway(),
+                    clarification_service=ParentPlanningClarificationService(),
+                    fanout_service=ParentPlanningFanoutService(),
+                    workflow_type=workflow_type,
+                    project_key_for_issue_fn=lambda _issue_key: "MAB",
+                    extract_changed_fields_fn=lambda **_kwargs: [],
+                    extract_status_transition_fn=lambda **_kwargs: (None, None),
+                    material_parent_changed_fields_fn=lambda **_kwargs: [],
+                    parent_board_entry_target_status_fn=lambda **_kwargs: None,
+                )
+            )
+
+            with self.assertRaises(HTTPException) as raised:
+                workflow._plan_and_seed_with_attempts(
+                    session=session,
+                    settings=SimpleNamespace(
+                        admin_ui_base_url="https://mb.example.test",
+                        jira_action_token_secret="test-action-secret",
+                    ),
+                    tenant_id="tenant-admit",
+                    project_id="tenant-admit-default",
+                    lifecycle=lifecycle,
+                    parent_detail=SimpleNamespace(
+                        key="MAB-244",
+                        issue_type="Initiative",
+                        summary="Unsupported parent type",
+                        status="Backlog",
+                        description="Initiative parent should fail before planning",
+                        labels=["pm-parent"],
+                    ),
+                    product_brief={"objective": "Plan backlog"},
+                    project_key="MAB",
+                    planning_summary="Backlog planning completed.",
+                    fanout_summary="Child fanout completed.",
+                )
+
+            self.assertIn("supports Epic -> story-level children and Story -> Sub-task only", str(raised.exception.detail))
+            self.assertEqual(planner.product_briefs, [])
 
     def test_backlog_planning_with_technical_decision_completes_without_jira_comment(self) -> None:
         with self.session_factory() as session:
@@ -302,6 +462,7 @@ class ParentFeaturePlanningWorkflowTests(SqliteTemplateDbTestCase):
                 lifecycle=lifecycle,
                 parent_detail=SimpleNamespace(
                     key="MAB-242",
+                    issue_type="Epic",
                     summary="Internal PM resolution",
                     status="Backlog",
                     description="Planning question can be answered internally",
@@ -420,6 +581,7 @@ class ParentFeaturePlanningWorkflowTests(SqliteTemplateDbTestCase):
                 lifecycle=lifecycle,
                 parent_detail=SimpleNamespace(
                     key="MAB-243",
+                    issue_type="Epic",
                     summary="PM decision resolution",
                     status="Backlog",
                     description="Planning question should be resolved internally",

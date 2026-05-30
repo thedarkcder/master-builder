@@ -10,11 +10,13 @@ from sqlalchemy.orm import Session
 from orchestrator.storage.models import ProjectInstall
 
 INSTALL_KIND_FASTLANE = "fastlane_lane"
+INSTALL_KIND_INTEGRATION = "integration"
 INSTALL_KIND_SUPABASE = "supabase_command"
 INSTALL_KIND_RAILWAY = "railway_command"
 INSTALL_KIND_SLACK = "slack_action"
 SUPPORTED_INSTALL_KINDS = (
     INSTALL_KIND_FASTLANE,
+    INSTALL_KIND_INTEGRATION,
     INSTALL_KIND_SUPABASE,
     INSTALL_KIND_RAILWAY,
     INSTALL_KIND_SLACK,

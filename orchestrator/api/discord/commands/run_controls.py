@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from collections.abc import Callable
+from datetime import datetime, timezone
 import logging
 from typing import Any
+from uuid import uuid4
 
 from fastapi import HTTPException, status
 from sqlalchemy import select
@@ -26,11 +28,20 @@ from orchestrator.core.communications.execution_admission_format import (
 )
 from orchestrator.core.decision.engine import DecisionEventInput, DecisionSource
 from orchestrator.core.decision.clarification_port import DecisionClarificationPort
+from orchestrator.core.decision.effect_service import publish_decision_effects
+from orchestrator.core.decision.reply_service import (
+    active_case_and_cycle_for_issue,
+    capture_decision_reply,
+    interpret_decision_reply,
+    list_cycle_answers,
+)
 from orchestrator.core.decision.state_machine import resolve_execution_admission
 from orchestrator.core.decision.state_machine import (
     ExecutionAdmissionReason,
     build_execution_admission_block,
 )
+from orchestrator.core.decision.types import PrecheckOutcome
+from orchestrator.core.development.self_executable_contract import resolve_self_executable_planning_contract
 from orchestrator.core.pm.followup_context_service import (
     FOLLOWUP_CONTEXT_DECISION_GATE,
     close_followup_contexts,
@@ -76,6 +87,8 @@ def _queue_run_from_issue_context(
     decision_clarification_port: DecisionClarificationPort,
     settings_factory: Callable[[], Any],
     tenant_atlassian_oauth_context: Callable[..., Any],
+    build_codex_runtime: Callable[..., Any],
+    resolve_codex_working_dir: Callable[..., str],
     conflict_prefix: str,
     success_message: str,
 ) -> DiscordCommandResponse:
@@ -87,7 +100,7 @@ def _queue_run_from_issue_context(
         event=DecisionEventInput(
             source=source,
             event_type="discord_run_control",
-            idempotency_key=None,
+            idempotency_key=f"{source}:{issue_key}:{uuid4().hex}",
             issue_key=issue_key,
             issue_summary=issue_summary,
             issue_description=issue_description,
@@ -101,11 +114,56 @@ def _queue_run_from_issue_context(
     )
     admission = resolve_execution_admission(decision_result=decision_result)
     if admission.blocked:
-        conflict = present_discord_admission_conflict(admission=admission)
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail=conflict.detail,
+        clarification_presentation = build_decision_clarification_presentation(
+            decision_result=decision_result,
+            question_feedback=load_cycle_question_feedback(
+                session=session,
+                cycle_id=str(decision_result.cycle_id or ""),
+            ),
         )
+        if clarification_presentation.recheck_required:
+            clarification_response = present_discord_decision_clarification(
+                issue_key=issue_key,
+                presentation=clarification_presentation,
+                precheck_message_builder=lambda: build_runtime_precheck_message(
+                    runtime=build_codex_runtime(session=session, settings=settings),
+                    invocation_context=AgentInvocationContext(
+                        channel="discord",
+                        tenant_id=tenant.tenant_id,
+                        project_id=project.project_id,
+                        command="run",
+                        stage="precheck_message",
+                        working_dir=resolve_codex_working_dir(
+                            session=session,
+                            tenant=tenant,
+                            settings=settings,
+                            project_id=project.project_id,
+                            project_keys=[project.jira_project_key],
+                        ),
+                        issue_key=issue_key,
+                    ),
+                    issue_key=issue_key,
+                    classification=clarification_presentation.mode,
+                    decision_gate_reason=clarification_presentation.decision_gate_reason or "",
+                    decision_gate_questions=list(clarification_presentation.decision_gate_questions),
+                    gtd_missing_criteria=list(clarification_presentation.gtd_missing_criteria),
+                    gtd_questions=list(clarification_presentation.gtd_questions),
+                    missing_slots=list(clarification_presentation.missing_slots),
+                ),
+            )
+            return DiscordCommandResponse(
+                ok=True,
+                command="retry" if source == "discord_retry" else "run",
+                message=clarification_response.message,
+                data={
+                    "issue_key": issue_key,
+                    "recheck_required": True,
+                    "followup_context_type": FOLLOWUP_CONTEXT_DECISION_GATE,
+                    **clarification_response.response_fields,
+                },
+            )
+        conflict = present_discord_admission_conflict(admission=admission)
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=conflict.detail)
     enqueue_result = enqueue_issue_run_with_precheck(
         session,
         tenant_id=tenant_id,
@@ -135,6 +193,53 @@ def _queue_run_from_issue_context(
     return DiscordCommandResponse(
         ok=True,
         command="retry" if source == "discord_retry" else "run",
+        message=success_message.format(run_id=enqueue_result.run.run_id, issue_key=issue_key),
+        data={"run_id": enqueue_result.run.run_id, "issue_key": issue_key},
+    )
+
+
+def _queue_ready_self_executable_parent_run(
+    *,
+    session: Session,
+    tenant: Tenant,
+    tenant_id: str,
+    project: Any,  # noqa: ANN401
+    issue_key: str,
+    issue_summary: str | None,
+    issue_description: str | None,
+    conflict_prefix: str,
+    success_message: str,
+    command: str,
+) -> DiscordCommandResponse:
+    enqueue_result = enqueue_issue_run_with_precheck(
+        session,
+        tenant_id=tenant_id,
+        project_id=project.project_id,
+        issue_key=issue_key,
+        issue_summary=issue_summary,
+        issue_description=issue_description,
+        repo_url=project.github_repository,
+        delivery_id=None,
+        precheck_outcome=PrecheckOutcome.READY_FOR_AGENT.value,
+        required_worker_capability=None,
+        max_concurrent_runs=resolve_effective_policy(
+            tenant_policy=tenant.policy_config,
+            project_overrides=project.policy_overrides,
+        ).get("max_concurrent_runs"),
+    )
+    if not enqueue_result.enqueued:
+        conflict = present_discord_enqueue_conflict(
+            prefix=conflict_prefix,
+            reason=enqueue_result.reason,
+            enqueue_run_obj=enqueue_result.run,
+        )
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=conflict.detail,
+        )
+    return DiscordCommandResponse(
+        ok=True,
+        command=command,
         message=success_message.format(run_id=enqueue_result.run.run_id, issue_key=issue_key),
         data={"run_id": enqueue_result.run.run_id, "issue_key": issue_key},
     )
@@ -175,13 +280,9 @@ def dispatch_run_control_command(
                 detail=f"Issue {issue_key} is outside the mapped project scope",
             )
         issue_preview = fetch_issue_preview(session=session, tenant=tenant, issue_key=issue_key)
-        ensure_issue_is_executable(
-            issue_status=issue_preview.status,
-            tenant=tenant,
-            extra_executable_statuses=("In Progress",),
-        )
         issue_description: str | None = None
         issue_labels: list[str] | None = None
+        issue_detail = None
         try:
             issue_detail = fetch_issue_detail(session=session, tenant=tenant, issue_key=issue_key)
             refreshed_description = str(getattr(issue_detail, "description", "") or "").strip()
@@ -193,6 +294,25 @@ def dispatch_run_control_command(
         except HTTPException:
             issue_description = None
             issue_labels = None
+        if issue_detail is not None:
+            self_executable_contract = resolve_self_executable_planning_contract(
+                session=session,
+                tenant_id=tenant_id,
+                source_issue=issue_detail,
+            )
+            if self_executable_contract is not None:
+                return _queue_ready_self_executable_parent_run(
+                    session=session,
+                    tenant=tenant,
+                    tenant_id=tenant_id,
+                    project=project,
+                    issue_key=issue_key,
+                    issue_summary=self_executable_contract.summary,
+                    issue_description=self_executable_contract.description,
+                    conflict_prefix="Run could not be queued",
+                    success_message="Queued run {run_id} for {issue_key}",
+                    command="run",
+                )
         return _queue_run_from_issue_context(
             session=session,
             tenant=tenant,
@@ -206,6 +326,8 @@ def dispatch_run_control_command(
             decision_clarification_port=decision_clarification_port,
             settings_factory=settings_factory,
             tenant_atlassian_oauth_context=tenant_atlassian_oauth_context,
+            build_codex_runtime=build_codex_runtime,
+            resolve_codex_working_dir=resolve_codex_working_dir,
             conflict_prefix="Run could not be queued",
             success_message="Queued run {run_id} for {issue_key}",
         )
@@ -259,13 +381,9 @@ def dispatch_run_control_command(
                 detail=f"Run {run.run_id} is {run.status}; only failed/blocked/cancelled runs can be retried",
             )
         issue_preview = fetch_issue_preview(session=session, tenant=tenant, issue_key=run.issue_key)
-        ensure_issue_is_executable(
-            issue_status=issue_preview.status,
-            tenant=tenant,
-            extra_executable_statuses=("In Progress",),
-        )
         issue_description = run.issue_description
         issue_labels: list[str] | None = None
+        issue_detail = None
         try:
             issue_detail = fetch_issue_detail(session=session, tenant=tenant, issue_key=run.issue_key)
             refreshed_description = str(getattr(issue_detail, "description", "") or "").strip()
@@ -287,6 +405,25 @@ def dispatch_run_control_command(
                 status_code=status.HTTP_403_FORBIDDEN,
                 detail=f"Issue {run.issue_key} is outside the mapped project scope",
             )
+        if issue_detail is not None:
+            self_executable_contract = resolve_self_executable_planning_contract(
+                session=session,
+                tenant_id=tenant_id,
+                source_issue=issue_detail,
+            )
+            if self_executable_contract is not None:
+                return _queue_ready_self_executable_parent_run(
+                    session=session,
+                    tenant=tenant,
+                    tenant_id=tenant_id,
+                    project=project,
+                    issue_key=run.issue_key,
+                    issue_summary=self_executable_contract.summary,
+                    issue_description=self_executable_contract.description,
+                    conflict_prefix="Retry could not be queued",
+                    success_message="Queued retry run {run_id} for {issue_key}",
+                    command="retry",
+                )
         return _queue_run_from_issue_context(
             session=session,
             tenant=tenant,
@@ -300,6 +437,8 @@ def dispatch_run_control_command(
             decision_clarification_port=decision_clarification_port,
             settings_factory=settings_factory,
             tenant_atlassian_oauth_context=tenant_atlassian_oauth_context,
+            build_codex_runtime=build_codex_runtime,
+            resolve_codex_working_dir=resolve_codex_working_dir,
             conflict_prefix="Retry could not be queued",
             success_message="Queued retry run {run_id} for {issue_key}",
         )
@@ -401,6 +540,85 @@ def dispatch_run_control_command(
             except Exception as exc:  # noqa: BLE001
                 return False, str(exc)
 
+        _case, active_cycle = active_case_and_cycle_for_issue(
+            session=session,
+            tenant_id=tenant.tenant_id,
+            issue_key=issue_key,
+        )
+        interpreted_reply = None
+        if active_cycle is not None:
+            interpreted_reply = interpret_decision_reply(
+                session=session,
+                settings=settings,
+                tenant=tenant,
+                project=project,
+                issue_key=issue_key,
+                issue_summary=issue_summary,
+                issue_description=issue_description,
+                cycle=active_cycle,
+                reply_text=reply_text,
+                existing_answers=list_cycle_answers(session=session, cycle_id=active_cycle.cycle_id),
+            )
+            if not any(action.type == "capture_decision_answer" for action in interpreted_reply.actions):
+                question_feedback = load_cycle_question_feedback(
+                    session=session,
+                    cycle_id=active_cycle.cycle_id,
+                )
+                return DiscordCommandResponse(
+                    ok=True,
+                    command="reply",
+                    message=interpreted_reply.message,
+                    data={
+                        "issue_key": issue_key,
+                        "recheck_required": True,
+                        "conversation_response": True,
+                        "questions": [
+                            str(item.get("question_text") or "").strip()
+                            for item in question_feedback
+                            if str(item.get("question_text") or "").strip()
+                        ],
+                        "question_feedback": list(question_feedback),
+                        "knowledge_mode": None,
+                    },
+                )
+            if not any(action.type == "recheck_gate" for action in interpreted_reply.actions):
+                capture = capture_decision_reply(
+                    session=session,
+                    settings=settings,
+                    tenant=tenant,
+                    project=project,
+                    issue_key=issue_key,
+                    reply_text=reply_text,
+                    source_transport="discord",
+                    source_ref=source_ref,
+                    actor_ref=payload.user_id,
+                    metadata={
+                        "channel_id": payload.channel_id,
+                        "ingress": "discord",
+                    },
+                    interpreted_reply=interpreted_reply,
+                )
+                capture_effect_ids = tuple(getattr(capture, "effect_ids", ()) or ())
+                if capture_effect_ids:
+                    publish_decision_effects(
+                        session=session,
+                        effect_ids=capture_effect_ids,
+                        publish_jira_comment_fn=_publish_jira_comment,
+                        occurred_at=datetime.now(timezone.utc),
+                    )
+                return DiscordCommandResponse(
+                    ok=True,
+                    command="reply",
+                    message=interpreted_reply.message,
+                    data={
+                        "issue_key": issue_key,
+                        "actions_applied": [action.type for action in interpreted_reply.actions],
+                        "recheck_requested": False,
+                        "evidence_id": capture.evidence_id,
+                        "knowledge_mode": None,
+                    },
+                )
+
         try:
             reply_result = decision_clarification_port.capture_decision_reply_and_recheck(
                 session=session,
@@ -429,6 +647,7 @@ def dispatch_run_control_command(
                 evaluate_pre_run_check_fn=evaluate_pre_run_check,
                 oauth_context=oauth,
                 publish_jira_comment_fn=_publish_jira_comment,
+                interpreted_reply=interpreted_reply,
             )
         except ValueError as exc:
             raise HTTPException(
@@ -489,7 +708,7 @@ def dispatch_run_control_command(
             return DiscordCommandResponse(
                 ok=True,
                 command=command_name,
-                message=clarification_response.message,
+                message=interpreted_reply.message if interpreted_reply is not None else clarification_response.message,
                 data={
                     "issue_key": issue_key,
                     "recheck_required": True,
@@ -508,11 +727,6 @@ def dispatch_run_control_command(
         )
 
         issue_preview = fetch_issue_preview(session=session, tenant=tenant, issue_key=issue_key)
-        ensure_issue_is_executable(
-            issue_status=issue_preview.status,
-            tenant=tenant,
-            extra_executable_statuses=("In Progress",),
-        )
         rechecked_issue_labels = getattr(decision_result, "issue_labels", None)
         effective_issue_labels = list(rechecked_issue_labels or issue_labels or [])
         pre_check = getattr(getattr(decision_result, "decision", None), "pre_check", None)
@@ -533,6 +747,8 @@ def dispatch_run_control_command(
             decision_clarification_port=decision_clarification_port,
             settings_factory=settings_factory,
             tenant_atlassian_oauth_context=tenant_atlassian_oauth_context,
+            build_codex_runtime=build_codex_runtime,
+            resolve_codex_working_dir=resolve_codex_working_dir,
             conflict_prefix="Retry could not be queued" if has_retryable_run else "Run could not be queued",
             success_message=(
                 "Queued retry run {run_id} for {issue_key}"

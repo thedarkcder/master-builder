@@ -29,7 +29,7 @@ from orchestrator.core.worker.queue_selector import (
 from orchestrator.core.worker.runtime_factory import build_workflow_runner_for_session
 from orchestrator.core.worker.capabilities import resolve_worker_capability_context
 from orchestrator.core.workflow.runner import WorkflowRunner
-from orchestrator.storage.models import Run, WebhookJob, WorkflowExecution
+from orchestrator.storage.models import Run, WebhookJob
 
 logger = logging.getLogger(__name__)
 
@@ -143,12 +143,6 @@ def reconcile_claimed_run_after_child_exit(
             return None
         status = str(getattr(run, "status", "") or "").strip().lower()
         if status == RUN_STATUS_DISPATCHING:
-            workflow = session.get(WorkflowExecution, str(getattr(run, "workflow_id", "") or "").strip())
-            if (
-                workflow is not None
-                and str(getattr(workflow, "orchestration_backend", "") or "").strip().lower() == "temporal"
-            ):
-                return "temporal_handoff"
             current_claim_id = str(getattr(run, "claim_id", "") or "").strip()
             expected_claim_id = str(claim_id or "").strip()
             if current_claim_id and current_claim_id != expected_claim_id:

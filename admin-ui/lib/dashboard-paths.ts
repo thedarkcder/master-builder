@@ -2,6 +2,7 @@ export type ProjectSection =
   | "overview"
   | "knowledge"
   | "settings"
+  | "installs"
   | "runs"
   | "webhooks"
   | "notifications"
@@ -70,6 +71,7 @@ export function resolveProjectSection(pathname: string): ProjectSection | null {
   if (
     rawSection === "settings" ||
     rawSection === "knowledge" ||
+    rawSection === "installs" ||
     rawSection === "runs" ||
     rawSection === "webhooks" ||
     rawSection === "notifications" ||

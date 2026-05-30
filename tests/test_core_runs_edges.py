@@ -48,6 +48,39 @@ class CoreRunsEdgeTests(unittest.TestCase):
                     delivery_id="d-1",
                 )
 
+    def test_enqueue_flushes_workflow_before_adding_run_attempt(self) -> None:
+        session = MagicMock()
+        added_model_names: list[str] = []
+
+        def add_and_track(model: object) -> None:
+            added_model_names.append(type(model).__name__)
+
+        def assert_workflow_flushed_first() -> None:
+            self.assertEqual(added_model_names, ["WorkflowExecution"])
+
+        session.add.side_effect = add_and_track
+        session.flush.side_effect = assert_workflow_flushed_first
+        with (
+            patch("orchestrator.core.runs.service._active_workflow_for_issue", return_value=None),
+            patch("orchestrator.core.runs.service._active_run_count_for_tenant", return_value=0),
+            patch("orchestrator.core.runs.service.notify_run_enqueued"),
+            patch("orchestrator.core.runs.service._resolve_required_runtime_kinds", return_value=["codex_cli"]),
+        ):
+            result = enqueue_run(
+                session,
+                tenant_id="tenant-a",
+                project_id="project-a",
+                issue_key="TP-1",
+                issue_summary="Ready issue",
+                issue_description="Ready description",
+                repo_url="https://github.com/example/repo",
+                precheck_outcome="ready_for_agent",
+        )
+
+        self.assertTrue(result.enqueued)
+        self.assertEqual(added_model_names[:2], ["WorkflowExecution", "Run"])
+        session.flush.assert_called_once()
+
     def test_enqueue_raises_when_concurrency_limit_reached_without_active_run(self) -> None:
         session = MagicMock()
         with (

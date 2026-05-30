@@ -9,14 +9,14 @@ from sqlalchemy import func, select
 from sqlalchemy.orm import Session
 from sqlalchemy.exc import IntegrityError
 
-from orchestrator.core.projects.policy import resolve_effective_policy
 from orchestrator.core.runtime.requirements import normalize_runtime_kinds, required_runtime_kinds_for_run
 from orchestrator.core.worker.capability_normalization import WorkerCapability
 from orchestrator.core.worker.capabilities import (
     parse_worker_capabilities,
     required_worker_capability_for_run,
 )
-from orchestrator.core.worker.run_lifecycle import claim_run_for_dispatch, resolve_project_for_run
+from orchestrator.core.worker.run_lifecycle import claim_run_for_dispatch
+from orchestrator.core.worker.run_execution_context import resolve_run_execution_policy_context
 from orchestrator.storage.models import Project, Run, Tenant, TenantRunClaim
 
 logger = logging.getLogger(__name__)
@@ -217,17 +217,16 @@ def _evaluate_candidate(
             tenant_missing=True,
         )
 
-    project = resolve_project_for_run(session, run=candidate)
-    project_overrides = project.policy_overrides if project is not None else {}
-    effective_policy = resolve_effective_policy(
-        tenant_policy=candidate_tenant.policy_config,
-        project_overrides=project_overrides,
+    policy_context = resolve_run_execution_policy_context(
+        session,
+        tenant=candidate_tenant,
+        run=candidate,
     )
     return QueueCandidateEvaluation(
         candidate=candidate,
         tenant=candidate_tenant,
-        project=project,
-        effective_policy=effective_policy,
+        project=policy_context.project,
+        effective_policy=policy_context.effective_policy,
         capability_compatible=True,
         runtime_ready=True,
         tenant_missing=False,

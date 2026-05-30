@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import logging
 import re
 
@@ -54,6 +55,11 @@ from orchestrator.core.pm.followup_context_service import (
 from orchestrator.api.schemas import DiscordCommandRequest
 from orchestrator.core.config import get_settings
 from orchestrator.core.discord.channel_tenant_index import resolve_tenant_for_discord_channel
+from orchestrator.core.platform.install_request_service import (
+    approve_install_request,
+    get_project_install_request,
+    reject_install_request,
+)
 from orchestrator.core.platform.secret_service import resolve_platform_secret_ref
 from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.models import Project, Tenant
@@ -529,6 +535,114 @@ async def _run_discord_ask_confirmation_followup(
         interaction_token=interaction_token,
         run_discord_ask_confirmation_followup_blocking_fn=_run_discord_ask_confirmation_followup_blocking,
     )
+
+
+async def _run_project_install_request_decision_followup(
+    *,
+    tenant_id: str | None,
+    user_id: str,
+    channel_id: str,
+    decision: str,
+    request_id: str,
+    application_id: str,
+    interaction_token: str,
+) -> None:
+    await asyncio.to_thread(
+        _run_project_install_request_decision_followup_blocking,
+        tenant_id=tenant_id,
+        user_id=user_id,
+        channel_id=channel_id,
+        decision=decision,
+        request_id=request_id,
+        application_id=application_id,
+        interaction_token=interaction_token,
+    )
+
+
+def _run_project_install_request_decision_followup_blocking(
+    *,
+    tenant_id: str | None,
+    user_id: str,
+    channel_id: str,
+    decision: str,
+    request_id: str,
+    application_id: str,
+    interaction_token: str,
+) -> None:
+    session_factory = create_session_factory()
+    settings = get_settings()
+    with session_factory() as session:
+        resolved_tenant_id = resolve_tenant_id_for_followup(
+            session_factory=session_factory,
+            resolve_tenant_for_channel_fn=resolve_tenant_for_discord_channel,
+            tenant_id=tenant_id,
+            channel_id=channel_id,
+        )
+        if not resolved_tenant_id:
+            _send_discord_interaction_followup(
+                application_id=application_id,
+                interaction_token=interaction_token,
+                content="No enabled tenant is configured for this Discord channel.",
+                ephemeral=True,
+            )
+            return
+        request = get_project_install_request(session=session, request_id=request_id)
+        if request is None or request.tenant_id != resolved_tenant_id:
+            _send_discord_interaction_followup(
+                application_id=application_id,
+                interaction_token=interaction_token,
+                content="I could not find that install approval request for this workspace.",
+                ephemeral=True,
+            )
+            return
+        project = session.get(Project, request.project_id)
+        if project is None or project.tenant_id != request.tenant_id:
+            _send_discord_interaction_followup(
+                application_id=application_id,
+                interaction_token=interaction_token,
+                content="The project for that install approval request no longer exists.",
+                ephemeral=True,
+            )
+            return
+        try:
+            if decision == "approve":
+                updated = approve_install_request(
+                    session=session,
+                    settings=settings,
+                    request=request,
+                    project=project,
+                    source_ref=f"discord:{user_id}",
+                )
+                content = (
+                    f"Approved `{updated.label}` for `{updated.issue_key}`. "
+                    "Master Builder created any missing project secret placeholders and resumed the run."
+                )
+            elif decision == "reject":
+                updated = reject_install_request(
+                    session=session,
+                    settings=settings,
+                    request=request,
+                    source_ref=f"discord:{user_id}",
+                )
+                content = f"Rejected `{updated.label}` for `{updated.issue_key}`. The run has been resumed to replan."
+            else:
+                content = "Unsupported install approval decision."
+        except Exception as exc:  # noqa: BLE001
+            logger.exception(
+                "discord_install_request_decision_failed tenant_id=%s channel_id=%s request_id=%s decision=%s error=%s",
+                resolved_tenant_id,
+                channel_id,
+                request_id,
+                decision,
+                exc,
+            )
+            content = f"Install approval failed: {exc}"
+        _send_discord_interaction_followup(
+            application_id=application_id,
+            interaction_token=interaction_token,
+            content=content,
+            ephemeral=True,
+        )
 
 
 

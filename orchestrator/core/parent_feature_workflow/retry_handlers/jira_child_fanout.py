@@ -209,6 +209,7 @@ class JiraChildFanoutRetryExecutor:
             attempt=attempt,
             parent_issue_key=parent_issue_key,
             parent_detail=parent_detail,
+            product_brief=brief_payload,
             planning_result=planning_result,
             planning_package=planning_package,
         )

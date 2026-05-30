@@ -8,6 +8,7 @@ from orchestrator.core.runtime.payload_models import (
     DecisionPlanner,
     DesignPlanning,
     EngineeringSeedPlan,
+    InteractionResponse,
     PlannerGateStatus,
     PmParentSeedPlan,
     PMDecisionRequest,
@@ -285,6 +286,40 @@ def test_pm_decision_request_payload_requires_related_decision_ids() -> None:
 
     assert request.request_id == "pm-decision-1"
     assert request.to_payload()["related_decision_ids"] == ["decision-1"]
+
+
+def test_interaction_response_payload_supports_message_without_actions() -> None:
+    response = InteractionResponse.from_payload(
+        {
+            "message": "I need to know which HubSpot information defines the paid annual subscription.",
+            "actions": [],
+        }
+    )
+
+    assert "HubSpot information" in response.message
+    assert response.actions == ()
+
+
+def test_interaction_response_payload_supports_actions() -> None:
+    response = InteractionResponse.from_payload(
+        {
+            "message": "That gives me the HubSpot subscription rule.",
+            "actions": [
+                {
+                    "type": "capture_decision_answer",
+                    "payload": {
+                        "question_id": "hubspot_subscription_rules",
+                        "status": "accepted",
+                        "answer": "A paid annual invoice activates access.",
+                        "notes": "Business subscription rule provided.",
+                    },
+                }
+            ],
+        }
+    )
+
+    assert response.actions[0].type == "capture_decision_answer"
+    assert response.actions[0].payload["question_id"] == "hubspot_subscription_rules"
 
 
 def test_pm_decision_request_payload_rejects_empty_related_decision_ids() -> None:
