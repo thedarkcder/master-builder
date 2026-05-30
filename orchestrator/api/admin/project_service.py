@@ -1402,6 +1402,7 @@ def _latest_deployment_release(
     query = select(ProjectDeploymentRelease).where(
         ProjectDeploymentRelease.tenant_id == tenant_id,
         ProjectDeploymentRelease.project_id == project_id,
+        ProjectDeploymentRelease.release_kind == "production",
     )
     normalized_app_id = _normalize_optional_string(app_id)
     if normalized_app_id is None:
