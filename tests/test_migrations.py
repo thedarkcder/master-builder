@@ -65,7 +65,7 @@ class MigrationTests(unittest.TestCase):
 
         duplicates = {revision_id: count for revision_id, count in Counter(revision_ids).items() if count > 1}
         self.assertEqual(duplicates, {})
-        self.assertEqual(script.get_heads(), ["20260527_0116"])
+        self.assertEqual(script.get_heads(), ["20260530_0117"])
 
     def test_project_install_request_label_normalization_migration_canonicalizes_provider_labels(self) -> None:
         module = self._load_migration_module(
@@ -110,7 +110,7 @@ class MigrationTests(unittest.TestCase):
             with engine.connect() as connection:
                 versions = connection.execute(text("SELECT version_num FROM alembic_version")).scalars().all()
 
-            self.assertEqual(versions, ["20260527_0116"])
+            self.assertEqual(versions, ["20260530_0117"])
 
     def test_requeue_snapshot_reason_repair_migration_backfills_missing_reason(self) -> None:
         migration = self._load_migration_module(
@@ -2005,7 +2005,7 @@ class MigrationTests(unittest.TestCase):
 
             with engine.begin() as connection:
                 versions = connection.execute(text("SELECT version_num FROM alembic_version")).scalars().all()
-            self.assertEqual(versions, ["20260527_0116"])
+            self.assertEqual(versions, ["20260530_0117"])
 
     def test_run_migrations_disables_alembic_logger_reconfiguration(self) -> None:
         fake_config = MagicMock()

@@ -7,6 +7,7 @@ import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 from tempfile import TemporaryDirectory
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from fastapi import HTTPException, status
@@ -37,6 +38,10 @@ from orchestrator.core.deployment_github_events import (
     GitHubDeploymentReleaseRequest,
     create_deployment_releases_for_github_push,
 )
+from orchestrator.core.deployment_previews import (
+    create_run_preview_deployment,
+    destroy_run_preview_deployments_for_pr,
+)
 from orchestrator.core.deployment_runtime import (
     _coolify_observation_for_release,
     _resolve_release_observation_transition,
@@ -46,13 +51,15 @@ from orchestrator.core.deployment_setup.compose_normalizer import (
     CoolifyComposeNormalizationResult,
     normalize_compose_for_coolify,
 )
+from orchestrator.core.deployment_setup.artifacts import (
+    ensure_deployment_compose_artifact as _ensure_deployment_compose_artifact,
+    sync_npm_lockfiles_for_deployment_branch as _sync_npm_lockfiles_for_deployment_branch,
+)
 from orchestrator.core.deployment_setup.planner import DeploymentPlannerResponse
 from orchestrator.core.deployment_setup.start import project_deployment_setup_workflow_id
 from orchestrator.temporal.activities.project_deployment_setup import (
     _create_initial_setup_release,
-    _ensure_deployment_compose_artifact,
     _supersede_failed_deployment_setup_executions,
-    _sync_npm_lockfiles_for_deployment_branch,
 )
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
@@ -61,7 +68,9 @@ from orchestrator.storage.models import (
     ProjectApp,
     ProjectAppAnalysisRun,
     ProjectDeploymentRelease,
+    Run,
     Tenant,
+    WorkflowExecutionArtifact,
     WorkflowExecution,
     WorkflowOperation,
 )
@@ -194,6 +203,146 @@ class DeploymentContractTests(unittest.TestCase):
             settings_factory=lambda: object(),
         )
 
+    def _seed_preview_run(self, *, session, now: datetime, commit_sha: str):  # noqa: ANN001
+        tenant = Tenant(
+            tenant_id="tenant-preview",
+            name="Tenant Preview",
+            is_enabled=True,
+            jira_config={},
+            github_config={},
+            repos_config={},
+            policy_config={},
+            discord_config=None,
+            deployment_plane_config={},
+            created_at=now,
+            updated_at=now,
+        )
+        project = Project(
+            project_id="project-preview",
+            tenant_id=tenant.tenant_id,
+            name="Project Preview",
+            github_repository="https://github.com/example/repo",
+            jira_project_key="TP",
+            policy_overrides={},
+            environment={},
+            secret_refs={},
+            discord_config=None,
+            deployment_config={
+                "enabled": True,
+                "production_branch": "main",
+                "preview_prs_enabled": True,
+            },
+            is_archived=False,
+            created_at=now,
+            updated_at=now,
+        )
+        workflow = WorkflowExecution(
+            workflow_id="workflow-preview-1",
+            execution_id="execution-preview-1",
+            workflow_type_key="development_team_run",
+            tenant_id=tenant.tenant_id,
+            project_id=project.project_id,
+            source_system="jira",
+            source_ref="AP-123",
+            source_external_id="AP-123",
+            display_name="AP-123",
+            source_description=None,
+            repo_url=project.github_repository,
+            branch="feature/AP-123",
+            pr_url=None,
+            orchestration_backend="temporal",
+            dedupe_scope="issue_execution",
+            status="running",
+            last_error=None,
+            active_run_id="run-1",
+            latest_checkpoint_id=None,
+            source_workflow_id=None,
+            source_run_id=None,
+            created_at=now,
+            started_at=now,
+            finished_at=None,
+            updated_at=now,
+        )
+        run = Run(
+            run_id="run-1",
+            workflow_id=workflow.workflow_id,
+            tenant_id=tenant.tenant_id,
+            project_id=project.project_id,
+            issue_key="AP-123",
+            issue_summary="Preview issue",
+            issue_description="Preview issue description",
+            repo_url=project.github_repository,
+            branch="feature/AP-123",
+            pr_url=None,
+            attempt_number=1,
+            parent_run_id=None,
+            entry_mode="fresh",
+            entry_stage="pm",
+            entry_checkpoint_id=None,
+            dedupe_scope="issue_execution",
+            status="running",
+            last_error=None,
+            pre_check_outcome=None,
+            required_worker_capability=None,
+            required_runtime_kinds_json=[],
+            claim_id=None,
+            plan={},
+            created_at=now,
+            dispatch_claimed_at=None,
+            started_at=now,
+            last_heartbeat_at=now,
+            worker_service_instance_id=None,
+            finished_at=None,
+        )
+        app = ProjectApp(
+            app_id="app-1",
+            tenant_id=tenant.tenant_id,
+            project_id=project.project_id,
+            name="Web",
+            slug="web",
+            source_path=".",
+            detection_confidence=1.0,
+            detected_runtime="node",
+            detected_language="typescript",
+            analysis_source="deployment_setup",
+            build_strategy="dockerfile",
+            exposed_port=3000,
+            healthcheck="/health",
+            start_command=None,
+            env_schema_json={},
+            secret_schema_json={},
+            deployment_config={
+                "enabled": True,
+                "environment_name": "production",
+                "source_strategy": "dockerfile",
+                "resources": [],
+                "services": [],
+                "volumes": [],
+            },
+            status="ready",
+            created_at=now,
+            updated_at=now,
+        )
+        artifact = WorkflowExecutionArtifact(
+            artifact_id="artifact-1",
+            tenant_id=tenant.tenant_id,
+            project_id=project.project_id,
+            workflow_id=workflow.workflow_id,
+            run_id=run.run_id,
+            artifact_kind="execution_branch",
+            status="pushed",
+            repo_url=project.github_repository,
+            branch="run/ap-123/run-1",
+            commit_sha=commit_sha,
+            diff_stat_json={},
+            pushed_at=now,
+            created_at=now,
+            updated_at=now,
+        )
+        session.add_all([tenant, project, workflow, run, app, artifact])
+        session.flush()
+        return tenant, project, run
+
     def test_deployment_config_write_rejects_raw_secret_material(self) -> None:
         with self.assertRaises(ValidationError):
             ProjectDeploymentConfigWrite.model_validate(
@@ -207,6 +356,188 @@ class DeploymentContractTests(unittest.TestCase):
                     ]
                 }
             )
+
+    def test_run_preview_deployment_uses_pushed_execution_artifact_and_marks_mobile_delivery(self) -> None:
+        now = datetime.now(timezone.utc)
+        commit_sha = "a" * 40
+        with self.session_factory() as session:
+            tenant, project, run = self._seed_preview_run(session=session, now=now, commit_sha=commit_sha)
+            session.add(
+                ProjectApp(
+                    app_id="mobile-1",
+                    tenant_id=tenant.tenant_id,
+                    project_id=project.project_id,
+                    name="iOS App",
+                    slug="ios-app",
+                    source_path="apps/ios",
+                    detection_confidence=1.0,
+                    detected_runtime="ios",
+                    detected_language="swift",
+                    analysis_source="test",
+                    build_strategy=None,
+                    exposed_port=None,
+                    healthcheck=None,
+                    start_command=None,
+                    env_schema_json={},
+                    secret_schema_json={},
+                    deployment_config={},
+                    status="ready",
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            session.commit()
+
+            captured: dict[str, object] = {}
+
+            def fake_create_release(**kwargs):
+                payload = kwargs["payload"]
+                captured["payload"] = payload
+                return SimpleNamespace(release_id="release-preview-1")
+
+            with patch("orchestrator.core.deployment_previews.create_project_deployment_release", side_effect=fake_create_release):
+                result = create_run_preview_deployment(
+                    session=session,
+                    tenant=tenant,
+                    project=project,
+                    run=run,
+                    settings=SimpleNamespace(project_repo_checkout_base_dir="/tmp/unused", secrets_encryption_key="unused"),
+                    pr_url="https://github.com/example/repo/pull/12",
+                )
+
+        payload = captured["payload"]
+        self.assertTrue(result.created)
+        self.assertEqual(payload.release_kind, "run_preview")
+        self.assertEqual(payload.git_ref, "run/ap-123/run-1")
+        self.assertEqual(payload.commit_sha, commit_sha)
+        self.assertEqual(payload.source_run_id, "run-1")
+        self.assertEqual(payload.pr_number, 12)
+        self.assertEqual(payload.delivery_metadata["mobile_delivery"]["status"], "pending_fastlane_distribution")
+
+    def test_run_preview_release_uses_config_override_without_mutating_app_config(self) -> None:
+        self._seed_tenant_project_app()
+        now = datetime.now(timezone.utc)
+        original_branch = "mb/deploy/project-1/main-aaaaaaaaaaaa"
+        preview_branch = "mb/deploy/project-1/run-preview-bbbbbbbbbbbb"
+        with self.session_factory() as session:
+            app = session.get(ProjectApp, "app-1")
+            assert app is not None
+            app.build_strategy = "docker_compose"
+            app.deployment_config = {
+                "enabled": True,
+                "environment_name": "production",
+                "source_strategy": "docker_compose",
+                "source_branch": "main",
+                "source_commit_sha": "a" * 40,
+                "deployment_branch": original_branch,
+                "deployment_commit_sha": "a" * 40,
+                "deployment_compose_path": ".master-builder/deployments/docker-compose.yml",
+                "generated_compose_raw": "services:\n  web:\n    image: nginx\n    ports:\n      - '80:80'\n",
+                "domains": [],
+                "services": [
+                    {
+                        "key": "web",
+                        "kind": "website",
+                        "name": "Web",
+                        "compose_service": "web",
+                        "public": True,
+                        "container_port": 80,
+                    }
+                ],
+                "resources": [],
+                "volumes": [],
+                "backup_policies": [],
+            }
+            app.updated_at = now
+            session.commit()
+
+            captured: dict[str, object] = {}
+
+            def fake_submit(**kwargs):
+                captured["project_deployment"] = kwargs["project_deployment"]
+                return {"application_uuid": "coolify-app-1", "deployment_uuid": "deployment-1"}
+
+            with patch(
+                "orchestrator.api.admin.deployment_release_service.submit_internal_coolify_release",
+                side_effect=fake_submit,
+            ):
+                release = create_project_deployment_release(
+                    session=session,
+                    tenant_id="tenant-1",
+                    project_id="project-1",
+                    payload=ProjectDeploymentReleaseCreate(
+                        app_id="app-1",
+                        release_kind="run_preview",
+                        git_ref=preview_branch,
+                        commit_sha="b" * 40,
+                        source_run_id="run-preview-1",
+                        pr_number=31,
+                    ),
+                    requested_by_user_id=None,
+                    deployment_config_override={
+                        "deployment_branch": preview_branch,
+                        "deployment_commit_sha": "b" * 40,
+                        "deployment_compose_path": ".master-builder/deployments/docker-compose.yml",
+                    },
+                )
+
+            session.refresh(app)
+
+        submitted_config = captured["project_deployment"]
+        self.assertEqual(release.status, "provisioning")
+        self.assertEqual(submitted_config.deployment_branch, preview_branch)
+        self.assertEqual(submitted_config.deployment_commit_sha, "b" * 40)
+        self.assertEqual(app.deployment_config["deployment_branch"], original_branch)
+        self.assertEqual(app.status, "ready")
+
+    def test_pr_merge_cleanup_destroys_matching_preview_releases_only(self) -> None:
+        now = datetime.now(timezone.utc)
+        with self.session_factory() as session:
+            tenant, project, _run = self._seed_preview_run(session=session, now=now, commit_sha="b" * 40)
+            session.add(
+                ProjectDeploymentRelease(
+                    release_id="preview-release-1",
+                    tenant_id=tenant.tenant_id,
+                    project_id=project.project_id,
+                    app_id="app-1",
+                    provider="internal_coolify",
+                    release_kind="run_preview",
+                    status="live",
+                    environment_name="production",
+                    source_strategy="dockerfile",
+                    git_ref="run/ap-123/run-1",
+                    commit_sha="b" * 40,
+                    source_run_id="run-1",
+                    pr_number=12,
+                    requested_by_user_id=None,
+                    deployment_snapshot={},
+                    provider_context={"application_uuid": "coolify-app-1"},
+                    delivery_metadata={},
+                    last_error=None,
+                    requested_at=now,
+                    started_at=now,
+                    completed_at=now,
+                    destroyed_at=None,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            session.commit()
+
+            with patch(
+                "orchestrator.core.deployment_previews.destroy_project_deployment_preview_release",
+                return_value=SimpleNamespace(release_id="preview-release-1"),
+            ) as destroy_mock:
+                result = destroy_run_preview_deployments_for_pr(
+                    session=session,
+                    tenant_id=tenant.tenant_id,
+                    project_id=project.project_id,
+                    pr_number=12,
+                    reason="pr_merged",
+                )
+
+        self.assertEqual(result.destroyed_release_ids, ("preview-release-1",))
+        destroy_mock.assert_called_once()
 
     def test_successful_deployment_setup_supersedes_previous_failed_setup_executions(self) -> None:
         self._seed_tenant_project_app()
@@ -611,15 +942,16 @@ class DeploymentContractTests(unittest.TestCase):
         self.assertEqual(config.branch_settings["main"].secret_refs, {"DATABASE_URL": "tenant/tenant-1/DATABASE_URL"})
         self.assertEqual(config.resources[0].key, "db-primary")
 
-    def test_project_deployment_policy_rejects_unsupported_preview_pr_events(self) -> None:
-        with self.assertRaises(ValidationError):
-            ProjectDeploymentPolicyWrite.model_validate(
-                {
-                    "enabled": True,
-                    "production_branch": "main",
-                    "preview_prs_enabled": True,
-                }
-            )
+    def test_project_deployment_policy_accepts_preview_pr_events(self) -> None:
+        config = ProjectDeploymentPolicyWrite.model_validate(
+            {
+                "enabled": True,
+                "production_branch": "main",
+                "preview_prs_enabled": True,
+            }
+        )
+
+        self.assertTrue(config.preview_prs_enabled)
 
     def test_app_deployment_config_rejects_project_release_policy_fields(self) -> None:
         with self.assertRaises(ValidationError):
@@ -1661,6 +1993,9 @@ class DeploymentContractTests(unittest.TestCase):
                 "enabled": True,
                 "environment_name": "production",
                 "source_strategy": "docker_compose",
+                "deployment_branch": "main",
+                "deployment_commit_sha": "abcdef1",
+                "deployment_compose_path": ".master-builder/deployments/docker-compose.yml",
                 "domains": [],
                 "services": [
                     {
@@ -1919,6 +2254,9 @@ class DeploymentContractTests(unittest.TestCase):
                 "enabled": True,
                 "environment_name": "production",
                 "source_strategy": "docker_compose",
+                "deployment_branch": "main",
+                "deployment_commit_sha": "abcdef1",
+                "deployment_compose_path": ".master-builder/deployments/docker-compose.yml",
                 "domains": [],
                 "services": [
                     {
@@ -2029,6 +2367,9 @@ class DeploymentContractTests(unittest.TestCase):
                 "enabled": True,
                 "environment_name": "production",
                 "source_strategy": "docker_compose",
+                "deployment_branch": "main",
+                "deployment_commit_sha": "abcdef1",
+                "deployment_compose_path": ".master-builder/deployments/docker-compose.yml",
                 "domains": [],
                 "services": [
                     {
@@ -2154,6 +2495,9 @@ class DeploymentContractTests(unittest.TestCase):
                 "enabled": True,
                 "environment_name": "production",
                 "source_strategy": "docker_compose",
+                "deployment_branch": "main",
+                "deployment_commit_sha": "abcdef1",
+                "deployment_compose_path": ".master-builder/deployments/docker-compose.yml",
                 "domains": [],
                 "services": [
                     {

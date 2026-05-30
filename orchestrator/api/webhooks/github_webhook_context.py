@@ -172,7 +172,6 @@ async def resolve_github_webhook_context(*, request: Request, session, settings,
         "issue_comment",
         "check_suite",
         "check_run",
-        "push",
     }
     deployment_events = {"push"}
     if github_event not in review_events | deployment_events:

@@ -99,6 +99,9 @@ class ProjectDeploymentRelease(Base):
     __table_args__ = (
         Index("ix_project_deployment_releases_tenant_project_created_at", "tenant_id", "project_id", "created_at"),
         Index("ix_project_deployment_releases_project_status", "project_id", "status"),
+        Index("ix_project_deployment_releases_project_kind_status", "project_id", "release_kind", "status"),
+        Index("ix_project_deployment_releases_source_run_id", "source_run_id"),
+        Index("ix_project_deployment_releases_project_pr_number", "project_id", "pr_number"),
     )
 
     release_id: Mapped[str] = mapped_column(String(64), primary_key=True)
@@ -121,18 +124,28 @@ class ProjectDeploymentRelease(Base):
         index=True,
     )
     provider: Mapped[str] = mapped_column(String(64), nullable=False)
+    release_kind: Mapped[str] = mapped_column(String(32), nullable=False, default="production", index=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="queued", index=True)
     environment_name: Mapped[str | None] = mapped_column(String(128), nullable=True)
     source_strategy: Mapped[str | None] = mapped_column(String(64), nullable=True)
     git_ref: Mapped[str] = mapped_column(String(255), nullable=False)
     commit_sha: Mapped[str] = mapped_column(String(64), nullable=False)
+    source_run_id: Mapped[str | None] = mapped_column(
+        String(64),
+        ForeignKey("runs.run_id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
+    pr_number: Mapped[int | None] = mapped_column(Integer, nullable=True, index=True)
     requested_by_user_id: Mapped[str | None] = mapped_column(String(64), nullable=True)
     deployment_snapshot: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     provider_context: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
+    delivery_metadata: Mapped[dict] = mapped_column(JSON, nullable=False, default=dict)
     last_error: Mapped[str | None] = mapped_column(Text, nullable=True)
     requested_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    destroyed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), nullable=False)
 

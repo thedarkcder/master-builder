@@ -930,8 +930,6 @@ class ProjectDeploymentPolicyWrite(BaseModel):
     def validate_policy(self) -> "ProjectDeploymentPolicyWrite":
         if self.enabled and not self.production_branch:
             raise ValueError("production_branch is required when deployments are enabled")
-        if self.preview_prs_enabled:
-            raise ValueError("preview PR deployments are not supported by the GitHub deployment worker yet")
         resource_keys: set[str] = set()
         for resource in self.resources:
             if resource.key in resource_keys:
@@ -1001,8 +999,6 @@ class ProjectDeploymentPolicyRead(BaseModel):
     def validate_policy(self) -> "ProjectDeploymentPolicyRead":
         if self.enabled and not self.production_branch:
             raise ValueError("production_branch is required when deployments are enabled")
-        if self.preview_prs_enabled:
-            raise ValueError("preview PR deployments are not supported by the GitHub deployment worker yet")
         resource_keys: set[str] = set()
         for resource in self.resources:
             if resource.key in resource_keys:
@@ -1082,9 +1078,13 @@ class ProjectDeploymentReleaseCreate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     app_id: str | None = None
+    release_kind: Literal["production", "run_preview"] = "production"
     git_ref: str
     commit_sha: str
     reason: str | None = None
+    source_run_id: str | None = None
+    pr_number: int | None = Field(default=None, ge=1)
+    delivery_metadata: dict[str, object] = Field(default_factory=dict)
 
     @field_validator("git_ref", "commit_sha")
     @classmethod
@@ -1094,7 +1094,7 @@ class ProjectDeploymentReleaseCreate(BaseModel):
             raise ValueError("commit_sha must be a Git commit SHA")
         return normalized
 
-    @field_validator("app_id", "reason")
+    @field_validator("app_id", "reason", "source_run_id")
     @classmethod
     def normalize_optional_strings(cls, value: object) -> str | None:
         return _normalize_optional_string(value)
@@ -1133,20 +1133,25 @@ class ProjectDeploymentReleaseRead(BaseModel):
     project_id: str
     app_id: str | None = None
     provider: str
+    release_kind: str = "production"
     status: str
     environment_name: str | None = None
     source_strategy: str | None = None
     git_ref: str
     commit_sha: str
     release_name: str
+    source_run_id: str | None = None
+    pr_number: int | None = None
     requested_by_user_id: str | None = None
     deployment_snapshot: dict[str, object] = Field(default_factory=dict)
     provider_context: dict[str, object] = Field(default_factory=dict)
+    delivery_metadata: dict[str, object] = Field(default_factory=dict)
     service_urls: list[ProjectDeploymentServiceUrlRead] = Field(default_factory=list)
     last_error: str | None = None
     requested_at: datetime
     started_at: datetime | None = None
     completed_at: datetime | None = None
+    destroyed_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -1154,7 +1159,7 @@ class ProjectDeploymentReleaseRead(BaseModel):
 class ProjectDeploymentReleaseStatusUpdate(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    status: Literal["queued", "provisioning", "deploying", "route_activating", "live", "failed", "rolled_back"]
+    status: Literal["queued", "provisioning", "deploying", "route_activating", "live", "failed", "rolled_back", "destroyed"]
     last_error: str | None = None
     deployment_uuid: str | None = None
 

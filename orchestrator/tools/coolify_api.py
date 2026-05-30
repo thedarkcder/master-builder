@@ -92,6 +92,12 @@ class CoolifyApiClient:
             path=f"/applications/{application_uuid}",
         )
 
+    def delete_application(self, *, application_uuid: str) -> dict:
+        return self._request_json(
+            method="DELETE",
+            path=f"/applications/{application_uuid}",
+        )
+
     def bulk_update_application_envs(self, *, application_uuid: str, payload: dict) -> dict:
         return self._request_json(
             method="PATCH",

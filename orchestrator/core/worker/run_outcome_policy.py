@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 
+from orchestrator.core.deployment_previews import create_run_preview_deployment
 from orchestrator.core.runs.service import RUN_STATUS_WAITING_FOR_INPUT
 from orchestrator.core.worker.finalization import CompletionTailExecutor, WorkflowFinalizer
 from orchestrator.core.worker.capabilities import worker_label_for_capability
@@ -108,6 +109,30 @@ class RunOutcomePolicy:
                 issue_key=run.issue_key,
                 agent_id=prepared.agent_id,
             )
+        if workflow_result.outcome == "success":
+            try:
+                preview_result = create_run_preview_deployment(
+                    session=self._session,
+                    tenant=prepared.tenant,
+                    project=project,
+                    run=run,
+                    settings=self._settings,
+                    pr_url=workflow_result.pr_url,
+                )
+                if preview_result.created and preview_result.release is not None:
+                    self._deps.identity.logger.info(
+                        "worker_run_preview_deployment_created tenant_id=%s project_id=%s run_id=%s release_id=%s",
+                        run.tenant_id,
+                        project.project_id,
+                        run.run_id,
+                        preview_result.release.release_id,
+                    )
+            except Exception as exc:  # noqa: BLE001
+                workflow_result = replace(
+                    workflow_result,
+                    outcome="failed",
+                    blocker_message=f"Run preview deployment failed: {type(exc).__name__}: {exc}",
+                )
         capability_result = self._handle_capability_requeue(
             prepared=prepared,
             workflow_result=workflow_result,

@@ -40,6 +40,7 @@ from orchestrator.core.deployment_github_events import (
     GitHubDeploymentReleaseRequest,
     create_deployment_releases_for_github_push,
 )
+from orchestrator.core.deployment_previews import destroy_run_preview_deployments_for_pr
 from orchestrator.core.github.transport_executor import GitHubTransportExecutor
 from orchestrator.core.project_app_analysis_runtime import run_project_app_analysis
 from orchestrator.core.project_app_artifact_pr_runtime import create_project_app_artifact_pr
@@ -438,11 +439,27 @@ def _process_github_subject_jobs(
     raw_pr_number = context_json.get("pr_number")
     pr_number = int(raw_pr_number) if raw_pr_number is not None else None
     review_summary_present = bool(context_json.get("review_summary_present"))
+    payload = dict(source_job.payload_json or {})
+    if (
+        str(context_json.get("github_event") or source_job.event_type or "").strip() == "pull_request"
+        and str(context_json.get("normalized_action") or "").strip() == "closed"
+        and pr_number is not None
+    ):
+        pull_request = payload.get("pull_request")
+        merged = bool(pull_request.get("merged")) if isinstance(pull_request, dict) else False
+        if merged:
+            destroy_run_preview_deployments_for_pr(
+                session=session,
+                tenant_id=tenant.tenant_id,
+                project_id=project.project_id,
+                pr_number=pr_number,
+                reason="pr_merged",
+            )
     context = GitHubWebhookContext(
         request_id=source_job.request_id,
         delivery_id=str(context_json.get("delivery_id") or source_job.dedupe_key or ""),
         github_event=str(context_json.get("github_event") or source_job.event_type or ""),
-        payload=dict(source_job.payload_json or {}),
+        payload=payload,
         normalized_action=str(context_json.get("normalized_action") or "").strip() or None,
         installation_id=int(context_json.get("installation_id") or 0),
         tenant=tenant,
