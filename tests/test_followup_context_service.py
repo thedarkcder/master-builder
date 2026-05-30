@@ -418,3 +418,67 @@ class FollowupContextServiceTests(unittest.TestCase):
             self.assertEqual(tenant_id, "example")
             self.assertIsNone(project_id)
             self.assertEqual(subject_key, "discord_channel:example:discord-channel-1")
+
+    def test_resolve_interaction_subject_scope_matches_active_thread_for_application_command(self) -> None:
+        with self.session_factory() as session:
+            context = upsert_followup_context(
+                session=session,
+                tenant_id="example",
+                project_id="example-default",
+                context_type="ask_thread",
+                channel_id="discord-channel-1",
+                thread_channel_id="thread-1",
+                root_message_id="message-1",
+                request_id="req-1",
+            )
+            context_id = context.context_id
+            session.commit()
+
+        def _find_tenant_for_discord_channel(*, session, channel_id: str):  # noqa: ANN001
+            if channel_id == "thread-1":
+                return type("TenantRef", (), {"tenant_id": "example"})()
+            return None
+
+        with self.session_factory() as session:
+            tenant_id, project_id, subject_key = resolve_discord_interaction_subject_scope(
+                session=session,
+                payload={
+                    "type": 2,
+                    "channel_id": "thread-1",
+                    "data": {"name": "run"},
+                    "member": {"user": {"id": "u-1"}},
+                },
+                find_tenant_for_discord_channel=_find_tenant_for_discord_channel,
+            )
+
+            self.assertEqual(tenant_id, "example")
+            self.assertEqual(project_id, "example-default")
+            self.assertEqual(subject_key, f"discord_followup:{context_id}")
+
+    def test_resolve_interaction_subject_scope_sets_project_for_project_channel(self) -> None:
+        def _find_tenant_for_discord_channel(*, session, channel_id: str):  # noqa: ANN001
+            if channel_id == "discord-channel-1":
+                return type("TenantRef", (), {"tenant_id": "example"})()
+            return None
+
+        def _resolve_project_for_discord_channel(*, session, tenant_id: str, channel_id: str):  # noqa: ANN001
+            if tenant_id == "example" and channel_id == "discord-channel-1":
+                return type("ProjectRef", (), {"project_id": "example-default"})()
+            return None
+
+        with self.session_factory() as session:
+            tenant_id, project_id, subject_key = resolve_discord_interaction_subject_scope(
+                session=session,
+                payload={
+                    "type": 2,
+                    "channel_id": "discord-channel-1",
+                    "data": {"name": "run"},
+                    "member": {"user": {"id": "u-1"}},
+                },
+                find_tenant_for_discord_channel=_find_tenant_for_discord_channel,
+                resolve_project_for_discord_channel=_resolve_project_for_discord_channel,
+            )
+
+            self.assertEqual(tenant_id, "example")
+            self.assertEqual(project_id, "example-default")
+            self.assertEqual(subject_key, "discord_channel:example:discord-channel-1")

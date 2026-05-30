@@ -361,6 +361,155 @@ class ParentWorkflowOperationRetryTests(SqliteTemplateDbTestCase):
                 (2, "completed"),
             ]
 
+    def test_jira_child_fanout_retry_completes_task_parent_without_child_fanout(self) -> None:
+        now = datetime.now(timezone.utc)
+        session_factory = create_session_factory(self.database_url)
+        settings = Settings(database_url=self.database_url)
+
+        with session_factory() as session:
+            tenant = Tenant(
+                tenant_id="tenant-task-fanout-retry",
+                name="Tenant Task Fanout Retry",
+                is_enabled=True,
+                jira_config={},
+                github_config={},
+                repos_config={},
+                policy_config={},
+                discord_config={},
+                experience_config={},
+                setup_state={},
+                created_at=now,
+                updated_at=now,
+            )
+            project = Project(
+                project_id="project-task-fanout-retry",
+                tenant_id="tenant-task-fanout-retry",
+                name="Project Task Fanout Retry",
+                github_repository="example/project-task-fanout-retry",
+                jira_project_key="MAB",
+                policy_overrides={},
+                environment={},
+                secret_refs={},
+                discord_config=None,
+                is_archived=False,
+                created_at=now,
+                updated_at=now,
+            )
+            workflow = WorkflowExecution(
+                workflow_id="parent_planning:MAB-255",
+                execution_id="wfexec-mab-255",
+                workflow_type_key="parent_planning",
+                tenant_id="tenant-task-fanout-retry",
+                project_id="project-task-fanout-retry",
+                source_system="jira",
+                source_ref="MAB-255",
+                display_name="Task parent retry",
+                source_description="Parent planning",
+                repo_url=None,
+                branch=None,
+                pr_url=None,
+                orchestration_backend="legacy",
+                dedupe_scope="parent_planning",
+                status="failed",
+                last_error="Task fanout failed",
+                active_run_id=None,
+                latest_checkpoint_id=None,
+                source_workflow_id=None,
+                source_run_id=None,
+                created_at=now,
+                started_at=now,
+                finished_at=None,
+                updated_at=now,
+            )
+            fanout_operation = WorkflowOperation(
+                operation_id="operation-task-fanout-failed",
+                workflow_id=workflow.workflow_id,
+                run_id=None,
+                operation_type="jira_child_fanout",
+                idempotency_key="workflow-definition:jira_child_fanout",
+                status="failed",
+                target_system="jira",
+                target_ref="MAB-255",
+                summary="Task fanout failed.",
+                created_at=now,
+                started_at=now,
+                finished_at=now,
+                updated_at=now,
+            )
+            session.add_all([tenant, project, workflow, fanout_operation])
+            session.add(
+                WorkflowOperationAttempt(
+                    attempt_id="attempt-task-fanout-1",
+                    operation_id=fanout_operation.operation_id,
+                    attempt_number=1,
+                    status="failed",
+                    error_category="external_failure",
+                    error_message="Task fanout failed.",
+                    retryable=True,
+                    next_retry_at=None,
+                    created_at=now,
+                    started_at=now,
+                    finished_at=now,
+                )
+            )
+            session.commit()
+
+            replaced_labels: list[list[str]] = []
+            fake_jira_client = SimpleNamespace(
+                replace_issue_labels=lambda **kwargs: replaced_labels.append(list(kwargs["labels"])),
+            )
+            fake_oauth_context = SimpleNamespace(
+                client=fake_jira_client,
+                access_token="token",
+                connection=SimpleNamespace(cloud_id="cloud"),
+            )
+            fake_jira_adapter = SimpleNamespace(
+                oauth_context=fake_oauth_context,
+                get_issue_detail=lambda **_kwargs: SimpleNamespace(
+                    key="MAB-255",
+                    summary="Task parent retry",
+                    description="Parent planning",
+                    issue_type="Task",
+                    labels=["pm-parent", "sync-blocked"],
+                    status="To Do",
+                ),
+            )
+            fake_router = SimpleNamespace(jira=lambda **_kwargs: fake_jira_adapter)
+            planner_result = SimpleNamespace(planning_state=PLANNING_STATE_COMPLETED, pm_decision_requests=())
+
+            with (
+                patch(
+                    "orchestrator.core.parent_feature_workflow.retry_handlers.jira_child_fanout.resolve_parent_feature_brief",
+                    return_value=SimpleNamespace(to_payload=lambda: {"objective": "Retry task fanout"}),
+                ),
+                patch(
+                    "orchestrator.core.parent_feature_workflow.adapters._ParentBriefPlanner.plan_backlog_parent",
+                    return_value=(planner_result, {"planning": "package"}),
+                ),
+            ):
+                handle = retry_workflow_operation_with_registered_handler(
+                    session=session,
+                    settings=settings,
+                    session_factory=session_factory,
+                    workflow=workflow,
+                    operation=fanout_operation,
+                    handler_registry=self._resolver(fake_router=fake_router),
+                )
+                session.commit()
+
+            operations = {
+                operation.operation_type: operation
+                for operation in session.query(WorkflowOperation)
+                .filter(WorkflowOperation.workflow_id == workflow.workflow_id)
+                .all()
+            }
+
+            assert handle.operation_type == "jira_child_fanout"
+            assert operations["jira_child_fanout"].status == "completed"
+            assert operations["jira_child_promotion"].status == "completed"
+            assert operations["jira_parent_update"].status == "completed"
+            assert replaced_labels == [["pm-parent", "sync-current"]]
+
     def test_backlog_planning_retry_propagates_retryable_model_contract_errors(self) -> None:
         now = datetime.now(timezone.utc)
         session_factory = create_session_factory(self.database_url)

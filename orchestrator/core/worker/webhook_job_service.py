@@ -435,7 +435,8 @@ def _process_github_subject_jobs(
     project = session.get(Project, context_json.get("project_id"))
     if tenant is None or project is None or not tenant.is_enabled or bool(getattr(project, "is_archived", False)):
         return mark_webhook_jobs_done(session, jobs=jobs, owner_id=owner_id)
-    pr_number = int(context_json.get("pr_number"))
+    raw_pr_number = context_json.get("pr_number")
+    pr_number = int(raw_pr_number) if raw_pr_number is not None else None
     review_summary_present = bool(context_json.get("review_summary_present"))
     context = GitHubWebhookContext(
         request_id=source_job.request_id,
@@ -447,7 +448,8 @@ def _process_github_subject_jobs(
         tenant=tenant,
         project=project,
         repo_full_name=str(context_json.get("repo_full_name") or ""),
-        pr_targets=[(pr_number, review_summary_present)],
+        pr_targets=[(pr_number, review_summary_present)] if pr_number is not None else [],
+        ref_name=str(context_json.get("ref_name") or "").strip() or None,
     )
     try:
         github_client, reviewer_gate = build_github_review_runtime(

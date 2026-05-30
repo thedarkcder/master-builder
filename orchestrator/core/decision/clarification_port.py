@@ -7,6 +7,7 @@ from sqlalchemy.orm import Session
 from orchestrator.core.decision import clarification_service as decision_clarification_service
 from orchestrator.core.decision.engine import DecisionEngineResult, DecisionEventInput
 from orchestrator.core.decision.reply_service import DecisionReplyCaptureResult
+from orchestrator.core.runtime.payload_models import InteractionResponse
 from orchestrator.storage.models import Project, Tenant
 
 
@@ -44,6 +45,7 @@ class DecisionClarificationPort(Protocol):
         evaluate_pre_run_check_fn: Callable[..., object],
         oauth_context: Any | None = None,
         publish_jira_comment_fn: Callable[[str], tuple[bool, str | None]] | None = None,
+        interpreted_reply: InteractionResponse | None = None,
     ) -> decision_clarification_service.DecisionReplyRecheckResult:
         ...
 
@@ -92,6 +94,7 @@ class RuntimeDecisionClarificationPort:
         evaluate_pre_run_check_fn: Callable[..., object],
         oauth_context: Any | None = None,
         publish_jira_comment_fn: Callable[[str], tuple[bool, str | None]] | None = None,
+        interpreted_reply: InteractionResponse | None = None,
     ) -> decision_clarification_service.DecisionReplyRecheckResult:
         return decision_clarification_service.capture_decision_reply_and_recheck(
             session=session,
@@ -109,4 +112,5 @@ class RuntimeDecisionClarificationPort:
             evaluate_pre_run_check_fn=evaluate_pre_run_check_fn,
             oauth_context=oauth_context,
             publish_jira_comment_fn=publish_jira_comment_fn,
+            interpreted_reply=interpreted_reply,
         )

@@ -353,11 +353,8 @@ def test_sync_project_knowledge_from_jira_upserts_comments_and_attachments() -> 
                 def __init__(self) -> None:
                     self._attachment_body = b"Bundle ID: com.example.girlpower\nService ID: com.example.girlpower.auth"
 
-                def search_issues_by_jql(self, **kwargs):  # noqa: ANN003
-                    start_at = int(kwargs.get("start_at", 0) or 0)
-                    if start_at > 0:
-                        return []
-                    return [SimpleNamespace(key="GP-122")]
+                def search_issues_by_jql_page(self, **_kwargs):
+                    return SimpleNamespace(issues=[SimpleNamespace(key="GP-122")], next_page_token=None)
 
                 def get_issue_detail(self, **_kwargs):
                     return SimpleNamespace(
@@ -497,11 +494,8 @@ def test_sync_project_knowledge_from_jira_handles_long_labeled_fact_lines() -> N
             session.commit()
 
             class _JiraClient:
-                def search_issues_by_jql(self, **kwargs):  # noqa: ANN003
-                    start_at = int(kwargs.get("start_at", 0) or 0)
-                    if start_at > 0:
-                        return []
-                    return [SimpleNamespace(key="GP-122")]
+                def search_issues_by_jql_page(self, **_kwargs):
+                    return SimpleNamespace(issues=[SimpleNamespace(key="GP-122")], next_page_token=None)
 
                 def get_issue_detail(self, **_kwargs):
                     return SimpleNamespace(
@@ -582,11 +576,8 @@ def test_sync_project_knowledge_from_jira_with_pgvector_string_embeddings() -> N
             session.commit()
 
             class _JiraClient:
-                def search_issues_by_jql(self, **kwargs):  # noqa: ANN003
-                    start_at = int(kwargs.get("start_at", 0) or 0)
-                    if start_at > 0:
-                        return []
-                    return [SimpleNamespace(key="GP-122")]
+                def search_issues_by_jql_page(self, **_kwargs):
+                    return SimpleNamespace(issues=[SimpleNamespace(key="GP-122")], next_page_token=None)
 
                 def get_issue_detail(self, **_kwargs):
                     return SimpleNamespace(

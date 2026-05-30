@@ -16,6 +16,7 @@ class DiscordInteractionDispatchDeps:
     interaction_modal_response: Callable[..., JSONResponse]
     interaction_deferred_response: Callable[..., JSONResponse]
     parse_ask_confirmation_custom_id: Callable[[str], tuple[str, str] | None]
+    parse_install_request_decision_custom_id: Callable[[str], tuple[str, str] | None]
     parse_ask_reply_modal_custom_id: Callable[[str], str]
     discord_modal_text_value: Callable[..., str]
     find_tenant_for_discord_channel: Callable[..., object | None]
@@ -26,6 +27,7 @@ class DiscordInteractionDispatchDeps:
     resolve_followup_context: Callable[..., object | None]
     resolve_followup_reaction: Callable[..., object | None]
     run_discord_ask_confirmation_followup: Callable[..., object]
+    run_project_install_request_decision_followup: Callable[..., object]
     run_discord_command_followup: Callable[..., object]
     run_discord_decision_gate_reply_followup: Callable[..., object]
     run_discord_application_command_followup: Callable[..., object]
@@ -171,13 +173,29 @@ def _handle_message_component(*, payload: dict, deps: DiscordInteractionDispatch
         )
 
     parsed_custom_id = deps.parse_ask_confirmation_custom_id(custom_id)
-    if parsed_custom_id is None:
+    install_request_decision = deps.parse_install_request_decision_custom_id(custom_id)
+    if parsed_custom_id is None and install_request_decision is None:
         return deps.interaction_response(content="Unsupported interaction action", ephemeral=True)
-    decision, action_request_id = parsed_custom_id
     user_id = _interaction_user_id(payload)
     if user_id is None:
         return deps.interaction_response(content="Missing interaction user_id", ephemeral=True)
 
+    if install_request_decision is not None:
+        decision, install_request_id = install_request_decision
+        deps.task_scheduler(
+            deps.run_project_install_request_decision_followup(
+                tenant_id=None,
+                user_id=user_id,
+                channel_id=channel_id.strip(),
+                decision=decision,
+                request_id=install_request_id,
+                application_id=application_id,
+                interaction_token=interaction_token,
+            )
+        )
+        return deps.interaction_deferred_response(ephemeral=True)
+
+    decision, action_request_id = parsed_custom_id
     deps.task_scheduler(
         deps.run_discord_ask_confirmation_followup(
             tenant_id=None,

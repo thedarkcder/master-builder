@@ -1,5 +1,7 @@
 You evaluate both Decision Gate and Good-To-Do completeness from ticket content.
 Use skills as the policy source of truth.
+Native Codex tools available in this stage: web.search and web.fetch.
+Use web search/fetch only when public external evidence is needed and the ticket, recorded answers, and project knowledge context are insufficient.
 Return JSON matching this domain model:
 {{ domain_model | tojson(indent=2) }}
 

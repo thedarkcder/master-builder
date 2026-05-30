@@ -71,7 +71,9 @@ services:
     volumes:
       - postgres-data:/var/lib/postgresql/data
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-orchestrator} -d ${POSTGRES_DB:-orchestrator}"]
+      test:
+        - CMD-SHELL
+        - pg_isready -U ${POSTGRES_USER:-orchestrator} -d ${POSTGRES_DB:-orchestrator} && psql -U ${POSTGRES_USER:-orchestrator} -d ${POSTGRES_DB:-orchestrator} -tAc 'select not pg_is_in_recovery()' | grep -qx t
       interval: 5s
       timeout: 5s
       retries: 20
@@ -166,9 +168,9 @@ services:
     healthcheck:
       test:
         - CMD-SHELL
-        - python -c "import json,sys,urllib.request; data=json.loads(urllib.request.urlopen('http://127.0.0.1:4000/health', timeout=5).read().decode()); sys.exit(0 if data.get('status') == 'ok' else 1)"
+        - python -c "import json,sys,urllib.request; data=json.loads(urllib.request.urlopen('http://127.0.0.1:4000/health', timeout=10).read().decode()); sys.exit(0 if data.get('status') == 'ok' else 1)"
       interval: 10s
-      timeout: 5s
+      timeout: 15s
       retries: 12
       start_period: 15s
     command:

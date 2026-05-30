@@ -228,6 +228,8 @@ export type ProjectPolicyOverrides = Partial<
   >
 > & {
   run_board_id?: number | string | null;
+  staging_admission_enabled?: boolean;
+  staging_branch?: string | null;
 };
 
 export type CodexModelOptionRecord = {
@@ -845,7 +847,22 @@ export type WorkflowBoardRunSummaryRecord = {
   finished_at: string | null;
 };
 
+export type WorkflowBoardChildIssueRecord = {
+  work_item_id: string;
+  issue_key: string;
+  summary: string | null;
+  status: string | null;
+  mb_work_state: string | null;
+  issue_type: string | null;
+  run_id: string | null;
+  run_status: string | null;
+  startable: boolean;
+  start_label: string | null;
+  start_blocked_reason: string | null;
+};
+
 export type WorkflowBoardItemRecord = {
+  work_item_id: string;
   execution_id: string;
   workflow_id: string;
   workflow_type_key: string;
@@ -858,11 +875,15 @@ export type WorkflowBoardItemRecord = {
   status: string;
   failure_reason: string | null;
   pending_input_request_id: string | null;
+  startable: boolean;
+  start_label: string | null;
+  start_blocked_reason: string | null;
   run_count: number;
   active_run_count: number;
   failed_run_count: number;
   latest_run: WorkflowBoardRunSummaryRecord | null;
   runs: WorkflowBoardRunSummaryRecord[];
+  children: WorkflowBoardChildIssueRecord[];
   links: WorkflowLinkRecord[];
   latest_activity_at: string;
   created_at: string;
@@ -1118,6 +1139,11 @@ export type WorkflowStartWorkResponseRecord = {
   skipped: StartWorkIssueRecord[];
   promoted_issue_keys: string[];
   started_attempt?: WorkflowOperationAttemptRecord | null;
+};
+
+export type WorkflowWorkItemStartResponseRecord = WorkflowStartWorkResponseRecord & {
+  work_item_id: string;
+  action: string;
 };
 
 export type StartEngineeringPreviewRecord = {
@@ -3036,19 +3062,6 @@ export function resumeWorkflowExecution(
   });
 }
 
-export function startParentPlanning(
-  credentials: Credentials,
-  executionId: string,
-): Promise<WorkflowRecord> {
-  return request<WorkflowRecord>(
-    credentials,
-    `/api/admin/workflows/${encodeURIComponent(executionId)}/start-planning`,
-    {
-      method: "POST",
-    },
-  );
-}
-
 export function getStartEngineeringPreview(
   credentials: Credentials,
   executionId: string,
@@ -3072,6 +3085,20 @@ export function startEngineeringFromAction(
     {
       method: "POST",
       body: JSON.stringify({ action_token: actionToken }),
+    },
+  );
+}
+
+export function startWorkflowBoardWorkItem(
+  credentials: Credentials,
+  workItemId: string,
+): Promise<WorkflowWorkItemStartResponseRecord> {
+  return request<WorkflowWorkItemStartResponseRecord>(
+    credentials,
+    "/api/admin/workflows/work-items/start",
+    {
+      method: "POST",
+      body: JSON.stringify({ work_item_id: workItemId }),
     },
   );
 }

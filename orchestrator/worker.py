@@ -32,6 +32,7 @@ from orchestrator.core.worker.child_process import WORKER_CHILD_EXIT_DEPENDENCY_
 from orchestrator.core.worker.child_process import WORKER_CHILD_EXIT_IDLE
 from orchestrator.core.worker.child_process import WORKER_CHILD_EXIT_PROCESSED
 from orchestrator.core.worker.child_process import WORKER_CHILD_EXIT_RUNTIME_FAILURE
+from orchestrator.core.worker.child_process import WORKER_CHILD_EXIT_TRANSIENT_FAILURE
 from orchestrator.core.worker.child_process import WorkerChildProcessHandle
 from orchestrator.core.worker.child_process import WorkerChildProcessResult
 from orchestrator.core.worker.child_process import spawn_worker_child_process as _spawn_worker_child_process
@@ -86,7 +87,6 @@ WORKER_STARTUP_DB_RETRY_MAX_DELAY_SECONDS = 8.0
 _VALID_POST_CHILD_RUN_STATUSES = {
     "queued",
     "ownership_lost",
-    "temporal_handoff",
     RUN_STATUS_RUNNING,
     RUN_STATUS_WAITING_FOR_INPUT,
     RUN_STATUS_BLOCKED,
@@ -348,6 +348,10 @@ def _worker_startup_db_retry_delay_seconds(*, attempt: int) -> float:
 
 
 def _is_retryable_worker_startup_db_error(exc: BaseException) -> bool:
+    return _is_retryable_worker_database_error(exc)
+
+
+def _is_retryable_worker_database_error(exc: BaseException) -> bool:
     if not isinstance(exc, SQLAlchemyOperationalError):
         return False
     message = " ".join(
@@ -367,6 +371,8 @@ def _is_retryable_worker_startup_db_error(exc: BaseException) -> bool:
             "connection failed",
             "could not connect",
             "connection refused",
+            "consuming input failed",
+            "database system is not yet accepting connections",
             "server closed the connection unexpectedly",
             "the database system is starting up",
             "timeout expired",
@@ -500,15 +506,15 @@ def run_worker_child_once(*, mode: str = WORKER_MODE_RUNS) -> int:
         settings=settings,
         service_name="run-worker-child" if str(mode or "").strip().lower() == WORKER_MODE_RUNS else "webhook-worker-child",
     )
-    session_factory = create_session_factory()
-    ensure_execution_snapshot_startup_bootstrap(
-        session_factory=session_factory,
-        database_url=settings.database_url,
-        actor=f"worker_child:{mode}",
-    )
-    with session_factory() as session:
-        validate_persisted_workflow_definitions(session=session)
     try:
+        session_factory = create_session_factory()
+        ensure_execution_snapshot_startup_bootstrap(
+            session_factory=session_factory,
+            database_url=settings.database_url,
+            actor=f"worker_child:{mode}",
+        )
+        with session_factory() as session:
+            validate_persisted_workflow_definitions(session=session)
         normalized_mode = str(mode or "").strip().lower()
         if normalized_mode == WORKER_MODE_RUNS:
             claimed_run_id = str(os.environ.get("ORCHESTRATOR_WORKER_CLAIMED_RUN_ID") or "").strip()
@@ -530,7 +536,11 @@ def run_worker_child_once(*, mode: str = WORKER_MODE_RUNS) -> int:
     except WorkerDependencyFailure:
         platform_metrics.record_worker_failure(kind="dependency")
         return WORKER_CHILD_EXIT_DEPENDENCY_FAILURE
-    except Exception:
+    except Exception as exc:
+        if _is_retryable_worker_database_error(exc):
+            platform_metrics.record_worker_failure(kind="database_unavailable")
+            logger.warning("worker_child_database_unavailable mode=%s error=%s", mode, exc)
+            return WORKER_CHILD_EXIT_TRANSIENT_FAILURE
         platform_metrics.record_worker_failure(kind="child_crash")
         logger.exception("worker_child_failed mode=%s", mode)
         return WORKER_CHILD_EXIT_RUNTIME_FAILURE
@@ -722,6 +732,16 @@ async def run_worker(*, mode: str = WORKER_MODE_RUNS) -> None:
                         child_result.return_code,
                         handle.process.pid,
                         child_result.timed_out,
+                    )
+                    drain_requested = True
+                    continue
+                if child_result.return_code == WORKER_CHILD_EXIT_TRANSIENT_FAILURE:
+                    platform_metrics.record_worker_failure(kind="database_unavailable")
+                    logger.warning(
+                        "worker_child_transient_database_failure mode=%s return_code=%s pid=%s",
+                        mode,
+                        child_result.return_code,
+                        handle.process.pid,
                     )
                     drain_requested = True
                     continue

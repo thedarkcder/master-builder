@@ -4,6 +4,9 @@ from unittest.mock import patch
 
 from orchestrator.core.runs.service import RUN_DEDUPE_SCOPE_ISSUE_EXECUTION, enqueue_run
 from orchestrator.core.worker.capability_normalization import WorkerCapability
+from orchestrator.core.workflow.execution_artifacts import (
+    record_pushed_execution_artifact,
+)
 from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 from orchestrator.core.worker.run_lifecycle import (
     bind_run_project,
@@ -20,13 +23,14 @@ from orchestrator.core.worker.run_lifecycle import (
 from orchestrator.core.worker.stage_event_types import WorkerStageEvent
 from orchestrator.core.worker.stage_events import WorkerStageUpdate
 from orchestrator.core.workflow.runner import (
+    DevResult,
     PmPlan,
     WorkflowDiagnostics,
     WorkflowResult,
     WorkflowStageCheckpoint,
 )
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
-from orchestrator.storage.models import Project, Run, Tenant, WorkflowExecution
+from orchestrator.storage.models import Project, Run, Tenant, WorkflowCheckpoint, WorkflowExecution
 from tests.test_support.db_harness import SqliteTemplateDbTestCase
 from tests.workflow_test_support import add_workflow_attempt
 
@@ -422,6 +426,84 @@ class WorkerRunLifecycleTests(SqliteTemplateDbTestCase):
             self.assertEqual(finalized.status, "succeeded")
             self.assertEqual(finalized.plan["stages"]["pm"]["status"], "completed")
             self.assertEqual(finalized.plan["context"]["trigger_context"], {"source": "manual"})
+
+    def test_persist_execution_checkpoint_without_pushed_artifact_is_not_reusable(self) -> None:
+        now = datetime.now(timezone.utc)
+        with self.session_factory() as session:
+            _, run, _ = add_workflow_attempt(
+                session,
+                run_id="run-dev-artifact",
+                tenant_id="tenant-a",
+                project_id="tenant-a-default",
+                issue_key="TA-206",
+                issue_summary="persist dev checkpoints",
+                issue_description="desc",
+                repo_url="https://github.com/example/a",
+                plan=self._canonical_plan(trigger_context={"source": "manual"}),
+                workflow_status="running",
+                run_status="running",
+                created_at=now,
+                started_at=now,
+                last_heartbeat_at=now,
+                worker_service_instance_id="node-a:1234",
+            )
+            session.commit()
+            session.refresh(run)
+            self._claim_running_run(run)
+            session.commit()
+            session.refresh(run)
+
+            dev_checkpoint = WorkflowStageCheckpoint(
+                stage="dev",
+                attempt=1,
+                status="completed",
+                summary="Dev completed",
+                dev_result=DevResult(change_summary=["changed"], pr_url=None),
+            )
+            persisted_without_artifact = persist_stage_checkpoint(
+                session,
+                run=run,
+                checkpoint=dev_checkpoint,
+                execution_context={"execution_branch": "run/ta-206/run-dev-artifact"},
+                expected_worker_service_instance_id="node-a:1234",
+                expected_claim_id="claim-1",
+            )
+
+            self.assertEqual(persisted_without_artifact.plan["stages"]["dev"]["status"], "completed")
+            self.assertFalse(
+                persisted_without_artifact.plan["context"]["execution_context"]["execution_checkpoint_reusable"]
+            )
+            self.assertIn(
+                "not reusable until the execution branch is pushed",
+                persisted_without_artifact.plan["context"]["execution_context"]["execution_checkpoint_reusable_reason"],
+            )
+            self.assertIsNone(session.get(WorkflowCheckpoint, "run-dev-artifact-execution"))
+
+            record_pushed_execution_artifact(
+                session,
+                run=run,
+                repo_url="https://github.com/example/a",
+                branch="run/ta-206/run-dev-artifact",
+                commit_sha="a" * 40,
+                diff_stat={"base_branch": "main"},
+            )
+            persisted = persist_stage_checkpoint(
+                session,
+                run=run,
+                checkpoint=dev_checkpoint,
+                execution_context={"execution_branch": "run/ta-206/run-dev-artifact"},
+                expected_worker_service_instance_id="node-a:1234",
+                expected_claim_id="claim-1",
+            )
+
+            self.assertEqual(persisted.plan["stages"]["dev"]["status"], "completed")
+            self.assertTrue(persisted.plan["context"]["execution_context"]["execution_checkpoint_reusable"])
+            self.assertNotIn(
+                "execution_checkpoint_reusable_reason",
+                persisted.plan["context"]["execution_context"],
+            )
+            checkpoint = session.get(WorkflowCheckpoint, "run-dev-artifact-execution")
+            self.assertIsNotNone(checkpoint)
 
     def test_start_run_returns_none_when_status_does_not_match_expected(self) -> None:
         now = datetime.now(timezone.utc)

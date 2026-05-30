@@ -3,11 +3,11 @@
   "version": "0.1.0",
   "private": true,
   "scripts": {
-    "dev": "next dev --webpack -p 4100",
-    "dev:turbo": "next dev --turbopack -p 4100",
+    "dev": "next dev --webpack -p ${ADMIN_UI_PORT:-60002}",
+    "dev:turbo": "next dev --turbopack -p ${ADMIN_UI_PORT:-60002}",
     "lint": "next typegen && tsc --noEmit -p tsconfig.lint.json",
     "build": "next build",
-    "start": "next start -p 4100",
+    "start": "next start -p ${ADMIN_UI_PORT:-60002}",
     "test:e2e": "playwright test",
     "test:e2e:headed": "playwright test --headed",
     "test:e2e:live": "PLAYWRIGHT_RUN_LIVE=1 playwright test --project=chromium-live"

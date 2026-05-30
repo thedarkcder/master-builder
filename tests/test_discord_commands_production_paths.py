@@ -27,7 +27,7 @@ from orchestrator.core.precheck.pre_run_check import PreRunCheckResult
 from orchestrator.core.runtime.payload_models import AskIntent
 from orchestrator.core.platform.secrets import encrypt_value
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
-from orchestrator.storage.models import AtlassianOAuthConnection, Project, Tenant
+from orchestrator.storage.models import AtlassianOAuthConnection, Project, Run, Tenant
 from orchestrator.tools.atlassian_oauth import JiraIssueBulkCreateResult, JiraIssueCreateResult, JiraIssueDetail, JiraIssuePreview
 from tests.test_support.db_harness import SqliteTemplateDbTestCase
 
@@ -414,6 +414,103 @@ class DiscordCommandProductionPathTests(SqliteTemplateDbTestCase):
             ),
         )
 
+    def _decision_gate_decision_result(self) -> DecisionEngineResult:
+        pre_check = PreRunCheckResult(
+            outcome="decision_gate_required",
+            ready_label="agent:ready",
+            ready_label_present=True,
+            required_worker_capability="linux",
+            required_worker_label="worker:linux",
+            required_worker_label_present=True,
+            decision_gate=DecisionGateResult(
+                triggered=True,
+                reason="Need owner and rollout decision.",
+                missing_sections=("decision_owner", "rollout_constraints"),
+                questions=(
+                    "Who owns final implementation sign-off?",
+                    "Are there rollout constraints, or should we record none?",
+                ),
+                recommendation="Clarification required before execution.",
+                tags=("[NEEDS-PM]",),
+            ),
+            gtd=GoodToDoValidationResult(
+                valid=True,
+                missing_criteria=(),
+                clarification_questions=(),
+            ),
+        )
+        decision = IngressDecision(
+            source="discord_run",
+            pre_check=pre_check,
+            block_reason="decision_gate_required",
+            policy_error=None,
+            guidance="Decision Gate is required before execution. Reply with the missing clarifications.",
+            label_actions=(),
+        )
+        return DecisionEngineResult(
+            decision=decision,
+            issue_labels=["agent:ready"],
+            classification=DecisionClassification.DECISION_GATE,
+            missing_slots=["decision_owner", "rollout_constraints"],
+            auto_resolved_slots=[],
+            case_id="case-decision-gate",
+            case_state="blocked_decision_gate",
+            cycle_id="cycle-decision-gate",
+            outbox_effect_ids=(),
+            duplicate_event=False,
+            execution_gate=resolve_execution_gate_state(
+                decision=decision,
+                classification=DecisionClassification.DECISION_GATE,
+            ),
+        )
+
+    def _ready_decision_result(self) -> DecisionEngineResult:
+        pre_check = PreRunCheckResult(
+            outcome="ready_for_agent",
+            ready_label="agent:ready",
+            ready_label_present=True,
+            required_worker_capability="linux",
+            required_worker_label="worker:linux",
+            required_worker_label_present=True,
+            decision_gate=DecisionGateResult(
+                triggered=False,
+                reason="Decision Gate not required",
+                missing_sections=(),
+                questions=(),
+                recommendation="Proceed",
+                tags=(),
+            ),
+            gtd=GoodToDoValidationResult(
+                valid=True,
+                missing_criteria=(),
+                clarification_questions=(),
+            ),
+        )
+        decision = IngressDecision(
+            source="discord_run",
+            pre_check=pre_check,
+            block_reason=None,
+            policy_error=None,
+            guidance=None,
+            label_actions=(),
+        )
+        return DecisionEngineResult(
+            decision=decision,
+            issue_labels=["agent:ready"],
+            classification=DecisionClassification.CLEAR,
+            missing_slots=[],
+            auto_resolved_slots=[],
+            case_id="case-ready",
+            case_state="clear",
+            cycle_id=None,
+            outbox_effect_ids=(),
+            duplicate_event=False,
+            execution_gate=resolve_execution_gate_state(
+                decision=decision,
+                classification=DecisionClassification.CLEAR,
+            ),
+        )
+
     def _planned_seed_output(
         self,
         *,
@@ -480,6 +577,117 @@ class DiscordCommandProductionPathTests(SqliteTemplateDbTestCase):
         self.assertEqual(response.status_code, 409)
         self.assertIn("missing the configured ready label", response.json()["detail"])
         self.assertIn("agent:ready", response.json()["detail"])
+
+    def test_run_command_returns_decision_gate_questions_instead_of_http_conflict(self) -> None:
+        with (
+            patch(
+                "orchestrator.api.discord.ingress.jira_runtime.fetch_jira_issue_preview",
+                return_value=JiraIssuePreview(key="TP-42", summary="Cross-account relink policy", status="To Do"),
+            ),
+            patch(
+                "orchestrator.api.discord.ingress.jira_runtime.fetch_jira_issue_detail",
+                return_value=JiraIssueDetail(
+                    key="TP-42",
+                    summary="Cross-account relink policy",
+                    status="To Do",
+                    description="Clarify the device relink policy.",
+                    labels=["agent:ready"],
+                ),
+            ),
+            patch(
+                "orchestrator.api.discord.ingress.executor._default_decision_clarification_port.evaluate_issue_clarification_state",
+                return_value=self._decision_gate_decision_result(),
+            ),
+        ):
+            response = self._post_command("!run TP-42")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertTrue(body["ok"])
+        self.assertEqual(body["command"], "run")
+        self.assertIn("I need a bit more before I can run `TP-42`", body["message"])
+        self.assertIn("Who owns final implementation sign-off?", body["message"])
+        self.assertEqual(body["data"]["followup_context_type"], "decision_gate")
+        self.assertEqual(
+            body["data"]["questions"],
+            [
+                "Who owns final implementation sign-off?",
+                "Are there rollout constraints, or should we record none?",
+            ],
+        )
+
+    def test_explicit_run_command_allows_testing_status(self) -> None:
+        with (
+            patch(
+                "orchestrator.api.discord.ingress.jira_runtime.fetch_jira_issue_preview",
+                return_value=JiraIssuePreview(key="TP-42", summary="Cross-account relink policy", status="Testing"),
+            ),
+            patch(
+                "orchestrator.api.discord.ingress.jira_runtime.fetch_jira_issue_detail",
+                return_value=JiraIssueDetail(
+                    key="TP-42",
+                    summary="Cross-account relink policy",
+                    status="Testing",
+                    description="Clarify the device relink policy.",
+                    labels=["agent:ready"],
+                ),
+            ),
+            patch(
+                "orchestrator.api.discord.ingress.executor._default_decision_clarification_port.evaluate_issue_clarification_state",
+                return_value=self._ready_decision_result(),
+            ),
+        ):
+            response = self._post_command("!run TP-42")
+
+        self.assertEqual(response.status_code, 200)
+        body = response.json()
+        self.assertTrue(body["ok"])
+        self.assertEqual(body["command"], "run")
+        self.assertEqual(body["data"]["issue_key"], "TP-42")
+        self.assertTrue(body["data"]["run_id"])
+        with self.session_factory() as session:
+            run = session.get(Run, body["data"]["run_id"])
+            self.assertIsNotNone(run)
+            assert run is not None
+            self.assertEqual(run.issue_key, "TP-42")
+            self.assertEqual(run.status, "queued")
+
+    def test_manual_run_command_uses_fresh_decision_event_idempotency(self) -> None:
+        captured_keys: list[str | None] = []
+
+        def _capture_decision_event(**kwargs):
+            captured_keys.append(kwargs["event"].idempotency_key)
+            return self._decision_gate_decision_result()
+
+        with (
+            patch(
+                "orchestrator.api.discord.ingress.jira_runtime.fetch_jira_issue_preview",
+                return_value=JiraIssuePreview(key="TP-42", summary="Cross-account relink policy", status="To Do"),
+            ),
+            patch(
+                "orchestrator.api.discord.ingress.jira_runtime.fetch_jira_issue_detail",
+                return_value=JiraIssueDetail(
+                    key="TP-42",
+                    summary="Cross-account relink policy",
+                    status="To Do",
+                    description="Clarify the device relink policy.",
+                    labels=["agent:ready"],
+                ),
+            ),
+            patch(
+                "orchestrator.api.discord.ingress.executor._default_decision_clarification_port.evaluate_issue_clarification_state",
+                side_effect=_capture_decision_event,
+            ),
+        ):
+            first = self._post_command("!run TP-42")
+            second = self._post_command("!run TP-42")
+
+        self.assertEqual(first.status_code, 200)
+        self.assertEqual(second.status_code, 200)
+        self.assertEqual(len(captured_keys), 2)
+        self.assertTrue(str(captured_keys[0]).startswith("discord_run:TP-42:"))
+        self.assertTrue(str(captured_keys[1]).startswith("discord_run:TP-42:"))
+        self.assertNotEqual(captured_keys[0], captured_keys[1])
 
     def test_reply_command_returns_controlled_message_when_no_active_cycle_exists(self) -> None:
         fake_jira_client = _FakeJiraClient(

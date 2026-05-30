@@ -1,7 +1,7 @@
 import type { APIRequestContext } from "@playwright/test";
 import { execFileSync } from "node:child_process";
 
-export const API_BASE_URL = "http://localhost:4000";
+export const API_BASE_URL = process.env.PLAYWRIGHT_API_BASE_URL ?? "http://localhost:60001";
 
 export type TenantProjectRecord = {
   project_id: string;
@@ -21,7 +21,7 @@ function psycopgDatabaseUrl(): string {
   const databaseUrl =
     process.env.ORCHESTRATOR_DATABASE_URL ??
     process.env.POSTGRES_URL ??
-    "postgresql+psycopg://orchestrator:orchestrator@127.0.0.1:4402/orchestrator";
+    "postgresql+psycopg://orchestrator:orchestrator@127.0.0.1:60003/orchestrator";
   return databaseUrl.replace("postgresql+psycopg://", "postgresql://");
 }
 

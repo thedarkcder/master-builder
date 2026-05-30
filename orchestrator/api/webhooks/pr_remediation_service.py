@@ -19,6 +19,10 @@ from orchestrator.api.webhooks.pr_remediation_policy import (
     parse_manual_pr_fix_request,
     resolve_pr_remediation_issue_key,
 )
+from orchestrator.core.review.pr_review_findings import (
+    evaluate_pr_review_findings,
+    pr_review_findings_clear,
+)
 from orchestrator.storage.models import Project, Run, Tenant
 from orchestrator.tools.github_app import GitHubApiError, GitHubAppClient
 
@@ -36,6 +40,39 @@ class PrRemediationResult:
     reason: str | None
     run: Run | None
     head_sha: str | None
+
+
+def _should_skip_check_trigger_remediation(
+    *,
+    github_client: GitHubAppClient,
+    repo_full_name: str,
+    pr_number: int,
+    pr_title: str,
+    pr_body: str,
+    checks: list,
+    tenant_id: str,
+    project_id: str,
+) -> tuple[bool, str | None]:
+    try:
+        changed_files = github_client.list_pull_request_files(
+            repo_full_name=repo_full_name,
+            pr_number=pr_number,
+        )
+        findings_result = evaluate_pr_review_findings(
+            repo_full_name=repo_full_name,
+            pr_number=pr_number,
+            pr_title=pr_title,
+            pr_body=pr_body,
+            workflow_checks=checks,
+            changed_files=changed_files,
+            tenant_id=tenant_id,
+            project_id=project_id,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return True, f"review_findings_evaluation_failed:{exc}"
+    if pr_review_findings_clear(findings_result):
+        return True, "review_clear_no_actionable_findings"
+    return False, None
 
 
 def _extract_payload_comment(payload: dict) -> dict:
@@ -308,6 +345,28 @@ def enqueue_pr_remediation_if_needed(
     else:
         code_context = None
         code_context_resolution = None
+
+    if manual_fix_request is None and normalized_event in {"check_run", "check_suite"}:
+        skip_remediation, skip_reason = _should_skip_check_trigger_remediation(
+            github_client=github_client,
+            repo_full_name=resolved_repo,
+            pr_number=resolved_pr_number,
+            pr_title=title,
+            pr_body=body,
+            checks=checks,
+            tenant_id=tenant.tenant_id,
+            project_id=project.project_id,
+        )
+        if skip_remediation:
+            return PrRemediationResult(
+                triggered=True,
+                issue_key=None,
+                issue_created=False,
+                enqueued=False,
+                reason=skip_reason,
+                run=None,
+                head_sha=head_sha,
+            )
 
     issue_key, issue_created, issue_error = resolve_pr_remediation_issue_key(
         session=session,

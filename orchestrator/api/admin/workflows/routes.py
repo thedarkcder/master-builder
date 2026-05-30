@@ -28,6 +28,8 @@ from orchestrator.api.schemas import (
     WorkflowStepTranscriptRead,
     WorkflowTypeDetailRead,
     WorkflowTypeSummaryRead,
+    WorkflowWorkItemStartRead,
+    WorkflowWorkItemStartRequest,
 )
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
@@ -122,13 +124,17 @@ def get_workflow(
     return use_cases.get_workflow(session=session, principal=principal, execution_id=execution_id)
 
 
-@router.post("/workflows/{execution_id}/start-planning", response_model=WorkflowRead)
-def start_parent_planning(
-    execution_id: str,
+@router.post("/workflows/work-items/start", response_model=WorkflowWorkItemStartRead)
+def start_work_item_from_board(
+    payload: WorkflowWorkItemStartRequest,
     principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
     session: Session = Depends(get_session),
-) -> WorkflowRead:
-    return use_cases.start_parent_planning(session=session, principal=principal, execution_id=execution_id)
+) -> WorkflowWorkItemStartRead:
+    return use_cases.start_work_item_from_board(
+        session=session,
+        principal=principal,
+        work_item_id=payload.work_item_id,
+    )
 
 
 @router.get("/workflows/{execution_id}/telemetry", response_model=list[WorkflowObservabilityEventRead])

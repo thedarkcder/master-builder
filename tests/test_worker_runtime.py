@@ -472,6 +472,87 @@ class WorkerTests(unittest.TestCase):
         listener.start.assert_called_once()
         listener.stop.assert_called_once()
 
+    def test_run_worker_webhooks_recovers_after_transient_child_database_failure(self) -> None:
+        import orchestrator.worker as worker_module
+
+        fake_settings = SimpleNamespace(
+            database_url="postgresql://localhost/db",
+            log_level="INFO",
+            sentry_environment="test",
+            sentry_release=None,
+            agent_id="worker-test",
+        )
+        listener = MagicMock()
+        child_spawns = {"count": 0}
+        wait_calls = {"count": 0}
+
+        async def _wait_for_wake_or_stop(
+            *,
+            wake_event: asyncio.Event,
+            stop_event: asyncio.Event,
+            timeout_seconds: float | None = None,
+        ) -> bool:
+            _ = timeout_seconds
+            wait_calls["count"] += 1
+            if wait_calls["count"] >= 3:
+                stop_event.set()
+                return False
+            wake_event.set()
+            return False
+
+        async def _spawn_worker_child_process(
+            *,
+            mode: str,
+            wake_event: asyncio.Event,
+            child_timeout_seconds: int,
+            claimed_run_id: str | None = None,
+            claim_id: str | None = None,
+            worker_service_instance_id: str | None = None,
+        ):
+            _ = mode
+            _ = wake_event
+            _ = child_timeout_seconds
+            self.assertIsNone(claimed_run_id)
+            self.assertIsNone(claim_id)
+            self.assertIsNone(worker_service_instance_id)
+            child_spawns["count"] += 1
+            return_code = (
+                worker_module.WORKER_CHILD_EXIT_TRANSIENT_FAILURE
+                if child_spawns["count"] == 1
+                else worker_module.WORKER_CHILD_EXIT_IDLE
+            )
+            child_result = worker_module.WorkerChildProcessResult(
+                return_code=return_code,
+                processed=False,
+                dependency_failure=False,
+            )
+            process = SimpleNamespace(pid=432, returncode=child_result.return_code, terminate=lambda: None)
+            return worker_module.WorkerChildProcessHandle(
+                process=process,
+                wait_task=asyncio.create_task(asyncio.sleep(0, result=child_result)),
+            )
+
+        with (
+            patch.object(worker_module, "get_settings", return_value=fake_settings),
+            patch.object(worker_module, "configure_logging"),
+            patch.object(worker_module, "create_session_factory", return_value=MagicMock()),
+            patch.object(worker_module, "is_postgres_database_url", return_value=True),
+            patch.object(worker_module, "postgres_dsn_from_database_url", return_value="postgres://dsn"),
+            patch.object(worker_module, "RunQueueNotificationBridge", return_value=listener),
+            patch.object(worker_module, "wait_for_wake_or_stop", new=_wait_for_wake_or_stop),
+            patch.object(worker_module, "_resolve_worker_child_capacity", return_value=1),
+            patch.object(worker_module, "_has_available_webhook_job_once", side_effect=[True, True, False]),
+            patch.object(worker_module, "_spawn_worker_child_process", new=_spawn_worker_child_process),
+            patch.object(worker_module, "worker_service_instance_id_for_mode", return_value="node-a:1234"),
+            patch.object(worker_module.platform_metrics, "record_worker_failure") as failure_metric,
+        ):
+            asyncio.run(worker_module.run_worker(mode="webhooks"))
+
+        self.assertEqual(child_spawns["count"], 2)
+        failure_metric.assert_any_call(kind="database_unavailable")
+        listener.start.assert_called_once()
+        listener.stop.assert_called_once()
+
     def test_run_worker_runs_uses_run_processor(self) -> None:
         import orchestrator.worker as worker_module
 
@@ -1160,6 +1241,38 @@ class WorkerTests(unittest.TestCase):
                 worker_module.run_worker_child_once(mode="runs"),
                 worker_module.WORKER_CHILD_EXIT_RUNTIME_FAILURE,
             )
+
+    def test_run_worker_child_once_returns_transient_exit_for_retryable_database_error(self) -> None:
+        import orchestrator.worker as worker_module
+
+        fake_settings = SimpleNamespace(
+            log_level="INFO",
+            sentry_environment="test",
+            sentry_release=None,
+            agent_id="worker-test",
+            database_url="postgresql://user:pass@localhost/test",
+        )
+        transient_error = SQLAlchemyOperationalError(
+            "SELECT webhook_jobs.job_id FROM webhook_jobs",
+            {},
+            RuntimeError("consuming input failed: server closed the connection unexpectedly"),
+        )
+
+        with (
+            patch.object(worker_module, "get_settings", return_value=fake_settings),
+            patch.object(worker_module, "configure_logging"),
+            patch.object(worker_module, "create_session_factory", return_value=MagicMock()),
+            patch.object(worker_module, "ensure_execution_snapshot_startup_bootstrap"),
+            patch.object(worker_module, "_resolve_webhook_owner_id", return_value="worker:webhooks:child:test"),
+            patch.object(worker_module, "_process_next_webhook_job_once", side_effect=transient_error),
+            patch.object(worker_module.platform_metrics, "record_worker_failure") as failure_metric,
+        ):
+            self.assertEqual(
+                worker_module.run_worker_child_once(mode="webhooks"),
+                worker_module.WORKER_CHILD_EXIT_TRANSIENT_FAILURE,
+            )
+
+        failure_metric.assert_called_once_with(kind="database_unavailable")
 
     def test_run_worker_runs_claims_before_spawning_child(self) -> None:
         import orchestrator.worker as worker_module

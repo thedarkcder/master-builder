@@ -24,14 +24,14 @@ Set required environment values:
 ```bash
 export ORCHESTRATOR_ADMIN_USERNAME=admin
 export ORCHESTRATOR_ADMIN_PASSWORD=change-me
-export ORCHESTRATOR_DATABASE_URL=postgresql+psycopg://orchestrator:orchestrator@localhost:4402/orchestrator
-export ORCHESTRATOR_CORS_ORIGINS=http://localhost:4100,http://127.0.0.1:4100
-export ORCHESTRATOR_ADMIN_UI_BASE_URL=http://localhost:4100
-export ORCHESTRATOR_PUBLIC_API_BASE_URL=http://localhost:4000
+export ORCHESTRATOR_DATABASE_URL=postgresql+psycopg://orchestrator:orchestrator@localhost:60003/orchestrator
+export ORCHESTRATOR_CORS_ORIGINS=http://localhost:60002,http://127.0.0.1:60002
+export ORCHESTRATOR_ADMIN_UI_BASE_URL=http://localhost:60002
+export ORCHESTRATOR_PUBLIC_API_BASE_URL=http://localhost:60001
 export ORCHESTRATOR_EMAIL_DELIVERY_PROVIDER=smtp
 export ORCHESTRATOR_EMAIL_FROM_ADDRESS=no-reply@masterbuilder.local
 export ORCHESTRATOR_SMTP_HOST=localhost
-export ORCHESTRATOR_SMTP_PORT=4205
+export ORCHESTRATOR_SMTP_PORT=60004
 # Production email via Resend (HTTPS API, no SMTP): set provider to `resend`, add a Resend API key,
 # and use ORCHESTRATOR_EMAIL_FROM_ADDRESS on a domain you verified in the Resend dashboard.
 # export ORCHESTRATOR_EMAIL_DELIVERY_PROVIDER=resend
@@ -43,7 +43,7 @@ export ORCHESTRATOR_CODEX_MODEL=gpt-5-codex
 export ORCHESTRATOR_CODEX_STDERR_LOG_MODE=errors_only # all|errors_only|off
 export ORCHESTRATOR_CODEX_PERSIST_TURN_COMPLETED_USAGE=true
 export ORCHESTRATOR_WORKER_POLL_INTERVAL_SECONDS=5
-export ORCHESTRATOR_DATABASE_URL=postgresql+psycopg://orchestrator:orchestrator@127.0.0.1:4402/orchestrator
+export ORCHESTRATOR_DATABASE_URL=postgresql+psycopg://orchestrator:orchestrator@127.0.0.1:60003/orchestrator
 export ORCHESTRATOR_VOICE_STT_PROVIDER=whisper
 export ORCHESTRATOR_VOICE_TTS_PROVIDER=pocket_tts
 # Optional fallback voice if room/persona config does not supply one.
@@ -131,7 +131,7 @@ curl \
   -H "$AUTH_HEADER" \
   -H 'Content-Type: application/json' \
   -d '{"value":"12345"}' \
-  http://localhost:4000/api/admin/secrets/MB_GH_APP_ID
+  http://localhost:60001/api/admin/secrets/MB_GH_APP_ID
 ```
 
 Example resolve check:
@@ -142,7 +142,7 @@ curl \
   -H "$AUTH_HEADER" \
   -H 'Content-Type: application/json' \
   -d '{"secret_ref":"MB_GH_APP_ID"}' \
-  http://localhost:4000/api/admin/secrets/resolve
+  http://localhost:60001/api/admin/secrets/resolve
 ```
 
 ## CLI entrypoints
@@ -163,7 +163,7 @@ orchestrator migrate
 ## Run locally
 Start API:
 ```bash
-uvicorn orchestrator.api.main:app --reload --port 4000
+uvicorn orchestrator.api.main:app --reload --port 60001
 ```
 
 Start run worker (processes queued runs using Codex-backed PM/Dev/Test/Review agents):
@@ -186,8 +186,8 @@ npm install
 npm run dev
 ```
 
-Default UI URL: `http://localhost:4100`
-Login route: `http://localhost:4100/login`
+Default UI URL: `http://localhost:60002`
+Login route: `http://localhost:60002/login`
 
 UI sections:
 - `/tenants` for list and health checks
@@ -202,18 +202,18 @@ cp .env.example .env
 docker compose up --build
 ```
 
-API is exposed on `http://localhost:4000`.
-Postgres is exposed on `localhost:4402`.
-Mailpit SMTP is exposed on `localhost:4205`.
-Mailpit inbox UI is exposed on `http://localhost:4206`.
-Admin UI (if running locally) is exposed on `http://localhost:4100`.
+API is exposed on `http://localhost:60001`.
+Admin UI is exposed on `http://localhost:60002`.
+Postgres is exposed on `localhost:60003`.
+Mailpit SMTP is exposed on `localhost:60004`.
+Mailpit inbox UI is exposed on `http://localhost:60005`.
 Tailscale sidecar uses `TS_AUTHKEY` from your environment (required for tailnet auth).
 
 For host-based API development, you can run only the local mail sink:
 ```bash
 docker compose up -d mailpit
 ```
-Then keep `ORCHESTRATOR_SMTP_HOST=localhost` and `ORCHESTRATOR_SMTP_PORT=4205` so invite and onboarding emails land in Mailpit instead of a real provider.
+Then keep `ORCHESTRATOR_SMTP_HOST=localhost` and `ORCHESTRATOR_SMTP_PORT=60004` so invite and onboarding emails land in Mailpit instead of a real provider.
 
 ### Worker build toolchains
 The worker image now includes:
@@ -247,6 +247,8 @@ Expose API publicly on Funnel:
 docker exec -it master-builder-tailscale tailscale funnel --bg 4000
 docker exec -it master-builder-tailscale tailscale funnel status
 ```
+
+The Funnel command uses the API container's internal port `4000`; the host-facing API port remains `60001`.
 
 Use the returned `https://<device>.<tailnet>.ts.net` URL for external callbacks (Jira/GitHub/Discord) during local testing.
 

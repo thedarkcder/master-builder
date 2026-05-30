@@ -14,6 +14,7 @@ from orchestrator.core.platform.binding_resolution_service import resolve_projec
 from orchestrator.core.guardrails import redact_sensitive_text
 from orchestrator.core.platform.install_registry_service import (
     INSTALL_KIND_FASTLANE,
+    INSTALL_KIND_INTEGRATION,
     INSTALL_KIND_RAILWAY,
     INSTALL_KIND_SLACK,
     INSTALL_KIND_SUPABASE,
@@ -76,6 +77,8 @@ def validate_install_definition(*, kind: str, config: dict[str, Any]) -> dict[st
             "action": action,
             "message": fallback_message,
         }
+    if normalized_kind == INSTALL_KIND_INTEGRATION:
+        return normalized_config
     raise ValueError(f"Unsupported install kind '{kind}'")
 
 
@@ -87,6 +90,8 @@ def _build_install_command(*, kind: str, config: dict[str, Any]) -> list[str]:
         return ["supabase", str(config["action"]), *list(config.get("args") or [])]
     if kind == INSTALL_KIND_RAILWAY:
         return ["railway", str(config["action"]), *list(config.get("args") or [])]
+    if kind == INSTALL_KIND_INTEGRATION:
+        raise ValueError("integration installs are capability records and do not map to an executable command")
     raise ValueError(f"Install kind '{kind}' does not map to a subprocess command")
 
 

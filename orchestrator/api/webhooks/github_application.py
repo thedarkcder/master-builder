@@ -10,6 +10,7 @@ from orchestrator.api.webhooks.github_event_classifier import (
     empty_github_review_summary,
     resolve_github_policy_state,
 )
+from orchestrator.api.webhooks.github_staging_admission import plan_staging_admission_actions
 from orchestrator.api.webhooks.github_manual_fix_planner import plan_manual_fix_reaction_actions
 from orchestrator.api.webhooks.github_review_planner import plan_pull_request_targets
 from orchestrator.api.webhooks.github_webhook_context import (
@@ -58,8 +59,23 @@ async def build_github_webhook_ingress_result(
         normalized_action=normalized_action,
         payload=payload,
     )
+    staging_admission_plan = None
+    if prepared_runtime.github_client is not None:
+        staging_admission_plan = plan_staging_admission_actions(
+            github_event=github_event,
+            normalized_action=normalized_action,
+            payload=payload,
+            repo_full_name=repo_full_name,
+            project_overrides=getattr(project, "policy_overrides", {}) or {},
+            pr_targets=pr_targets,
+            github_client=prepared_runtime.github_client,
+        )
 
-    if not policy_state.allow_code_reviews and not trigger_state.manual_fix_requested:
+    if (
+        not policy_state.allow_code_reviews
+        and not trigger_state.manual_fix_requested
+        and not bool(getattr(staging_admission_plan, "actions", ()))
+    ):
         return _http_json_result(
             status_code=status.HTTP_202_ACCEPTED,
             content={
@@ -88,6 +104,10 @@ async def build_github_webhook_ingress_result(
                     "manual_fix_requests_enabled": policy_state.allow_manual_pr_fix_requests,
                     "reason": "code_reviews_disabled",
                 },
+                "staging_admission": {
+                    "enabled": False,
+                    "results": [],
+                },
                 "remediation": [],
                 "remediation_comments": [],
             },
@@ -98,7 +118,7 @@ async def build_github_webhook_ingress_result(
         payload=payload,
         repo_full_name=repo_full_name,
     )
-    if trigger_state.ignored_reason is not None:
+    if trigger_state.ignored_reason is not None and not bool(getattr(staging_admission_plan, "actions", ())):
         logger.info(
             "github_review_trigger_ignored request_id=%s tenant_id=%s project_id=%s repo=%s event=%s action=%s reason=%s sender=%s",
             request_id,
@@ -128,6 +148,10 @@ async def build_github_webhook_ingress_result(
                     full_review_trigger=False,
                     ignored_reason=trigger_state.ignored_reason,
                 ),
+                "staging_admission": {
+                    "enabled": False,
+                    "results": [],
+                },
             },
             extra_actions=planned_actions,
         )
@@ -135,6 +159,7 @@ async def build_github_webhook_ingress_result(
         not trigger_state.full_review_trigger
         and not trigger_state.remediation_trigger
         and not trigger_state.manual_fix_requested
+        and not bool(getattr(staging_admission_plan, "actions", ()))
     ):
         logger.info(
             "github_review_trigger_ignored request_id=%s tenant_id=%s project_id=%s repo=%s event=%s action=%s reason=unsupported_event sender=%s",
@@ -164,6 +189,10 @@ async def build_github_webhook_ingress_result(
                     full_review_trigger=False,
                     ignored_reason="unsupported_event",
                 ),
+                "staging_admission": {
+                    "enabled": False,
+                    "results": [],
+                },
             },
             extra_actions=planned_actions,
         )
@@ -229,8 +258,16 @@ async def build_github_webhook_ingress_result(
             "accepted": True,
             "repository": repo_full_name,
             **review_plan.summary,
+            "staging_admission": {
+                "enabled": bool(getattr(staging_admission_plan, "enabled", False)),
+                "results": list(getattr(staging_admission_plan, "results", [])),
+            },
         },
-        extra_actions=(*planned_actions, *review_plan.actions),
+        extra_actions=(
+            *planned_actions,
+            *review_plan.actions,
+            *tuple(getattr(staging_admission_plan, "actions", ()) or ()),
+        ),
     )
 
 

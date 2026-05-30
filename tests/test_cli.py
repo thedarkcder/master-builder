@@ -129,13 +129,13 @@ class CliEntrypointTests(unittest.TestCase):
             get_settings.cache_clear()
 
     def test_discord_gateway_command_invokes_runtime(self) -> None:
-        with patch("orchestrator.cli.run_discord_gateway") as gateway_mock:
+        with patch("orchestrator.core.discord.gateway_runtime.run_discord_gateway") as gateway_mock:
             exit_code = cli_main(["discord-gateway"])
         self.assertEqual(exit_code, 0)
         gateway_mock.assert_called_once_with()
 
     def test_worker_child_commands_invoke_child_runtime(self) -> None:
-        with patch("orchestrator.cli.run_worker_child_once", return_value=0) as child_mock:
+        with patch("orchestrator.worker.run_worker_child_once", return_value=0) as child_mock:
             exit_code_runs = cli_main(["worker-child-runs"])
             exit_code_webhooks = cli_main(["worker-child-webhooks"])
         self.assertEqual(exit_code_runs, 0)
@@ -164,13 +164,13 @@ class CliEntrypointTests(unittest.TestCase):
         self.assertIn("master-builder orchestrator", result.stdout)
 
     def test_discord_live_voice_command_invokes_runtime(self) -> None:
-        with patch("orchestrator.cli.run_discord_live_voice") as voice_mock:
+        with patch("orchestrator.core.discord.live_voice_gateway_runtime.run_discord_live_voice") as voice_mock:
             exit_code = cli_main(["discord-live-voice"])
         self.assertEqual(exit_code, 0)
         voice_mock.assert_called_once_with()
 
     def test_knowledge_jira_sync_command_invokes_runtime(self) -> None:
-        with patch("orchestrator.cli.run_knowledge_jira_sync") as sync_mock:
+        with patch("orchestrator.core.knowledge.jira_sync_runtime.run_knowledge_jira_sync") as sync_mock:
             exit_code = cli_main(["knowledge-jira-sync"])
         self.assertEqual(exit_code, 0)
         sync_mock.assert_called_once_with()
@@ -179,7 +179,7 @@ class CliEntrypointTests(unittest.TestCase):
         output = io.StringIO()
         with (
             redirect_stdout(output),
-            patch("orchestrator.cli.prewarm_knowledge_dependencies") as prewarm_mock,
+            patch("orchestrator.core.knowledge.prewarm.prewarm_knowledge_dependencies") as prewarm_mock,
         ):
             prewarm_mock.return_value.embedding_model = "BAAI/bge-small-en-v1.5"
             exit_code = cli_main(["knowledge-prewarm"])
@@ -194,7 +194,7 @@ class CliEntrypointTests(unittest.TestCase):
         output = io.StringIO()
         with (
             redirect_stdout(output),
-            patch("orchestrator.cli.prewarm_voice_dependencies") as prewarm_mock,
+            patch("orchestrator.core.voice.prewarm.prewarm_voice_dependencies") as prewarm_mock,
         ):
             prewarm_mock.return_value.voice_stt_provider = "openai"
             prewarm_mock.return_value.voice_tts_provider = "pocket_tts"

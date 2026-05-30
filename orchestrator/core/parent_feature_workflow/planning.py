@@ -16,6 +16,7 @@ from orchestrator.core.projects.parent_planning_clarification_service import (
 from orchestrator.core.projects.parent_planning_fanout_service import (
     ParentPlanningFanoutResult,
     ParentPlanningFanoutSeedError,
+    ParentPlanningSeedEvaluation,
     ParentPlanningFanoutService,
 )
 from orchestrator.core.parent_feature_workflow.operations import (
@@ -54,6 +55,8 @@ from orchestrator.core.parent_feature_workflow.child_fanout_execution import (
     ChildFanoutExecutionInput,
     execute_child_fanout_step,
 )
+from orchestrator.core.parent_feature_workflow.issue_types import is_self_executable_parent_issue_type
+from orchestrator.core.issue_fanout.service import require_engineering_child_fanout_issue_type
 from orchestrator.core.planning.specialist import PLANNING_STATE_COMPLETED
 from orchestrator.core.workflow.advance import WorkflowAdvanceLifecycle, WorkflowAdvanceOutcome
 from orchestrator.core.workflow.definition import (
@@ -66,7 +69,12 @@ from orchestrator.core.workflow.definition import (
 )
 from orchestrator.core.workflow.execution_projection import classify_external_workflow_failure
 from orchestrator.core.workflow.execution_projection import resolve_latest_workflow_execution_by_source
+from orchestrator.core.workflow.operation_service import (
+    OPERATION_STATUS_COMPLETED,
+    OPERATION_STATUS_WAITING_FOR_INPUT,
+)
 from orchestrator.core.workflow.step_runner import (
+    complete_waiting_workflow_step_attempt,
     complete_workflow_step_attempt,
     fail_workflow_step_attempt,
     start_workflow_step_attempt,
@@ -957,9 +965,14 @@ class ParentFeaturePlanningWorkflow:
                 },
             )
 
-        self._complete_brief_normalization_from_followup(
+        if not self._resume_brief_normalization_from_followup(
             lifecycle=lifecycle,
-        )
+        ):
+            return self._outcome(
+                handled=True,
+                reason="pm_interview_followup_replayed",
+                extra={"webhook_event": context.webhook_event},
+            )
         architecture_gate = issue_gateway.resolve_architecture_gate(
             parent_issue_key=context.issue_key,
             issue_summary=parent_detail.summary,
@@ -1042,13 +1055,31 @@ class ParentFeaturePlanningWorkflow:
             },
         )
 
-    def _complete_brief_normalization_from_followup(self, *, lifecycle) -> None:  # noqa: ANN001
-        step = start_workflow_step_attempt(lifecycle=lifecycle, operation_type=PARENT_OP_BRIEF_NORMALIZATION)
-        complete_workflow_step_attempt(
+    def _resume_brief_normalization_from_followup(self, *, lifecycle) -> bool:  # noqa: ANN001
+        operation = (
+            lifecycle.session.execute(
+                select(WorkflowOperation).where(
+                    WorkflowOperation.workflow_id == lifecycle.workflow.workflow_id,
+                    WorkflowOperation.operation_type == PARENT_OP_BRIEF_NORMALIZATION,
+                )
+            )
+            .scalars()
+            .first()
+        )
+        operation_status = str(getattr(operation, "status", "") or "").strip().lower()
+        if operation_status == OPERATION_STATUS_COMPLETED:
+            return False
+        if operation_status and operation_status != OPERATION_STATUS_WAITING_FOR_INPUT:
+            raise RuntimeError(
+                "Cannot resume parent brief normalization from follow-up; "
+                f"operation is {operation_status}, expected waiting_for_input."
+            )
+        complete_waiting_workflow_step_attempt(
             lifecycle=lifecycle,
-            step=step,
+            operation_type=PARENT_OP_BRIEF_NORMALIZATION,
             summary="Parent brief normalized from product clarification.",
         )
+        return True
 
     def _sync_parent_issue_references(
         self,
@@ -1233,6 +1264,7 @@ class ParentFeaturePlanningWorkflow:
         planning_summary: str,
         fanout_summary: str,
     ) -> ParentPlanningFanoutResult:
+        requires_child_fanout = self._requires_child_fanout(parent_detail=parent_detail, project_key=project_key)
         planning_step = start_workflow_step_attempt(lifecycle=lifecycle, operation_type=PARENT_OP_BACKLOG_PLANNING)
         planner = self._deps.brief_planner.with_attempt(
             attempt_ref=planning_step.ref,
@@ -1407,6 +1439,17 @@ class ParentFeaturePlanningWorkflow:
                 message="Specialist planning blocked without PM decision requests.",
             )
             raise RuntimeError("Specialist planning blocked without PM decision requests.")
+        if not requires_child_fanout:
+            return self._complete_self_executable_parent_planning(
+                lifecycle=lifecycle,
+                settings=settings,
+                parent_detail=parent_detail,
+                tenant_id=tenant_id,
+                project_id=project_id,
+                product_brief=product_brief,
+                planning_result=planning_result,
+                planning_package=planning_package,
+            )
         fanout_step = start_workflow_step_attempt(lifecycle=lifecycle, operation_type=PARENT_OP_JIRA_CHILD_FANOUT)
         fanout = execute_child_fanout_step(
             request=ChildFanoutExecutionInput(
@@ -1470,6 +1513,79 @@ class ParentFeaturePlanningWorkflow:
                 project_id=project_id,
             )
             lifecycle.mark_completed_if_ready()
+        return fanout
+
+    def _requires_child_fanout(self, *, parent_detail, project_key: str) -> bool:  # noqa: ANN001
+        parent_issue_type = str(getattr(parent_detail, "issue_type", "") or "").strip()
+        if is_self_executable_parent_issue_type(parent_issue_type):
+            return False
+        issue_types = self._deps.issue_gateway.list_project_issue_types_for_create(project_key=project_key)
+        require_engineering_child_fanout_issue_type(
+            parent_issue_type=parent_issue_type,
+            available_issue_types=list(issue_types),
+            parent_issue_key=str(getattr(parent_detail, "key", "") or "").strip(),
+        )
+        return True
+
+    def _complete_self_executable_parent_planning(
+        self,
+        *,
+        lifecycle,
+        settings,  # noqa: ANN001
+        parent_detail,
+        tenant_id: str,
+        project_id: str | None,
+        product_brief: dict[str, Any],
+        planning_result,
+        planning_package: dict[str, Any],
+    ) -> ParentPlanningFanoutResult:
+        seed_evaluation = ParentPlanningSeedEvaluation(
+            seed_data={
+                "requires_input": False,
+                "fanout_required": False,
+                "self_executable_issue_key": str(getattr(parent_detail, "key", "") or "").strip(),
+            },
+            updated_children=[],
+            created_children=[],
+            changed_children=[],
+            questions=(),
+        )
+        fanout = ParentPlanningFanoutResult(
+            planning_result=planning_result,
+            planning_package=planning_package,
+            seed_evaluation=seed_evaluation,
+        )
+        fanout_step = start_workflow_step_attempt(lifecycle=lifecycle, operation_type=PARENT_OP_JIRA_CHILD_FANOUT)
+        complete_workflow_step_attempt(
+            lifecycle=lifecycle,
+            step=fanout_step,
+            summary=(
+                f"Child fanout not required because {getattr(parent_detail, 'key', 'the source issue')} "
+                f"is a self-executable {getattr(parent_detail, 'issue_type', 'issue')}."
+            ),
+        )
+        promotion_step = start_workflow_step_attempt(lifecycle=lifecycle, operation_type=PARENT_OP_JIRA_CHILD_PROMOTION)
+        complete_workflow_step_attempt(
+            lifecycle=lifecycle,
+            step=promotion_step,
+            summary=(
+                f"Child promotion not required because {getattr(parent_detail, 'key', 'the source issue')} "
+                "will be started directly."
+            ),
+        )
+        self._clarification_steps().update_sync_label(
+            lifecycle=lifecycle,
+            parent_detail=parent_detail,
+            target_label="sync-current",
+        )
+        self._publish_start_development_link_step(
+            lifecycle=lifecycle,
+            settings=settings,
+            parent_detail=parent_detail,
+            tenant_id=tenant_id,
+            project_id=project_id,
+        )
+        lifecycle.mark_completed_if_ready()
         return fanout
 
     def _publish_start_development_link_step(

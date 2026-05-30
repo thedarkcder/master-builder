@@ -6,10 +6,10 @@ from orchestrator.core.runtime.payload_models import (
     AskIntent,
     DecisionGate,
     DecisionPlanner,
-    DecisionReply,
     EngineeringClarification,
     EngineeringSeedPlan,
     GoodToDo,
+    InteractionResponse,
     JiraIssueIntakeRoute,
     PMDecisionResolutionSet,
     PMInterviewPlan,
@@ -36,11 +36,11 @@ PromptDomainContract = type[
     | AskIntent
     | DecisionGate
     | DecisionPlanner
-    | DecisionReply
     | DevResult
     | EngineeringClarification
     | EngineeringSeedPlan
     | GoodToDo
+    | InteractionResponse
     | JiraIssueIntakeRoute
     | PMDecisionResolutionSet
     | PMInterviewPlan
@@ -67,7 +67,7 @@ PromptDomainContract = type[
 _DOMAIN_MODELS_BY_TEMPLATE: dict[str, PromptDomainContract] = {
     "policy/decision_gate_system.j2": DecisionGate,
     "policy/decision_planner_system.j2": DecisionPlanner,
-    "policy/decision_reply_system.j2": DecisionReply,
+    "policy/decision_reply_system.j2": InteractionResponse,
     "policy/gtd_system.j2": GoodToDo,
     "policy/precheck_message_system.j2": PrecheckMessage,
     "policy/precheck_system.j2": PrecheckPolicy,

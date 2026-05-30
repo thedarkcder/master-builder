@@ -8,10 +8,10 @@ from orchestrator.core.knowledge.base import KnowledgeEmbeddingAccessMode
 from orchestrator.core.runtime.invocation import (
     AgentInvocationContext,
     _AsyncRuntimeLogWriter,
+    _emit_invocation_event,
+    NativeToolPolicyError,
     RuntimeJsonContractError,
-    ToolBridgeExhaustedError,
     ToolBridgeProtocolError,
-    ToolExecutionError,
     invoke_runtime_json,
     invoke_runtime_json_with_tools,
 )
@@ -79,7 +79,6 @@ class CodexInvocationTests(unittest.TestCase):
             persisted_messages.append(message)
 
         with (
-            patch("orchestrator.core.runtime.invocation._get_log_writer", return_value=self._Writer()),
             patch("orchestrator.core.runtime.invocation._enqueue_runtime_log_line", side_effect=_capture_persist),
             patch("orchestrator.core.runtime.invocation._append_raw_log_line"),
             patch("orchestrator.core.runtime.invocation._emit_invocation_event"),
@@ -105,7 +104,7 @@ class CodexInvocationTests(unittest.TestCase):
             "turn.completed usage lines must bypass DB sampling",
         )
 
-    def test_async_runtime_log_writer_isolates_persistence_failures_by_invocation(self) -> None:
+    def test_async_runtime_log_writer_reports_persistence_failures_without_raising(self) -> None:
         writer = _AsyncRuntimeLogWriter()
         writer._batch_size = 100
         writer._batch_flush_ms = 50
@@ -134,12 +133,14 @@ class CodexInvocationTests(unittest.TestCase):
             self.assertTrue(writer.enqueue(context=contexts["bad"], stream="stdout", message="bad line"))
             self.assertTrue(writer.enqueue(context=contexts["good"], stream="stdout", message="good line"))
 
-            with self.assertRaisesRegex(RuntimeError, "bad invocation"):
-                writer.flush_invocation(invocation_id="bad")
-            writer.flush_invocation(invocation_id="good")
+            bad_flush = writer.flush_invocation(invocation_id="bad")
+            good_flush = writer.flush_invocation(invocation_id="good")
 
         self.assertIn(["bad"], persisted_groups)
         self.assertIn(["good"], persisted_groups)
+        self.assertEqual(bad_flush.failure_message, "Runtime log persistence failed for invocation_id=bad: bad invocation")
+        self.assertTrue(good_flush.completed)
+        self.assertIsNone(good_flush.failure_message)
 
     def test_invoke_runtime_json_captures_usage_from_turn_completed_log_line(self) -> None:
         def _request(  # noqa: ANN001
@@ -182,7 +183,6 @@ class CodexInvocationTests(unittest.TestCase):
             events.append((event_kind, payload))
 
         with (
-            patch("orchestrator.core.runtime.invocation._get_log_writer", return_value=self._Writer()),
             patch("orchestrator.core.runtime.invocation._emit_invocation_event", side_effect=_capture_event),
         ):
             payload = invoke_runtime_json(
@@ -249,7 +249,6 @@ class CodexInvocationTests(unittest.TestCase):
             captured_db.append(message)
 
         with (
-            patch("orchestrator.core.runtime.invocation._get_log_writer", return_value=self._Writer()),
             patch("orchestrator.core.runtime.invocation._append_raw_log_line"),
             patch("orchestrator.core.runtime.invocation._enqueue_runtime_log_line", side_effect=_capture_db),
             patch("orchestrator.core.runtime.invocation._emit_invocation_event"),
@@ -269,7 +268,7 @@ class CodexInvocationTests(unittest.TestCase):
             self.assertIn("123e4567-e89b-12d3-a456-426614174000", message)
             self.assertIn("[REDACTED]", message)
 
-    def test_invoke_runtime_json_flushes_invocation_logs(self) -> None:
+    def test_invoke_runtime_json_does_not_flush_async_runtime_logs(self) -> None:
         runtime = CodexRuntime(
             model="m",
             max_output_tokens=10,
@@ -288,7 +287,14 @@ class CodexInvocationTests(unittest.TestCase):
 
         class _CaptureWriter:
             def __init__(self) -> None:
+                self.enqueued_messages: list[str] = []
                 self.flushed_invocations: list[str] = []
+
+            def enqueue(self, *, context, stream: str, message: str) -> bool:  # noqa: ANN001
+                _ = context
+                _ = stream
+                self.enqueued_messages.append(message)
+                return True
 
             def flush_invocation(self, *, invocation_id: str, timeout_seconds: float = 3.0) -> None:
                 _ = timeout_seconds
@@ -304,8 +310,98 @@ class CodexInvocationTests(unittest.TestCase):
             )
 
         self.assertEqual(payload, {"ok": True})
-        self.assertEqual(len(writer.flushed_invocations), 1)
-        self.assertTrue(writer.flushed_invocations[0].strip())
+        self.assertEqual(writer.flushed_invocations, [])
+
+    def test_invoke_runtime_json_does_not_fail_when_async_runtime_log_enqueue_fails(self) -> None:
+        runtime = CodexRuntime(
+            model="m",
+            max_output_tokens=10,
+            command="override",
+            _request=lambda _s, _u, _w, on_log_line=None: (
+                on_log_line("stdout", "line") if callable(on_log_line) else None
+            )
+            or '{"ok": true}',
+        )
+        context = AgentInvocationContext(
+            channel="worker",
+            tenant_id="tenant-1",
+            project_id="proj-1",
+            command="workflow",
+            stage="test",
+            working_dir=".",
+            run_id="run-1",
+        )
+        events: list[tuple[str, dict[str, object]]] = []
+
+        class _FailingEnqueueWriter:
+            def enqueue(self, *, context, stream: str, message: str) -> bool:  # noqa: ANN001
+                _ = context
+                _ = stream
+                _ = message
+                return False
+
+            def flush_invocation(self, *, invocation_id: str, timeout_seconds: float = 3.0) -> None:
+                raise AssertionError("runtime execution must not flush async log writes")
+
+        def _capture_event(*, context, event_kind: str, payload: dict[str, object]) -> None:  # noqa: ANN001
+            _ = context
+            events.append((event_kind, payload))
+
+        with (
+            patch("orchestrator.core.runtime.invocation._get_log_writer", return_value=_FailingEnqueueWriter()),
+            patch("orchestrator.core.runtime.invocation._emit_invocation_event", side_effect=_capture_event),
+        ):
+            payload = invoke_runtime_json(
+                runtime=runtime,
+                context=context,
+                system_prompt="system",
+                user_prompt="user",
+            )
+
+        self.assertEqual(payload, {"ok": True})
+        finished_payload = next(
+            payload
+            for event_kind, payload in events
+            if event_kind == "stage_invocation_finished"
+        )
+        self.assertEqual(finished_payload["status"], "succeeded")
+        self.assertEqual(finished_payload["runtime_log_persistence_failed"], True)
+        self.assertIn("Runtime log write failed", str(finished_payload["runtime_log_persistence_error"]))
+
+    def test_runtime_invocation_event_persistence_failure_is_non_terminal(self) -> None:
+        context = AgentInvocationContext(
+            channel="worker",
+            tenant_id="tenant-1",
+            project_id="proj-1",
+            command="workflow",
+            stage="test",
+            working_dir=".",
+            run_id="run-1",
+            invocation_id="invocation-1",
+            db_session=object(),  # type: ignore[arg-type]
+        )
+
+        with (
+            patch(
+                "orchestrator.core.runtime.invocation.record_observability_stream_event",
+                side_effect=RuntimeError("ClickHouse query failed: 500 NOT_ENOUGH_SPACE"),
+            ),
+            patch(
+                "orchestrator.core.runtime.invocation.get_settings",
+                return_value=SimpleNamespace(agent_id="agent-1"),
+            ),
+            self.assertLogs("orchestrator.core.runtime.invocation", level="ERROR") as logs,
+        ):
+            _emit_invocation_event(
+                context=context,
+                event_kind="stage_invocation_finished",
+                payload={"status": "succeeded"},
+            )
+
+        self.assertTrue(
+            any("runtime_invocation_event_persist_failed" in message for message in logs.output),
+            logs.output,
+        )
 
     def test_invoke_runtime_json_uses_explicit_codex_session_and_persists_it(self) -> None:
         runtime_call: dict[str, str | None] = {}
@@ -343,7 +439,6 @@ class CodexInvocationTests(unittest.TestCase):
         )
 
         with (
-            patch("orchestrator.core.runtime.invocation._get_log_writer", return_value=self._Writer()),
             patch("orchestrator.core.runtime.invocation._persist_checkpoint_session_id") as persist_mock,
         ):
             payload = invoke_runtime_json(
@@ -398,7 +493,6 @@ class CodexInvocationTests(unittest.TestCase):
         )
 
         with (
-            patch("orchestrator.core.runtime.invocation._get_log_writer", return_value=self._Writer()),
             patch("orchestrator.core.runtime.invocation._persist_checkpoint_session_id") as persist_mock,
         ):
             payload = invoke_runtime_json(
@@ -453,7 +547,6 @@ class CodexInvocationTests(unittest.TestCase):
         )
 
         with (
-            patch("orchestrator.core.runtime.invocation._get_log_writer", return_value=self._Writer()),
             patch("orchestrator.core.runtime.invocation._persist_checkpoint_session_id") as persist_mock,
         ):
             payload = invoke_runtime_json(
@@ -508,7 +601,6 @@ class CodexInvocationTests(unittest.TestCase):
         )
 
         with (
-            patch("orchestrator.core.runtime.invocation._get_log_writer", return_value=self._Writer()),
             patch("orchestrator.core.runtime.invocation._persist_checkpoint_session_id"),
         ):
             payload = invoke_runtime_json(
@@ -565,7 +657,6 @@ class CodexInvocationTests(unittest.TestCase):
             events.append((event_kind, payload))
 
         with (
-            patch("orchestrator.core.runtime.invocation._get_log_writer", return_value=self._Writer()),
             patch("orchestrator.core.runtime.invocation._emit_invocation_event", side_effect=_capture_event),
         ):
             payload = invoke_runtime_json(
@@ -630,7 +721,6 @@ class CodexInvocationTests(unittest.TestCase):
             events.append((event_kind, payload))
 
         with (
-            patch("orchestrator.core.runtime.invocation._get_log_writer", return_value=self._Writer()),
             patch("orchestrator.core.runtime.invocation._emit_invocation_event", side_effect=_capture_event),
         ):
             payload = invoke_runtime_json(
@@ -671,7 +761,6 @@ class CodexInvocationTests(unittest.TestCase):
         )
 
         with (
-            patch("orchestrator.core.runtime.invocation._get_log_writer", return_value=self._Writer()),
             patch(
                 "orchestrator.core.runtime.invocation._resolve_knowledge_policy_for_context",
                 return_value=("proj-1", True, "aggressive", "gpt-5.4-mini", "high", True),
@@ -706,7 +795,6 @@ class CodexInvocationTests(unittest.TestCase):
         )
 
         with (
-            patch("orchestrator.core.runtime.invocation._get_log_writer", return_value=self._Writer()),
             patch(
                 "orchestrator.core.runtime.invocation._resolve_knowledge_policy_for_context",
                 return_value=("proj-1", True, "aggressive", "gpt-5.4", "medium", False),
@@ -750,7 +838,6 @@ class CodexInvocationTests(unittest.TestCase):
         )
 
         with (
-            patch("orchestrator.core.runtime.invocation._get_log_writer", return_value=self._Writer()),
             patch(
                 "orchestrator.core.runtime.invocation._resolve_knowledge_policy_for_context",
                 return_value=("proj-1", True, "aggressive", "gpt-5.4-mini", "high", True),
@@ -790,7 +877,6 @@ class CodexInvocationTests(unittest.TestCase):
         )
 
         with (
-            patch("orchestrator.core.runtime.invocation._get_log_writer", return_value=self._Writer()),
             patch(
                 "orchestrator.core.runtime.invocation._resolve_knowledge_policy_for_context",
                 return_value=("proj-1", False, "aggressive", "gpt-5.4-mini", "high", True),
@@ -842,7 +928,6 @@ class CodexInvocationTests(unittest.TestCase):
         )
 
         with (
-            patch("orchestrator.core.runtime.invocation._get_log_writer", return_value=self._Writer()),
             patch(
                 "orchestrator.core.runtime.invocation._resolve_knowledge_policy_for_context",
                 return_value=("proj-1", True, "aggressive", "gpt-5.4", "high", True),
@@ -880,7 +965,6 @@ class CodexInvocationTests(unittest.TestCase):
         )
 
         with (
-            patch("orchestrator.core.runtime.invocation._get_log_writer", return_value=self._Writer()),
             self.assertRaises(RuntimeJsonContractError) as raised,
         ):
             invoke_runtime_json(
@@ -908,7 +992,6 @@ class CodexInvocationTests(unittest.TestCase):
         )
 
         with (
-            patch("orchestrator.core.runtime.invocation._get_log_writer", return_value=self._Writer()),
             self.assertRaises(CodexRuntimeError),
         ):
             invoke_runtime_json(
@@ -965,6 +1048,103 @@ class CodexInvocationTests(unittest.TestCase):
         self.assertIn('"tool_name": "decision.read_state"', str(runtime_calls[1]["user_prompt"]))
         self.assertIn('"ok": true', str(runtime_calls[1]["user_prompt"]).lower())
 
+    def test_invoke_runtime_json_retries_after_disallowed_native_tool_observation(self) -> None:
+        class _Runtime:
+            command = "codex"
+
+            def __init__(self) -> None:
+                self.user_prompts: list[str] = []
+
+            def run_json(self, **kwargs):  # noqa: ANN003
+                self.user_prompts.append(str(kwargs.get("user_prompt") or ""))
+                on_log_line = kwargs.get("on_log_line")
+                if len(self.user_prompts) == 1 and callable(on_log_line):
+                    on_log_line("stdout", '{"type":"web_search_call","query":"jira api"}')
+                return {"ok": True, "attempt": len(self.user_prompts)}
+
+        context = AgentInvocationContext(
+            channel="system",
+            tenant_id="tenant-1",
+            project_id=None,
+            command="policy",
+            stage="decision_planner",
+            working_dir=".",
+        )
+        runtime = _Runtime()
+
+        with patch("orchestrator.core.runtime.invocation._get_log_writer", return_value=self._Writer()):
+            payload = invoke_runtime_json(
+                runtime=runtime,  # type: ignore[arg-type]
+                context=context,
+                system_prompt="system",
+                user_prompt="user",
+            )
+
+        self.assertEqual(payload, {"ok": True, "attempt": 2})
+        self.assertEqual(len(runtime.user_prompts), 2)
+        self.assertIn("web.search", runtime.user_prompts[1])
+        self.assertIn("Do not rely on evidence gathered from the disallowed tool use", runtime.user_prompts[1])
+
+    def test_invoke_runtime_json_fails_when_native_tool_policy_repair_also_violates_policy(self) -> None:
+        class _Runtime:
+            command = "codex"
+
+            def run_json(self, **kwargs):  # noqa: ANN003
+                on_log_line = kwargs.get("on_log_line")
+                if callable(on_log_line):
+                    on_log_line("stdout", '{"type":"web_search_call","query":"jira api"}')
+                return {"ok": True}
+
+        context = AgentInvocationContext(
+            channel="system",
+            tenant_id="tenant-1",
+            project_id=None,
+            command="policy",
+            stage="decision_planner",
+            working_dir=".",
+        )
+
+        with (
+            self.assertRaises(NativeToolPolicyError) as raised,
+        ):
+            invoke_runtime_json(
+                runtime=_Runtime(),  # type: ignore[arg-type]
+                context=context,
+                system_prompt="system",
+                user_prompt="user",
+            )
+
+        self.assertIn("web.search", str(raised.exception))
+
+    def test_invoke_runtime_json_allows_stage_allowed_native_tool_observation(self) -> None:
+        class _Runtime:
+            command = "codex"
+
+            def run_json(self, **kwargs):  # noqa: ANN003
+                on_log_line = kwargs.get("on_log_line")
+                if callable(on_log_line):
+                    on_log_line("stdout", '{"type":"web_search_call","query":"jira api"}')
+                return {"ok": True}
+
+        context = AgentInvocationContext(
+            channel="worker",
+            tenant_id="tenant-1",
+            project_id="proj-1",
+            command="workflow",
+            stage="dev",
+            working_dir=".",
+        )
+
+        with patch("orchestrator.core.runtime.invocation._get_log_writer", return_value=self._Writer()):
+            payload = invoke_runtime_json(
+                runtime=_Runtime(),  # type: ignore[arg-type]
+                context=context,
+                system_prompt="system",
+                user_prompt="user",
+            )
+
+        self.assertEqual(payload, {"ok": True})
+
     def test_invoke_runtime_json_preserves_operation_id_in_runtime_log_sink(self) -> None:
         captured: dict[str, object] = {}
         live_lines: list[tuple[str | None, str | None, str]] = []
@@ -998,7 +1178,6 @@ class CodexInvocationTests(unittest.TestCase):
             live_lines.append((context.operation_id, context.attempt_id, message))
 
         with (
-            patch("orchestrator.core.runtime.invocation._get_log_writer", return_value=self._Writer()),
             patch("orchestrator.core.runtime.invocation.build_runtime_log_sink", side_effect=_fake_sink),
             patch("orchestrator.core.runtime.invocation._emit_invocation_event"),
             patch("orchestrator.core.runtime.invocation._append_raw_log_line"),
@@ -1061,7 +1240,6 @@ class CodexInvocationTests(unittest.TestCase):
             invocation_events.append((event_kind, context.operation_id, context.attempt_id, payload))
 
         with (
-            patch("orchestrator.core.runtime.invocation._get_log_writer", return_value=self._Writer()),
             patch("orchestrator.core.runtime.invocation.build_runtime_log_sink", side_effect=_fake_sink),
             patch("orchestrator.core.runtime.invocation._emit_invocation_event", side_effect=_capture_event),
             patch("orchestrator.core.runtime.invocation._append_raw_log_line"),
@@ -1130,7 +1308,6 @@ class CodexInvocationTests(unittest.TestCase):
         )
 
         with (
-            patch("orchestrator.core.runtime.invocation._get_log_writer", return_value=self._Writer()),
             self.assertRaises(ToolBridgeProtocolError) as raised,
         ):
             invoke_runtime_json_with_tools(
@@ -1145,8 +1322,9 @@ class CodexInvocationTests(unittest.TestCase):
         self.assertIn("disallowed tool", str(raised.exception).lower())
         self.assertEqual(len(runtime_calls), 1)
 
-    def test_invoke_runtime_json_with_tools_fails_after_tool_hop_limit(self) -> None:
+    def test_invoke_runtime_json_with_tools_requests_final_response_after_tool_hop_limit(self) -> None:
         runtime_calls: list[dict[str, object]] = []
+        test_case = self
 
         class _Runtime:
             def run_json(self, **kwargs):  # noqa: ANN003
@@ -1157,6 +1335,8 @@ class CodexInvocationTests(unittest.TestCase):
                         "tool_name": "decision.read_state",
                         "tool_args": {},
                     }
+                test_case.assertIn("Runtime tool hop limit 1 reached", kwargs["user_prompt"])
+                test_case.assertIn("Return a final_response now", kwargs["user_prompt"])
                 return {
                     "type": "final_response",
                     "result": {"message": "continued after hop limit"},
@@ -1171,11 +1351,8 @@ class CodexInvocationTests(unittest.TestCase):
             working_dir=".",
         )
 
-        with (
-            patch("orchestrator.core.runtime.invocation._get_log_writer", return_value=self._Writer()),
-            self.assertRaises(ToolBridgeExhaustedError) as raised,
-        ):
-            invoke_runtime_json_with_tools(
+        with patch("orchestrator.core.runtime.invocation._get_log_writer", return_value=self._Writer()):
+            result = invoke_runtime_json_with_tools(
                 runtime=_Runtime(),  # type: ignore[arg-type]
                 context=context,
                 system_prompt="system",
@@ -1185,8 +1362,8 @@ class CodexInvocationTests(unittest.TestCase):
                 max_tool_hops=1,
             )
 
-        self.assertIn("tool hop limit exceeded", str(raised.exception).lower())
-        self.assertEqual(len(runtime_calls), 2)
+        self.assertEqual(result, {"message": "continued after hop limit"})
+        self.assertEqual(len(runtime_calls), 3)
 
     def test_invoke_runtime_json_with_tools_fails_when_bridge_never_finalizes(self) -> None:
         class _Runtime:
@@ -1207,7 +1384,6 @@ class CodexInvocationTests(unittest.TestCase):
         )
 
         with (
-            patch("orchestrator.core.runtime.invocation._get_log_writer", return_value=self._Writer()),
             self.assertRaises(ToolBridgeProtocolError) as raised,
         ):
             invoke_runtime_json_with_tools(
@@ -1221,13 +1397,69 @@ class CodexInvocationTests(unittest.TestCase):
 
         self.assertIn("disallowed tool", str(raised.exception).lower())
 
-    def test_invoke_runtime_json_with_tools_fails_when_tool_executor_fails(self) -> None:
+    def test_invoke_runtime_json_with_tools_returns_correctable_tool_errors_to_runtime(self) -> None:
+        runtime_calls: list[dict[str, object]] = []
+        test_case = self
+
         class _Runtime:
-            def run_json(self, **_kwargs):  # noqa: ANN003
+            def run_json(self, **kwargs):  # noqa: ANN003
+                runtime_calls.append(kwargs)
+                if len(runtime_calls) == 1:
+                    return {
+                        "type": "tool_request",
+                        "tool_name": "repo.read",
+                        "tool_args": {"command": "rg foo . | head"},
+                    }
+                test_case.assertIn("\"ok\": false", kwargs["user_prompt"])
+                test_case.assertIn("no shell operators", kwargs["user_prompt"])
+                test_case.assertIn("corrected allowed tool_request", kwargs["user_prompt"])
+                test_case.assertNotIn("Tool failures are advisory", kwargs["user_prompt"])
                 return {
-                    "type": "tool_request",
-                    "tool_name": "decision.read_state",
-                    "tool_args": {},
+                    "type": "final_response",
+                    "result": {"message": "corrected"},
+                }
+
+        context = AgentInvocationContext(
+            channel="system",
+            tenant_id="tenant-1",
+            project_id=None,
+            command="policy",
+            stage="decision_planner",
+            working_dir=".",
+        )
+
+        def _reject_tool_request(_tool_name: str, _tool_args: dict[str, object]) -> dict[str, object]:
+            raise PermissionError("repo.read only allows a single command (no shell operators)")
+
+        with patch("orchestrator.core.runtime.invocation._get_log_writer", return_value=self._Writer()):
+            result = invoke_runtime_json_with_tools(
+                runtime=_Runtime(),  # type: ignore[arg-type]
+                context=context,
+                system_prompt="system",
+                user_prompt="user",
+                allowed_tools={"repo.read"},
+                execute_tool=_reject_tool_request,
+            )
+
+        self.assertEqual(result, {"message": "corrected"})
+        self.assertEqual(len(runtime_calls), 2)
+
+    def test_invoke_runtime_json_with_tools_returns_tool_executor_failure_to_model(self) -> None:
+        class _Runtime:
+            def __init__(self) -> None:
+                self.user_prompts: list[str] = []
+
+            def run_json(self, **kwargs):  # noqa: ANN003
+                self.user_prompts.append(str(kwargs.get("user_prompt") or ""))
+                if len(self.user_prompts) == 1:
+                    return {
+                        "type": "tool_request",
+                        "tool_name": "decision.read_state",
+                        "tool_args": {},
+                    }
+                return {
+                    "type": "final_response",
+                    "result": {"state": "blocked", "reason": "tool database unavailable"},
                 }
 
         context = AgentInvocationContext(
@@ -1242,12 +1474,10 @@ class CodexInvocationTests(unittest.TestCase):
         def _raise_tool_failure(_tool_name: str, _tool_args: dict[str, object]) -> dict[str, object]:
             raise RuntimeError("tool database unavailable")
 
-        with (
-            patch("orchestrator.core.runtime.invocation._get_log_writer", return_value=self._Writer()),
-            self.assertRaises(ToolExecutionError) as raised,
-        ):
-            invoke_runtime_json_with_tools(
-                runtime=_Runtime(),  # type: ignore[arg-type]
+        runtime = _Runtime()
+        with patch("orchestrator.core.runtime.invocation._get_log_writer", return_value=self._Writer()):
+            result = invoke_runtime_json_with_tools(
+                runtime=runtime,  # type: ignore[arg-type]
                 context=context,
                 system_prompt="system",
                 user_prompt="user",
@@ -1255,7 +1485,96 @@ class CodexInvocationTests(unittest.TestCase):
                 execute_tool=_raise_tool_failure,
             )
 
-        self.assertIn("tool database unavailable", str(raised.exception))
+        self.assertEqual(result, {"state": "blocked", "reason": "tool database unavailable"})
+        self.assertEqual(len(runtime.user_prompts), 2)
+        self.assertIn('"failure_policy": "recoverable_tool_failure"', runtime.user_prompts[1])
+        self.assertIn("tool database unavailable", runtime.user_prompts[1])
+
+    def test_invoke_runtime_json_with_tools_native_policy_repair_keeps_original_prompt(self) -> None:
+        class _Runtime:
+            command = "codex"
+
+            def __init__(self) -> None:
+                self.user_prompts: list[str] = []
+
+            def run_json(self, **kwargs):  # noqa: ANN003
+                self.user_prompts.append(str(kwargs.get("user_prompt") or ""))
+                if len(self.user_prompts) == 1:
+                    return {
+                        "type": "tool_request",
+                        "tool_name": "decision.read_state",
+                        "tool_args": {},
+                    }
+                on_log_line = kwargs.get("on_log_line")
+                if len(self.user_prompts) == 2 and callable(on_log_line):
+                    on_log_line("stdout", '{"type":"web_search_call","query":"jira api"}')
+                return {"type": "final_response", "result": {"state": "ok"}}
+
+        context = AgentInvocationContext(
+            channel="system",
+            tenant_id="tenant-1",
+            project_id=None,
+            command="policy",
+            stage="decision_planner",
+            working_dir=".",
+        )
+        runtime = _Runtime()
+
+        with patch("orchestrator.core.runtime.invocation._get_log_writer", return_value=self._Writer()):
+            result = invoke_runtime_json_with_tools(
+                runtime=runtime,  # type: ignore[arg-type]
+                context=context,
+                system_prompt="system",
+                user_prompt="original task context",
+                allowed_tools={"decision.read_state"},
+                execute_tool=lambda _name, _args: {"answered": True},
+            )
+
+        self.assertEqual(result, {"state": "ok"})
+        self.assertEqual(len(runtime.user_prompts), 3)
+        self.assertIn("original task context", runtime.user_prompts[2])
+        self.assertNotIn("Tool result:", runtime.user_prompts[2])
+
+    def test_required_correctable_tool_failure_remains_required_evidence(self) -> None:
+        class _Runtime:
+            def __init__(self) -> None:
+                self.user_prompts: list[str] = []
+
+            def run_json(self, **kwargs):  # noqa: ANN003
+                self.user_prompts.append(str(kwargs.get("user_prompt") or ""))
+                if len(self.user_prompts) == 1:
+                    return {
+                        "type": "tool_request",
+                        "tool_name": "decision.read_state",
+                        "tool_args": {"bad": True},
+                    }
+                return {
+                    "type": "final_response",
+                    "result": {"state": "blocked"},
+                }
+
+        context = AgentInvocationContext(
+            channel="system",
+            tenant_id="tenant-1",
+            project_id=None,
+            command="policy",
+            stage="decision_planner",
+            working_dir=".",
+        )
+        runtime = _Runtime()
+
+        with patch("orchestrator.core.runtime.invocation._get_log_writer", return_value=self._Writer()):
+            invoke_runtime_json_with_tools(
+                runtime=runtime,  # type: ignore[arg-type]
+                context=context,
+                system_prompt="system",
+                user_prompt="user",
+                allowed_tools={"decision.read_state"},
+                required_tools={"decision.read_state"},
+                execute_tool=lambda _name, _args: (_ for _ in ()).throw(ValueError("bad args")),
+            )
+
+        self.assertIn("This failed tool is required evidence", runtime.user_prompts[1])
 
 
 if __name__ == "__main__":

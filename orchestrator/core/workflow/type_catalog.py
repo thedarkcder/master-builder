@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from orchestrator.core.workflow.definition import (
     WorkflowDefinition,
     WorkflowDefinitionRegistry,
@@ -216,6 +218,10 @@ def normalize_workflow_retry_policy_config(raw: dict | None) -> dict[str, object
 
 workflow_definition_registry = WorkflowDefinitionRegistry()
 _builtin_workflows_registered = False
+_LEGACY_WORKFLOW_TYPES_TO_PURGE = frozenset()
+_VALIDATED_WORKFLOW_STATUSES = ("queued", "running", "waiting_for_input", "failed")
+
+logger = logging.getLogger(__name__)
 
 
 def _register_builtin_workflows() -> None:
@@ -358,12 +364,36 @@ def validate_workflow_operation_type(*, workflow_type_key: str, operation_type: 
 
 
 def validate_persisted_workflow_definitions(*, session) -> None:  # noqa: ANN001
-    from sqlalchemy import select
+    from sqlalchemy import delete, select
 
     from orchestrator.storage.models import WorkflowExecution, WorkflowOperation
 
+    if _LEGACY_WORKFLOW_TYPES_TO_PURGE:
+        legacy_workflows = session.execute(
+            select(WorkflowExecution).where(
+                WorkflowExecution.workflow_type_key.in_(tuple(_LEGACY_WORKFLOW_TYPES_TO_PURGE)),
+                WorkflowExecution.status.in_(_VALIDATED_WORKFLOW_STATUSES),
+            )
+        ).scalars().all()
+        if legacy_workflows:
+            legacy_ids = [workflow.workflow_id for workflow in legacy_workflows]
+            session.execute(delete(WorkflowExecution).where(WorkflowExecution.workflow_id.in_(legacy_ids)))
+            session.commit()
+            logger.warning(
+                "purged_legacy_workflow_executions workflow_type_keys=%s workflow_ids=%s",
+                sorted(_LEGACY_WORKFLOW_TYPES_TO_PURGE),
+                legacy_ids,
+                extra={
+                    "event_type": "workflow_definition_repair",
+                    "metadata": {
+                        "workflow_type_keys": sorted(_LEGACY_WORKFLOW_TYPES_TO_PURGE),
+                        "workflow_ids": legacy_ids,
+                    },
+                },
+            )
+
     active_workflows = session.execute(
-        select(WorkflowExecution).where(WorkflowExecution.status.in_(("queued", "running", "waiting_for_input", "failed")))
+        select(WorkflowExecution).where(WorkflowExecution.status.in_(_VALIDATED_WORKFLOW_STATUSES))
     ).scalars().all()
     for workflow in active_workflows:
         definition = get_workflow_type(session, workflow_type_key=workflow.workflow_type_key)

@@ -321,7 +321,7 @@ class DiscordWebhookFollowupServiceTests(unittest.TestCase):
         self.assertIsInstance(transport.actions[1], DiscordInteractionFollowupAction)
         self.assertEqual(transport.actions[1].components, [{"type": 1, "custom_id": "ask.reply.open"}])
 
-    def test_command_followup_http_exception_formats_detail(self) -> None:
+    def test_command_followup_http_exception_formats_detail_as_rejection(self) -> None:
         session = MagicMock()
         session.get.return_value = SimpleNamespace(is_enabled=True, tenant_id="tenant-1")
         execute = MagicMock(side_effect=HTTPException(status_code=400, detail="bad request"))
@@ -340,7 +340,30 @@ class DiscordWebhookFollowupServiceTests(unittest.TestCase):
 
         self._assert_thread_delivery_with_ack(transport, DiscordAskWithThreadAction)
         sent_content = transport.actions[0].content
-        self.assertIn("Command failed: bad request", sent_content)
+        self.assertIn("Command rejected: bad request", sent_content)
+
+    def test_run_followup_http_exception_formats_as_start_rejection(self) -> None:
+        session = MagicMock()
+        session.get.return_value = SimpleNamespace(is_enabled=True, tenant_id="tenant-1")
+        execute = MagicMock(side_effect=HTTPException(status_code=409, detail="Decision Gate required"))
+        service, transport = self._build_service(session=session, execute_command_ingress=execute)
+
+        asyncio.run(
+            service.run_discord_command_followup(
+                tenant_id="tenant-1",
+                user_id="u-1",
+                channel_id="c-1",
+                command_text="!run GP-114",
+                command_params={"issue_key": "gp-114"},
+                application_id="app-1",
+                interaction_token="token-1",
+            )
+        )
+
+        self._assert_thread_delivery_with_ack(transport, DiscordAskWithThreadAction)
+        sent_content = transport.actions[0].content
+        self.assertIn("Could not start run: Decision Gate required", sent_content)
+        self.assertNotIn("Command failed", sent_content)
 
     def test_command_followup_http_exception_preserves_issue_context_for_thread_binding(self) -> None:
         session = MagicMock()

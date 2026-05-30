@@ -12,9 +12,11 @@ from sqlalchemy.orm import Session
 
 from orchestrator.core.decision.types import DecisionClassification, DecisionQuestionKind
 from orchestrator.core.runtime.invocation import AgentInvocationContext, invoke_runtime_json
+from orchestrator.core.runtime.payload_models import InteractionAction, InteractionResponse
 from orchestrator.core.runtime.runtime import CodexRuntimeError, build_codex_runtime
 from orchestrator.core.prompt_templates import render_prompt
 from orchestrator.core.decision.state_repository import existing_case_for_issue
+from orchestrator.core.decision.question_state import unresolved_question_ids_for_question_set
 from orchestrator.storage.models import (
     DecisionAnswer,
     DecisionCase,
@@ -157,14 +159,7 @@ def accepted_question_ids_for_cycle(*, session: Session, cycle_id: str) -> set[s
 
 
 def frozen_question_ids_for_cycle(*, cycle: DecisionCycle) -> list[str]:
-    return [
-        question_id
-        for question_id in (
-            str(item.get("id") or "").strip()
-            for item in cycle.question_set_json
-        )
-        if question_id
-    ]
+    return unresolved_question_ids_for_question_set(question_set=cycle.question_set_json)
 
 
 def unresolved_question_ids_for_cycle(*, session: Session, cycle: DecisionCycle) -> tuple[str, ...]:
@@ -235,20 +230,22 @@ def _normalize_question_payload(cycle: DecisionCycle) -> list[dict[str, str]]:
     return payload
 
 
-def _extract_reply_matches(
+def interpret_decision_reply(
     *,
     session: Session,
     settings: Any,
     tenant: Tenant,
     project: Project | None,
     issue_key: str,
+    issue_summary: str | None = None,
+    issue_description: str | None = None,
     cycle: DecisionCycle,
     reply_text: str,
     existing_answers: list[DecisionAnswer],
-) -> list[dict[str, Any]]:
+) -> InteractionResponse:
     questions = _normalize_question_payload(cycle)
     if not questions:
-        return []
+        raise CodexRuntimeError("Decision reply interpretation has no open questions")
     runtime = build_codex_runtime(session=session, settings=settings)
     working_dir = "."
     if project is not None:
@@ -273,11 +270,14 @@ def _extract_reply_matches(
         user_prompt=render_prompt(
             "policy/decision_reply_user.j2",
             issue_key=issue_key,
+            issue_summary=issue_summary or "",
+            issue_description=issue_description or "",
             questions_json=json.dumps(questions),
             existing_answers_json=json.dumps(
                 [
                     {
                         "question_id": answer.question_id,
+                        "question_text": answer.question_text,
                         "status": answer.status,
                         "answer": answer.normalized_answer,
                     }
@@ -287,31 +287,32 @@ def _extract_reply_matches(
             reply_text=reply_text,
         ),
     )
-    answers_raw = payload.get("answers")
-    if not isinstance(answers_raw, list):
-        raise CodexRuntimeError("Decision reply extraction did not return an answers array")
-    normalized: list[dict[str, Any]] = []
-    for item in answers_raw:
-        if not isinstance(item, dict):
+    try:
+        interaction = InteractionResponse.from_payload(payload, context="Decision reply interaction")
+        _validate_decision_reply_actions(interaction.actions)
+        return interaction
+    except RuntimeError as exc:
+        raise CodexRuntimeError(f"Decision reply interpretation returned invalid payload: {exc}") from exc
+
+
+def _validate_decision_reply_actions(actions: tuple[InteractionAction, ...]) -> None:
+    allowed_action_types = {"capture_decision_answer", "recheck_gate"}
+    for action in actions:
+        if action.type not in allowed_action_types:
+            raise RuntimeError(f"Decision reply returned unsupported action type {action.type!r}")
+        if action.type == "recheck_gate":
+            if action.payload:
+                raise RuntimeError("Decision reply recheck_gate action payload must be empty")
             continue
-        question_id = str(item.get("question_id") or "").strip()
+        question_id = str(action.payload.get("question_id") or "").strip()
+        status = str(action.payload.get("status") or "").strip().lower()
+        answer = str(action.payload.get("answer") or "").strip()
         if not question_id:
-            continue
-        status = str(item.get("status") or "").strip().lower()
-        if status not in {"ignored", "answered", "accepted"}:
-            status = "answered"
-        answer_text = str(item.get("answer") or "").strip()
-        if status in {"answered", "accepted"} and not answer_text:
-            continue
-        normalized.append(
-            {
-                "question_id": question_id,
-                "status": status,
-                "answer": answer_text,
-                "notes": str(item.get("notes") or "").strip() or None,
-            }
-        )
-    return normalized
+            raise RuntimeError("Decision reply capture_decision_answer action missing question_id")
+        if status not in {"answered", "accepted"}:
+            raise RuntimeError("Decision reply capture_decision_answer action has invalid status")
+        if not answer:
+            raise RuntimeError("Decision reply capture_decision_answer action missing answer")
 
 
 def _question_lookup(cycle: DecisionCycle) -> dict[str, dict[str, str]]:
@@ -360,11 +361,14 @@ def _feedback_for_cycle_questions(
         question_id = str(item.get("id") or "").strip()
         if not question_id or question_id not in unresolved_ids:
             continue
+        item_status = str(item.get("status") or "").strip().lower()
+        if item_status == "accepted":
+            continue
         question_text = str(item.get("text") or "").strip()
         answer = answer_lookup.get(question_id)
         metadata = dict(answer.metadata_json or {}) if answer is not None else {}
         note = str(metadata.get("notes") or "").strip()
-        status = str(answer.status or "").strip().lower() if answer is not None else "open"
+        status = str(answer.status or "").strip().lower() if answer is not None else item_status or "open"
         if status == "accepted":
             continue
         row: dict[str, str] = {
@@ -521,6 +525,7 @@ def capture_decision_reply(
     source_ref: str | None = None,
     actor_ref: str | None = None,
     metadata: dict[str, Any] | None = None,
+    interpreted_reply: InteractionResponse | None = None,
 ) -> DecisionReplyCaptureResult:
     case, cycle = active_case_and_cycle_for_issue(
         session=session,
@@ -566,16 +571,31 @@ def capture_decision_reply(
         evidence = existing_evidence
 
     existing_answers = list_cycle_answers(session=session, cycle_id=cycle.cycle_id)
-    matches = _extract_reply_matches(
+    interpretation = interpreted_reply or interpret_decision_reply(
         session=session,
         settings=settings,
         tenant=tenant,
         project=project,
         issue_key=issue_key,
+        issue_summary=str(case.metadata_json.get("issue_summary") or "") if isinstance(case.metadata_json, dict) else "",
+        issue_description=str(case.metadata_json.get("issue_description") or "") if isinstance(case.metadata_json, dict) else "",
         cycle=cycle,
         reply_text=reply_text,
         existing_answers=existing_answers,
     )
+    _validate_decision_reply_actions(interpretation.actions)
+    capture_actions = [action for action in interpretation.actions if action.type == "capture_decision_answer"]
+    if not capture_actions:
+        raise ValueError("Decision reply interaction has no answer evidence to capture")
+    matches = [
+        {
+            "question_id": str(action.payload.get("question_id") or "").strip(),
+            "status": str(action.payload.get("status") or "").strip(),
+            "answer": str(action.payload.get("answer") or "").strip(),
+            "notes": str(action.payload.get("notes") or "").strip() or None,
+        }
+        for action in capture_actions
+    ]
     question_lookup = _question_lookup(cycle)
     answer_lookup = {
         str(answer.question_id or "").strip(): answer

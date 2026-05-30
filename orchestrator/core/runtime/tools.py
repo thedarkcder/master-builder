@@ -27,6 +27,7 @@ from orchestrator.core.runs.human_input_service import create_human_input_reques
 from orchestrator.core.platform.tenant_secret_service import resolve_scoped_secret_ref
 from orchestrator.core.platform.trusted_install_executor import run_install as execute_project_install
 from orchestrator.core.worker.workspace import resolve_worker_workspace_key
+from orchestrator.core.workflow.execution_artifacts import record_pushed_execution_artifact
 from orchestrator.core.workflow.execution_snapshot import load_parsed_trigger_context_from_plan
 from orchestrator.core.workflow.trigger_context import GithubPrRemediationTriggerContext
 from orchestrator.storage.models import (
@@ -117,6 +118,14 @@ TOOL_ALLOWLIST: dict[str, set[str]] = {
         "exec.run_install",
         "run.request_human_input",
     },
+    "pr_ready": {
+        "web.search",
+        "web.fetch",
+    },
+    "pr_review_findings": {
+        "web.search",
+        "web.fetch",
+    },
     "repo_setup": {
         "repo.read",
         "repo.exec_bootstrap",
@@ -186,20 +195,12 @@ TOOL_ALLOWLIST: dict[str, set[str]] = {
         "jira.get_issue",
         "knowledge.exact_read",
         "knowledge.read",
-        "web.search",
-        "web.fetch",
-        "browser.open",
-        "browser.snapshot",
         "repo.read",
     },
     "engineering_planning": {
         "jira.get_issue",
         "knowledge.exact_read",
         "knowledge.read",
-        "web.search",
-        "web.fetch",
-        "browser.open",
-        "browser.snapshot",
         "repo.read",
         "project.list_installs",
         "project.check_runtime_bindings",
@@ -208,10 +209,6 @@ TOOL_ALLOWLIST: dict[str, set[str]] = {
         "jira.get_issue",
         "knowledge.exact_read",
         "knowledge.read",
-        "web.search",
-        "web.fetch",
-        "browser.open",
-        "browser.snapshot",
         "repo.read",
         "project.list_installs",
         "project.check_runtime_bindings",
@@ -220,10 +217,6 @@ TOOL_ALLOWLIST: dict[str, set[str]] = {
         "jira.get_issue",
         "knowledge.exact_read",
         "knowledge.read",
-        "web.search",
-        "web.fetch",
-        "browser.open",
-        "browser.snapshot",
         "repo.read",
         "project.list_installs",
         "project.check_runtime_bindings",
@@ -253,11 +246,41 @@ TOOL_DESCRIPTIONS: dict[str, str] = {
     "browser.snapshot": "Use native Codex browser inspection when available in this runtime to capture a structured UI snapshot. Use this when you need read-only browser/UI inspection.",
     "project.list_installs": "List the integrations installed for the active project. Use this to confirm whether a required Fastlane, Supabase, Railway, Slack, or similar install already exists before planning or execution.",
     "project.check_runtime_bindings": "Check whether explicitly named project bindings are configured. Use this only to verify presence of required env or secret-backed bindings; it never returns the underlying values.",
-    "project.request_install": "Create a structured install request for the active run and pause the workflow. Use this when execution depends on an integration that is not yet installed for the project.",
-    "repo.read": "Run guarded read-only repository commands and return file or git metadata. Use this to inspect code, files, branches, or diffs without making changes.",
-    "repo.exec_bootstrap": "Run a bounded bootstrap shell command inside the project checkout root. Use this only in repo_setup to clone, fetch, repair, prune, or create the execution repo before agent workflow stages begin.",
+    "project.request_install": (
+        "Create a structured install/dependency approval request for the active run and pause the workflow. "
+        "Use this when execution depends on project or Master Builder integration work that is not yet installed "
+        "or configured. Use a stable capability label such as hubspot, stripe, fastlane, or railway; do not include "
+        "the Jira issue key in the label. The reason and operator_decision must explain the requested approval in "
+        "plain operator language. Put reusable detail in suggested_config for the UI, but do not make the operator "
+        "read JSON or internal config names."
+    ),
+    "repo.read": "Run guarded read-only repository commands through portable POSIX sh and return file or git metadata. Use this to inspect code, files, branches, or diffs without making changes. Arguments: {\"command\":\"<single read-only shell command>\"}. Use the exact key `command`, not `cmd`; do not use pipes, redirects, semicolons, or other shell operators. If output is too large, the tool fails with output_overflow and you must issue a narrower read; overflow output is not evidence.",
+    "repo.exec_bootstrap": "Run a bounded bootstrap shell command inside the project checkout root. Use this only in repo_setup to clone, fetch, repair, prune, or create the execution repo before agent workflow stages begin. If output is too large, the tool fails with output_overflow instead of returning partial evidence.",
     "run.request_human_input": "Create a structured human-input request for the active run and pause the workflow until a reply arrives. Use this when one-time operator clarification or data is required to continue.",
     "exec.run_install": "Execute a registered project install with its pre-approved bindings injected server-side. Use this when a configured integration must run and the model must not see the binding values.",
+}
+
+TOOL_ARGUMENT_SCHEMAS: dict[str, dict[str, object]] = {
+    "repo.read": {
+        "type": "object",
+        "required": ["command"],
+        "properties": {
+            "command": {
+                "type": "string",
+                "description": "Single read-only shell command, for example `rg -n \"pattern\" .`.",
+            },
+        },
+        "additionalProperties": False,
+    },
+    "repo.exec_bootstrap": {
+        "type": "object",
+        "required": ["command"],
+        "properties": {
+            "command": {"type": "string", "description": "Single bounded bootstrap command."},
+            "cwd": {"type": "string", "description": "Optional checkout-root-relative directory."},
+        },
+        "additionalProperties": False,
+    },
 }
 
 _READ_ONLY_SHELL_OPERATOR_PATTERN = re.compile(r"[|;&><`]|(?:\$\()")
@@ -274,8 +297,11 @@ _READ_ONLY_REPO_COMMANDS = {
     "du",
     "tree",
 }
+_TOOL_OUTPUT_MAX_CHARS = 12000
+_TOOL_ERROR_OUTPUT_MAX_CHARS = 6000
 _READ_ONLY_GIT_SUBCOMMANDS = {
     "status",
+    "branch",
     "diff",
     "log",
     "show",
@@ -286,10 +312,58 @@ _READ_ONLY_GIT_SUBCOMMANDS = {
     "describe",
     "tag",
 }
+_READ_ONLY_GIT_BLOCKED_OPTIONS: dict[str, set[str]] = {
+    "branch": {
+        "-c",
+        "-C",
+        "-d",
+        "-D",
+        "-m",
+        "-M",
+        "--copy",
+        "--delete",
+        "--edit-description",
+        "--move",
+        "--no-track",
+        "--set-upstream",
+        "--set-upstream-to",
+        "--track",
+        "--unset-upstream",
+    },
+}
 _DEV_STAGE_BLOCKED_GIT_SUBCOMMANDS = {
     "push",
 }
 _NATIVE_CODEX_TOOL_NAMES = frozenset({"web.search", "web.fetch", "browser.open", "browser.snapshot"})
+_SUPPORTED_TOOL_PLATFORMS = frozenset({"linux", "macos"})
+_TOOL_PLATFORM_SCOPES: dict[str, frozenset[str]] = {
+    # Keep platform support explicit so future Mac-only/Linux-only tools cannot leak
+    # into the wrong execution worker prompt or governed bridge.
+    tool_name: _SUPPORTED_TOOL_PLATFORMS
+    for stage_tools in TOOL_ALLOWLIST.values()
+    for tool_name in stage_tools
+}
+
+
+def _normalize_worker_platform(worker_platform: str | None) -> str | None:
+    normalized = str(worker_platform or "").strip().lower()
+    if not normalized:
+        return None
+    if normalized not in _SUPPORTED_TOOL_PLATFORMS:
+        allowed = ", ".join(sorted(_SUPPORTED_TOOL_PLATFORMS))
+        raise ValueError(f"Unsupported worker platform '{normalized}'. Allowed values: {allowed}.")
+    return normalized
+
+
+def _tool_platforms(tool_name: str) -> frozenset[str]:
+    return _TOOL_PLATFORM_SCOPES.get(str(tool_name or "").strip(), _SUPPORTED_TOOL_PLATFORMS)
+
+
+def _tool_allowed_on_platform(tool_name: str, *, worker_platform: str | None) -> bool:
+    normalized_platform = _normalize_worker_platform(worker_platform)
+    if normalized_platform is None:
+        return True
+    return normalized_platform in _tool_platforms(tool_name)
 
 
 @dataclass(frozen=True)
@@ -301,6 +375,7 @@ class AgentToolContext:
     run_id: str | None
     repo_dir: Path
     checkout_root: Path
+    worker_platform: str | None = None
     run: Run | None = None
 
 
@@ -313,8 +388,16 @@ def _ensure_repo_checkout_exists(repo_dir: Path) -> None:
         raise ValueError(f"Repository checkout missing at {repo_dir}")
 
 
-def allowed_tools_for_stage(stage: str) -> set[str]:
-    return set(TOOL_ALLOWLIST.get(str(stage or "").strip().lower(), set()))
+def allowed_tools_for_stage(stage: str, *, worker_platform: str | None = None) -> set[str]:
+    normalized_platform = _normalize_worker_platform(worker_platform)
+    tools = set(TOOL_ALLOWLIST.get(str(stage or "").strip().lower(), set()))
+    if normalized_platform is None:
+        return tools
+    return {
+        tool_name
+        for tool_name in tools
+        if _tool_allowed_on_platform(tool_name, worker_platform=normalized_platform)
+    }
 
 
 def _runtime_supports_native_codex_tools(runtime_command: str | None) -> bool:
@@ -324,15 +407,26 @@ def _runtime_supports_native_codex_tools(runtime_command: str | None) -> bool:
     return "codex" in normalized
 
 
-def native_model_tools_for_stage(stage: str, *, runtime_command: str | None = None) -> set[str]:
+def native_model_tools_for_stage(
+    stage: str,
+    *,
+    runtime_command: str | None = None,
+    worker_platform: str | None = None,
+) -> set[str]:
     if not _runtime_supports_native_codex_tools(runtime_command):
         return set()
-    return allowed_tools_for_stage(stage) & set(_NATIVE_CODEX_TOOL_NAMES)
+    normalized_stage = str(stage or "").strip().lower()
+    return allowed_tools_for_stage(normalized_stage, worker_platform=worker_platform) & set(_NATIVE_CODEX_TOOL_NAMES)
 
 
-def governed_allowed_tools_for_stage(stage: str, *, runtime_command: str | None = None) -> set[str]:
+def governed_allowed_tools_for_stage(
+    stage: str,
+    *,
+    runtime_command: str | None = None,
+    worker_platform: str | None = None,
+) -> set[str]:
     _ = runtime_command
-    return allowed_tools_for_stage(stage) - set(_NATIVE_CODEX_TOOL_NAMES)
+    return allowed_tools_for_stage(stage, worker_platform=worker_platform) - set(_NATIVE_CODEX_TOOL_NAMES)
 
 
 def list_implemented_tools() -> list[dict[str, object]]:
@@ -349,31 +443,60 @@ def list_implemented_tools() -> list[dict[str, object]]:
                 "tool_name": tool_name,
                 "category": category or "other",
                 "description": TOOL_DESCRIPTIONS.get(tool_name, "Implemented governed tool."),
+                "args_schema": TOOL_ARGUMENT_SCHEMAS.get(tool_name, {}),
                 "stages": tool_stage_membership[tool_name],
+                "platforms": sorted(_tool_platforms(tool_name)),
             }
         )
     return tools
 
 
-def tool_catalog_for_stage(stage: str) -> list[dict[str, object]]:
+def tool_catalog_for_stage(stage: str, *, worker_platform: str | None = None) -> list[dict[str, object]]:
     normalized_stage = str(stage or "").strip().lower()
     if not normalized_stage:
         return []
+    allowed = allowed_tools_for_stage(normalized_stage, worker_platform=worker_platform)
     return [
         tool
         for tool in list_implemented_tools()
-        if normalized_stage in tool.get("stages", [])
+        if normalized_stage in tool.get("stages", []) and str(tool.get("tool_name") or "") in allowed
     ]
 
 
-def governed_tool_catalog_for_stage(stage: str, *, runtime_command: str | None = None) -> list[dict[str, object]]:
-    allowed = governed_allowed_tools_for_stage(stage, runtime_command=runtime_command)
-    return [tool for tool in tool_catalog_for_stage(stage) if str(tool.get("tool_name") or "") in allowed]
+def governed_tool_catalog_for_stage(
+    stage: str,
+    *,
+    runtime_command: str | None = None,
+    worker_platform: str | None = None,
+) -> list[dict[str, object]]:
+    allowed = governed_allowed_tools_for_stage(
+        stage,
+        runtime_command=runtime_command,
+        worker_platform=worker_platform,
+    )
+    return [
+        tool
+        for tool in tool_catalog_for_stage(stage, worker_platform=worker_platform)
+        if str(tool.get("tool_name") or "") in allowed
+    ]
 
 
-def native_tool_catalog_for_stage(stage: str, *, runtime_command: str | None = None) -> list[dict[str, object]]:
-    allowed = native_model_tools_for_stage(stage, runtime_command=runtime_command)
-    return [tool for tool in tool_catalog_for_stage(stage) if str(tool.get("tool_name") or "") in allowed]
+def native_tool_catalog_for_stage(
+    stage: str,
+    *,
+    runtime_command: str | None = None,
+    worker_platform: str | None = None,
+) -> list[dict[str, object]]:
+    allowed = native_model_tools_for_stage(
+        stage,
+        runtime_command=runtime_command,
+        worker_platform=worker_platform,
+    )
+    return [
+        tool
+        for tool in tool_catalog_for_stage(stage, worker_platform=worker_platform)
+        if str(tool.get("tool_name") or "") in allowed
+    ]
 
 
 def build_agent_tool_command(
@@ -383,6 +506,7 @@ def build_agent_tool_command(
     run_id: str | None,
     issue_key: str,
     stage: str,
+    worker_platform: str | None = None,
 ) -> str:
     command = [
         sys.executable,
@@ -398,6 +522,9 @@ def build_agent_tool_command(
     normalized_run_id = str(run_id or "").strip()
     if normalized_run_id:
         command.extend(["--run", normalized_run_id])
+    normalized_worker_platform = _normalize_worker_platform(worker_platform)
+    if normalized_worker_platform:
+        command.extend(["--worker-platform", normalized_worker_platform])
     command.extend(
         [
             "--issue",
@@ -424,6 +551,7 @@ def execute_agent_tool(
     stage: str,
     tool_name: str,
     tool_args: dict[str, Any] | None,
+    worker_platform: str | None = None,
 ) -> dict[str, Any]:  # noqa: ANN401
     context = _resolve_context(
         session=session,
@@ -433,8 +561,12 @@ def execute_agent_tool(
         run_id=run_id,
         issue_key=issue_key,
         stage=stage,
+        worker_platform=worker_platform,
     )
-    allowed = allowed_tools_for_stage(context.stage)
+    allowed = allowed_tools_for_stage(
+        context.stage,
+        worker_platform=getattr(context, "worker_platform", None),
+    )
     if tool_name not in allowed:
         raise PermissionError(f"Tool '{tool_name}' is not allowed in stage '{context.stage}'")
     if tool_name in _NATIVE_CODEX_TOOL_NAMES:
@@ -446,7 +578,7 @@ def execute_agent_tool(
     if tool_name == "repo.read":
         return _tool_repo_read(context=context, args=args)
     if tool_name == "repo.exec_bootstrap":
-        return _tool_repo_exec_bootstrap(context=context, args=args)
+        return _tool_repo_exec_bootstrap(session=session, settings=settings, context=context, args=args)
     if tool_name.startswith("project."):
         return _execute_project_tool(
             session=session,
@@ -498,6 +630,7 @@ def _resolve_context(
     run_id: str | None,
     issue_key: str,
     stage: str,
+    worker_platform: str | None = None,
 ) -> AgentToolContext:  # noqa: ANN001
     tenant = session.get(Tenant, tenant_id)
     if tenant is None:
@@ -555,6 +688,7 @@ def _resolve_context(
         run_id=str(run_id).strip() if run_id else None,
         repo_dir=repo_dir,
         checkout_root=checkout_root,
+        worker_platform=_normalize_worker_platform(worker_platform),
         run=run,
     )
 
@@ -564,23 +698,50 @@ def _tool_repo_read(*, context: AgentToolContext, args: dict[str, Any]) -> dict[
     if not command:
         raise ValueError("repo.read requires 'command'")
     _ensure_repo_checkout_exists(context.repo_dir)
-    _enforce_repo_command_for_stage(stage=context.stage, command=command)
+    _enforce_repo_command_for_stage(
+        stage=context.stage,
+        command=command,
+        checkout_root=getattr(context, "checkout_root", context.repo_dir),
+    )
     process = subprocess.run(  # noqa: S603
-        ["/bin/zsh", "-lc", command],
+        ["/bin/sh", "-lc", command],
         cwd=str(context.repo_dir),
         capture_output=True,
         text=True,
         check=False,
     )
+    overflow = _tool_output_overflow(stdout=process.stdout, stderr=process.stderr)
+    if overflow is not None:
+        return {
+            "ok": False,
+            "exit_code": process.returncode,
+            "failure_policy": "output_overflow",
+            "error": overflow["error"],
+            "stdout": "",
+            "stderr": "",
+            "stdout_original_chars": overflow["stdout_original_chars"],
+            "stderr_original_chars": overflow["stderr_original_chars"],
+            "output_available": False,
+            "retry_guidance": "Issue a narrower repo.read command that targets specific files, paths, or line ranges. Do not treat this overflow response as evidence.",
+        }
     return {
         "ok": process.returncode == 0,
         "exit_code": process.returncode,
         "stdout": process.stdout,
         "stderr": process.stderr,
+        "stdout_original_chars": len(process.stdout or ""),
+        "stderr_original_chars": len(process.stderr or ""),
+        "output_available": True,
     }
 
 
-def _tool_repo_exec_bootstrap(*, context: AgentToolContext, args: dict[str, Any]) -> dict[str, Any]:  # noqa: ANN401
+def _tool_repo_exec_bootstrap(
+    *,
+    session: Session,
+    settings,
+    context: AgentToolContext,
+    args: dict[str, Any],  # noqa: ANN401
+) -> dict[str, Any]:
     if context.stage != "repo_setup":
         raise PermissionError("repo.exec_bootstrap is only allowed during repo_setup")
     command = str(args.get("command") or "").strip()
@@ -599,13 +760,31 @@ def _tool_repo_exec_bootstrap(*, context: AgentToolContext, args: dict[str, Any]
         if not candidate.exists():
             raise ValueError(f"repo.exec_bootstrap cwd does not exist: {candidate}")
         cwd = candidate
+    token = _github_installation_token_for_context(session=session, settings=settings, context=context)
     process = subprocess.run(  # noqa: S603
-        ["/bin/zsh", "-lc", command],
+        ["/bin/sh", "-lc", command],
         cwd=str(cwd),
         capture_output=True,
         text=True,
         check=False,
+        env=_git_auth_env(token),
     )
+    overflow = _tool_output_overflow(stdout=process.stdout, stderr=process.stderr)
+    if overflow is not None:
+        return {
+            "ok": False,
+            "exit_code": process.returncode,
+            "cwd": str(cwd),
+            "checkout_root": str(checkout_root),
+            "failure_policy": "output_overflow",
+            "error": overflow["error"],
+            "stdout": "",
+            "stderr": "",
+            "stdout_original_chars": overflow["stdout_original_chars"],
+            "stderr_original_chars": overflow["stderr_original_chars"],
+            "output_available": False,
+            "retry_guidance": "Issue a narrower repo.exec_bootstrap command or inspect the resulting checkout with repo.read. Do not treat this overflow response as evidence.",
+        }
     return {
         "ok": process.returncode == 0,
         "exit_code": process.returncode,
@@ -613,10 +792,30 @@ def _tool_repo_exec_bootstrap(*, context: AgentToolContext, args: dict[str, Any]
         "checkout_root": str(checkout_root),
         "stdout": process.stdout,
         "stderr": process.stderr,
+        "stdout_original_chars": len(process.stdout or ""),
+        "stderr_original_chars": len(process.stderr or ""),
+        "output_available": True,
     }
 
 
-def _enforce_repo_command_for_stage(*, stage: str, command: str) -> None:
+def _tool_output_overflow(*, stdout: str, stderr: str) -> dict[str, object] | None:
+    stdout_chars = len(stdout or "")
+    stderr_chars = len(stderr or "")
+    overflow_fields: list[str] = []
+    if stdout_chars > _TOOL_OUTPUT_MAX_CHARS:
+        overflow_fields.append(f"stdout {stdout_chars}>{_TOOL_OUTPUT_MAX_CHARS}")
+    if stderr_chars > _TOOL_ERROR_OUTPUT_MAX_CHARS:
+        overflow_fields.append(f"stderr {stderr_chars}>{_TOOL_ERROR_OUTPUT_MAX_CHARS}")
+    if not overflow_fields:
+        return None
+    return {
+        "error": f"Tool output exceeded per-call evidence bounds: {', '.join(overflow_fields)}",
+        "stdout_original_chars": stdout_chars,
+        "stderr_original_chars": stderr_chars,
+    }
+
+
+def _enforce_repo_command_for_stage(*, stage: str, command: str, checkout_root: Path | None = None) -> None:
     if _READ_ONLY_SHELL_OPERATOR_PATTERN.search(command):
         raise PermissionError("repo.read only allows a single command (no shell operators)")
     try:
@@ -630,7 +829,8 @@ def _enforce_repo_command_for_stage(*, stage: str, command: str) -> None:
     executable = tokens[0]
     if normalized_stage == "dev":
         if executable == "git" and len(tokens) >= 2:
-            subcommand = tokens[1]
+            subcommand_index = _git_subcommand_index(tokens=tokens, checkout_root=checkout_root)
+            subcommand = tokens[subcommand_index] if subcommand_index is not None else ""
             if subcommand in _DEV_STAGE_BLOCKED_GIT_SUBCOMMANDS:
                 raise PermissionError(
                     "repo.read does not allow 'git push' in dev; use github.push_branch"
@@ -638,19 +838,54 @@ def _enforce_repo_command_for_stage(*, stage: str, command: str) -> None:
         return
 
     if executable == "git":
-        if len(tokens) < 2:
+        subcommand_index = _git_subcommand_index(tokens=tokens, checkout_root=checkout_root)
+        if subcommand_index is None:
             raise PermissionError("repo.read git command must include a read-only subcommand")
-        subcommand = tokens[1]
+        subcommand = tokens[subcommand_index]
         if subcommand not in _READ_ONLY_GIT_SUBCOMMANDS:
             raise PermissionError(
                 f"repo.read does not allow mutating git subcommand '{subcommand}'"
             )
+        blocked_options = _READ_ONLY_GIT_BLOCKED_OPTIONS.get(subcommand, set())
+        if blocked_options:
+            used_blocked_options = blocked_options.intersection(tokens[subcommand_index + 1 :])
+            if used_blocked_options:
+                blocked = sorted(used_blocked_options)[0]
+                raise PermissionError(
+                    f"repo.read does not allow mutating git option '{blocked}' for subcommand '{subcommand}'"
+                )
         return
 
     if executable not in _READ_ONLY_REPO_COMMANDS:
         raise PermissionError(
             f"repo.read does not allow command '{executable}'; use a read-only command"
         )
+
+
+def _git_subcommand_index(*, tokens: list[str], checkout_root: Path | None) -> int | None:
+    index = 1
+    while index < len(tokens):
+        token = tokens[index]
+        if token == "-C":
+            if index + 1 >= len(tokens):
+                raise PermissionError("repo.read git -C requires a checkout-root-relative path")
+            _require_git_c_path_inside_checkout(path_value=tokens[index + 1], checkout_root=checkout_root)
+            index += 2
+            continue
+        if token.startswith("-"):
+            raise PermissionError(f"repo.read does not allow git global option '{token}'")
+        return index
+    return None
+
+
+def _require_git_c_path_inside_checkout(*, path_value: str, checkout_root: Path | None) -> None:
+    if checkout_root is None:
+        raise PermissionError("repo.read git -C requires checkout root context")
+    root = Path(checkout_root).resolve(strict=False)
+    raw_path = Path(path_value)
+    candidate = raw_path.resolve(strict=False) if raw_path.is_absolute() else (root / raw_path).resolve(strict=False)
+    if not candidate.is_relative_to(root):
+        raise PermissionError("repo.read git -C path must stay inside the project checkout root")
 
 
 def _execute_jira_tool(
@@ -954,7 +1189,7 @@ def _execute_project_tool(
             "request_id": request.request_id,
             "request_kind": request.request_kind,
             "status": request.status,
-            "waiting_for_input": True,
+            "waiting_for_input": request.status != "approved",
             "kind_supported": request_kind_for_install(kind) != "unsupported_kind",
         }
 
@@ -1120,7 +1355,21 @@ def _execute_github_tool(
             ["push", "-u", "origin", push_ref],
             token=github_client.get_installation_token(),
         )
-        return {"branch_name": branch_name}
+        pushed_sha = _run_git(context.repo_dir, ["rev-parse", "HEAD"]).strip()
+        if context.run is None:
+            raise ValueError("github.push_branch requires an active run context")
+        artifact = record_pushed_execution_artifact(
+            session,
+            run=context.run,
+            repo_url=github_repository,
+            branch=branch_name,
+            commit_sha=pushed_sha,
+            diff_stat={
+                "base_branch": default_base_branch,
+                "head_branch": branch_name,
+            },
+        )
+        return {"branch_name": branch_name, "commit_sha": pushed_sha, "artifact_id": artifact.artifact_id}
 
     if tool_name == "github.open_pr":
         title = str(args.get("title") or f"{context.issue_key}: update").strip()
@@ -1284,10 +1533,31 @@ def _git_auth_env(token: str) -> dict[str, str]:
     credential = base64.b64encode(f"x-access-token:{token}".encode("utf-8")).decode("ascii")
     return {
         **os.environ,
+        "GIT_TERMINAL_PROMPT": "0",
         "GIT_CONFIG_COUNT": "1",
         "GIT_CONFIG_KEY_0": "http.https://github.com/.extraheader",
         "GIT_CONFIG_VALUE_0": f"AUTHORIZATION: basic {credential}",
     }
+
+
+def _github_installation_token_for_context(*, session: Session, settings, context: AgentToolContext) -> str:
+    github_config = context.tenant.github_config or {}
+    github_client = github_client_from_tenant_config(
+        github_config,
+        tenant_secret_lookup=lambda secret_ref: resolve_scoped_secret_ref(
+            session,
+            secret_ref=secret_ref,
+            tenant_id=context.tenant.tenant_id,
+            project_id=context.project.project_id,
+            encryption_key=settings.secrets_encryption_key,
+        ),
+        platform_secret_lookup=lambda secret_ref: resolve_platform_secret_ref(
+            session,
+            secret_ref=secret_ref,
+            encryption_key=settings.secrets_encryption_key,
+        ),
+    )
+    return github_client.get_installation_token()
 
 
 def _run_git(repo_dir: Path, args: list[str], *, token: str | None = None) -> str:
