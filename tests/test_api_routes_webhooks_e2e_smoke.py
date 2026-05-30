@@ -125,8 +125,8 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
         os.environ["ORCHESTRATOR_ADMIN_PASSWORD"] = "secret"
         os.environ["ORCHESTRATOR_ADMIN_TOKEN_SECRET"] = "admin-token-secret-for-tests-0123456789"
         os.environ["ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET"] = "unit-test-secret"
-        os.environ["ORCHESTRATOR_ADMIN_UI_BASE_URL"] = "http://localhost:4100"
-        os.environ["ORCHESTRATOR_PUBLIC_API_BASE_URL"] = "http://localhost:4000"
+        os.environ["ORCHESTRATOR_ADMIN_UI_BASE_URL"] = "http://localhost:60002"
+        os.environ["ORCHESTRATOR_PUBLIC_API_BASE_URL"] = "http://localhost:60001"
         os.environ["ORCHESTRATOR_ATLASSIAN_OAUTH_STATE_SECRET"] = "atlassian-oauth-state-secret"
         os.environ["ORCHESTRATOR_GITHUB_APP_SLUG"] = "master-builder-app"
         os.environ["ORCHESTRATOR_SECRETS_ENCRYPTION_KEY"] = Fernet.generate_key().decode("utf-8")
@@ -462,9 +462,10 @@ class ApiRoutesWebhooksE2ESmokeTests(unittest.TestCase):
                 path="/api/admin/workflows/workflow-e2e/audit",
                 auth=admin,
             ),
-            ("POST", "/api/admin/workflows/{execution_id}/start-planning"): RouteScenario(
-                path="/api/admin/workflows/workflow-missing/start-planning",
+            ("POST", "/api/admin/workflows/work-items/start"): RouteScenario(
+                path="/api/admin/workflows/work-items/start",
                 auth=admin,
+                json={"work_item_id": "parent:workflow-missing"},
                 expected_statuses=(404,),
             ),
             ("GET", "/api/admin/runs/{run_id}/events"): RouteScenario(

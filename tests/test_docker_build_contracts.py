@@ -25,7 +25,8 @@ class DockerBuildContractTests(unittest.TestCase):
         expected_targets = {
             "api:": "app-runtime-base",
             "run-worker:": "android-runtime",
-            "webhook-worker:": "app-runtime-base",
+            "temporal-orchestrator:": "app-runtime-base",
+            "webhook-worker:": "voice-runtime",
             "knowledge-sync:": "app-runtime-base",
             "discord-gateway:": "voice-runtime",
             "discord-live-voice:": "voice-runtime",
@@ -48,15 +49,20 @@ class DockerBuildContractTests(unittest.TestCase):
         deps_install = '"${VIRTUAL_ENV}/bin/pip" install -r /tmp/requirements-base.txt'
         app_source_copy = "COPY orchestrator ./orchestrator"
         bootstrap_script_copy = "COPY scripts/bootstrap_deployment_host_agent.py ./scripts/bootstrap_deployment_host_agent.py"
-        local_install = '"${VIRTUAL_ENV}/bin/pip" install --no-deps --no-build-isolation .'
         source_compile = '"${VIRTUAL_ENV}/bin/python" -m compileall -q -j 0 /app/orchestrator'
+        local_console_shim = 'exec python -m orchestrator "$@"'
 
         self.assertIn(deps_copy, dockerfile)
         self.assertIn(deps_install, dockerfile)
         self.assertIn(app_source_copy, dockerfile)
         self.assertIn(bootstrap_script_copy, dockerfile)
-        self.assertIn(local_install, dockerfile)
         self.assertIn(source_compile, dockerfile)
+        self.assertIn(local_console_shim, dockerfile)
+        self.assertNotIn(
+            '"${VIRTUAL_ENV}/bin/pip" install --no-deps --no-build-isolation .',
+            dockerfile,
+            msg="Runtime image rebuilds must not spend time building and reinstalling the local wheel.",
+        )
 
         self.assertLess(
             dockerfile.index(deps_copy),
@@ -75,13 +81,13 @@ class DockerBuildContractTests(unittest.TestCase):
         )
         self.assertLess(
             dockerfile.index(bootstrap_script_copy),
-            dockerfile.index(local_install),
-            msg="Local package install should happen after app source and runtime script copy.",
+            dockerfile.index(local_console_shim),
+            msg="The console shim should be created after the deployment host bootstrap script copy.",
         )
         self.assertLess(
-            dockerfile.index(local_install),
+            dockerfile.index(local_console_shim),
             dockerfile.index(source_compile),
-            msg="API image should precompile app bytecode after local package installation.",
+            msg="API image should precompile app bytecode after the console shim is created.",
         )
 
     def test_voice_target_installs_voice_dependencies_before_source_copy(self) -> None:
@@ -90,7 +96,7 @@ class DockerBuildContractTests(unittest.TestCase):
         voice_target = dockerfile.split("FROM python-common-base AS voice-runtime", 1)[1]
         voice_deps_install = '"${VIRTUAL_ENV}/bin/pip" install -r /tmp/requirements-voice.txt'
         app_source_copy = "COPY orchestrator ./orchestrator"
-        local_install = '"${VIRTUAL_ENV}/bin/pip" install --no-deps --no-build-isolation .'
+        local_console_shim = 'exec python -m orchestrator "$@"'
 
         self.assertIn(voice_deps_install, voice_target)
         self.assertLess(
@@ -100,9 +106,23 @@ class DockerBuildContractTests(unittest.TestCase):
         )
         self.assertLess(
             voice_target.index(app_source_copy),
-            voice_target.index(local_install),
-            msg="Local package install should remain the last Python install step in the voice target.",
+            voice_target.index(local_console_shim),
+            msg="The console shim should remain after app source copy in the voice target.",
         )
+
+    def test_default_voice_image_keeps_existing_local_ml_dependencies(self) -> None:
+        pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+        compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+
+        voice_extra = pyproject.split("voice = [", 1)[1].split("]", 1)[0]
+
+        self.assertIn("faster-whisper", voice_extra)
+        self.assertIn("pocket-tts", voice_extra)
+        self.assertIn("py-cord[voice", voice_extra)
+        self.assertIn("ORCHESTRATOR_VOICE_STT_PROVIDER: ${ORCHESTRATOR_VOICE_STT_PROVIDER:-whisper}", compose)
+        self.assertIn("ORCHESTRATOR_VOICE_TTS_PROVIDER: ${ORCHESTRATOR_VOICE_TTS_PROVIDER:-pocket_tts}", compose)
+        self.assertNotIn("INSTALL_LOCAL_STT", compose)
+        self.assertNotIn("INSTALL_LOCAL_TTS", compose)
 
     def test_base_target_omits_android_and_voice_transport_layers(self) -> None:
         dockerfile = (ROOT / "orchestrator" / "Dockerfile").read_text(encoding="utf-8")
@@ -126,6 +146,7 @@ class DockerBuildContractTests(unittest.TestCase):
         self.assertIn("ANDROID_SDK_ROOT", android_target)
         self.assertIn("sdkmanager", android_target)
         self.assertIn("default-jdk-headless", android_target)
+        self.assertIn("maven", android_target)
 
     def test_dockerignore_excludes_local_workdirs_from_build_context(self) -> None:
         dockerignore = (ROOT / ".dockerignore").read_text(encoding="utf-8").splitlines()
@@ -134,6 +155,33 @@ class DockerBuildContractTests(unittest.TestCase):
             {line.strip() for line in dockerignore},
             msg="Local run workdirs should not be sent into the Docker build context.",
         )
+
+    def test_local_compose_host_ports_use_master_builder_range(self) -> None:
+        compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+
+        expected_ports = (
+            "${MASTER_BUILDER_API_PORT:-60001}:4000",
+            "${MASTER_BUILDER_ADMIN_UI_PORT:-60002}:4100",
+            "${MASTER_BUILDER_POSTGRES_PORT:-60003}:5432",
+            "${MASTER_BUILDER_MAILPIT_SMTP_PORT:-60004}:1025",
+            "${MASTER_BUILDER_MAILPIT_UI_PORT:-60005}:8025",
+            "${MASTER_BUILDER_CLICKHOUSE_HTTP_PORT:-60006}:8123",
+            "${MASTER_BUILDER_CLICKHOUSE_NATIVE_PORT:-60007}:9000",
+            "${MASTER_BUILDER_TEMPORAL_PORT:-60008}:7233",
+            "${MASTER_BUILDER_OTEL_GRPC_PORT:-60009}:4317",
+            "${MASTER_BUILDER_OTEL_HTTP_PORT:-60010}:4318",
+            "${MASTER_BUILDER_OTEL_METRICS_PORT:-60011}:9464",
+            "${MASTER_BUILDER_TEMPO_PORT:-60012}:3200",
+            "${MASTER_BUILDER_PROMETHEUS_PORT:-60013}:9090",
+            "${MASTER_BUILDER_GRAFANA_PORT:-60014}:3000",
+        )
+
+        for expected_port in expected_ports:
+            self.assertIn(expected_port, compose)
+
+        self.assertNotIn('"4000:4000"', compose)
+        self.assertNotIn('"4100:4100"', compose)
+        self.assertNotIn('"4402:5432"', compose)
 
     def test_run_worker_prewarms_models_before_processing_queue_in_dev_and_prod(self) -> None:
         expected_lines = (
@@ -161,7 +209,8 @@ class DockerBuildContractTests(unittest.TestCase):
             "HF_HUB_OFFLINE=0 python -m orchestrator voice-prewarm",
             "python -m orchestrator worker-webhooks",
             "huggingface-cache:/root/.cache/huggingface",
-            "pocket-tts-cache:/root/.cache/pocket_tts",
+            "ORCHESTRATOR_VOICE_STT_PROVIDER: ${ORCHESTRATOR_VOICE_STT_PROVIDER:-whisper}",
+            "ORCHESTRATOR_VOICE_TTS_PROVIDER: ${ORCHESTRATOR_VOICE_TTS_PROVIDER:-pocket_tts}",
         )
 
         for relative_path in ("docker-compose.yml", "deploy/hetzner/docker-compose.prod.yml"):
@@ -226,6 +275,19 @@ class DockerBuildContractTests(unittest.TestCase):
                 api_block,
                 msg=f"api in {relative_path} should not use Uvicorn's 5s default worker startup healthcheck.",
             )
+
+    def test_tailscale_bootstrap_clears_stale_funnel_config_before_enabling_funnel(self) -> None:
+        script = (ROOT / "scripts" / "tailscale" / "funnel-bootstrap.sh").read_text(encoding="utf-8")
+
+        funnel_reset = 'tailscale --socket="$SOCKET" funnel reset'
+        serve_reset = 'tailscale --socket="$SOCKET" serve reset'
+        funnel_enable = 'tailscale --socket="$SOCKET" funnel --bg --yes "$FUNNEL_PORT"'
+
+        self.assertIn(funnel_reset, script)
+        self.assertIn(serve_reset, script)
+        self.assertIn(funnel_enable, script)
+        self.assertLess(script.index(funnel_reset), script.index(funnel_enable))
+        self.assertLess(script.index(serve_reset), script.index(funnel_enable))
 
 
 if __name__ == "__main__":

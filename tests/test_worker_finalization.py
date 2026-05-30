@@ -69,6 +69,60 @@ class WorkflowFinalizationTests(unittest.TestCase):
             ("orchestration_trace", "jira_feedback", "manual_pr_reporting", "workspace_cleanup"),
         )
 
+    def test_workflow_finalizer_keeps_failed_run_workspace_for_recovery(self) -> None:
+        session = MagicMock()
+        logger = MagicMock()
+        run = SimpleNamespace(
+            run_id="run-1",
+            tenant_id="tenant-1",
+            issue_key="GP-185",
+            project_id="project-1",
+            status="running",
+            plan={"x": 1},
+            last_error=None,
+        )
+        finalized_run = SimpleNamespace(
+            run_id="run-1",
+            tenant_id="tenant-1",
+            issue_key="GP-185",
+            project_id="project-1",
+            status="failed",
+            plan={"x": 1},
+            last_error="dev failed",
+        )
+        workflow_result = WorkflowResult(
+            outcome="failed",
+            plan=None,
+            pr_url=None,
+            summary=["failed"],
+            test_guidance=[],
+            attempts=1,
+            diagnostics=WorkflowDiagnostics(stage="dev", message="dev failed", attempts=1, history=[]),
+        )
+
+        finalizer = WorkflowFinalizer(
+            session=session,
+            logger=logger,
+            finalize_workflow_result_fn=MagicMock(return_value=finalized_run),
+            run_status_failed="failed",
+            project_id="project-1",
+            agent_id="worker-linux",
+        )
+
+        with patch("orchestrator.core.worker.finalization.emit_logging_pane_event"):
+            plan = finalizer.finalize(
+                run=run,
+                workflow_result=workflow_result,
+                stage_updates=[],
+                execution_context={"execution_branch": "run/gp-185"},
+                expected_worker_service_instance_id="worker-1",
+            )
+
+        self.assertIs(plan.run, finalized_run)
+        self.assertEqual(plan.persisted_status, "failed")
+        self.assertEqual(plan.event_types, ("RUN_FAILED", "TASK_FAILED"))
+        self.assertEqual(plan.tail_steps, ("orchestration_trace", "jira_feedback", "manual_pr_reporting"))
+
     def test_workflow_finalizer_falls_back_to_failed_plan_when_finalize_raises(self) -> None:
         session = MagicMock()
         logger = MagicMock()

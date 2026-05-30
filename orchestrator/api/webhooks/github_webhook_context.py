@@ -40,6 +40,7 @@ class GitHubWebhookContext:
     project: object
     repo_full_name: str
     pr_targets: list[tuple[int, bool]]
+    ref_name: str | None = None
 
 
 @dataclass(frozen=True)
@@ -171,6 +172,7 @@ async def resolve_github_webhook_context(*, request: Request, session, settings,
         "issue_comment",
         "check_suite",
         "check_run",
+        "push",
     }
     deployment_events = {"push"}
     if github_event not in review_events | deployment_events:
@@ -187,6 +189,7 @@ async def resolve_github_webhook_context(*, request: Request, session, settings,
 
     repo_full_name = extract_repository_full_name(payload)
     pr_targets = extract_pull_request_targets(payload)
+    ref_name = str(payload.get("ref") or "").strip() or None
     push_source = extract_push_deployment_source(payload) if github_event == "push" else None
     if repo_full_name is None or (github_event in review_events and not pr_targets):
         return github_response(
@@ -240,6 +243,7 @@ async def resolve_github_webhook_context(*, request: Request, session, settings,
         project=project,
         repo_full_name=repo_full_name,
         pr_targets=pr_targets,
+        ref_name=ref_name,
     )
 
 

@@ -23,9 +23,11 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-orchestrator}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-orchestrator}
     ports:
-      - "4402:5432"
+      - "${MASTER_BUILDER_POSTGRES_PORT:-60003}:5432"
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-orchestrator} -d ${POSTGRES_DB:-orchestrator}"]
+      test:
+        - CMD-SHELL
+        - pg_isready -U ${POSTGRES_USER:-orchestrator} -d ${POSTGRES_DB:-orchestrator} && psql -U ${POSTGRES_USER:-orchestrator} -d ${POSTGRES_DB:-orchestrator} -tAc 'select not pg_is_in_recovery()' | grep -qx t
       interval: 5s
       timeout: 5s
       retries: 20
@@ -36,8 +38,8 @@ services:
     image: axllent/mailpit:v1.27.5
     container_name: master-builder-mailpit
     ports:
-      - "4205:1025"
-      - "4206:8025"
+      - "${MASTER_BUILDER_MAILPIT_SMTP_PORT:-60004}:1025"
+      - "${MASTER_BUILDER_MAILPIT_UI_PORT:-60005}:8025"
     healthcheck:
       test: ["CMD-SHELL", "wget --quiet --tries=1 --spider http://127.0.0.1:8025 || exit 1"]
       interval: 10s
@@ -52,8 +54,8 @@ services:
       CLICKHOUSE_USER: ${ORCHESTRATOR_CLICKHOUSE_USERNAME:-master_builder}
       CLICKHOUSE_PASSWORD: ${ORCHESTRATOR_CLICKHOUSE_PASSWORD:-master_builder}
     ports:
-      - "8123:8123"
-      - "9000:9000"
+      - "${MASTER_BUILDER_CLICKHOUSE_HTTP_PORT:-60006}:8123"
+      - "${MASTER_BUILDER_CLICKHOUSE_NATIVE_PORT:-60007}:9000"
     healthcheck:
       test: ["CMD-SHELL", "wget --quiet --tries=1 --spider http://127.0.0.1:8123/ping || exit 1"]
       interval: 5s
@@ -73,7 +75,7 @@ services:
       POSTGRES_USER: ${POSTGRES_USER:-orchestrator}
       POSTGRES_PWD: ${POSTGRES_PASSWORD:-orchestrator}
     ports:
-      - "7233:7233"
+      - "${MASTER_BUILDER_TEMPORAL_PORT:-60008}:7233"
     depends_on:
       postgres:
         condition: service_healthy
@@ -112,9 +114,9 @@ services:
     volumes:
       - ./ops/observability/otel-collector-config.yaml:/etc/otelcol-contrib/config.yaml:ro
     ports:
-      - "4317:4317"
-      - "4318:4318"
-      - "9464:9464"
+      - "${MASTER_BUILDER_OTEL_GRPC_PORT:-60009}:4317"
+      - "${MASTER_BUILDER_OTEL_HTTP_PORT:-60010}:4318"
+      - "${MASTER_BUILDER_OTEL_METRICS_PORT:-60011}:9464"
     depends_on:
       tempo:
         condition: service_started
@@ -127,7 +129,7 @@ services:
       - ./ops/observability/tempo-config.yaml:/etc/tempo/config.yaml:ro
       - tempo-data:/var/tempo
     ports:
-      - "3200:3200"
+      - "${MASTER_BUILDER_TEMPO_PORT:-60012}:3200"
 
   prometheus:
     image: prom/prometheus:v3.3.0
@@ -139,7 +141,7 @@ services:
       - ./ops/observability/prometheus.yml:/etc/prometheus/prometheus.yml:ro
       - prometheus-data:/prometheus
     ports:
-      - "9090:9090"
+      - "${MASTER_BUILDER_PROMETHEUS_PORT:-60013}:9090"
     depends_on:
       - api
       - otel-collector
@@ -157,7 +159,7 @@ services:
       - ./ops/observability/grafana/provisioning:/etc/grafana/provisioning:ro
       - grafana-data:/var/lib/grafana
     ports:
-      - "4300:3000"
+      - "${MASTER_BUILDER_GRAFANA_PORT:-60014}:3000"
     depends_on:
       - prometheus
       - tempo
@@ -178,10 +180,10 @@ services:
       ORCHESTRATOR_ADMIN_PASSWORD: ${ORCHESTRATOR_ADMIN_PASSWORD:?Set ORCHESTRATOR_ADMIN_PASSWORD}
       ORCHESTRATOR_DATABASE_URL: ${ORCHESTRATOR_DATABASE_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
       POSTGRES_URL: ${POSTGRES_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
-      ORCHESTRATOR_CORS_ORIGINS: ${ORCHESTRATOR_CORS_ORIGINS:-http://localhost:4100,http://127.0.0.1:4100}
+      ORCHESTRATOR_CORS_ORIGINS: ${ORCHESTRATOR_CORS_ORIGINS:-http://localhost:${MASTER_BUILDER_ADMIN_UI_PORT:-60002},http://127.0.0.1:${MASTER_BUILDER_ADMIN_UI_PORT:-60002}}
       ORCHESTRATOR_CORS_ORIGIN_REGEX: ${ORCHESTRATOR_CORS_ORIGIN_REGEX:-}
-      ORCHESTRATOR_PUBLIC_API_BASE_URL: ${ORCHESTRATOR_PUBLIC_API_BASE_URL:-http://localhost:4000}
-      ORCHESTRATOR_ADMIN_UI_BASE_URL: ${ORCHESTRATOR_ADMIN_UI_BASE_URL:-http://localhost:4100}
+      ORCHESTRATOR_PUBLIC_API_BASE_URL: ${ORCHESTRATOR_PUBLIC_API_BASE_URL:-http://localhost:${MASTER_BUILDER_API_PORT:-60001}}
+      ORCHESTRATOR_ADMIN_UI_BASE_URL: ${ORCHESTRATOR_ADMIN_UI_BASE_URL:-http://localhost:${MASTER_BUILDER_ADMIN_UI_PORT:-60002}}
       ORCHESTRATOR_DISCORD_OAUTH_CLIENT_ID: ${ORCHESTRATOR_DISCORD_OAUTH_CLIENT_ID:-}
       ORCHESTRATOR_DISCORD_OAUTH_CLIENT_SECRET: ${ORCHESTRATOR_DISCORD_OAUTH_CLIENT_SECRET:-}
       ORCHESTRATOR_DISCORD_OAUTH_REDIRECT_URL: ${ORCHESTRATOR_DISCORD_OAUTH_REDIRECT_URL:-}
@@ -211,7 +213,7 @@ services:
       ORCHESTRATOR_TEMPORAL_NAMESPACE: ${ORCHESTRATOR_TEMPORAL_NAMESPACE:-default}
       ORCHESTRATOR_TEMPORAL_TASK_QUEUE: ${ORCHESTRATOR_TEMPORAL_TASK_QUEUE:-master-builder}
     ports:
-      - "4000:4000"
+      - "${MASTER_BUILDER_API_PORT:-60001}:4000"
     depends_on:
       migrate:
         condition: service_completed_successfully
@@ -228,9 +230,9 @@ services:
     healthcheck:
       test:
         - CMD-SHELL
-        - python -c "import json,sys,urllib.request; data=json.loads(urllib.request.urlopen('http://127.0.0.1:4000/health', timeout=5).read().decode()); sys.exit(0 if data.get('status') == 'ok' else 1)"
+        - python -c "import json,sys,urllib.request; data=json.loads(urllib.request.urlopen('http://127.0.0.1:4000/health', timeout=10).read().decode()); sys.exit(0 if data.get('status') == 'ok' else 1)"
       interval: 10s
-      timeout: 5s
+      timeout: 15s
       retries: 12
       start_period: 15s
     command:
@@ -270,8 +272,8 @@ services:
       ORCHESTRATOR_ADMIN_PASSWORD: ${ORCHESTRATOR_ADMIN_PASSWORD:?Set ORCHESTRATOR_ADMIN_PASSWORD}
       ORCHESTRATOR_DATABASE_URL: ${ORCHESTRATOR_DATABASE_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
       POSTGRES_URL: ${POSTGRES_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
-      ORCHESTRATOR_PUBLIC_API_BASE_URL: ${ORCHESTRATOR_PUBLIC_API_BASE_URL:-http://localhost:4000}
-      ORCHESTRATOR_ADMIN_UI_BASE_URL: ${ORCHESTRATOR_ADMIN_UI_BASE_URL:-http://localhost:4100}
+      ORCHESTRATOR_PUBLIC_API_BASE_URL: ${ORCHESTRATOR_PUBLIC_API_BASE_URL:-http://localhost:${MASTER_BUILDER_API_PORT:-60001}}
+      ORCHESTRATOR_ADMIN_UI_BASE_URL: ${ORCHESTRATOR_ADMIN_UI_BASE_URL:-http://localhost:${MASTER_BUILDER_ADMIN_UI_PORT:-60002}}
       ORCHESTRATOR_CODEX_SANDBOX_MODE: ${ORCHESTRATOR_CODEX_SANDBOX_MODE:-danger-full-access}
       ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET: ${ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET:?Set ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET}
       ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET: ${ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET:?Set ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET}
@@ -326,8 +328,8 @@ services:
       ORCHESTRATOR_ADMIN_PASSWORD: ${ORCHESTRATOR_ADMIN_PASSWORD:?Set ORCHESTRATOR_ADMIN_PASSWORD}
       ORCHESTRATOR_DATABASE_URL: ${ORCHESTRATOR_DATABASE_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
       POSTGRES_URL: ${POSTGRES_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
-      ORCHESTRATOR_PUBLIC_API_BASE_URL: ${ORCHESTRATOR_PUBLIC_API_BASE_URL:-http://localhost:4000}
-      ORCHESTRATOR_ADMIN_UI_BASE_URL: ${ORCHESTRATOR_ADMIN_UI_BASE_URL:-http://localhost:4100}
+      ORCHESTRATOR_PUBLIC_API_BASE_URL: ${ORCHESTRATOR_PUBLIC_API_BASE_URL:-http://localhost:${MASTER_BUILDER_API_PORT:-60001}}
+      ORCHESTRATOR_ADMIN_UI_BASE_URL: ${ORCHESTRATOR_ADMIN_UI_BASE_URL:-http://localhost:${MASTER_BUILDER_ADMIN_UI_PORT:-60002}}
       ORCHESTRATOR_CODEX_SANDBOX_MODE: ${ORCHESTRATOR_CODEX_SANDBOX_MODE:-danger-full-access}
       ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET: ${ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET:?Set ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET}
       ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET: ${ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET:?Set ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET}
@@ -463,8 +465,8 @@ services:
       ORCHESTRATOR_ADMIN_PASSWORD: ${ORCHESTRATOR_ADMIN_PASSWORD:?Set ORCHESTRATOR_ADMIN_PASSWORD}
       ORCHESTRATOR_DATABASE_URL: ${ORCHESTRATOR_DATABASE_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
       POSTGRES_URL: ${POSTGRES_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
-      ORCHESTRATOR_PUBLIC_API_BASE_URL: ${ORCHESTRATOR_PUBLIC_API_BASE_URL:-http://localhost:4000}
-      ORCHESTRATOR_ADMIN_UI_BASE_URL: ${ORCHESTRATOR_ADMIN_UI_BASE_URL:-http://localhost:4100}
+      ORCHESTRATOR_PUBLIC_API_BASE_URL: ${ORCHESTRATOR_PUBLIC_API_BASE_URL:-http://localhost:${MASTER_BUILDER_API_PORT:-60001}}
+      ORCHESTRATOR_ADMIN_UI_BASE_URL: ${ORCHESTRATOR_ADMIN_UI_BASE_URL:-http://localhost:${MASTER_BUILDER_ADMIN_UI_PORT:-60002}}
       ORCHESTRATOR_CODEX_SANDBOX_MODE: ${ORCHESTRATOR_CODEX_SANDBOX_MODE:-danger-full-access}
       ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET: ${ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET:?Set ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET}
       ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET: ${ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET:?Set ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET}
@@ -532,7 +534,7 @@ services:
       - huggingface-cache:/root/.cache/huggingface
       - pocket-tts-cache:/root/.cache/pocket_tts
 
-  temporal-worker:
+  temporal-orchestrator:
     <<: *extra_hosts_host_gateway
     build:
       context: .
@@ -540,7 +542,7 @@ services:
       target: app-runtime-base
       args:
         CODEX_NPM_VERSION: ${CODEX_NPM_VERSION:-latest}
-    container_name: master-builder-temporal-worker
+    container_name: master-builder-temporal-orchestrator
     restart: unless-stopped
     depends_on:
       migrate:
@@ -561,8 +563,8 @@ services:
       ORCHESTRATOR_ADMIN_PASSWORD: ${ORCHESTRATOR_ADMIN_PASSWORD:?Set ORCHESTRATOR_ADMIN_PASSWORD}
       ORCHESTRATOR_DATABASE_URL: ${ORCHESTRATOR_DATABASE_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
       POSTGRES_URL: ${POSTGRES_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
-      ORCHESTRATOR_PUBLIC_API_BASE_URL: ${ORCHESTRATOR_PUBLIC_API_BASE_URL:-http://localhost:4000}
-      ORCHESTRATOR_ADMIN_UI_BASE_URL: ${ORCHESTRATOR_ADMIN_UI_BASE_URL:-http://localhost:4100}
+      ORCHESTRATOR_PUBLIC_API_BASE_URL: ${ORCHESTRATOR_PUBLIC_API_BASE_URL:-http://localhost:${MASTER_BUILDER_API_PORT:-60001}}
+      ORCHESTRATOR_ADMIN_UI_BASE_URL: ${ORCHESTRATOR_ADMIN_UI_BASE_URL:-http://localhost:${MASTER_BUILDER_ADMIN_UI_PORT:-60002}}
       ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET: ${ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET:?Set ORCHESTRATOR_GITHUB_INSTALL_STATE_SECRET}
       ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET: ${ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET:?Set ORCHESTRATOR_JIRA_OAUTH_STATE_SECRET}
       ORCHESTRATOR_SECRETS_ENCRYPTION_KEY: ${ORCHESTRATOR_SECRETS_ENCRYPTION_KEY:?Set ORCHESTRATOR_SECRETS_ENCRYPTION_KEY}
@@ -576,7 +578,7 @@ services:
       - -ceu
       - |
         if [ -f /app/AGENTS.md ]; then cp /app/AGENTS.md /root/AGENTS.md; fi
-        python -m orchestrator temporal-worker
+        python -m orchestrator temporal-orchestrator
     volumes:
       - codex-home:/root/.codex
       - ./.workdirs:/tmp/master-builder-project-repos
@@ -685,7 +687,7 @@ services:
     env_file:
       - ./admin-ui/.env.local
     ports:
-      - "4100:4100"
+      - "${MASTER_BUILDER_ADMIN_UI_PORT:-60002}:4100"
 
   tailscale:
     image: tailscale/tailscale:stable

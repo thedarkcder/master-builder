@@ -83,6 +83,24 @@ def resolve_issue_key_hint(*, command_text: str, command_params: dict[str, str] 
     return None
 
 
+def _format_command_http_error(
+    *,
+    user_id: str,
+    command_name: str | None,
+    status_code: int,
+    detail: str,
+) -> str:
+    normalized_command_name = str(command_name or "").strip().lower()
+    normalized_detail = str(detail or "").strip() or "request was rejected"
+    if status_code >= 500:
+        return f"<@{user_id}> Command failed due to an internal error."
+    if normalized_command_name in {"run", "retry"}:
+        return f"<@{user_id}> Could not start run: {normalized_detail}"
+    if normalized_command_name == "reply":
+        return f"<@{user_id}> Could not apply reply: {normalized_detail}"
+    return f"<@{user_id}> Command rejected: {normalized_detail}"
+
+
 async def run_discord_command_followup(
     *,
     deps: DiscordFollowupExecutionDeps,
@@ -237,7 +255,12 @@ async def run_discord_command_followup(
                             detail,
                             exc,
                         )
-                        content = f"<@{user_id}> Command failed: {detail}"
+                        content = _format_command_http_error(
+                            user_id=user_id,
+                            command_name=command_name_hint,
+                            status_code=int(exc.status_code),
+                            detail=detail,
+                        )
                     except Exception as exc:  # pragma: no cover
                         error_ref = uuid4().hex[:8]
                         logger.exception(

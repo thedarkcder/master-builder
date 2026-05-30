@@ -62,6 +62,33 @@ def test_build_decision_clarification_presentation_prefers_feedback_questions_fo
     assert presentation.questions[0].why_it_matters == "Missing ownership detail"
 
 
+def test_build_decision_clarification_presentation_excludes_accepted_feedback_questions() -> None:
+    presentation = build_decision_clarification_presentation(
+        decision_result=_decision_result(
+            classification="decision_gate",
+            decision_gate_reason="Need clarification.",
+            decision_gate_questions=("Q1", "Q2"),
+        ),
+        question_feedback=(
+            {
+                "question_id": "objective",
+                "question_text": "What is the objective?",
+                "note": "Already present in Jira.",
+                "status": "accepted",
+            },
+            {
+                "question_id": "owner",
+                "question_text": "Who owns approval?",
+                "note": "Missing owner.",
+                "status": "open",
+            },
+        ),
+    )
+
+    assert tuple(question.question for question in presentation.questions) == ("Who owns approval?",)
+    assert [item["question_id"] for item in presentation.question_feedback] == ["owner"]
+
+
 def test_build_decision_clarification_presentation_uses_gtd_questions_when_no_feedback() -> None:
     presentation = build_decision_clarification_presentation(
         decision_result=_decision_result(
@@ -94,7 +121,39 @@ def test_render_decision_gate_feedback_message_includes_missing_detail() -> None
         ),
     )
     assert "Need owner decision." in message
-    assert "Missing detail: Owner role not specified" in message
+    assert "What is still missing:" in message
+    assert "Owner role not specified" in message
+    assert "Missing detail:" not in message
+    assert "Please reply with:" not in message
+
+
+def test_render_decision_gate_feedback_message_humanizes_partial_answers() -> None:
+    message = render_decision_gate_feedback_message(
+        issue_key="AP-248",
+        reason="AP-248 still needs clarifications before it is fully clear.",
+        question_feedback=(
+            {
+                "question_id": "decision_owner",
+                "question_text": "Who is the single accountable decision owner for AP-248?",
+                "answer": "stake holder",
+                "note": "Current answer 'stake holder' is not a specific accountable person.",
+                "status": "answered",
+            },
+            {
+                "question_id": "hubspot_subscription_rules",
+                "question_text": "Which HubSpot information should decide whether the customer subscription is active, overdue, cancelled, or expired?",
+                "note": "Annual invoice is confirmed as billing source, but the business rules for subscription status are not clear yet.",
+                "status": "answered",
+            },
+        ),
+    )
+
+    assert "I still need a bit more before I can run `AP-248`." in message
+    assert "Owner: I have `stake holder`, but that is not a specific accountable person." in message
+    assert "HubSpot subscription rules: Annual invoice is confirmed as billing source" in message
+    assert "Reply in plain English" not in message
+    assert "Please reply with:" not in message
+    assert "Missing detail:" not in message
 
 
 def test_render_decision_gate_remaining_questions_message_lists_questions() -> None:
@@ -104,6 +163,8 @@ def test_render_decision_gate_remaining_questions_message_lists_questions() -> N
         questions=("What is the fallback?", "How do we test?"),
     )
     assert "Need details." in message
+    assert "I need a bit more before I can run `GP-1`." in message
+    assert "I need:" in message
     assert "- What is the fallback?" in message
     assert "- How do we test?" in message
 
@@ -159,7 +220,8 @@ def test_present_discord_decision_clarification_prefers_feedback_rendering() -> 
     )
 
     assert "Need owner decision." in result.message
-    assert "Missing detail: Owner role not specified" in result.message
+    assert "Who owns rollout: Owner role not specified" in result.message
+    assert "Missing detail:" not in result.message
     assert result.response_fields["classification"] == "decision_gate"
     assert result.response_fields["questions"] == ["Who owns rollout?"]
 

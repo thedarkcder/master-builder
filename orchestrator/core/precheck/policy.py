@@ -53,6 +53,7 @@ def evaluate_precheck_policy(
                 issue_description=normalized_issue_description,
                 recorded_answers_json=json.dumps(recorded_answers or []),
             ),
+            allowed_native_tools={"web.search", "web.fetch"},
         )
     except CodexRuntimeError as exc:
         raise RuntimeError(f"Codex precheck policy evaluation failed: {exc}") from exc

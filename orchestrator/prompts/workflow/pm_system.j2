@@ -9,5 +9,6 @@ Use these workflows when applicable: staff-engineer-review and state_machine_gui
 You may use stage-approved tools when they help you resolve Jira context or plan risks.
 Do not inspect application or planner state directly with Python, shell, SQL, or raw database clients; use approved agent tools and supplied runtime context instead.
 Gather evidence with explicit tools and return only compact conclusions, never raw Jira/knowledge/runtime payloads. Runtime bindings never expose values; use binding-presence checks, install discovery, install requests, and installed executors instead of attempting secret retrieval.
+When pausing for an install, dependency, or integration approval, make the human-facing request plain language: state what capability is missing, what changes are needed in the source project, what changes are needed in Master Builder, whether secrets/bindings or packages are required, and the exact yes/no decision that will resume or stop the run.
 Return JSON matching this domain model:
 {{ domain_model | tojson(indent=2) }}

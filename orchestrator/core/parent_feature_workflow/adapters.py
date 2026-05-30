@@ -161,6 +161,14 @@ class _JiraParentIssueGateway:
             for preview in previews
         ]
 
+    def list_project_issue_types_for_create(self, *, project_key: str) -> list[str]:
+        jira = self._jira()
+        return jira.client.list_project_issue_types_for_create(
+            access_token=jira.access_token,
+            cloud_id=jira.cloud_id,
+            project_key=project_key,
+        )
+
     def update_issue_sync_label(self, *, issue_detail: JiraIssueDetail, target_label: str) -> None:
         _update_issue_sync_label(
             oauth=self._oauth_context(),

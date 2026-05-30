@@ -6,7 +6,9 @@ from unittest.mock import patch
 import pytest
 
 from orchestrator.core.config import get_settings
+from orchestrator.core.review.pr_review_findings import PrReviewFindingsResult, ReviewFinding
 from orchestrator.core.worker.webhook_job_service import process_next_webhook_job
+from orchestrator.storage.models import Project
 from tests.production_path_support import (
     load_json_fixture,
     ProductionPathApiTestCase,
@@ -24,6 +26,7 @@ class _FakeGitHubClient:
         self.issue_comment_reactions: list[dict[str, object]] = []
         self.review_thread_replies: list[dict[str, object]] = []
         self.issue_comments: list[dict[str, object]] = []
+        self.check_runs: list[dict[str, object]] = []
 
     def get_pull_request_details(self, *, repo_full_name: str, pr_number: int):
         return SimpleNamespace(
@@ -32,8 +35,13 @@ class _FakeGitHubClient:
             body="desc",
             head_ref="feature/GP-123",
             base_ref="main",
+            mergeable=True,
+            mergeable_state="clean",
             html_url=f"https://github.com/{repo_full_name}/pull/{pr_number}",
         )
+
+    def get_branch_head_sha(self, *, repo_full_name: str, branch: str):  # noqa: ARG002
+        return "staging1234567"
 
     def list_check_suites(self, *, repo_full_name: str, ref: str):  # noqa: ARG002
         return []
@@ -97,6 +105,30 @@ class _FakeGitHubClient:
             {"repo_full_name": repo_full_name, "pr_number": pr_number, "body": body}
         )
         return SimpleNamespace(comment_id=500 + len(self.issue_comments))
+
+    def create_check_run(
+        self,
+        *,
+        repo_full_name: str,
+        head_sha: str,
+        name: str,
+        status: str,
+        conclusion: str | None = None,
+        title: str | None = None,
+        summary: str | None = None,
+    ):
+        self.check_runs.append(
+            {
+                "repo_full_name": repo_full_name,
+                "head_sha": head_sha,
+                "name": name,
+                "status": status,
+                "conclusion": conclusion,
+                "title": title,
+                "summary": summary,
+            }
+        )
+        return SimpleNamespace(check_run_id=100 + len(self.check_runs), html_url=None)
 
     def update_issue_comment(self, *, repo_full_name: str, comment_id: int, body: str):
         self.issue_comments.append(
@@ -256,6 +288,14 @@ class GitHubWebhookProductionPathTests(ProductionPathApiTestCase):
                 ),
             ),
             patch(
+                "orchestrator.api.webhooks.github_application.evaluate_pr_review_findings",
+                return_value=PrReviewFindingsResult(
+                    state="blocked",
+                    summary="Found issues",
+                    findings=(ReviewFinding(severity="high", message="Fix this", path=None, line=None),),
+                ),
+            ),
+            patch(
                 "orchestrator.api.webhooks.github_application.enqueue_pr_remediation_if_needed",
                 return_value=SimpleNamespace(
                     triggered=False,
@@ -284,15 +324,82 @@ class GitHubWebhookProductionPathTests(ProductionPathApiTestCase):
         self.assertEqual(processed.status, "done")
         self.assertEqual(
             fake_client.pull_request_reactions,
-            [
-                {"repo_full_name": "org/repo", "pr_number": 17, "content": "eyes"},
-                {"repo_full_name": "org/repo", "pr_number": 17, "content": "confused"},
-            ],
+            [{"repo_full_name": "org/repo", "pr_number": 17, "content": "confused"}],
         )
         self.assertTrue(fake_client.issue_comments)
         self.assertTrue(any("Codex PR Review" in str(comment["body"]) for comment in fake_client.issue_comments))
 
-    def test_pull_request_closed_does_not_post_review_comment(self) -> None:
+    def test_pull_request_reaction_404_does_not_fail_webhook_job(self) -> None:
+        fake_client = _FakeGitHubClient()
+
+        def raise_reaction_404(**_: object) -> None:
+            raise RuntimeError("HTTP Error 404: Not Found")
+
+        fake_client.sync_pull_request_reaction = raise_reaction_404
+        payload = {
+            "action": "synchronize",
+            "installation": {"id": 12345},
+            "repository": {"full_name": "org/repo"},
+            "pull_request": {
+                "number": 17,
+                "title": "GP-123: example",
+                "body": "desc",
+                "html_url": "https://github.com/org/repo/pull/17",
+                "state": "open",
+                "head": {"sha": "abc123", "ref": "feature/GP-123"},
+                "base": {"ref": "stage"},
+            },
+        }
+
+        with (
+            patch(
+                "orchestrator.api.webhooks.github_webhook_context.github_client_from_tenant_config",
+                return_value=fake_client,
+            ),
+            patch(
+                "orchestrator.api.webhooks.github_webhook_context.ReviewAgentGate",
+                return_value=SimpleNamespace(
+                    evaluate_pr=lambda **kwargs: SimpleNamespace(ready=False, state="needs_changes", message="needs changes")
+                ),
+            ),
+            patch(
+                "orchestrator.api.webhooks.github_application.evaluate_pr_review_findings",
+                return_value=PrReviewFindingsResult(
+                    state="blocked",
+                    summary="Found issues",
+                    findings=(ReviewFinding(severity="high", message="Fix this", path=None, line=None),),
+                ),
+            ),
+            patch(
+                "orchestrator.api.webhooks.github_application.enqueue_pr_remediation_if_needed",
+                return_value=SimpleNamespace(
+                    triggered=False,
+                    issue_key=None,
+                    issue_created=False,
+                    enqueued=False,
+                    reason="not_needed",
+                    run=None,
+                    head_sha="abc123",
+                ),
+            ),
+        ):
+            response = self.client.post(
+                "/github/webhook",
+                json=payload,
+                headers={
+                    "X-GitHub-Event": "pull_request",
+                    "X-GitHub-Delivery": "delivery-pr-reaction-404",
+                },
+            )
+            processed = self._process_one_webhook_job()
+
+        self.assertEqual(response.status_code, 202)
+        self.assertIsNotNone(processed)
+        assert processed is not None
+        self.assertEqual(processed.status, "done")
+        self.assertTrue(fake_client.issue_comments)
+
+    def test_pull_request_closed_does_not_publish_review_side_effects(self) -> None:
         fake_client = _FakeGitHubClient()
         payload = {
             "action": "closed",
@@ -305,13 +412,24 @@ class GitHubWebhookProductionPathTests(ProductionPathApiTestCase):
                 "html_url": "https://github.com/org/repo/pull/17",
                 "state": "closed",
                 "head": {"sha": "abc123", "ref": "feature/GP-123"},
-                "base": {"ref": "main"},
+                "base": {"ref": "stage"},
             },
         }
 
-        with patch(
-            "orchestrator.api.webhooks.github_webhook_context.github_client_from_tenant_config",
-            return_value=fake_client,
+        with (
+            patch(
+                "orchestrator.api.webhooks.github_webhook_context.github_client_from_tenant_config",
+                return_value=fake_client,
+            ),
+            patch(
+                "orchestrator.api.webhooks.github_webhook_context.ReviewAgentGate",
+                return_value=SimpleNamespace(
+                    evaluate_pr=lambda **kwargs: SimpleNamespace(ready=False, state="needs_changes", message="needs changes")
+                ),
+            ),
+            patch(
+                "orchestrator.api.webhooks.github_application.enqueue_pr_remediation_if_needed",
+            ) as remediation_mock,
         ):
             response = self.client.post(
                 "/github/webhook",
@@ -327,8 +445,153 @@ class GitHubWebhookProductionPathTests(ProductionPathApiTestCase):
         self.assertIsNotNone(processed)
         assert processed is not None
         self.assertEqual(processed.status, "done")
+        remediation_mock.assert_not_called()
         self.assertFalse(fake_client.pull_request_reactions)
         self.assertFalse(fake_client.issue_comments)
+
+    def test_pull_request_opened_with_no_findings_publishes_single_success_reaction(self) -> None:
+        fake_client = _FakeGitHubClient()
+        payload = {
+            "action": "ready_for_review",
+            "installation": {"id": 12345},
+            "repository": {"full_name": "org/repo"},
+            "pull_request": {
+                "number": 17,
+                "title": "GP-123: example",
+                "body": "desc",
+                "html_url": "https://github.com/org/repo/pull/17",
+                "state": "open",
+                "head": {"sha": "abc123", "ref": "feature/GP-123"},
+                "base": {"ref": "main"},
+            },
+        }
+        missing_checks_signal = SimpleNamespace(
+            ready=False,
+            state="missing_checks",
+            message="PR checks missing: CI, Security",
+        )
+        findings_result = PrReviewFindingsResult(
+            state="ready",
+            summary="No actionable findings identified in the provided patch set.",
+            findings=(),
+        )
+
+        with (
+            patch(
+                "orchestrator.api.webhooks.github_webhook_context.github_client_from_tenant_config",
+                return_value=fake_client,
+            ),
+            patch(
+                "orchestrator.api.webhooks.github_webhook_context.ReviewAgentGate",
+                return_value=SimpleNamespace(evaluate_pr=lambda **kwargs: missing_checks_signal),
+            ),
+            patch(
+                "orchestrator.api.webhooks.github_application.evaluate_pr_review_findings",
+                return_value=findings_result,
+            ),
+            patch(
+                "orchestrator.api.webhooks.github_application.enqueue_pr_remediation_if_needed",
+            ) as remediation_mock,
+        ):
+            response = self.client.post(
+                "/github/webhook",
+                json=payload,
+                headers={
+                    "X-GitHub-Event": "pull_request",
+                    "X-GitHub-Delivery": "delivery-pr-no-findings",
+                },
+            )
+            processed = self._process_one_webhook_job()
+
+        self.assertEqual(response.status_code, 202)
+        self.assertIsNotNone(processed)
+        assert processed is not None
+        self.assertEqual(processed.status, "done")
+        self.assertEqual(
+            fake_client.pull_request_reactions,
+            [{"repo_full_name": "org/repo", "pr_number": 17, "content": "+1"}],
+        )
+        remediation_mock.assert_not_called()
+        self.assertFalse(fake_client.issue_comments)
+
+    def test_pull_request_opened_publishes_staging_admission_check(self) -> None:
+        fake_client = _FakeGitHubClient()
+        fake_client.get_pull_request_details = lambda **_: SimpleNamespace(
+            head_sha="abc123",
+            title="GP-124: stage-safe",
+            body="desc",
+            head_ref="feature/GP-124",
+            base_ref="staging",
+            mergeable=True,
+            mergeable_state="clean",
+            html_url="https://github.com/org/repo/pull/18",
+            state="open",
+        )
+        payload = {
+            "action": "opened",
+            "installation": {"id": 12345},
+            "repository": {"full_name": "org/repo"},
+            "pull_request": {
+                "number": 18,
+                "title": "GP-124: stage-safe",
+                "body": "desc",
+                "html_url": "https://github.com/org/repo/pull/18",
+                "state": "open",
+                "head": {"sha": "abc123", "ref": "feature/GP-124"},
+                "base": {"ref": "staging"},
+            },
+        }
+
+        with (
+            patch(
+                "orchestrator.api.webhooks.github_webhook_context.github_client_from_tenant_config",
+                return_value=fake_client,
+            ),
+            patch(
+                "orchestrator.api.webhooks.github_webhook_context.ReviewAgentGate",
+                return_value=SimpleNamespace(
+                    evaluate_pr=lambda **kwargs: SimpleNamespace(ready=False, state="needs_changes", message="needs changes")
+                ),
+            ),
+            patch(
+                "orchestrator.api.webhooks.github_application.enqueue_pr_remediation_if_needed",
+                return_value=SimpleNamespace(
+                    triggered=False,
+                    issue_key=None,
+                    issue_created=False,
+                    enqueued=False,
+                    reason="not_needed",
+                    run=None,
+                    head_sha="abc123",
+                ),
+            ),
+        ):
+            with self.session_factory() as session:
+                project = session.get(Project, "route25-default")
+                assert project is not None
+                project.policy_overrides = {
+                    **dict(project.policy_overrides or {}),
+                    "staging_admission_enabled": True,
+                    "staging_branch": "staging",
+                }
+                session.commit()
+            response = self.client.post(
+                "/github/webhook",
+                json=payload,
+                headers={
+                    "X-GitHub-Event": "pull_request",
+                    "X-GitHub-Delivery": "delivery-pr-opened-check",
+                },
+            )
+            processed = self._process_one_webhook_job()
+
+        self.assertEqual(response.status_code, 202)
+        self.assertIsNotNone(processed)
+        assert processed is not None
+        self.assertEqual(processed.status, "done")
+        self.assertTrue(fake_client.check_runs)
+        self.assertEqual(fake_client.check_runs[0]["name"], "MB Staging Merge Check")
+        self.assertEqual(fake_client.check_runs[0]["conclusion"], "success")
 
     def test_check_run_completed_refreshes_pr_review_comment(self) -> None:
         fake_client = _FakeGitHubClient()
@@ -382,10 +645,7 @@ class GitHubWebhookProductionPathTests(ProductionPathApiTestCase):
         self.assertEqual(processed.status, "done")
         self.assertEqual(
             fake_client.pull_request_reactions,
-            [
-                {"repo_full_name": "org/repo", "pr_number": 17, "content": "eyes"},
-                {"repo_full_name": "org/repo", "pr_number": 17, "content": "confused"},
-            ],
+            [{"repo_full_name": "org/repo", "pr_number": 17, "content": "confused"}],
         )
         self.assertTrue(fake_client.issue_comments)
         self.assertTrue(any("Codex PR Review" in str(comment["body"]) for comment in fake_client.issue_comments))

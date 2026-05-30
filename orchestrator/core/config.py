@@ -5,7 +5,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    database_url: str = "postgresql+psycopg://orchestrator:orchestrator@127.0.0.1:4402/orchestrator"
+    database_url: str = "postgresql+psycopg://orchestrator:orchestrator@127.0.0.1:60003/orchestrator"
     allow_sqlite_for_tests: bool = False
     db_pool_size: int = 10
     db_pool_max_overflow: int = 20
@@ -21,7 +21,7 @@ class Settings(BaseSettings):
     auth_token_ttl_seconds: int = 28800
     discord_oauth_client_id: str = ""
     discord_oauth_client_secret: str = ""
-    discord_oauth_redirect_url: str = "http://localhost:4000/api/public/discord/oauth/callback"
+    discord_oauth_redirect_url: str = "http://localhost:60001/api/public/discord/oauth/callback"
     discord_install_state_secret: str = "local-dev-discord-install-secret"
     discord_bot_permissions: int = 3224728621023057
     email_delivery_provider: Literal["smtp", "resend"] = "smtp"
@@ -35,13 +35,13 @@ class Settings(BaseSettings):
     smtp_use_tls: bool = False
     smtp_use_ssl: bool = False
     resend_api_key: str = ""
-    cors_origins: str = "http://localhost:4100,http://127.0.0.1:4100"
+    cors_origins: str = "http://localhost:60002,http://127.0.0.1:60002"
     cors_origin_regex: str = ""
-    admin_ui_base_url: str = "http://localhost:4100"
+    admin_ui_base_url: str = "http://localhost:60002"
     jira_action_token_secret: str = "local-dev-jira-action-token-secret"
     github_install_state_secret: str = "local-dev-change-me"
     github_app_slug: str = ""
-    public_api_base_url: str = "http://localhost:4000"
+    public_api_base_url: str = "http://localhost:60001"
     atlassian_oauth_state_secret: str = "local-dev-change-me"
     secrets_encryption_key: str = ""
     discord_guild_id: str = ""
@@ -81,7 +81,7 @@ class Settings(BaseSettings):
     log_db_batch_size: int = 200
     log_db_batch_flush_ms: int = 50
     log_retention_sweep_seconds: int = 60
-    clickhouse_http_url: str = "http://127.0.0.1:8123"
+    clickhouse_http_url: str = "http://127.0.0.1:60006"
     clickhouse_database: str = "master_builder"
     clickhouse_username: str = "master_builder"
     clickhouse_password: str = "master_builder"
@@ -124,7 +124,7 @@ class Settings(BaseSettings):
     deployment_host_agent_container_runtime_command: str = "docker"
     workflow_orchestrated_run_timeout_minutes: int = 90
     orchestration_backend: Literal["legacy", "temporal"] = "legacy"
-    temporal_target_host: str = "127.0.0.1:7233"
+    temporal_target_host: str = "127.0.0.1:60008"
     temporal_namespace: str = "default"
     temporal_task_queue: str = "master-builder"
     otel_enabled: bool = False

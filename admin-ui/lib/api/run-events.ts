@@ -14,6 +14,7 @@ export type RunStatus = (typeof RUN_STATUSES)[number];
 export type RunRecord = {
   run_id: string;
   workflow_id: string;
+  workflow_execution_id: string;
   attempt_number: number;
   parent_run_id: string | null;
   entry_mode: string;

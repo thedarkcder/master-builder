@@ -904,8 +904,9 @@ class BuildCodexRuntimeTests(unittest.TestCase):
         call_args = list(popen_mock.call_args.args[0])
         sandbox_idx = call_args.index("--sandbox") + 1
         self.assertEqual(call_args[sandbox_idx], "workspace-write")
-        config_idx = call_args.index("-c") + 1
-        self.assertEqual(call_args[config_idx], 'reasoning.effort="medium"')
+        config_values = [call_args[index + 1] for index, item in enumerate(call_args) if item == "-c"]
+        self.assertIn('reasoning.effort="medium"', config_values)
+        self.assertNotIn('web_search="disabled"', config_values)
 
         def fake_popen_stdout(args: list[str], **_kwargs: object):
             output_idx = args.index("--output-last-message") + 1
@@ -1395,6 +1396,8 @@ class BuildCodexRuntimeTests(unittest.TestCase):
             self.assertEqual(call_args[4:8], ["--disable", "apps", "--disable", "plugins"])
             self.assertNotIn("--sandbox", call_args)
             self.assertIn("--full-auto", call_args)
+            config_values = [call_args[index + 1] for index, item in enumerate(call_args) if item == "-c"]
+            self.assertNotIn('web_search="disabled"', config_values)
             self.assertIn("--json", call_args)
             self.assertNotIn("--output-last-message", call_args)
             self.assertEqual(captured_session_ids, ["11111111-2222-3333-4444-555555555555"])

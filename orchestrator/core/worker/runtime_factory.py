@@ -32,7 +32,7 @@ def build_workflow_runner_for_session(*, session: Session) -> WorkflowRunner:
                 else ("workflow_test_default" if stage == "test" else ("workflow_review_default" if stage == "review" else None))
             ),
         ),
-        execute_tool=lambda tenant_id, project_id, run_id, issue_key, stage, tool_name, tool_args: execute_agent_tool(
+        execute_tool=lambda tenant_id, project_id, run_id, issue_key, stage, tool_name, tool_args, worker_platform: execute_agent_tool(
             session=session,
             settings=settings,
             tenant_id=tenant_id,
@@ -42,6 +42,7 @@ def build_workflow_runner_for_session(*, session: Session) -> WorkflowRunner:
             stage=stage,
             tool_name=tool_name,
             tool_args=tool_args,
+            worker_platform=worker_platform,
         ),
     )
     return WorkflowRunner(agents)

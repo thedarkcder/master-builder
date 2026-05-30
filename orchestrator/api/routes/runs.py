@@ -11,9 +11,10 @@ from orchestrator.storage.models import Run
 router = APIRouter(tags=["runs"])
 
 
-def _run_to_schema(run: Run) -> RunRead:
+def _run_to_schema(run: Run, workflow_execution_id: str | None = None) -> RunRead:
     return RunRead(
         run_id=run.run_id,
+        workflow_execution_id=workflow_execution_id or run.workflow_id,
         workflow_id=run.workflow_id,
         attempt_number=run.attempt_number,
         parent_run_id=run.parent_run_id,

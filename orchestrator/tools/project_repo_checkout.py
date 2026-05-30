@@ -97,6 +97,19 @@ def _github_git_extraheader(github_installation_token: str) -> str:
     return f"AUTHORIZATION: basic {credential}"
 
 
+def _github_git_env(github_installation_token: str | None) -> dict[str, str] | None:
+    token = str(github_installation_token or "").strip()
+    if not token:
+        return None
+    return {
+        **os.environ,
+        "GIT_TERMINAL_PROMPT": "0",
+        "GIT_CONFIG_COUNT": "1",
+        "GIT_CONFIG_KEY_0": "http.https://github.com/.extraheader",
+        "GIT_CONFIG_VALUE_0": _github_git_extraheader(token),
+    }
+
+
 def _run_git(args: list[str], *, cwd: Path, env: dict[str, str] | None = None) -> str:
     process = subprocess.run(
         ["git", *args],
@@ -230,10 +243,10 @@ def _sync_agent_workspace_files(*, repo_dir: Path) -> None:
     agents_src = source_root / "AGENTS.md"
     codex_src = source_root / ".codex"
 
-    if agents_src.exists():
+    if agents_src.exists() and not _is_git_path_tracked(repo_dir=repo_dir, path="AGENTS.md"):
         shutil.copy2(agents_src, repo_dir / "AGENTS.md")
 
-    if codex_src.exists() and codex_src.is_dir():
+    if codex_src.exists() and codex_src.is_dir() and not _is_git_path_tracked(repo_dir=repo_dir, path=".codex"):
         shutil.copytree(codex_src, repo_dir / ".codex", dirs_exist_ok=True)
         _restrict_external_tool_surfaces_in_project_codex(repo_dir=repo_dir)
 
@@ -261,6 +274,17 @@ def _sync_agent_workspace_files(*, repo_dir: Path) -> None:
         prefix = "\n" if exclude_path.exists() and exclude_path.read_text(encoding="utf-8") else ""
         with exclude_path.open("a", encoding="utf-8") as handle:
             handle.write(prefix + "\n".join(missing_lines) + "\n")
+
+
+def _is_git_path_tracked(*, repo_dir: Path, path: str) -> bool:
+    process = subprocess.run(
+        ["git", "ls-files", "--error-unmatch", "--", path],
+        cwd=str(repo_dir),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return process.returncode == 0
 
 
 def _run_metadata_path(*, repo_dir: Path | str) -> Path:
@@ -512,9 +536,10 @@ def check_run_snapshot_freshness(
     project: Project,
     start_point_ref: str,
     start_point_sha: str,
+    github_installation_token: str | None = None,
 ) -> RunSnapshotFreshness:
     repo_dir = project_repo_dir(base_dir=base_dir, tenant_id=tenant_id, project_id=project.project_id)
-    _run_git(["fetch", "origin", "--prune"], cwd=repo_dir)
+    _run_git(["fetch", "origin", "--prune"], cwd=repo_dir, env=_github_git_env(github_installation_token))
     try:
         current_sha = _resolve_ref_commit_sha(repo_dir=repo_dir, ref=start_point_ref)
     except ProjectRepoCheckoutError:
@@ -555,6 +580,7 @@ def ensure_run_worktree(
     base_branch: str,
     integration_branch: str,
     workspace_key: str,
+    github_installation_token: str | None = None,
 ) -> tuple[Path, str]:
     repo_dir = project_repo_dir(base_dir=base_dir, tenant_id=tenant_id, project_id=project.project_id)
     if not (repo_dir / ".git").exists():
@@ -571,7 +597,7 @@ def ensure_run_worktree(
         workspace_key=normalized_workspace_key,
     )
     execution_branch = execution_branch_name(issue_key=issue_key, run_id=run_id)
-    _run_git(["fetch", "origin", "--prune"], cwd=repo_dir)
+    _run_git(["fetch", "origin", "--prune"], cwd=repo_dir, env=_github_git_env(github_installation_token))
     start_point_ref = _resolve_worktree_start_point(
         repo_dir=repo_dir,
         base_branch=base_branch,

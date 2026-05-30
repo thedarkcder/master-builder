@@ -1,0 +1,21 @@
+Stage: repo_setup.prepare.repair
+
+The previous `ready` response failed authoritative validation.
+
+Validation error:
+{{ validation_error }}
+
+Previous response JSON:
+{{ previous_payload | tojson(indent=2) }}
+
+Repair the repository using the allowed governed tools from the original prompt, then return JSON only.
+
+Rules:
+- Do not return `ready` until you have fixed the validation error and verified the execution repo again.
+- If the error is about missing or invalid `.master-builder-execution-repo.json`, write or repair that file using the required shape from the original prompt.
+- If the branch or cleanliness checks fail, repair them with `repo.exec_bootstrap`, then verify again.
+- Return `retryable_failure` only when another attempt may fix it.
+- Return `terminal_failure` only when operator intervention is required.
+
+Original prompt:
+{{ original_prompt }}

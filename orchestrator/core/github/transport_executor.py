@@ -15,6 +15,7 @@ from orchestrator.core.communications import (
     GitHubIssueCommentReactionAction,
     GitHubManualFixIssueCommentReplyAction,
     GitHubManualFixReviewThreadReplyAction,
+    GitHubPullRequestCheckRunAction,
     GitHubPullRequestMergeAction,
     GitHubPullRequestReactionAction,
     GitHubPullRequestReviewCommentReactionAction,
@@ -41,25 +42,16 @@ class GitHubTransportExecutor:
 
     def execute(self, *, action: TransportAction) -> None:
         if isinstance(action, GitHubIssueCommentReactionAction):
-            self._github_client.add_issue_comment_reaction(
-                repo_full_name=action.repo_full_name,
-                comment_id=action.comment_id,
-                content=action.content,
-            )
+            self._execute_issue_comment_reaction(action=action)
             return
         if isinstance(action, GitHubPullRequestReviewCommentReactionAction):
-            self._github_client.add_pull_request_review_comment_reaction(
-                repo_full_name=action.repo_full_name,
-                comment_id=action.comment_id,
-                content=action.content,
-            )
+            self._execute_pull_request_review_comment_reaction(action=action)
             return
         if isinstance(action, GitHubPullRequestReactionAction):
-            self._github_client.sync_pull_request_reaction(
-                repo_full_name=action.repo_full_name,
-                pr_number=action.pr_number,
-                content=action.content,
-            )
+            self._execute_pull_request_reaction(action=action)
+            return
+        if isinstance(action, GitHubPullRequestCheckRunAction):
+            self._execute_pull_request_check_run(action=action)
             return
         if isinstance(action, GitHubStickyReviewCommentAction):
             self._execute_sticky_review_comment(action=action)
@@ -77,6 +69,83 @@ class GitHubTransportExecutor:
             self._execute_pull_request_merge(action=action)
             return
         raise RuntimeError(f"Unsupported GitHub transport action: {type(action).__name__}")
+
+    def _execute_issue_comment_reaction(self, *, action: GitHubIssueCommentReactionAction) -> None:
+        try:
+            self._github_client.add_issue_comment_reaction(
+                repo_full_name=action.repo_full_name,
+                comment_id=action.comment_id,
+                content=action.content,
+            )
+        except Exception as exc:  # noqa: BLE001
+            self._logger.warning(
+                "github_transport_action_failed kind=issue_comment_reaction repo=%s comment_id=%s error=%s",
+                action.repo_full_name,
+                action.comment_id,
+                exc,
+            )
+            if self._raise_on_error:
+                raise
+
+    def _execute_pull_request_review_comment_reaction(
+        self,
+        *,
+        action: GitHubPullRequestReviewCommentReactionAction,
+    ) -> None:
+        try:
+            self._github_client.add_pull_request_review_comment_reaction(
+                repo_full_name=action.repo_full_name,
+                comment_id=action.comment_id,
+                content=action.content,
+            )
+        except Exception as exc:  # noqa: BLE001
+            self._logger.warning(
+                "github_transport_action_failed kind=review_comment_reaction repo=%s comment_id=%s error=%s",
+                action.repo_full_name,
+                action.comment_id,
+                exc,
+            )
+            if self._raise_on_error:
+                raise
+
+    def _execute_pull_request_reaction(self, *, action: GitHubPullRequestReactionAction) -> None:
+        try:
+            self._github_client.sync_pull_request_reaction(
+                repo_full_name=action.repo_full_name,
+                pr_number=action.pr_number,
+                content=action.content,
+            )
+        except Exception as exc:  # noqa: BLE001
+            self._logger.warning(
+                "github_transport_action_failed kind=pull_request_reaction repo=%s pr_number=%s error=%s",
+                action.repo_full_name,
+                action.pr_number,
+                exc,
+            )
+            if self._raise_on_error:
+                raise
+
+    def _execute_pull_request_check_run(self, *, action: GitHubPullRequestCheckRunAction) -> None:
+        try:
+            self._github_client.create_check_run(
+                repo_full_name=action.repo_full_name,
+                head_sha=action.head_sha,
+                name=action.name,
+                status=action.status,
+                conclusion=action.conclusion,
+                title=action.title,
+                summary=action.summary,
+            )
+        except Exception as exc:  # noqa: BLE001
+            self._logger.warning(
+                "github_transport_action_failed kind=check_run repo=%s head_sha=%s name=%s error=%s",
+                action.repo_full_name,
+                action.head_sha,
+                action.name,
+                exc,
+            )
+            if self._raise_on_error:
+                raise
 
     def _execute_sticky_review_comment(self, *, action: GitHubStickyReviewCommentAction) -> None:
         try:

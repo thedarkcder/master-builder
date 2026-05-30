@@ -14,6 +14,7 @@ from orchestrator.tools.atlassian_oauth_models import (
     JiraIssueCreateResult,
     JiraIssueDetail,
     JiraIssuePreview,
+    JiraIssueSearchPage,
     AtlassianOAuthError,
     JiraProject,
 )
@@ -64,18 +65,39 @@ class JiraOAuthIssueService:
         max_results: int = 20,
         start_at: int = 0,
     ) -> list[JiraIssuePreview]:
-        bounded_max_results = max(1, min(max_results, 50))
-        query = urlencode(
-            {
-                "jql": jql,
-                "maxResults": bounded_max_results,
-                "startAt": max(0, int(start_at)),
-                "fields": "summary,status",
-            }
-        )
-        payload = self._get_json(
-            url=f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/search/jql?{query}",
+        if int(start_at) != 0:
+            raise AtlassianOAuthError("Jira enhanced search uses nextPageToken pagination; start_at offsets are unsupported")
+        return self.search_issues_by_jql_page(
             access_token=access_token,
+            cloud_id=cloud_id,
+            jql=jql,
+            max_results=max_results,
+            next_page_token=None,
+        ).issues
+
+    def search_issues_by_jql_page(
+        self,
+        *,
+        access_token: str,
+        cloud_id: str,
+        jql: str,
+        max_results: int = 20,
+        next_page_token: str | None = None,
+    ) -> JiraIssueSearchPage:
+        bounded_max_results = max(1, min(max_results, 50))
+        request_payload: dict[str, object] = {
+            "jql": jql,
+            "maxResults": bounded_max_results,
+            "fields": ["summary", "status"],
+        }
+        normalized_next_page_token = str(next_page_token or "").strip()
+        if normalized_next_page_token:
+            request_payload["nextPageToken"] = normalized_next_page_token
+        payload = self._request_json(
+            method="POST",
+            url=f"https://api.atlassian.com/ex/jira/{cloud_id}/rest/api/3/search/jql",
+            access_token=access_token,
+            payload=request_payload,
         )
         issues = payload.get("issues") if isinstance(payload, dict) else None
         if not isinstance(issues, list):
@@ -101,7 +123,14 @@ class JiraOAuthIssueService:
                 raise AtlassianOAuthError(f"Issue search response item {index} missing issue status")
 
             results.append(JiraIssuePreview(key=key, summary=summary, status=status_name))
-        return results
+        raw_next_page_token = payload.get("nextPageToken") if isinstance(payload, dict) else None
+        if raw_next_page_token is None:
+            parsed_next_page_token = None
+        elif isinstance(raw_next_page_token, str):
+            parsed_next_page_token = raw_next_page_token.strip() or None
+        else:
+            raise AtlassianOAuthError("Issue search response nextPageToken was not a string")
+        return JiraIssueSearchPage(issues=results, next_page_token=parsed_next_page_token)
 
     def get_issue_detail(
         self,

@@ -2,6 +2,7 @@ from pathlib import Path
 
 from alembic import command
 from alembic.config import Config
+from alembic.script import ScriptDirectory
 from sqlalchemy import create_engine, inspect, text
 import sqlalchemy as sa
 
@@ -13,6 +14,10 @@ _TOP_REVISION_IDS = {
     "20260327_0039",
     "20260327_0040",
     "20260327_0041",
+}
+
+_ORPHANED_REVISION_REPAIRS = {
+    "20260509_0122": "20260523_0107",
 }
 
 
@@ -35,6 +40,15 @@ def _review_id_is_bigint(inspector: sa.Inspector) -> bool:
         column_type = column.get("type")
         return isinstance(column_type, sa.BigInteger) or str(column_type).upper() == "BIGINT"
     return False
+
+
+def _index_columns(inspector: sa.Inspector, table_name: str, index_name: str) -> list[str] | None:
+    if not _table_exists(inspector, table_name):
+        return None
+    for index in inspector.get_indexes(table_name):
+        if index.get("name") == index_name:
+            return list(index.get("column_names") or [])
+    return None
 
 
 def _desired_top_revisions(inspector: sa.Inspector) -> list[str] | None:
@@ -120,6 +134,63 @@ def _repair_stamp_if_schema_ahead_of_version(database_url: str) -> None:
         engine.dispose()
 
 
+def _repair_revision_is_materialized(inspector: sa.Inspector, repair_revision: str) -> bool:
+    if repair_revision != "20260523_0107":
+        raise RuntimeError(
+            f"Orphaned alembic revision repair is not configured for repair target {repair_revision}; "
+            "add an explicit schema contract before repairing stale stamps."
+        )
+    return (
+        _table_exists(inspector, "planning_decision_records")
+        and _table_exists(inspector, "workflow_operation_work_units")
+        and _column_exists(inspector, "workflow_executions", "source_external_id")
+        and _column_exists(inspector, "workflow_operation_attempts", "last_heartbeat_at")
+        and _column_exists(inspector, "workflow_operation_attempts", "lease_expires_at")
+        and _column_exists(inspector, "workflow_operation_attempts", "lease_owner")
+        and _table_exists(inspector, "workflow_executable_work_items")
+        and _index_columns(
+            inspector,
+            "workflow_executions",
+            "ix_workflow_executions_source_external_id",
+        )
+        == ["tenant_id", "source_system", "source_external_id", "dedupe_scope"]
+    )
+
+
+def _repair_orphaned_revision_stamp(database_url: str, head_revision: str) -> None:
+    _ = head_revision
+    engine = create_engine(database_url)
+    try:
+        with engine.begin() as connection:
+            inspector = inspect(connection)
+            if not _table_exists(inspector, "alembic_version"):
+                return
+            rows = [
+                str(value)
+                for value in connection.execute(
+                    text("SELECT version_num FROM alembic_version ORDER BY version_num")
+                ).scalars()
+            ]
+            if len(rows) != 1:
+                return
+            current_revision = rows[0]
+            expected_head = _ORPHANED_REVISION_REPAIRS.get(current_revision)
+            if expected_head is None:
+                return
+            if not _repair_revision_is_materialized(inspector, expected_head):
+                raise RuntimeError(
+                    "Database is stamped to orphaned Alembic revision "
+                    f"{current_revision}, but the live schema does not satisfy repair target {expected_head}. "
+                    "Manual migration intervention is required."
+                )
+            connection.execute(
+                text("UPDATE alembic_version SET version_num = :head_revision"),
+                {"head_revision": expected_head},
+            )
+    finally:
+        engine.dispose()
+
+
 def run_migrations(database_url: str | None = None) -> None:
     settings = get_settings()
     root = Path(__file__).resolve().parents[2]
@@ -130,9 +201,6 @@ def run_migrations(database_url: str | None = None) -> None:
         allow_sqlite_for_tests=bool(getattr(settings, "allow_sqlite_for_tests", False)),
     )
 
-    _normalize_repaired_top_revisions(target_database_url)
-    _repair_stamp_if_schema_ahead_of_version(target_database_url)
-
     config = Config(str(root / "alembic.ini"))
     # Keep application logging configuration intact; Alembic's default fileConfig
     # would otherwise reset handlers/levels (which hides request logs).
@@ -142,4 +210,12 @@ def run_migrations(database_url: str | None = None) -> None:
         str(root / "orchestrator" / "storage" / "migrations"),
     )
     config.set_main_option("sqlalchemy.url", target_database_url)
+    head_revisions = ScriptDirectory.from_config(config).get_heads()
+    if len(head_revisions) != 1:
+        raise RuntimeError(
+            f"Expected a single Alembic head before running migrations, found {head_revisions!r}."
+        )
+    _normalize_repaired_top_revisions(target_database_url)
+    _repair_stamp_if_schema_ahead_of_version(target_database_url)
+    _repair_orphaned_revision_stamp(target_database_url, head_revisions[0])
     command.upgrade(config, "head")

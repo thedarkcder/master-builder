@@ -20,6 +20,7 @@ from orchestrator.api.admin.workflows.queries import workflow_by_execution_id
 from orchestrator.api.admin.workflows.start_development_service import (
     preview_start_engineering,
     start_engineering_from_action,
+    start_work_item_from_board,
     start_work_result_to_schema,
 )
 from orchestrator.api.admin.workflows.start_planning_service import start_parent_planning
@@ -42,6 +43,7 @@ __all__ = [
     "retry_workflow_operation",
     "preview_start_engineering",
     "start_engineering_from_action",
+    "start_work_item_from_board",
     "start_parent_planning",
     "start_work_result_to_schema",
 ]

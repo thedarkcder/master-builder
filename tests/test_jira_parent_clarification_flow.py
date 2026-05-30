@@ -1,3 +1,4 @@
+from dataclasses import replace
 from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import patch
@@ -69,7 +70,19 @@ class _JiraMetadataClientMixin:
         cloud_id: str,
         issue_id_or_key: str,
     ) -> JiraIssueDetail:
-        return self._get_issue_detail(issue_id_or_key)
+        detail = self._get_issue_detail(issue_id_or_key)
+        if detail.issue_type is None:
+            return replace(detail, issue_type="Epic")
+        return detail
+
+    def list_project_issue_types_for_create(
+        self,
+        *,
+        access_token: str,
+        cloud_id: str,
+        project_key: str,
+    ) -> list[str]:
+        return ["Epic", "Story", "Sub-task"]
 
     def _get_issue_detail(self, issue_id_or_key: str) -> JiraIssueDetail:
         raise NotImplementedError
@@ -97,6 +110,41 @@ class _JiraMetadataClientMixin:
 
 
 class JiraParentClarificationFlowTests(JiraWebhookHarness):
+    def _add_waiting_parent_brief_gate(
+        self,
+        *,
+        session,
+        issue_key: str,
+        project_id: str = "project-1",
+        display_name: str = "Identity redesign",
+        description: str = "Loose parent description",
+    ) -> None:
+        workflow_type = get_workflow_type(session, workflow_type_key="parent_planning")
+        projection = ensure_workflow_execution(
+            session=session,
+            workflow_type=workflow_type,
+            tenant_id="tenant-webhook",
+            project_id=project_id,
+            execution=WorkflowExecutionReference(
+                key=issue_key,
+                source=WorkflowSourceReference(
+                    source_system="jira",
+                    source_ref=issue_key,
+                    display_name=display_name,
+                    description=description,
+                    attributes={"jira_issue_labels": ["pm-parent", "sync-blocked"]},
+                ),
+            ),
+            display_name=display_name,
+            description=description,
+        )
+        operation, attempt = projection.start_operation_attempt(operation_type="brief_normalization")
+        projection.wait_started_operation(
+            operation=operation,
+            attempt=attempt,
+            summary="PM clarification required.",
+        )
+
     def test_webhook_comment_command_clarify_creates_parent_followup_and_blocks_child(self) -> None:
         payload = self._jira_issue_payload(issue_key="TP-960", labels=["engineering-child", "parent-tp-950"], status_name="To Do")
         payload["webhookEvent"] = "comment_created"
@@ -1024,6 +1072,7 @@ class JiraParentClarificationFlowTests(JiraWebhookHarness):
     def test_webhook_parent_pm_reply_consumes_jira_anchor_and_refreshes_children(self) -> None:
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
+            self._add_waiting_parent_brief_gate(session=session, issue_key="TP-980")
             session.add(
                 PMInterviewCase(
                     case_id="pm-case-980",
@@ -1444,6 +1493,7 @@ class JiraParentClarificationFlowTests(JiraWebhookHarness):
     def test_webhook_parent_pm_reply_posts_planning_blocker_after_pm_completion(self) -> None:
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
+            self._add_waiting_parent_brief_gate(session=session, issue_key="TP-980B")
             session.add(
                 PMInterviewCase(
                     case_id="pm-case-980b",
@@ -1680,6 +1730,7 @@ class JiraParentClarificationFlowTests(JiraWebhookHarness):
     def test_webhook_parent_pm_reply_posts_next_jira_question_when_more_detail_is_needed(self) -> None:
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
+            self._add_waiting_parent_brief_gate(session=session, issue_key="TP-981")
             session.add(
                 PMInterviewCase(
                     case_id="pm-case-981",
@@ -1910,6 +1961,7 @@ class JiraParentClarificationFlowTests(JiraWebhookHarness):
     def test_webhook_parent_pm_reply_commits_pm_state_before_runtime_advance(self) -> None:
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
+            self._add_waiting_parent_brief_gate(session=session, issue_key="TP-981C")
             session.add(
                 PMInterviewCase(
                     case_id="pm-case-981c",

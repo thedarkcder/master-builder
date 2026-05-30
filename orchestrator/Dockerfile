@@ -104,8 +104,8 @@ COPY orchestrator ./orchestrator
 COPY scripts/bootstrap_deployment_host_agent.py ./scripts/bootstrap_deployment_host_agent.py
 COPY alembic.ini ./alembic.ini
 
-RUN --mount=type=cache,target=/root/.cache/pip \
-    "${VIRTUAL_ENV}/bin/pip" install --no-deps --no-build-isolation .
+RUN printf '#!/usr/bin/env sh\nexec python -m orchestrator "$@"\n' > "${VIRTUAL_ENV}/bin/orchestrator" && \
+    chmod +x "${VIRTUAL_ENV}/bin/orchestrator"
 
 RUN "${VIRTUAL_ENV}/bin/python" -m compileall -q -j 0 /app/orchestrator
 
@@ -129,7 +129,8 @@ RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
     --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
     apt-get update && \
     apt-get install -y --no-install-recommends \
-      default-jdk-headless && \
+      default-jdk-headless \
+      maven && \
     mkdir -p "${ANDROID_SDK_ROOT}/cmdline-tools" && \
     curl -fsSL "https://dl.google.com/android/repository/commandlinetools-linux-${ANDROID_CMDLINE_TOOLS_VERSION}_latest.zip" \
       -o /tmp/android-cmdline-tools.zip && \
@@ -153,8 +154,8 @@ COPY .codex ./.codex
 COPY orchestrator ./orchestrator
 COPY alembic.ini ./alembic.ini
 
-RUN --mount=type=cache,target=/root/.cache/pip \
-    "${VIRTUAL_ENV}/bin/pip" install --no-deps --no-build-isolation .
+RUN printf '#!/usr/bin/env sh\nexec python -m orchestrator "$@"\n' > "${VIRTUAL_ENV}/bin/orchestrator" && \
+    chmod +x "${VIRTUAL_ENV}/bin/orchestrator"
 
 RUN mkdir -p /app/data
 
@@ -189,8 +190,8 @@ COPY .codex ./.codex
 COPY orchestrator ./orchestrator
 COPY alembic.ini ./alembic.ini
 
-RUN --mount=type=cache,target=/root/.cache/pip \
-    "${VIRTUAL_ENV}/bin/pip" install --no-deps --no-build-isolation .
+RUN printf '#!/usr/bin/env sh\nexec python -m orchestrator "$@"\n' > "${VIRTUAL_ENV}/bin/orchestrator" && \
+    chmod +x "${VIRTUAL_ENV}/bin/orchestrator"
 
 RUN mkdir -p /app/data
 

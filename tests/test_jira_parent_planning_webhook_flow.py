@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -79,7 +80,10 @@ class _JiraMetadataClientMixin:
         cloud_id: str,
         issue_id_or_key: str,
     ) -> JiraIssueDetail:
-        return self._get_issue_detail(issue_id_or_key)
+        detail = self._get_issue_detail(issue_id_or_key)
+        if detail.issue_type is None:
+            return replace(detail, issue_type="Epic")
+        return detail
 
     def _get_issue_detail(self, issue_id_or_key: str) -> JiraIssueDetail:
         raise NotImplementedError
@@ -149,6 +153,15 @@ class _JiraMetadataClientMixin:
 
     def _transition_issue(self, issue_id_or_key: str, target_status: str) -> dict[str, object]:
         return {}
+
+    def list_project_issue_types_for_create(
+        self,
+        *,
+        access_token: str,
+        cloud_id: str,
+        project_key: str,
+    ) -> list[str]:  # noqa: ARG002
+        return ["Epic", "Story", "Task", "Sub-task"]
 
     def list_issue_comments(
         self,
@@ -588,7 +601,7 @@ class JiraParentPlanningWebhookFlowTests(JiraWebhookTestsHarness):
                 description: str | dict[str, object],
                 labels: list[str],
             ) -> None:
-                return None
+                self.labels = list(labels)
 
         oauth_context = SimpleNamespace(
             client=_FakeClient(),

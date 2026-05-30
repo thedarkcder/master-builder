@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_serializer, model_validator
 
@@ -1166,6 +1166,7 @@ class AgentRuntimeToolRead(BaseModel):
     tool_name: str
     category: str
     description: str
+    args_schema: dict[str, Any] = Field(default_factory=dict)
     stages: list[str] = Field(default_factory=list)
 
 
@@ -1177,6 +1178,7 @@ class AgentRuntimeToolsRead(BaseModel):
 class RunRead(BaseModel):
     run_id: str
     workflow_id: str
+    workflow_execution_id: str
     attempt_number: int
     parent_run_id: str | None = None
     entry_mode: str
@@ -1413,7 +1415,22 @@ class WorkflowBoardRunSummaryRead(BaseModel):
     finished_at: datetime | None = None
 
 
+class WorkflowBoardChildIssueRead(BaseModel):
+    work_item_id: str
+    issue_key: str
+    summary: str | None = None
+    status: str | None = None
+    mb_work_state: str | None = None
+    issue_type: str | None = None
+    run_id: str | None = None
+    run_status: str | None = None
+    startable: bool = False
+    start_label: str | None = None
+    start_blocked_reason: str | None = None
+
+
 class WorkflowBoardItemRead(BaseModel):
+    work_item_id: str
     execution_id: str
     workflow_id: str
     workflow_type_key: str
@@ -1426,11 +1443,15 @@ class WorkflowBoardItemRead(BaseModel):
     status: str
     failure_reason: str | None = None
     pending_input_request_id: str | None = None
+    startable: bool = False
+    start_label: str | None = None
+    start_blocked_reason: str | None = None
     run_count: int = 0
     active_run_count: int = 0
     failed_run_count: int = 0
     latest_run: WorkflowBoardRunSummaryRead | None = None
     runs: list[WorkflowBoardRunSummaryRead] = Field(default_factory=list)
+    children: list[WorkflowBoardChildIssueRead] = Field(default_factory=list)
     links: list[WorkflowLinkRead] = Field(default_factory=list)
     latest_activity_at: datetime
     created_at: datetime
@@ -1548,6 +1569,20 @@ class StartWorkIssueRead(BaseModel):
 
 
 class WorkflowStartWorkRead(BaseModel):
+    workflow: WorkflowRead
+    queued: list[StartWorkIssueRead] = Field(default_factory=list)
+    skipped: list[StartWorkIssueRead] = Field(default_factory=list)
+    promoted_issue_keys: list[str] = Field(default_factory=list)
+    started_attempt: WorkflowOperationAttemptRead | None = None
+
+
+class WorkflowWorkItemStartRequest(BaseModel):
+    work_item_id: str
+
+
+class WorkflowWorkItemStartRead(BaseModel):
+    work_item_id: str
+    action: str
     workflow: WorkflowRead
     queued: list[StartWorkIssueRead] = Field(default_factory=list)
     skipped: list[StartWorkIssueRead] = Field(default_factory=list)

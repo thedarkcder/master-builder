@@ -11,7 +11,6 @@ from orchestrator.core.worker.workflow_request_branching import (
     resolve_branch_from_open_pull_requests,
     resolve_integration_branch,
 )
-from orchestrator.core.worker.queue_selector import coerce_positive_int
 from orchestrator.core.worker.repo_setup_service import (
     RetryableRepoSetupError,
     TerminalRepoSetupError,
@@ -39,6 +38,17 @@ from orchestrator.tools.github_app import github_client_from_tenant_config
 logger = logging.getLogger(__name__)
 _entry_checkpoint = entry_checkpoint
 _resolve_branch_from_open_pull_requests = resolve_branch_from_open_pull_requests
+
+
+def _require_positive_policy_int(effective_policy: dict, field_name: str) -> int:
+    raw_value = effective_policy.get(field_name)
+    try:
+        parsed_value = int(raw_value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"Effective policy field {field_name} must be a positive integer") from exc
+    if parsed_value < 1:
+        raise ValueError(f"Effective policy field {field_name} must be a positive integer")
+    return parsed_value
 
 
 def build_workflow_request(
@@ -71,10 +81,7 @@ def build_workflow_request(
         entry_checkpoint_fn = entry_checkpoint
     if resolve_branch_from_open_pull_requests_fn is None:
         resolve_branch_from_open_pull_requests_fn = resolve_branch_from_open_pull_requests
-    max_loops = coerce_positive_int(
-        effective_policy.get("max_dev_test_review_loops"),
-        default=1,
-    )
+    max_loops = _require_positive_policy_int(effective_policy, "max_dev_test_review_loops")
     suggested_test_commands_raw = effective_policy.get("allowed_commands") or []
     suggested_test_commands: list[str] = []
     for command in suggested_test_commands_raw:

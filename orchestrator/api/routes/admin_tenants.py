@@ -122,8 +122,12 @@ from orchestrator.core.platform.install_registry_service import (
     update_project_install,
 )
 from orchestrator.core.platform.install_request_service import (
+    INSTALL_REQUEST_STATUS_APPROVED,
+    INSTALL_REQUEST_STATUS_REJECTED,
+    approve_install_request,
     get_project_install_request,
     list_project_install_requests,
+    reject_install_request,
     update_install_request_status,
 )
 from orchestrator.core.config import get_settings
@@ -1126,11 +1130,33 @@ def update_project_install_request_route(
     session: Session = Depends(get_session),
 ) -> ProjectInstallRequestRead:
     require_tenant_permission(principal=principal, tenant_id=tenant_id, permission_key=PERMISSION_PROJECTS_MANAGE)
-    _get_project_for_tenant_or_404(session=session, tenant_id=tenant_id, project_id=project_id)
+    project = _get_project_for_tenant_or_404(session=session, tenant_id=tenant_id, project_id=project_id)
     request = get_project_install_request(session=session, request_id=request_id)
     if request is None or request.tenant_id != tenant_id or request.project_id != project_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project install request not found")
-    if str(payload.status or "").strip().lower() == "fulfilled":
+    normalized_status = str(payload.status or "").strip().lower()
+    settings = get_settings()
+    try:
+        if normalized_status == INSTALL_REQUEST_STATUS_APPROVED:
+            updated = approve_install_request(
+                session=session,
+                settings=settings,
+                request=request,
+                project=project,
+                source_ref=f"admin:{principal.user_id or principal.username or principal.principal_type}",
+            )
+            return project_install_request_to_schema(updated)
+        if normalized_status == INSTALL_REQUEST_STATUS_REJECTED:
+            updated = reject_install_request(
+                session=session,
+                settings=settings,
+                request=request,
+                source_ref=f"admin:{principal.user_id or principal.username or principal.principal_type}",
+            )
+            return project_install_request_to_schema(updated)
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
+    if normalized_status == "fulfilled":
         matching_install = next(
             (
                 install
@@ -1145,7 +1171,7 @@ def update_project_install_request_route(
                 detail="Create a matching project install before marking this request fulfilled",
             )
     try:
-        updated = update_install_request_status(session=session, request=request, status=payload.status)
+        updated = update_install_request_status(session=session, request=request, status=normalized_status)
     except ValueError as exc:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(exc)) from exc
     return project_install_request_to_schema(updated)

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from dataclasses import replace
+
 from orchestrator.core.runs.service import RUN_STATUS_WAITING_FOR_INPUT
 from orchestrator.core.worker.finalization import CompletionTailExecutor, WorkflowFinalizer
 from orchestrator.core.worker.capabilities import worker_label_for_capability
@@ -114,10 +116,26 @@ class RunOutcomePolicy:
         if capability_result is not None:
             return capability_result
 
+        generic_requeue_result = self._handle_generic_requeue(
+            prepared=prepared,
+            workflow_result=workflow_result,
+            execution_context=execution_context,
+        )
+        if generic_requeue_result is not None:
+            return generic_requeue_result
+
         if workflow_result.outcome == "waiting_for_input":
             self._session.refresh(run)
             if str(getattr(run, "status", "") or "").strip().lower() == RUN_STATUS_WAITING_FOR_INPUT:
                 return run
+            workflow_result = replace(
+                workflow_result,
+                outcome="blocked",
+                blocker_message=(
+                    workflow_result.blocker_message
+                    or "Workflow requested human input, but no pending human-input request was created."
+                ),
+            )
         if workflow_result.outcome in {"blocked", "failed"} and self._deps.stage_updates.run_failed_update_fn is not None:
             error_text = (
                 workflow_result.blocker_message
@@ -280,4 +298,40 @@ class RunOutcomePolicy:
             execution_context=execution_context,
             expected_worker_service_instance_id=prepared.worker_service_instance_id,
             expected_claim_id=prepared.claim_id,
+        )
+
+    def _handle_generic_requeue(self, *, prepared, workflow_result, execution_context):
+        if workflow_result.outcome != "requeue":
+            return None
+        error_text = (
+            workflow_result.requeue_reason
+            or workflow_result.blocker_message
+            or (workflow_result.diagnostics.message if workflow_result.diagnostics is not None else None)
+            or "Workflow requested requeue."
+        )
+        self._deps.identity.logger.info(
+            "worker_requeue_generic run_id=%s tenant_id=%s issue_key=%s error=%s",
+            prepared.run.run_id,
+            prepared.run.tenant_id,
+            prepared.run.issue_key,
+            error_text,
+        )
+        self._cleanup_run_workspaces_safe_fn(
+            cleanup_run_workspaces_fn=self._deps.identity.cleanup_run_workspaces_fn,
+            logger=self._deps.identity.logger,
+            base_dir=self._settings.project_repo_checkout_base_dir,
+            tenant_id=prepared.run.tenant_id,
+            project_id=prepared.project.project_id,
+            run_id=prepared.run.run_id,
+        )
+        return self._deps.execution.requeue_workflow_result_for_stale_snapshot_fn(
+            self._session,
+            run=prepared.run,
+            workflow_result=workflow_result,
+            stage_updates=prepared.notifier.stage_updates,
+            error=error_text,
+            execution_context=execution_context,
+            expected_worker_service_instance_id=prepared.worker_service_instance_id,
+            expected_claim_id=prepared.claim_id,
+            mark_stale_snapshot=False,
         )

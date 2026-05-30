@@ -39,6 +39,9 @@ class DiscordMessageApplicationTests(unittest.TestCase):
             load_pending_human_input_request=MagicMock(return_value=None),
             answer_human_input_request=MagicMock(),
             resume_workflow_from_human_input_answer=MagicMock(),
+            load_project_install_request=MagicMock(),
+            approve_install_request=MagicMock(),
+            reject_install_request=MagicMock(),
             resolve_followup_context_match=resolve_followup_context_match,
             resolve_followup_context=MagicMock(return_value=None),
             resolve_followup_reaction=resolve_followup_reaction or MagicMock(return_value=None),
@@ -192,6 +195,48 @@ class DiscordMessageApplicationTests(unittest.TestCase):
             settings=deps.settings,
             request=answered_request,
         )
+
+    def test_install_request_yes_approves_instead_of_generic_human_input_resume(self) -> None:
+        execute = MagicMock()
+        pending_request = SimpleNamespace(
+            request_id="human-input-1",
+            issue_key="AP-248",
+            request_type="install_request",
+            request_context_json={"install_request_id": "install-request-1"},
+        )
+        install_request = SimpleNamespace(
+            request_id="install-request-1",
+            issue_key="AP-248",
+            project_id="project-1",
+        )
+        deps = self._deps(
+            execute_tenant_discord_command=execute,
+            resolve_followup_context_match=MagicMock(
+                return_value=SimpleNamespace(status="matched", context=SimpleNamespace(context_type="human_input"), matches=())
+            ),
+            resolve_followup_reaction=MagicMock(
+                return_value=SimpleNamespace(kind="human_input", request_id="human-input-1")
+            ),
+        )
+        deps.load_pending_human_input_request.return_value = pending_request
+        deps.load_project_install_request.return_value = install_request
+
+        result = build_discord_message_ingress_result(
+            payload={
+                "id": "msg-install-approve",
+                "channel_id": "thread-1",
+                "author": {"id": "user-1", "bot": False},
+                "content": "yes",
+            },
+            session=MagicMock(get=MagicMock(return_value=SimpleNamespace(project_id="project-1"))),
+            deps=deps,
+        )
+
+        self.assertEqual(len(result.actions), 1)
+        self.assertIn("Approved the install request", result.actions[0].content)
+        deps.approve_install_request.assert_called_once()
+        deps.answer_human_input_request.assert_not_called()
+        deps.resume_workflow_from_human_input_answer.assert_not_called()
 
     def test_pm_voice_note_entry_opens_interview_thread(self) -> None:
         execute = MagicMock(

@@ -87,9 +87,9 @@ export default function HetznerInstallTutorialPage() {
           <article className="rounded-2xl border border-white/[0.08] bg-[#15171c] p-6">
             <h2 className="text-xl font-bold text-white">Step 3: Validate deployment</h2>
             <pre className="mt-3 overflow-x-auto rounded-xl border border-[#78d1ff]/20 bg-[#0f1218] p-4 text-sm text-[#d9e4ec]">
-              <code>{`curl -fsSL http://SERVER_IP:4000/health
+              <code>{`curl -fsSL http://SERVER_IP:60001/health
 # open in browser
-http://SERVER_IP:4100`}</code>
+http://SERVER_IP:60002`}</code>
             </pre>
             <p className="mt-3 text-sm leading-7 text-[#bdc8d0]">
               If health is not <code>ok</code>, inspect cloud-init output and docker container logs on the host.

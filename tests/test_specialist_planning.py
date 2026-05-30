@@ -104,7 +104,7 @@ class SpecialistPlanningTests(unittest.TestCase):
             prompts.append((template_name, kwargs))
             return template_name
 
-        def _invoke_runtime_json(*, context, system_prompt, user_prompt, runtime):  # noqa: ANN001
+        def _invoke_runtime_json(*, context, system_prompt, user_prompt, runtime, allowed_native_tools=None):  # noqa: ANN001
             _ = (system_prompt, user_prompt, runtime)
             if context.stage == PLANNING_STATE_ENGINEERING:
                 return _stage_contract(**{
@@ -200,7 +200,7 @@ class SpecialistPlanningTests(unittest.TestCase):
     def test_pm_decision_requests_block_planning_but_still_run_all_stages(self) -> None:
         request = self._request()
 
-        def _invoke_runtime_json(*, context, system_prompt, user_prompt, runtime):  # noqa: ANN001
+        def _invoke_runtime_json(*, context, system_prompt, user_prompt, runtime, allowed_native_tools=None):  # noqa: ANN001
             _ = (system_prompt, user_prompt, runtime)
             if context.stage == PLANNING_STATE_ENGINEERING:
                 return _stage_contract(**{
@@ -304,7 +304,8 @@ class SpecialistPlanningTests(unittest.TestCase):
             self.assertIn('"type":"final_response"', user_prompt)
             self.assertIn("Allowed governed tools for this stage", user_prompt)
             self.assertIn("Native Codex tools available directly in this runtime", user_prompt)
-            self.assertIn('When the user message includes "Allowed governed tools" and "Native Codex tools" sections', system_prompt)
+            self.assertIn("Use only the governed tool bridge", system_prompt)
+            self.assertIn("Do not use native Codex shell, web, or browser tools directly", user_prompt)
 
     def test_fanout_uses_tool_bridge_when_session_and_settings_present(self) -> None:
         request = self._request()
@@ -348,11 +349,10 @@ class SpecialistPlanningTests(unittest.TestCase):
         self.assertNotIn("web.search", captured["allowed_tools"])
         self.assertIn("tool_name", str(captured["governed_tools_json"]))
         self.assertIn("project.check_runtime_bindings", str(captured["governed_tools_json"]))
-        self.assertIn("web.search", str(captured["native_tools_json"]))
-        self.assertIn("browser.snapshot", str(captured["native_tools_json"]))
+        self.assertEqual(captured["native_tools_json"], "[]")
 
     def test_build_runtime_seed_planning_package_keeps_architecture_artifacts(self) -> None:
-        def _invoke_runtime_json(*, context, system_prompt, user_prompt, runtime):  # noqa: ANN001
+        def _invoke_runtime_json(*, context, system_prompt, user_prompt, runtime, allowed_native_tools=None):  # noqa: ANN001
             _ = (system_prompt, user_prompt, runtime)
             if context.stage == PLANNING_STATE_ENGINEERING:
                 return _stage_contract(**{
@@ -423,7 +423,7 @@ class SpecialistPlanningTests(unittest.TestCase):
     def test_architect_stage_retries_contract_violation_and_uses_corrected_payload(self) -> None:
         prompts: list[str] = []
 
-        def _invoke_runtime_json(*, context, system_prompt, user_prompt, runtime):  # noqa: ANN001
+        def _invoke_runtime_json(*, context, system_prompt, user_prompt, runtime, allowed_native_tools=None):  # noqa: ANN001
             _ = (system_prompt, runtime)
             prompts.append(user_prompt)
             if context.stage == PLANNING_STATE_ENGINEERING and len(prompts) == 1:
@@ -504,7 +504,7 @@ class SpecialistPlanningTests(unittest.TestCase):
     def test_stage_preserves_multiple_pm_decision_requests_for_same_decision_set(self) -> None:
         prompts: list[str] = []
 
-        def _invoke_runtime_json(*, context, system_prompt, user_prompt, runtime):  # noqa: ANN001
+        def _invoke_runtime_json(*, context, system_prompt, user_prompt, runtime, allowed_native_tools=None):  # noqa: ANN001
             _ = (system_prompt, runtime)
             prompts.append(user_prompt)
             if context.stage == PLANNING_STATE_SECURITY:
@@ -556,7 +556,7 @@ class SpecialistPlanningTests(unittest.TestCase):
         prompts: list[str] = []
         security_calls = 0
 
-        def _invoke_runtime_json(*, context, system_prompt, user_prompt, runtime):  # noqa: ANN001
+        def _invoke_runtime_json(*, context, system_prompt, user_prompt, runtime, allowed_native_tools=None):  # noqa: ANN001
             nonlocal security_calls
             _ = (system_prompt, runtime)
             prompts.append(user_prompt)
@@ -612,7 +612,7 @@ class SpecialistPlanningTests(unittest.TestCase):
     def test_architect_stage_fails_hard_when_child_ticket_spec_repair_is_still_missing_done_means(self) -> None:
         calls: list[str] = []
 
-        def _invoke_runtime_json(*, context, system_prompt, user_prompt, runtime):  # noqa: ANN001
+        def _invoke_runtime_json(*, context, system_prompt, user_prompt, runtime, allowed_native_tools=None):  # noqa: ANN001
             _ = (system_prompt, user_prompt, runtime)
             calls.append(context.stage)
             if context.stage == PLANNING_STATE_ENGINEERING:

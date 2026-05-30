@@ -88,6 +88,8 @@ type ProjectFormState = {
   allow_manual_pr_fix_requests: OverrideToggleValue;
   allow_label_mutations: OverrideToggleValue;
   allow_auto_merge: OverrideToggleValue;
+  staging_merge_check_enabled: OverrideToggleValue;
+  staging_branch: string;
   require_agents_md: RequireAgentsValue;
   knowledge_base_enabled: OverrideToggleValue;
   knowledge_auto_answer_mode: KnowledgeModeValue;
@@ -189,6 +191,8 @@ function buildProjectFormState(payload: ProjectRecord | null): ProjectFormState 
     allow_manual_pr_fix_requests: booleanOverrideToState(overrides.allow_manual_pr_fix_requests),
     allow_label_mutations: booleanOverrideToState(overrides.allow_label_mutations),
     allow_auto_merge: booleanOverrideToState(overrides.allow_auto_merge),
+    staging_merge_check_enabled: booleanOverrideToState(overrides.staging_admission_enabled),
+    staging_branch: typeof overrides.staging_branch === "string" ? overrides.staging_branch : "",
     require_agents_md: requireAgentsOverrideToState(overrides.require_agents_md),
     knowledge_base_enabled: booleanOverrideToState(overrides.knowledge_base_enabled),
     knowledge_auto_answer_mode: knowledgeModeOverrideToState(overrides.knowledge_auto_answer_mode),
@@ -649,6 +653,7 @@ export function TenantProjectDetailsPage() {
     const allowManualPrFixRequests = booleanStateToOverride(form.allow_manual_pr_fix_requests);
     const allowLabelMutations = booleanStateToOverride(form.allow_label_mutations);
     const allowAutoMerge = booleanStateToOverride(form.allow_auto_merge);
+    const stagingMergeCheckEnabled = booleanStateToOverride(form.staging_merge_check_enabled);
     const knowledgeBaseEnabled = booleanStateToOverride(form.knowledge_base_enabled);
     const maxDevTestReviewLoops = parsePositiveOverride(form.max_dev_test_review_loops);
     const maxPrAutoRemediationLoops = parsePositiveOverride(form.max_pr_auto_remediation_loops);
@@ -687,6 +692,16 @@ export function TenantProjectDetailsPage() {
       delete nextPolicyOverrides.allow_auto_merge;
     } else {
       nextPolicyOverrides.allow_auto_merge = allowAutoMerge;
+    }
+    if (stagingMergeCheckEnabled === undefined) {
+      delete nextPolicyOverrides.staging_admission_enabled;
+    } else {
+      nextPolicyOverrides.staging_admission_enabled = stagingMergeCheckEnabled;
+    }
+    if (form.staging_branch.trim()) {
+      nextPolicyOverrides.staging_branch = form.staging_branch.trim();
+    } else {
+      delete nextPolicyOverrides.staging_branch;
     }
     if (form.require_agents_md === "required") {
       nextPolicyOverrides.require_agents_md = true;
@@ -1311,6 +1326,34 @@ export function TenantProjectDetailsPage() {
                         disabled={busy}
                       />
                       <p className="text-xs text-muted-foreground">Effective: {formatBoolean(project.effective_policy.allow_auto_merge)}</p>
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                        Staging merge check
+                      </label>
+                      <OverrideSegmentedControl
+                        value={form.staging_merge_check_enabled}
+                        options={BOOLEAN_OVERRIDE_OPTIONS}
+                        onChange={(next) => setForm((prev) => ({ ...prev, staging_merge_check_enabled: next }))}
+                        disabled={busy}
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        Publish the GitHub check that keeps staging-targeted PRs fresh against the current staging head.
+                      </p>
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                        Staging branch
+                      </label>
+                      <Input
+                        value={form.staging_branch}
+                        onChange={(e) => setForm((prev) => ({ ...prev, staging_branch: e.target.value }))}
+                        placeholder="staging"
+                        disabled={busy}
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        Branch name to validate before the GitHub merge button is used.
+                      </p>
                     </div>
                     <div className="space-y-1.5">
                       <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">

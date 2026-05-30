@@ -17,6 +17,7 @@ from orchestrator.tools.atlassian_oauth_models import (
     JiraIssueCreateResult,
     JiraIssueDetail,
     JiraIssuePreview,
+    JiraIssueSearchPage,
     AtlassianOAuthClientConfig,
     AtlassianOAuthError,
     AtlassianOAuthResource,
@@ -35,6 +36,7 @@ __all__ = [
     "ConfluenceSpace",
     "ConfluencePage",
     "JiraIssuePreview",
+    "JiraIssueSearchPage",
     "JiraIssueDetail",
     "JiraIssueComment",
     "JiraIssueAttachment",
@@ -259,6 +261,23 @@ class AtlassianOAuthClient:
             jql=jql,
             max_results=max_results,
             start_at=start_at,
+        )
+
+    def search_issues_by_jql_page(
+        self,
+        *,
+        access_token: str,
+        cloud_id: str,
+        jql: str,
+        max_results: int = 20,
+        next_page_token: str | None = None,
+    ) -> JiraIssueSearchPage:
+        return self._issue_service.search_issues_by_jql_page(
+            access_token=access_token,
+            cloud_id=cloud_id,
+            jql=jql,
+            max_results=max_results,
+            next_page_token=next_page_token,
         )
 
     def get_issue_detail(

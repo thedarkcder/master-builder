@@ -28,6 +28,11 @@ from orchestrator.core.runs.service import (
 )
 from orchestrator.core.runtime.requirements import resolve_required_runtime_kinds_for_workflow
 from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
+from orchestrator.core.workflow.execution_artifacts import (
+    MissingDurableExecutionArtifactError,
+    attach_artifact_to_resume_plan,
+    require_durable_execution_artifact_for_checkpoint,
+)
 from orchestrator.core.workflow.transitions import ATTEMPT_ENTRY_MODES, attempt_creation_policy
 from orchestrator.core.workflow.attempt_factory import build_workflow_execution_for_attempt
 from orchestrator.core.workflow.execution_lifecycle import reconcile_execution_with_active_run_state
@@ -100,6 +105,14 @@ def checkpoint_resume_plan(*, checkpoint: WorkflowCheckpoint) -> dict[str, objec
         checkpoint.payload_json,
         allow_empty=False,
     ).dump()
+
+
+def durable_checkpoint_resume_plan(*, session, checkpoint: WorkflowCheckpoint) -> dict[str, object]:  # noqa: ANN001
+    artifact = require_durable_execution_artifact_for_checkpoint(session=session, checkpoint=checkpoint)
+    return attach_artifact_to_resume_plan(
+        plan=checkpoint_resume_plan(checkpoint=checkpoint),
+        artifact=artifact,
+    )
 
 
 def resolve_precheck_outcome_for_admin_attempt(*, source_run: Run | None, plan: object | None) -> str | None:
@@ -274,8 +287,10 @@ def create_workflow_attempt(
         next_run_plan = (
             fresh_start_plan(source_run=source_run)
             if normalized_mode == "fresh"
-            else checkpoint_resume_plan(checkpoint=selected_checkpoint)
+            else durable_checkpoint_resume_plan(session=session, checkpoint=selected_checkpoint)
         )
+    except MissingDurableExecutionArtifactError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -355,7 +370,7 @@ def create_workflow_attempt(
             ) from error
         raise
     session.refresh(enqueue_result.run)
-    return run_to_schema_fn(enqueue_result.run)
+    return run_to_schema_fn(enqueue_result.run, workflow_execution_id=workflow.execution_id)
 
 
 def resume_workflow_execution(
@@ -403,7 +418,9 @@ def resume_workflow_execution(
     workflow.latest_checkpoint_id = selected_checkpoint.checkpoint_id
 
     try:
-        next_run_plan = checkpoint_resume_plan(checkpoint=selected_checkpoint)
+        next_run_plan = durable_checkpoint_resume_plan(session=session, checkpoint=selected_checkpoint)
+    except MissingDurableExecutionArtifactError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(
             status_code=status.HTTP_409_CONFLICT,
@@ -467,4 +484,4 @@ def resume_workflow_execution(
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Execution already has an active attempt.") from error
         raise
     session.refresh(enqueue_result.run)
-    return run_to_schema_fn(enqueue_result.run)
+    return run_to_schema_fn(enqueue_result.run, workflow_execution_id=workflow.execution_id)

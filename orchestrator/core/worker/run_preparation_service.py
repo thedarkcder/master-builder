@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from orchestrator.core.platform.dashboard_links import admin_run_url
-from orchestrator.core.projects.policy import resolve_effective_policy
+from orchestrator.core.worker.run_execution_context import effective_policy_for_project
 from orchestrator.core.worker.repo_setup_service import (
     RetryableRepoSetupError,
     TerminalRepoSetupError,
@@ -99,14 +99,7 @@ class RunPreparationService:
             send_discord_message=self._deps.stage_updates.send_discord_message_fn,
             send_jira_message=self._deps.stage_updates.send_jira_message_fn,
         )
-        effective_policy = (
-            dict(claimed_run.effective_policy)
-            if isinstance(getattr(claimed_run, "effective_policy", None), dict)
-            else resolve_effective_policy(
-                tenant_policy=tenant.policy_config,
-                project_overrides=project.policy_overrides,
-            )
-        )
+        effective_policy = effective_policy_for_project(tenant=tenant, project=project)
 
         self._deps.project.bind_run_project_fn(self._session, run=run, project=project)
         jira_issue_url = self._deps.project.tenant_jira_issue_url_fn(

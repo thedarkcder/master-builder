@@ -3,10 +3,7 @@ from __future__ import annotations
 from datetime import timedelta
 
 from orchestrator.core.workflow.engine import WorkflowEngineState
-from orchestrator.temporal.activities.run_execution import (
-    execute_claimed_run_activity,
-    resume_human_input_activity,
-)
+from orchestrator.temporal.activities.run_execution import resume_human_input_activity
 from orchestrator.temporal.payloads import (
     DevelopmentTeamRunActivityResult,
     DevelopmentTeamRunWorkflowInput,
@@ -17,6 +14,9 @@ try:  # pragma: no cover - exercised when temporal backend is enabled
     from temporalio import workflow
 except ImportError as exc:  # pragma: no cover - exercised when temporal backend is enabled
     raise RuntimeError("Temporal backend requires temporalio to be installed") from exc
+
+
+ACTIVE_EXECUTION_STATUSES = {"queued", "dispatching", "running"}
 
 
 @workflow.defn(name="DevelopmentTeamRunWorkflow")
@@ -39,16 +39,6 @@ class DevelopmentTeamRunWorkflow:
         self._pending_request_id = str(result.pending_request_id or "").strip() or None
         self._last_error = str(result.last_error or "").strip() or None
 
-    async def _execute_initial_run(
-        self,
-        payload: DevelopmentTeamRunWorkflowInput,
-    ) -> DevelopmentTeamRunActivityResult:
-        return await workflow.execute_activity(
-            execute_claimed_run_activity,
-            payload,
-            start_to_close_timeout=timedelta(seconds=self._activity_timeout_seconds),
-        )
-
     async def _resume_from_human_input(
         self,
         payload: HumanInputResumeInput,
@@ -67,10 +57,16 @@ class DevelopmentTeamRunWorkflow:
         self._activity_timeout_seconds = max(1, int(payload.activity_start_to_close_timeout_seconds or 0))
         self._resume_timeout_seconds = max(1, int(payload.human_input_resume_timeout_seconds or 0))
         self._status = "dispatching"
-        self._apply_result(await self._execute_initial_run(payload))
+        while self._status in ACTIVE_EXECUTION_STATUSES:
+            await workflow.wait_condition(lambda: self._status not in ACTIVE_EXECUTION_STATUSES)
         while self._status == "waiting_for_input":
             await workflow.wait_condition(lambda: self._status != "waiting_for_input")
         return self.describe_state()
+
+    @workflow.update
+    async def record_run_result(self, payload: DevelopmentTeamRunActivityResult) -> str | None:
+        self._apply_result(payload)
+        return self._active_run_id
 
     @workflow.update
     async def resume_human_input(self, payload: HumanInputResumeInput) -> str | None:

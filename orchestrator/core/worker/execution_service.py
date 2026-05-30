@@ -4,6 +4,7 @@ import logging
 from collections.abc import Callable
 from types import SimpleNamespace
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 from sqlalchemy.orm import sessionmaker
 
@@ -11,7 +12,19 @@ from orchestrator.core.config import Settings, get_settings
 from orchestrator.core.observability.agent_observability import record_agent_lifecycle_event
 from orchestrator.core.discord.notifications import send_tenant_discord_message
 from orchestrator.core.integrations.atlassian.links import tenant_jira_issue_url
+from orchestrator.core.platform.secret_service import resolve_platform_secret_ref
+from orchestrator.core.platform.tenant_secret_service import resolve_scoped_secret_ref
 from orchestrator.core.workflow.runtime import build_workflow_runtime
+from orchestrator.core.workflow.execution_projection import WorkflowExecutionProjection
+from orchestrator.core.workflow.step_runner import (
+    complete_workflow_step_attempt,
+    fail_workflow_step_attempt,
+    retry_workflow_step_attempt,
+    start_workflow_step_attempt,
+    wait_workflow_step_attempt,
+)
+from orchestrator.core.workflow.type_catalog import ISSUE_EXECUTION_STEP_RUN_ATTEMPT_EXECUTION, get_workflow_type
+from orchestrator.core.workflow.work_units import run_work_unit
 from orchestrator.core.worker.webhook_job_service import process_next_webhook_job
 from orchestrator.core.worker.jira_stage_service import send_stage_update_to_jira as _send_stage_update_to_jira
 from orchestrator.core.worker.jira_stage_service import transition_issue_status as _transition_issue_status
@@ -21,6 +34,7 @@ from orchestrator.core.worker.process_service import (
 )
 from orchestrator.core.worker.queue_selector import claim_next_queued_run
 from orchestrator.core.worker.queue_selector import ClaimedRun
+from orchestrator.core.worker.run_execution_context import resolve_run_execution_policy_context
 from orchestrator.core.worker.run_health import (
     WorkerRunHeartbeatController,
     worker_service_instance_id_for_mode,
@@ -56,18 +70,22 @@ from orchestrator.core.worker.workflow_request_service import (
 )
 from orchestrator.core.workflow.runner import WorkflowRequest, WorkflowRunner
 from orchestrator.api.admin.route_helpers import ensure_project_repository_checkout
-from orchestrator.storage.models import Project, Run, Tenant, WorkflowExecution
+from orchestrator.storage.models import Project, Run, RunHumanInputRequest, Tenant, WorkflowExecution
 from orchestrator.tools.project_repo_checkout import check_run_snapshot_freshness
 from orchestrator.tools.project_repo_checkout import cleanup_run_workspaces
+from orchestrator.tools.github_app import github_client_from_tenant_config
 
 logger = logging.getLogger(__name__)
 
 RUN_STATUS_QUEUED = "queued"
 RUN_STATUS_DISPATCHING = "dispatching"
 RUN_STATUS_RUNNING = "running"
+RUN_STATUS_WAITING_FOR_INPUT = "waiting_for_input"
+RUN_STATUS_SUCCEEDED = "succeeded"
 RUN_STATUS_FAILED = "failed"
 RUN_STATUS_BLOCKED = "blocked"
 RUN_STATUS_CANCELLED = "cancelled"
+ACTIVE_RUN_STATUSES = {RUN_STATUS_QUEUED, RUN_STATUS_DISPATCHING, RUN_STATUS_RUNNING}
 TransportActionSender = Callable[..., object]
 
 
@@ -87,6 +105,32 @@ def _workflow_request_for_run(
         effective_policy=effective_policy,
         settings=get_settings(),
     )
+
+
+def _github_installation_token_for_project(
+    *,
+    session: Session,
+    settings: Settings,
+    tenant: Tenant,
+    project: Project,
+) -> str:
+    github_config = tenant.github_config or {}
+    github_client = github_client_from_tenant_config(
+        github_config,
+        tenant_secret_lookup=lambda secret_ref: resolve_scoped_secret_ref(
+            session,
+            secret_ref=secret_ref,
+            encryption_key=settings.secrets_encryption_key,
+            tenant_id=tenant.tenant_id,
+            project_id=project.project_id,
+        ),
+        platform_secret_lookup=lambda secret_ref: resolve_platform_secret_ref(
+            session,
+            secret_ref=secret_ref,
+            encryption_key=settings.secrets_encryption_key,
+        ),
+    )
+    return github_client.get_installation_token()
 
 
 def process_next_queued_run(session: Session, runner: WorkflowRunner) -> Run | None:
@@ -112,6 +156,177 @@ def process_next_webhook_job_with_dependencies(
             settings=settings,
             owner_id=resolved_owner_id,
         )
+
+
+def _pending_request_id(*, session: Session, workflow_id: str) -> str | None:
+    request_id = session.execute(
+        select(RunHumanInputRequest.request_id)
+        .where(
+            RunHumanInputRequest.workflow_id == workflow_id,
+            RunHumanInputRequest.status == "pending",
+        )
+        .order_by(RunHumanInputRequest.created_at.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+    return str(request_id or "").strip() or None
+
+
+def _run_result_payload(*, session: Session, workflow: WorkflowExecution, run: Run, claim_id: str | None) -> dict[str, object]:
+    normalized_status = str(run.status or "").strip().lower()
+    return {
+        "workflow_id": workflow.workflow_id,
+        "run_id": run.run_id,
+        "status": str(run.status),
+        "issue_key": str(run.issue_key),
+        "claim_id": str(claim_id or "").strip() or None,
+        "pending_request_id": (
+            _pending_request_id(session=session, workflow_id=workflow.workflow_id)
+            if normalized_status == RUN_STATUS_WAITING_FOR_INPUT
+            else None
+        ),
+        "last_error": str(getattr(run, "last_error", "") or "").strip() or None,
+    }
+
+
+def _finish_workflow_step_for_run(
+    *,
+    lifecycle: WorkflowExecutionProjection,
+    step,
+    run: Run,
+) -> None:  # noqa: ANN001
+    result_status = str(run.status or "").strip().lower()
+    summary = f"Run attempt {run.run_id} finished with status {result_status}"
+    if result_status in ACTIVE_RUN_STATUSES:
+        retry_workflow_step_attempt(
+            lifecycle=lifecycle,
+            step=step,
+            category=f"run_attempt_{result_status}",
+            message=summary,
+        )
+        return
+    if result_status == RUN_STATUS_SUCCEEDED:
+        complete_workflow_step_attempt(lifecycle=lifecycle, step=step, summary=summary)
+        return
+    if result_status == RUN_STATUS_WAITING_FOR_INPUT:
+        wait_workflow_step_attempt(lifecycle=lifecycle, step=step, summary=summary)
+        return
+    if result_status in {RUN_STATUS_BLOCKED, RUN_STATUS_FAILED, RUN_STATUS_CANCELLED}:
+        fail_workflow_step_attempt(
+            lifecycle=lifecycle,
+            step=step,
+            category=f"run_attempt_{result_status}",
+            message=run.last_error or summary,
+        )
+        return
+    complete_workflow_step_attempt(lifecycle=lifecycle, step=step, summary=summary)
+
+
+def _process_claimed_run_impl_with_temporal_projection(
+    *,
+    session: Session,
+    runner: WorkflowRunner,
+    settings: Settings,
+    workflow: WorkflowExecution,
+    claimed_run: Run,
+    tenant: Tenant,
+    expected_owner: str,
+    expected_claim_id: str,
+    send_discord_message_fn: TransportActionSender,
+) -> Run:
+    workflow_type = get_workflow_type(session, workflow_type_key=workflow.workflow_type_key)
+    lifecycle = WorkflowExecutionProjection(session=session, workflow=workflow, workflow_type=workflow_type)
+    step = start_workflow_step_attempt(
+        lifecycle=lifecycle,
+        run_id=claimed_run.run_id,
+        operation_type=ISSUE_EXECUTION_STEP_RUN_ATTEMPT_EXECUTION,
+        idempotency_key=f"run-attempt:{claimed_run.run_id}",
+        target_system="execution_worker",
+        target_ref=claimed_run.run_id,
+        summary=f"Execute run attempt {claimed_run.attempt_number}",
+    )
+
+    policy_context = resolve_run_execution_policy_context(
+        session,
+        tenant=tenant,
+        run=claimed_run,
+    )
+
+    def _execute(_context) -> dict[str, object]:  # noqa: ANN001
+        processed = _process_claimed_run_impl(
+            session=session,
+            runner=runner,
+            settings=settings,
+            selection=SimpleNamespace(
+                claimed_run=ClaimedRun(
+                    run=claimed_run,
+                    tenant=tenant,
+                    project=policy_context.project,
+                    effective_policy=policy_context.effective_policy,
+                    run_id=claimed_run.run_id,
+                    claim_id=expected_claim_id,
+                    worker_service_instance_id=expected_owner,
+                    status=RUN_STATUS_DISPATCHING,
+                ),
+                run=claimed_run,
+                terminal_run=None,
+            ),
+            **build_run_process_kwargs(
+                session=session,
+                settings=settings,
+                worker_service_instance_id=expected_owner,
+                send_discord_message_fn=send_discord_message_fn,
+            ),
+        )
+        if processed is None:
+            raise RuntimeError(f"Execution worker returned no run for workflow_id={workflow.workflow_id}")
+        return _run_result_payload(
+            session=session,
+            workflow=workflow,
+            run=processed,
+            claim_id=expected_claim_id,
+        )
+
+    try:
+        result_payload = run_work_unit(
+            session,
+            operation=step.operation,
+            operation_attempt=step.attempt,
+            unit_key="run_attempt_execution.runtime_invocation",
+            idempotency_key=f"run:{claimed_run.run_id}:runtime_invocation:{step.attempt.attempt_id}",
+            input_payload={
+                "workflow_id": workflow.workflow_id,
+                "run_id": claimed_run.run_id,
+                "attempt_number": claimed_run.attempt_number,
+                "operation_attempt_id": step.attempt.attempt_id,
+                "issue_key": claimed_run.issue_key,
+                "worker_service_instance_id": expected_owner,
+            },
+            execute=_execute,
+            serialize=lambda payload: dict(payload),
+            deserialize=lambda payload: dict(payload),
+        )
+        processed_run = session.get(Run, str(result_payload["run_id"]))
+        if processed_run is None:
+            raise RuntimeError(f"Execution worker result referenced missing run {result_payload['run_id']}")
+        from orchestrator.temporal.workflow_engine import notify_temporal_run_result
+
+        notify_temporal_run_result(
+            session=session,
+            settings=settings,
+            workflow=workflow,
+            run=processed_run,
+        )
+        _finish_workflow_step_for_run(lifecycle=lifecycle, step=step, run=processed_run)
+        return processed_run
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("execution_worker_temporal_run_failed workflow_id=%s run_id=%s", workflow.workflow_id, claimed_run.run_id)
+        fail_workflow_step_attempt(
+            lifecycle=lifecycle,
+            step=step,
+            category="run_execution_failed",
+            message=str(exc),
+        )
+        raise
 
 
 def process_claimed_run_with_dependencies(
@@ -166,6 +381,11 @@ def process_claimed_run_with_dependencies(
             send_discord_message_fn=send_discord_message_fn,
         ),
     )
+    policy_context = resolve_run_execution_policy_context(
+        session,
+        tenant=tenant,
+        run=claimed_run,
+    )
     if str(getattr(workflow, "orchestration_backend", "") or "").strip().lower() == "legacy":
         return _process_claimed_run_impl(
             session=session,
@@ -175,27 +395,39 @@ def process_claimed_run_with_dependencies(
                 claimed_run=ClaimedRun(
                     run=claimed_run,
                     tenant=tenant,
-                    project=None,
-                    effective_policy={},
+                    project=policy_context.project,
+                    effective_policy=policy_context.effective_policy,
                     run_id=claimed_run.run_id,
                     claim_id=expected_claim_id,
                     worker_service_instance_id=expected_owner,
                     status=RUN_STATUS_DISPATCHING,
                 ),
+                run=claimed_run,
                 terminal_run=None,
             ),
             **build_run_process_kwargs(
                 session=session,
                 settings=settings,
+                worker_service_instance_id=expected_owner,
                 send_discord_message_fn=send_discord_message_fn,
             ),
         )
-    result = runtime.start_execution(
+    runtime.start_execution(
         workflow=workflow,
         run=claimed_run,
         claim_id=expected_claim_id,
     )
-    return result
+    return _process_claimed_run_impl_with_temporal_projection(
+        session=session,
+        runner=runner,
+        settings=settings,
+        workflow=workflow,
+        claimed_run=claimed_run,
+        tenant=tenant,
+        expected_owner=expected_owner,
+        expected_claim_id=expected_claim_id,
+        send_discord_message_fn=send_discord_message_fn,
+    )
 
 
 def build_run_process_kwargs(
@@ -222,6 +454,31 @@ def build_run_process_kwargs(
             run_id=run_id,
             issue_key=issue_key,
             agent_id=agent_id,
+        )
+
+    def _check_run_snapshot_freshness_with_auth(**kwargs: object):
+        tenant_id = str(kwargs.get("tenant_id") or "").strip()
+        project = kwargs.get("project")
+        if not tenant_id:
+            raise ValueError("Snapshot freshness check requires tenant_id")
+        if not isinstance(project, Project):
+            raise ValueError("Snapshot freshness check requires project")
+        tenant = session.get(Tenant, tenant_id)
+        if tenant is None:
+            raise ValueError(f"Snapshot freshness check tenant not found: {tenant_id}")
+        token = _github_installation_token_for_project(
+            session=session,
+            settings=settings,
+            tenant=tenant,
+            project=project,
+        )
+        return check_run_snapshot_freshness(
+            base_dir=str(kwargs.get("base_dir") or ""),
+            tenant_id=tenant_id,
+            project=project,
+            start_point_ref=str(kwargs.get("start_point_ref") or ""),
+            start_point_sha=str(kwargs.get("start_point_sha") or ""),
+            github_installation_token=token,
         )
 
     return dict(
@@ -261,7 +518,7 @@ def build_run_process_kwargs(
         requeue_run_for_repo_setup_fn=requeue_run_for_repo_setup,
         requeue_workflow_result_for_capability_fn=requeue_workflow_result_for_capability,
         requeue_workflow_result_for_stale_snapshot_fn=requeue_workflow_result_for_stale_snapshot,
-        check_run_snapshot_freshness_fn=check_run_snapshot_freshness,
+        check_run_snapshot_freshness_fn=_check_run_snapshot_freshness_with_auth,
         transition_issue_status_fn=_transition_issue_status,
         emit_agent_event_fn=_emit_agent_event,
         resolve_agent_id_fn=lambda: settings.agent_id,

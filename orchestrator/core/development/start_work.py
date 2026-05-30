@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Protocol
 
 from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
 from orchestrator.core.decision.types import PrecheckOutcome
+from orchestrator.core.development.self_executable_contract import resolve_self_executable_planning_contract
 from orchestrator.core.runs.enqueue_types import EnqueueFailureReason
 from orchestrator.core.runs.service import EnqueueRunResult, enqueue_run
 from orchestrator.core.workflow.operation_service import (
@@ -22,6 +23,18 @@ from orchestrator.tools.atlassian_oauth import JiraIssueDetail
 DEVELOPMENT_START_OPERATION = "development_start"
 _ACTIONABLE_STATUSES = {"to do", "ready for agent"}
 _BLOCKING_LABELS = {"sync-blocked", "sync-stale"}
+_RUN_STATUSES_BLOCKING_START = {
+    "queued",
+    "dispatching",
+    "running",
+    "processing",
+    "retrying",
+    "review",
+    "in_review",
+    "waiting_for_input",
+    "blocked",
+    "succeeded",
+}
 
 
 class StartWorkIssueGateway(Protocol):
@@ -92,10 +105,12 @@ class StartWorkUseCase:
         session: Session,
         issue_gateway: StartWorkIssueGateway,
         enqueue_run_fn=enqueue_run,  # noqa: ANN001
+        self_executable_contract_resolver=resolve_self_executable_planning_contract,  # noqa: ANN001
     ) -> None:
         self._session = session
         self._issue_gateway = issue_gateway
         self._enqueue_run_fn = enqueue_run_fn
+        self._self_executable_contract_resolver = self_executable_contract_resolver
 
     def start(
         self,
@@ -131,7 +146,12 @@ class StartWorkUseCase:
             project_key=_project_key_for_issue(source_issue_key),
             parent_issue_key=source_issue_key,
         )
-        targets = self._execution_targets(source_issue=source_issue, child_issues=child_issues)
+        targets = self._execution_targets(
+            tenant=tenant,
+            source_workflow=source_workflow,
+            source_issue=source_issue,
+            child_issues=child_issues,
+        )
         if not targets:
             raise ValueError(f"No executable engineering work found for {source_issue_key}")
 
@@ -233,11 +253,31 @@ class StartWorkUseCase:
     def _execution_targets(
         self,
         *,
+        tenant: Tenant,
+        source_workflow: WorkflowExecution | None,
         source_issue: JiraIssueDetail,
         child_issues: list[JiraIssueDetail],
     ) -> tuple[JiraIssueDetail, ...]:
         if _is_pm_parent(source_issue):
-            return tuple(issue for issue in child_issues if _is_clean_engineering_issue(issue))
+            executable_children = tuple(issue for issue in child_issues if _is_clean_engineering_issue(issue))
+            if executable_children:
+                return executable_children
+            contract = self._self_executable_contract_resolver(
+                session=self._session,
+                tenant_id=tenant.tenant_id,
+                source_issue=source_issue,
+                source_workflow=source_workflow,
+            )
+            if contract is not None:
+                return (
+                    replace(
+                        source_issue,
+                        summary=contract.summary,
+                        description=contract.description,
+                        labels=list(contract.labels),
+                    ),
+                )
+            return ()
 
         executable_children = tuple(issue for issue in child_issues if _is_clean_engineering_issue(issue))
         if executable_children:
@@ -320,23 +360,15 @@ class StartWorkUseCase:
         )
 
     def _existing_run_for_issue(self, *, tenant: Tenant, issue: JiraIssueDetail) -> Run | None:
-        workflow = self._session.execute(
-            select(WorkflowExecution)
-            .where(
-                WorkflowExecution.tenant_id == tenant.tenant_id,
-                WorkflowExecution.source_system == "jira",
-                WorkflowExecution.source_ref == _normalized_key(issue.key),
-                WorkflowExecution.dedupe_scope == "issue_execution",
-            )
-            .order_by(desc(WorkflowExecution.created_at))
-            .limit(1)
-        ).scalar_one_or_none()
-        if workflow is None:
-            return None
         return self._session.execute(
             select(Run)
-            .where(Run.workflow_id == workflow.workflow_id)
-            .order_by(desc(Run.attempt_number))
+            .where(
+                Run.tenant_id == tenant.tenant_id,
+                Run.issue_key == _normalized_key(issue.key),
+                Run.dedupe_scope == "issue_execution",
+                Run.status.in_(_RUN_STATUSES_BLOCKING_START),
+            )
+            .order_by(desc(Run.created_at))
             .limit(1)
         ).scalar_one_or_none()
 

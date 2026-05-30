@@ -756,6 +756,7 @@ def _planner_question_set(planner_result: DecisionPlannerResult) -> list[dict[st
             continue
         seen.add(item.question_id)
         override = open_question_overrides.get(item.question_id)
+        status = str(item.status or "").strip().lower()
         question_set.append(
             {
                 "id": item.question_id,
@@ -763,6 +764,7 @@ def _planner_question_set(planner_result: DecisionPlannerResult) -> list[dict[st
                 "text": override.question if override is not None else item.question,
                 "status": item.status,
                 "detail": override.detail if override is not None else item.detail,
+                "unresolved": override is not None or status == "open",
             }
         )
     return question_set
