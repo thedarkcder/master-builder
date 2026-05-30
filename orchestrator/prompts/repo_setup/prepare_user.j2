@@ -43,9 +43,15 @@ Required process:
      "start_point_sha": "<commit sha at that ref>",
      "repo_kind": "run_worktree" | "repo_clone" | "existing_repo"
    }
-7. Before returning `ready`, ensure `git status --porcelain` is empty in the execution repo.
-8. If the repo can likely be made ready by another attempt, return `retryable_failure`.
-9. Return `terminal_failure` only when the repo cannot be prepared without operator intervention.
+7. Write metadata with a command that is safe to re-run. If you use a heredoc, the closing delimiter must be alone on its own line. Do not write `EOF; next command` on the delimiter line. Prefer a quoted delimiter such as `MB_METADATA`.
+8. Before returning `ready`, use `repo.read` or `repo.exec_bootstrap` to verify all of this evidence in one command:
+   - `.master-builder-execution-repo.json` exists at the exact execution repo path.
+   - The metadata file can be parsed as JSON.
+   - `git rev-parse --abbrev-ref HEAD` equals the execution branch.
+   - `git status --porcelain` is empty in the execution repo.
+9. Do not return `ready` from `git status --porcelain` alone. A clean status is not evidence that metadata exists, because ignored/untracked metadata can be invisible to status.
+10. If validation fails but the repo can likely be repaired by another tool call or another attempt, return `retryable_failure`.
+11. Return `terminal_failure` only when the repo cannot be prepared without operator intervention.
 
 Return JSON matching this domain model:
 {{ domain_model | tojson(indent=2) }}

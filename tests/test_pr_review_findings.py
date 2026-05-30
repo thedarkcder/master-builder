@@ -41,3 +41,30 @@ def test_evaluate_pr_review_findings_parses_payload() -> None:
     assert len(result.findings) == 1
     assert result.findings[0].path == "orchestrator/core/x.py"
     assert result.findings[0].line == 42
+
+
+def test_evaluate_pr_review_findings_treats_empty_findings_as_ready() -> None:
+    payload = {
+        "state": "blocked",
+        "summary": "No actionable findings identified in the provided patch set.",
+        "findings": [],
+    }
+    with (
+        patch("orchestrator.core.review.pr_review_findings.get_settings", return_value=object()),
+        patch("orchestrator.core.review.pr_review_findings.build_codex_runtime", return_value=object()),
+        patch("orchestrator.core.review.pr_review_findings.invoke_runtime_json", return_value=payload),
+        patch("orchestrator.core.review.pr_review_findings.render_prompt", return_value="prompt"),
+    ):
+        result = evaluate_pr_review_findings(
+            repo_full_name="org/repo",
+            pr_number=10,
+            pr_title="MAB-1",
+            pr_body="desc",
+            workflow_checks=[],
+            changed_files=[PullRequestFileChange(filename="orchestrator/core/x.py", patch="+ good()")],
+            tenant_id="t1",
+            project_id="p1",
+        )
+
+    assert result.state == "ready"
+    assert result.findings == ()

@@ -235,11 +235,12 @@ def _run_for_workflow(session: Session, workflow: WorkflowExecution) -> Run | No
     active_run_id = str(workflow.active_run_id or "").strip()
     if active_run_id:
         active_run = session.get(Run, active_run_id)
-        if active_run is not None:
+        if active_run is not None and active_run.status in ACTIVE_RUN_STATUSES:
             return active_run
     return session.execute(
         select(Run)
         .where(Run.workflow_id == workflow.workflow_id)
+        .where(Run.status.in_(ACTIVE_RUN_STATUSES))
         .order_by(Run.attempt_number.desc())
         .limit(1)
     ).scalars().first()
@@ -507,24 +508,25 @@ def enqueue_run(
         required_runtime_kinds_json=normalized_required_runtime_kinds,
         created_at=now,
     )
-    session.add(workflow)
-    session.add(run)
-    if delivery_id:
-        session.add(
-            WebhookDelivery(
-                tenant_id=tenant_id,
-                delivery_id=delivery_id,
-                run_id=run_id,
-                created_at=now,
-            )
-        )
-    notify_run_enqueued(
-        session,
-        tenant_id=tenant_id,
-        project_id=project_id,
-        run_id=run_id,
-    )
     try:
+        session.add(workflow)
+        session.flush()
+        session.add(run)
+        if delivery_id:
+            session.add(
+                WebhookDelivery(
+                    tenant_id=tenant_id,
+                    delivery_id=delivery_id,
+                    run_id=run_id,
+                    created_at=now,
+                )
+            )
+        notify_run_enqueued(
+            session,
+            tenant_id=tenant_id,
+            project_id=project_id,
+            run_id=run_id,
+        )
         session.commit()
     except IntegrityError:
         session.rollback()
@@ -617,13 +619,16 @@ def _enqueue_attempt_for_workflow(
         raise RunStateTransitionError(f"Workflow not found: {workflow_id}")
     if workflow.status in {RUN_STATUS_QUEUED, RUN_STATUS_RUNNING}:
         active_run = _run_for_workflow(session, workflow)
-        if active_run is None:
+        if active_run is None and str(bootstrap.entry_mode or "").strip().lower() == "resume":
+            workflow.active_run_id = None
+        elif active_run is None:
             raise RunStateTransitionError(f"Workflow {workflow_id} is active but has no attempt rows")
-        return EnqueueRunResult(
-            enqueued=False,
-            reason=EnqueueFailureReason.RUN_ALREADY_ACTIVE,
-            run=active_run,
-        )
+        else:
+            return EnqueueRunResult(
+                enqueued=False,
+                reason=EnqueueFailureReason.RUN_ALREADY_ACTIVE,
+                run=active_run,
+            )
     if is_workflow_terminal(workflow.status) and str(bootstrap.entry_mode or "").strip().lower() != "resume":
         raise RunStateTransitionError(
             f"Workflow {workflow_id} is terminal; create a new workflow execution instead of reusing it"

@@ -725,7 +725,7 @@ class PMInterviewServiceTests(unittest.TestCase):
         self.assertNotIn("web.search", captured["allowed_tools"])
         self.assertIn("tool_name", str(captured["governed_tools_json"]))
         self.assertIn("knowledge.read", str(captured["governed_tools_json"]))
-        self.assertIn("web.search", str(captured["native_tools_json"]))
+        self.assertNotIn("web.search", str(captured["native_tools_json"]))
 
     def test_plan_pm_interview_with_runtime_uses_current_question_examples_and_json_contract(self) -> None:
         captured: dict[str, object] = {}

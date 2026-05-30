@@ -1,5 +1,6 @@
 import json
 import logging
+from pathlib import Path
 import unittest
 
 from orchestrator.core.observability.otel import (
@@ -14,6 +15,15 @@ from orchestrator.core.observability.otel import (
 
 
 class ObservabilityContractTests(unittest.TestCase):
+    def test_otel_collector_accepts_configured_log_exporter_signal(self) -> None:
+        config = (
+            Path(__file__).resolve().parents[1] / "ops" / "observability" / "otel-collector-config.yaml"
+        ).read_text(encoding="utf-8")
+
+        self.assertIn("logs:", config)
+        self.assertIn("receivers: [otlp]", config)
+        self.assertIn("exporters: [debug]", config)
+
     def test_formatter_emits_required_contract_fields(self) -> None:
         formatter = ObservabilityJsonFormatter(environment="test", platform_version="v-test")
         record = logging.LogRecord(

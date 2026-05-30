@@ -123,6 +123,30 @@ class _CapabilityMismatchRunner:
         )
 
 
+class _GenericRequeueRunner:
+    def run(self, request, *, test_feedback_hook=None, stage_checkpoint_hook=None):  # noqa: ANN001,ARG002
+        _ = stage_checkpoint_hook
+        return WorkflowResult(
+            outcome="requeue",
+            plan=PmPlan(
+                plan_steps=["Plan implementation"],
+                acceptance_criteria=["Feature implemented"],
+                risks=[],
+            ),
+            pr_url=None,
+            summary=[],
+            test_guidance=[],
+            attempts=1,
+            requeue_reason="Remote branch moved; retry from a fresh queue claim.",
+            diagnostics=WorkflowDiagnostics(
+                stage="dev",
+                message="Remote branch moved; retry from a fresh queue claim.",
+                attempts=1,
+                history=[],
+            ),
+        )
+
+
 class WorkerWorkflowTests(SqliteTemplateDbTestCase):
     @classmethod
     def bootstrap_template_database(cls) -> None:
@@ -207,9 +231,15 @@ class WorkerWorkflowTests(SqliteTemplateDbTestCase):
             return_value=SimpleNamespace(stale=False, message=None),
         )
         self.freshness_patcher.start()
+        self.github_token_patcher = patch(
+            "orchestrator.core.worker.execution_service._github_installation_token_for_project",
+            return_value="github-app-token",
+        )
+        self.github_token_patcher.start()
         self._seed_checked_out_repo()
 
     def tearDown(self) -> None:
+        self.github_token_patcher.stop()
         self.repo_setup_patcher.stop()
         self.freshness_patcher.stop()
         self.temp_dir.cleanup()
@@ -460,6 +490,29 @@ class WorkerWorkflowTests(SqliteTemplateDbTestCase):
         event_types = [event.event_type for event in events]
         self.assertIn("TASK_STARTED", event_types)
         self.assertNotIn("TASK_FAILED", event_types)
+
+    def test_process_next_queued_run_requeues_generic_requeue_without_terminal_failure(self) -> None:
+        run_id = self._queue_run("TP-3021")
+
+        with self.session_factory() as session:
+            processed = process_next_queued_run(session, _GenericRequeueRunner())
+            self.assertIsNotNone(processed)
+            assert processed is not None
+            self.assertEqual(processed.run_id, run_id)
+            self.assertEqual(processed.status, "queued")
+            self.assertIsNone(processed.last_error)
+            self.assertIsNone(processed.started_at)
+            self.assertIsNone(processed.finished_at)
+            self.assertIsInstance(processed.plan, dict)
+            self.assertEqual(processed.plan["workflow"]["outcome"], "requeue")
+            self.assertIsNone(processed.plan["workflow"]["requeue_target"])
+            self.assertIn("Remote branch moved", processed.plan["workflow"]["requeue_reason"])
+            self.assertNotIn("stale_branch_snapshot", processed.plan["context"]["execution_context"])
+            workflow = session.get(WorkflowExecution, processed.workflow_id)
+            self.assertIsNotNone(workflow)
+            assert workflow is not None
+            self.assertEqual(workflow.status, "queued")
+            self.assertEqual(workflow.active_run_id, run_id)
 
     def test_process_next_queued_run_missing_project_mapping_releases_run_lock(self) -> None:
         with self.session_factory() as session:

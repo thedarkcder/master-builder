@@ -216,7 +216,7 @@ class RunsServiceTests(unittest.TestCase):
         )
 
         self.assertEqual(payload, {"run_id": "r1", "issue_url": "https://jira.example/browse/R1"})
-        to_schema.assert_called_once_with(run)
+        to_schema.assert_called_once_with(run, workflow_execution_id=None)
 
 
 class ProjectRoutingTests(unittest.TestCase):

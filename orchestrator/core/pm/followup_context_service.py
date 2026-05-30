@@ -263,6 +263,7 @@ def resolve_discord_interaction_subject_scope(
     session: Session,
     payload: dict,
     find_tenant_for_discord_channel,
+    resolve_project_for_discord_channel=None,
 ) -> tuple[str | None, str | None, str]:  # noqa: ANN001
     channel_id = str(payload.get("channel_id") or "").strip()
     user_id = str(((payload.get("member") or {}).get("user") or {}).get("id") or "").strip()
@@ -275,6 +276,14 @@ def resolve_discord_interaction_subject_scope(
         tenant = find_tenant_for_discord_channel(session=session, channel_id=channel_id)
         if tenant is not None:
             tenant_id = str(getattr(tenant, "tenant_id", "") or "").strip() or None
+    if tenant_id and channel_id and resolve_project_for_discord_channel is not None:
+        project = resolve_project_for_discord_channel(
+            session=session,
+            tenant_id=tenant_id,
+            channel_id=channel_id,
+        )
+        if project is not None:
+            project_id = str(getattr(project, "project_id", "") or "").strip() or None
 
     root_message_id = None
     data = payload.get("data")
@@ -286,7 +295,7 @@ def resolve_discord_interaction_subject_scope(
             root_message_id = str(message.get("id") or "").strip() or None
 
     interaction_type = payload.get("type")
-    if interaction_type in {3, 5} and tenant_id and channel_id:
+    if interaction_type in {2, 3, 5} and tenant_id and channel_id:
         resolution = resolve_followup_context_match(
             session=session,
             tenant_id=tenant_id,

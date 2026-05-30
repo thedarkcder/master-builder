@@ -88,6 +88,19 @@ def process_handler_workflow_advance_activity(
                 str(exc),
                 type="retryable_invalid_model_output",
             ) from exc
+        except WorkflowOperationAttemptAlreadyRunningError:
+            session.rollback()
+            workflow = session.get(WorkflowExecution, workflow_id)
+            if workflow is None:
+                raise RuntimeError(f"Workflow advance lost workflow execution {workflow_id}")
+            status_payload = _workflow_status_payload(workflow=workflow)
+            return HandlerWorkflowAdvanceResult(
+                handled=True,
+                reason="workflow_operation_already_active",
+                status=status_payload["status"] or "running",
+                active_run_id=status_payload["active_run_id"],
+                last_error=status_payload["last_error"],
+            )
         except Exception as exc:
             raise ApplicationError(
                 str(exc),

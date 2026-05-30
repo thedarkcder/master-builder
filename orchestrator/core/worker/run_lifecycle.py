@@ -17,6 +17,10 @@ from orchestrator.core.workflow.checkpoints import (
     checkpoint_kind_for_stage,
     upsert_workflow_checkpoint,
 )
+from orchestrator.core.workflow.execution_artifacts import (
+    latest_pushed_execution_artifact_for_run,
+    snapshot_requires_durable_execution_artifact,
+)
 from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 from orchestrator.core.workflow.execution_snapshot import SnapshotWorkflow
 from orchestrator.core.worker.stage_events import WorkerStageUpdate
@@ -420,6 +424,7 @@ def requeue_workflow_result_for_stale_snapshot(
     execution_context: dict[str, str] | None = None,
     expected_worker_service_instance_id: str | None = None,
     expected_claim_id: str | None = None,
+    mark_stale_snapshot: bool = True,
 ) -> Run:
     ownership = RunOwnership.from_expected(
         expected_worker_service_instance_id=expected_worker_service_instance_id,
@@ -438,7 +443,10 @@ def requeue_workflow_result_for_stale_snapshot(
         workflow_result=workflow_result,
         stage_updates=stage_updates,
     )
-    snapshot.context.execution_context["stale_branch_snapshot"] = True
+    if mark_stale_snapshot:
+        snapshot.context.execution_context["stale_branch_snapshot"] = True
+    else:
+        snapshot.context.execution_context.pop("stale_branch_snapshot", None)
     snapshot.workflow.outcome = "requeue"
     snapshot.workflow.requeue_target = None
     snapshot.workflow.requeue_reason = error
@@ -512,13 +520,30 @@ def persist_stage_checkpoint(
     snapshot = _load_or_init_snapshot(run.plan)
     snapshot.apply_stage_checkpoint(checkpoint)
     snapshot.apply_execution_context(execution_context)
+    requires_durable_artifact = snapshot_requires_durable_execution_artifact(snapshot.dump())
+    missing_durable_artifact = (
+        requires_durable_artifact
+        and latest_pushed_execution_artifact_for_run(
+            session=session,
+            run_id=run.run_id,
+        )
+        is None
+    )
+    if missing_durable_artifact:
+        snapshot.context.execution_context["execution_checkpoint_reusable"] = False
+        snapshot.context.execution_context["execution_checkpoint_reusable_reason"] = (
+            f"{checkpoint.stage.upper()} checkpoint is not reusable until the execution branch is pushed."
+        )
+    elif requires_durable_artifact:
+        snapshot.context.execution_context["execution_checkpoint_reusable"] = True
+        snapshot.context.execution_context.pop("execution_checkpoint_reusable_reason", None)
     run.plan = snapshot.dump()
     if checkpoint.stage == "dev" and checkpoint.dev_result is not None:
         run.pr_url = checkpoint.dev_result.pr_url
     elif checkpoint.stage == "review" and checkpoint.review_result is not None:
         run.pr_url = checkpoint.review_result.pr_url or run.pr_url
     checkpoint_kind = checkpoint_kind_for_stage(checkpoint.stage)
-    if checkpoint_kind is not None:
+    if checkpoint_kind is not None and not missing_durable_artifact:
         upsert_workflow_checkpoint(
             session,
             workflow_id=run.workflow_id,

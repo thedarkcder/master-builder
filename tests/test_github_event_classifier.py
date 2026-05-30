@@ -16,6 +16,16 @@ class GitHubEventClassifierTests(unittest.TestCase):
         self.assertTrue(state.full_review_trigger)
         self.assertFalse(state.remediation_trigger)
 
+    def test_pull_request_closed_does_not_trigger_full_review(self) -> None:
+        state = classify_github_trigger_state(
+            github_event="pull_request",
+            normalized_action="closed",
+            payload={},
+        )
+
+        self.assertFalse(state.full_review_trigger)
+        self.assertFalse(state.remediation_trigger)
+
     def test_check_run_event_triggers_remediation_but_not_full_review(self) -> None:
         state = classify_github_trigger_state(
             github_event="check_run",

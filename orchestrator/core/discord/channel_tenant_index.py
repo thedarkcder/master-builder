@@ -4,16 +4,19 @@ from dataclasses import dataclass
 from datetime import datetime
 from threading import Lock
 
-from sqlalchemy import func, select
+from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session
 
 from orchestrator.core.discord.policy import channel_ids_from_discord_config
-from orchestrator.storage.models import Project, Tenant
+from orchestrator.core.pm.followup_context_service import ACTIVE_FOLLOWUP_CONTEXT_STATUS
+from orchestrator.storage.models import FollowupContext, Project, Tenant
+
+_Revision = tuple[str, datetime | None, int, datetime | None, int, datetime | None, int]
 
 
 @dataclass(frozen=True)
 class _DiscordChannelTenantIndex:
-    revision: tuple[str, datetime | None, int, datetime | None, int]
+    revision: _Revision
     channel_to_tenant_ids: dict[str, set[str]]
 
 
@@ -61,7 +64,7 @@ def _get_or_refresh_index(*, session: Session, force_refresh: bool) -> _DiscordC
         return _INDEX_CACHE
 
 
-def _current_revision(*, session: Session) -> tuple[str, datetime | None, int, datetime | None, int]:
+def _current_revision(*, session: Session) -> _Revision:
     bind_identity = str(session.bind.url) if session.bind is not None else "unknown"
     project_max_updated_at, project_count = session.execute(
         select(func.max(Project.updated_at), func.count(Project.project_id)).where(Project.is_archived.is_(False))
@@ -69,13 +72,30 @@ def _current_revision(*, session: Session) -> tuple[str, datetime | None, int, d
     tenant_max_updated_at, tenant_count = session.execute(
         select(func.max(Tenant.updated_at), func.count(Tenant.tenant_id)).where(Tenant.is_enabled.is_(True))
     ).one()
-    return (bind_identity, project_max_updated_at, int(project_count), tenant_max_updated_at, int(tenant_count))
+    followup_max_updated_at, followup_count = session.execute(
+        select(func.max(FollowupContext.updated_at), func.count(FollowupContext.context_id)).where(
+            FollowupContext.status == ACTIVE_FOLLOWUP_CONTEXT_STATUS,
+            or_(
+                FollowupContext.thread_channel_id.is_not(None),
+                FollowupContext.channel_id.is_not(None),
+            ),
+        )
+    ).one()
+    return (
+        bind_identity,
+        project_max_updated_at,
+        int(project_count),
+        tenant_max_updated_at,
+        int(tenant_count),
+        followup_max_updated_at,
+        int(followup_count),
+    )
 
 
 def _build_index(
     *,
     session: Session,
-    revision: tuple[str, datetime | None, int, datetime | None, int],
+    revision: _Revision,
 ) -> _DiscordChannelTenantIndex:
     channel_to_tenant_ids: dict[str, set[str]] = {}
     projects = session.execute(
@@ -92,6 +112,20 @@ def _build_index(
         channel = str((discord_config or {}).get("channel_id") or "").strip()
         if channel:
             channel_to_tenant_ids.setdefault(channel, set()).add(str(tenant_id))
+
+    followup_contexts = session.execute(
+        select(FollowupContext.tenant_id, FollowupContext.channel_id, FollowupContext.thread_channel_id).where(
+            FollowupContext.status == ACTIVE_FOLLOWUP_CONTEXT_STATUS,
+            or_(
+                FollowupContext.thread_channel_id.is_not(None),
+                FollowupContext.channel_id.is_not(None),
+            ),
+        )
+    ).all()
+    for tenant_id, channel_id, thread_channel_id in followup_contexts:
+        for channel in {str(channel_id or "").strip(), str(thread_channel_id or "").strip()}:
+            if channel:
+                channel_to_tenant_ids.setdefault(channel, set()).add(str(tenant_id))
 
     return _DiscordChannelTenantIndex(
         revision=revision,
@@ -113,4 +147,16 @@ def _tenant_allows_channel(*, session: Session, tenant_id: str, channel_id: str)
     if tenant is None:
         return False
     tenant_channel = str((tenant.discord_config or {}).get("channel_id") or "").strip()
-    return channel_id == tenant_channel
+    if channel_id == tenant_channel:
+        return True
+    active_followup_context = session.execute(
+        select(FollowupContext.context_id).where(
+            FollowupContext.tenant_id == tenant_id,
+            FollowupContext.status == ACTIVE_FOLLOWUP_CONTEXT_STATUS,
+            or_(
+                FollowupContext.thread_channel_id == channel_id,
+                FollowupContext.channel_id == channel_id,
+            ),
+        )
+    ).first()
+    return active_followup_context is not None

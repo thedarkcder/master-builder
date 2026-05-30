@@ -56,6 +56,7 @@ def handle_atlassian_connect_callback(
     session: Session,
     settings,
     atlassian_oauth_client_fn,
+    provision_jira_webhook_fn,
 ) -> str:  # noqa: ANN001
     try:
         state = parse_atlassian_oauth_state_token(
@@ -111,6 +112,25 @@ def handle_atlassian_connect_callback(
         jira_config["connection_id"] = connection.connection_id
         tenant.jira_config = jira_config
         tenant.updated_at = now
+        session.flush()
+        try:
+            webhook_result = provision_jira_webhook_fn(
+                session=session,
+                tenant=tenant,
+                settings=settings,
+                replace_existing=True,
+            )
+        except Exception as exc:
+            session.rollback()
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Failed to reset Jira webhook after Atlassian reauthorization.",
+            ) from exc
+        if not webhook_result.ok:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail=f"Failed to reset Jira webhook after Atlassian reauthorization: {webhook_result.details}",
+            )
 
     session.commit()
 
@@ -118,6 +138,7 @@ def handle_atlassian_connect_callback(
         return (
             f"{settings.admin_ui_base_url.rstrip('/')}/{quote(state.tenant_id, safe='')}/settings/atlassian"
             f"?atlassian_oauth=success&atlassian_connection_id={quote(connection.connection_id, safe='')}"
+            "&jira_webhook=reset"
         )
     return (
         f"{settings.admin_ui_base_url.rstrip('/')}/tenants/new"

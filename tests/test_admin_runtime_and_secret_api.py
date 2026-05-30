@@ -178,6 +178,7 @@ class AdminRuntimeAndSecretApiTests(AdminApiTestHarness):
         self.assertIn("dev", repo_read["stages"])
         self.assertIn("pm", repo_read["stages"])
         self.assertTrue(repo_read["description"])
+        self.assertEqual(repo_read["args_schema"]["required"], ["command"])
 
     def test_agent_runtime_profiles_crud_and_reset(self) -> None:
         create_response = self.client.post(

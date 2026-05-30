@@ -13,10 +13,11 @@ RUN if [ -f package-lock.json ]; then \
     fi
 
 ENV NEXT_TELEMETRY_DISABLED=1
-ENV NEXT_PUBLIC_API_BASE_URL=http://localhost:4000
+ENV NEXT_PUBLIC_API_BASE_URL=http://localhost:60001
+ENV ADMIN_UI_PORT=4100
 
 RUN npm run build
 
 EXPOSE 4100
 
-CMD ["npm", "run", "start", "--", "-H", "0.0.0.0", "-p", "4100"]
+CMD ["npm", "run", "start", "--", "-H", "0.0.0.0"]

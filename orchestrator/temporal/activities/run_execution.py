@@ -1,32 +1,31 @@
 from __future__ import annotations
 
 import logging
-from types import SimpleNamespace
-from uuid import uuid4
+import threading
 
 from sqlalchemy import select
 from temporalio import activity
 
 from orchestrator.core.config import get_settings
 from orchestrator.core.runs.human_input_service import resume_run_from_human_input_answer
+from orchestrator.core.workflow.operation_service import (
+    ACTIVE_OPERATION_ATTEMPT_STATUSES,
+    touch_workflow_operation_attempt_heartbeat,
+)
 from orchestrator.core.workflow.execution_projection import WorkflowExecutionProjection
 from orchestrator.core.workflow.step_runner import (
     complete_workflow_step_attempt,
     fail_workflow_step_attempt,
     start_workflow_step_attempt,
+    wait_workflow_step_attempt,
 )
 from orchestrator.core.workflow.work_units import run_work_unit
 from orchestrator.core.workflow.type_catalog import (
     ISSUE_EXECUTION_STEP_HUMAN_INPUT_RESUME,
-    ISSUE_EXECUTION_STEP_RUN_ATTEMPT_EXECUTION,
     get_workflow_type,
 )
-from orchestrator.core.worker.execution_service import build_run_process_kwargs
-from orchestrator.core.worker.run_lifecycle import claim_run_for_dispatch
-from orchestrator.core.worker.runtime_factory import build_workflow_runner_for_session
-from orchestrator.core.worker.process_service import process_claimed_run
 from orchestrator.storage.db import create_session_factory
-from orchestrator.storage.models import Run, RunHumanInputRequest, Tenant, WorkflowExecution
+from orchestrator.storage.models import Run, RunHumanInputRequest, WorkflowExecution, WorkflowOperationAttempt
 from orchestrator.temporal.payloads import (
     DevelopmentTeamRunActivityResult,
     DevelopmentTeamRunWorkflowInput,
@@ -34,6 +33,82 @@ from orchestrator.temporal.payloads import (
 )
 
 logger = logging.getLogger(__name__)
+_CLAIMABLE_OR_EXECUTABLE_RUN_STATUSES = {"queued", "dispatching", "running"}
+_SUCCESS_RUN_STATUSES = {"succeeded"}
+_FAILED_RUN_STATUSES = {"blocked", "failed", "cancelled"}
+
+
+class _CompositeHeartbeatController:
+    def __init__(self, *controllers) -> None:  # noqa: ANN001
+        self._controllers = controllers
+
+    def start(self) -> None:
+        for controller in self._controllers:
+            controller.start()
+
+    def stop(self) -> None:
+        for controller in reversed(self._controllers):
+            controller.stop()
+
+
+class _WorkflowOperationAttemptHeartbeatController:
+    def __init__(
+        self,
+        *,
+        database_url: str,
+        attempt_id: str,
+        lease_owner: str,
+        heartbeat_interval_seconds: int,
+    ) -> None:
+        self._session_factory = create_session_factory(database_url)
+        self._attempt_id = attempt_id
+        self._lease_owner = lease_owner
+        self._heartbeat_interval_seconds = heartbeat_interval_seconds
+        self._stop_event = threading.Event()
+        self._thread: threading.Thread | None = None
+
+    def start(self) -> None:
+        if self._thread is not None and self._thread.is_alive():
+            return
+        self._stop_event.clear()
+        self._thread = threading.Thread(
+            target=self._run,
+            name=f"workflow-operation-heartbeat-{self._attempt_id}",
+            daemon=True,
+        )
+        self._thread.start()
+
+    def stop(self) -> None:
+        self._stop_event.set()
+        if self._thread is not None and self._thread.is_alive():
+            self._thread.join(timeout=max(1.0, float(self._heartbeat_interval_seconds)))
+
+    def _run(self) -> None:
+        interval_seconds = max(5, int(self._heartbeat_interval_seconds))
+        while not self._stop_event.wait(interval_seconds):
+            if not self._run_once():
+                return
+
+    def _run_once(self) -> bool:
+        try:
+            with self._session_factory() as session:
+                attempt = session.get(WorkflowOperationAttempt, self._attempt_id)
+                if attempt is None or str(attempt.status or "").strip().lower() not in ACTIVE_OPERATION_ATTEMPT_STATUSES:
+                    return False
+                touch_workflow_operation_attempt_heartbeat(
+                    session,
+                    attempt=attempt,
+                    lease_owner=self._lease_owner,
+                )
+                session.commit()
+                return True
+        except Exception as exc:  # noqa: BLE001
+            logger.exception(
+                "workflow_operation_attempt_heartbeat_failed attempt_id=%s error=%s",
+                self._attempt_id,
+                exc,
+            )
+            return True
 
 
 def _pending_request_id(*, session, workflow_id: str) -> str | None:
@@ -89,84 +164,46 @@ def _run_result_to_payload(result: DevelopmentTeamRunActivityResult) -> dict[str
     }
 
 
+def _finish_workflow_step_for_run_result(
+    *,
+    lifecycle: WorkflowExecutionProjection,
+    step,
+    result: DevelopmentTeamRunActivityResult,
+    action_label: str,
+) -> None:  # noqa: ANN001
+    result_status = str(result.status or "").strip().lower()
+    summary = f"{action_label} {result.run_id} finished with status {result_status}"
+    if result_status in _SUCCESS_RUN_STATUSES:
+        complete_workflow_step_attempt(lifecycle=lifecycle, step=step, summary=summary)
+        return
+    if result_status == "waiting_for_input":
+        wait_workflow_step_attempt(lifecycle=lifecycle, step=step, summary=summary)
+        return
+    if result_status in _FAILED_RUN_STATUSES:
+        fail_workflow_step_attempt(
+            lifecycle=lifecycle,
+            step=step,
+            category=f"{action_label.lower().replace(' ', '_')}_{result_status}",
+            message=result.last_error or summary,
+        )
+        return
+    complete_workflow_step_attempt(lifecycle=lifecycle, step=step, summary=summary)
+
+
 @activity.defn(name="execute_claimed_run_activity")
 def execute_claimed_run_activity(payload: DevelopmentTeamRunWorkflowInput) -> DevelopmentTeamRunActivityResult:
-    settings = get_settings()
     session_factory = create_session_factory()
     with session_factory() as session:
         workflow = session.get(WorkflowExecution, str(payload.workflow_id))
         run = session.get(Run, str(payload.run_id))
         if workflow is None or run is None:
             raise RuntimeError(f"Temporal run activity missing workflow/run for workflow_id={payload.workflow_id} run_id={payload.run_id}")
-        tenant = session.get(Tenant, run.tenant_id)
-        if tenant is None:
-            raise RuntimeError(f"Temporal run activity missing tenant {run.tenant_id}")
-
-        workflow_type = get_workflow_type(session, workflow_type_key=workflow.workflow_type_key)
-        lifecycle = WorkflowExecutionProjection(session=session, workflow=workflow, workflow_type=workflow_type)
-        step = start_workflow_step_attempt(
-            lifecycle=lifecycle,
-            run_id=run.run_id,
-            operation_type=ISSUE_EXECUTION_STEP_RUN_ATTEMPT_EXECUTION,
-            idempotency_key=f"run-attempt:{run.run_id}",
-            target_system="workflow_engine",
-            target_ref=run.run_id,
-            summary=f"Execute run attempt {run.attempt_number}",
+        return _result_for_run(
+            session=session,
+            workflow_id=workflow.workflow_id,
+            run=run,
+            claim_id=str(getattr(run, "claim_id", "") or "").strip() or None,
         )
-        session.commit()
-
-        try:
-            def _execute(_context) -> DevelopmentTeamRunActivityResult:  # noqa: ANN001
-                runner = build_workflow_runner_for_session(session=session)
-                processed = process_claimed_run(
-                    session=session,
-                    runner=runner,
-                    settings=settings,
-                    selection=SimpleNamespace(run=run, tenant=tenant, terminal_run=None),
-                    **build_run_process_kwargs(
-                        session=session,
-                        settings=settings,
-                        worker_service_instance_id=str(getattr(run, "worker_service_instance_id", "") or "").strip()
-                        or None,
-                    ),
-                )
-                if processed is None:
-                    raise RuntimeError(f"Temporal run activity returned no run for workflow_id={workflow.workflow_id}")
-                return _result_for_run(session=session, workflow_id=workflow.workflow_id, run=processed)
-
-            result = run_work_unit(
-                session,
-                operation=step.operation,
-                operation_attempt=step.attempt,
-                unit_key="run_attempt_execution.runtime_invocation",
-                idempotency_key=f"run:{run.run_id}:runtime_invocation",
-                input_payload={
-                    "workflow_id": workflow.workflow_id,
-                    "run_id": run.run_id,
-                    "attempt_number": run.attempt_number,
-                    "issue_key": run.issue_key,
-                },
-                execute=_execute,
-                serialize=_run_result_to_payload,
-                deserialize=_run_result_from_payload,
-            )
-            complete_workflow_step_attempt(
-                lifecycle=lifecycle,
-                step=step,
-                summary=f"Run attempt {result.run_id} finished with status {result.status}",
-            )
-            session.commit()
-            return result
-        except Exception as exc:  # noqa: BLE001
-            logger.exception("temporal_run_execute_failed workflow_id=%s run_id=%s", workflow.workflow_id, run.run_id)
-            fail_workflow_step_attempt(
-                lifecycle=lifecycle,
-                step=step,
-                category="run_execution_failed",
-                message=str(exc),
-            )
-            session.commit()
-            raise
 
 
 @activity.defn(name="resume_human_input_activity")
@@ -200,38 +237,13 @@ def resume_human_input_activity(payload: HumanInputResumeInput) -> DevelopmentTe
                     settings=settings,
                     request=request,
                 )
-                claimed = claim_run_for_dispatch(
-                    session,
-                    run=resumed_run,
-                    expected_status="queued",
-                    worker_service_instance_id=f"temporal:{workflow.workflow_id}",
-                    claim_id=uuid4().hex,
-                )
-                if claimed is None:
-                    raise RuntimeError(f"Unable to claim resumed run {resumed_run.run_id} for temporal execution")
-                tenant = session.get(Tenant, claimed.tenant_id)
-                if tenant is None:
-                    raise RuntimeError(f"Temporal resume activity missing tenant {claimed.tenant_id}")
-                runner = build_workflow_runner_for_session(session=session)
-                processed = process_claimed_run(
-                    session=session,
-                    runner=runner,
-                    settings=settings,
-                    selection=SimpleNamespace(run=claimed, tenant=tenant, terminal_run=None),
-                    **build_run_process_kwargs(
-                        session=session,
-                        settings=settings,
-                        worker_service_instance_id=str(getattr(claimed, "worker_service_instance_id", "") or "").strip()
-                        or None,
-                    ),
-                )
-                if processed is None:
-                    raise RuntimeError(f"Temporal resume activity returned no run for workflow_id={workflow.workflow_id}")
+                step.operation.run_id = resumed_run.run_id
+                session.flush()
                 return _result_for_run(
                     session=session,
                     workflow_id=workflow.workflow_id,
-                    run=processed,
-                    claim_id=str(getattr(claimed, "claim_id", "") or "").strip() or None,
+                    run=resumed_run,
+                    claim_id=str(getattr(resumed_run, "claim_id", "") or "").strip() or None,
                 )
 
             result = run_work_unit(
@@ -245,10 +257,11 @@ def resume_human_input_activity(payload: HumanInputResumeInput) -> DevelopmentTe
                 serialize=_run_result_to_payload,
                 deserialize=_run_result_from_payload,
             )
-            complete_workflow_step_attempt(
+            _finish_workflow_step_for_run_result(
                 lifecycle=lifecycle,
                 step=step,
-                summary=f"Resumed run {result.run_id} finished with status {result.status}",
+                result=result,
+                action_label="Resumed run",
             )
             session.commit()
             return result

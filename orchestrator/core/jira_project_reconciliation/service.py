@@ -9,6 +9,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from orchestrator.api.atlassian_oauth.connection_service import tenant_atlassian_oauth_context
+from orchestrator.core.development.executable_work_item_projection import sync_executable_work_items_for_project
 from orchestrator.core.jira_project_reconciliation.models import (
     ClassifiedJiraIssue,
     ENGINEERING_CHILD_LABEL,
@@ -54,11 +55,18 @@ from orchestrator.tools.atlassian_oauth_models import (
     AtlassianOAuthHttpError,
     JiraIssueDetail,
     JiraIssuePreview,
+    JiraIssueSearchPage,
 )
 
 
 class JiraProjectReconciliationGateway(Protocol):
-    def search_project_issues_page(self, *, project_key: str, start_at: int, max_results: int) -> list[JiraIssuePreview]:
+    def search_project_issues_page(
+        self,
+        *,
+        project_key: str,
+        next_page_token: str | None,
+        max_results: int,
+    ) -> JiraIssueSearchPage:
         ...
 
     def get_issue_detail(self, *, issue_key: str) -> JiraIssueDetail:
@@ -89,16 +97,22 @@ class _AtlassianJiraProjectReconciliationGateway:
     def _cloud_id(self) -> str:
         return str(self._oauth_context.connection.cloud_id or "").strip()
 
-    def search_project_issues_page(self, *, project_key: str, start_at: int, max_results: int) -> list[JiraIssuePreview]:
+    def search_project_issues_page(
+        self,
+        *,
+        project_key: str,
+        next_page_token: str | None,
+        max_results: int,
+    ) -> JiraIssueSearchPage:
         normalized_project_key = _normalized_key(project_key)
         if not normalized_project_key:
             raise ValueError("Jira project reconciliation requires a project key")
-        return self._client.search_issues_by_jql(
+        return self._client.search_issues_by_jql_page(
             access_token=self._access_token,
             cloud_id=self._cloud_id,
             jql=f"project = {normalized_project_key} ORDER BY created ASC",
             max_results=max_results,
-            start_at=start_at,
+            next_page_token=next_page_token,
         )
 
     def get_issue_detail(self, *, issue_key: str) -> JiraIssueDetail:
@@ -206,6 +220,15 @@ def _mb_work_state_for_jira_detail(detail: JiraIssueDetail) -> str:
     if status_name in {"backlog", "to do", "todo", "open"}:
         return MB_WORK_STATE_PLANNING_CANDIDATE
     return MB_WORK_STATE_NOT_PLANNING
+
+
+def _parent_workflow_status_for_issue(issue: JiraReconciliationIssue) -> str | None:
+    if issue.mb_work_state == MB_WORK_STATE_PLANNING_CANDIDATE:
+        return "queued"
+    status_name = _normalized(issue.status).casefold()
+    if status_name in {"done", "closed", "released", "ready to release", "release ready"}:
+        return None
+    return "running"
 
 
 def _desired_labels(issue: JiraReconciliationIssue, *, classification: str) -> tuple[str, ...]:
@@ -507,40 +530,69 @@ class JiraProjectReconciliationWorkflowService:
     def _run_scan_step(self, *, operation, attempt) -> str:  # noqa: ANN001
         loaded = 0
         page_size = min(50, self._max_items)
-        start_at = 0
+        next_page_token: str | None = None
+        seen_page_tokens: set[str] = set()
+        full_page_signatures: set[tuple[str, ...]] = set()
+        page_number = 0
         while loaded < self._max_items:
-            previews = run_work_unit(
+            page = run_work_unit(
                 self._session,
                 operation=operation,
                 operation_attempt=attempt,
                 unit_key=JIRA_PROJECT_RECONCILIATION_WU_PAGE_FETCH,
-                idempotency_key=f"{self._idempotency_scope}:page:{start_at}:{page_size}",
+                idempotency_key=f"{self._idempotency_scope}:cursor-page:{page_number}:{page_size}",
                 input_payload={
                     "request_id": self._request_id,
                     "project_id": self._project.project_id,
                     "project_key": self._project.jira_project_key,
-                    "start_at": start_at,
+                    "next_page_token": next_page_token,
                     "max_results": page_size,
                 },
-                execute=lambda _context: [
-                    {
-                        "key": preview.key,
-                        "summary": preview.summary,
-                        "status": preview.status,
-                    }
-                    for preview in self._gateway.search_project_issues_page(
+                execute=lambda _context: self._gateway.search_project_issues_page(
                         project_key=self._project.jira_project_key,
-                        start_at=start_at,
+                        next_page_token=next_page_token,
                         max_results=page_size,
-                    )
-                ],
-                serialize=lambda result: {"items": list(result)},
-                deserialize=lambda payload: list(payload.get("items") or []),
+                    ),
+                serialize=lambda result: {
+                    "items": [
+                        {
+                            "key": preview.key,
+                            "summary": preview.summary,
+                            "status": preview.status,
+                        }
+                        for preview in result.issues
+                    ],
+                    "next_page_token": result.next_page_token,
+                },
+                deserialize=lambda payload: JiraIssueSearchPage(
+                    issues=[
+                        JiraIssuePreview(
+                            key=str(item.get("key") or ""),
+                            summary=str(item.get("summary") or ""),
+                            status=str(item.get("status") or ""),
+                        )
+                        for item in list(payload.get("items") or [])
+                        if isinstance(item, dict)
+                    ],
+                    next_page_token=(
+                        str(payload.get("next_page_token") or "").strip()
+                        if payload.get("next_page_token") is not None
+                        else None
+                    ),
+                ),
             )
+            previews = page.issues
             if not previews:
                 break
+            page_issue_keys = tuple(_normalized_key(preview.key) for preview in previews)
+            if len(previews) == page_size:
+                if page_issue_keys in full_page_signatures:
+                    raise ValueError(
+                        "Jira search pagination repeated a full Jira issue page; refusing to report an incomplete scan"
+                    )
+                full_page_signatures.add(page_issue_keys)
             for preview in previews:
-                issue_key = _normalized_key(preview.get("key"))
+                issue_key = _normalized_key(preview.key)
                 if not issue_key:
                     raise ValueError("Jira preview payload is missing issue key")
                 issue = run_work_unit(
@@ -561,9 +613,15 @@ class JiraProjectReconciliationWorkflowService:
                 loaded += 1
                 if loaded >= self._max_items:
                     break
-            if len(previews) < page_size:
+            if loaded >= self._max_items:
                 break
-            start_at += len(previews)
+            next_page_token = page.next_page_token
+            if not next_page_token:
+                break
+            if next_page_token in seen_page_tokens:
+                raise ValueError("Jira search pagination repeated nextPageToken; refusing to continue scan")
+            seen_page_tokens.add(next_page_token)
+            page_number += 1
         return f"Scanned {loaded} Jira issues for project {self._project.jira_project_key}."
 
     def _run_classification_step(self, *, operation, attempt) -> str:  # noqa: ANN001
@@ -646,6 +704,13 @@ class JiraProjectReconciliationWorkflowService:
                 deactivated += 1
             else:
                 existing += 1
+        sync_executable_work_items_for_project(
+            session=self._session,
+            tenant=self._tenant,
+            project=self._project,
+            classified_issues=self._classified_issues(),
+            prune_stale=self._scan_is_complete(),
+        )
         return f"Queued {created} parent workflows, matched {existing}, and removed {deactivated} non-planning parents."
 
     def _run_summary_step(self, *, operation, attempt) -> str:  # noqa: ANN001
@@ -677,7 +742,7 @@ class JiraProjectReconciliationWorkflowService:
         classified_issue: ClassifiedJiraIssue,
     ) -> ParentWorkflowReconciliationResult:  # noqa: ANN001
         issue = classified_issue.issue
-        if issue.mb_work_state != MB_WORK_STATE_PLANNING_CANDIDATE:
+        if _parent_workflow_status_for_issue(issue) is None:
             return self._deactivate_parent_workflow_if_present(
                 workflow_type=workflow_type,
                 classified_issue=classified_issue,
@@ -691,6 +756,9 @@ class JiraProjectReconciliationWorkflowService:
         classified_issue: ClassifiedJiraIssue,
     ) -> ParentWorkflowReconciliationResult:  # noqa: ANN001
         issue = classified_issue.issue
+        workflow_status = _parent_workflow_status_for_issue(issue)
+        if workflow_status is None:
+            raise ValueError(f"Parent issue {issue.key} is not board-visible")
         workflow_id = f"{workflow_type.workflow_type_key}:{issue.key}"
         existed = _workflow_exists_by_key_or_external_id(
             session=self._session,
@@ -718,10 +786,13 @@ class JiraProjectReconciliationWorkflowService:
             display_name=issue.summary,
             description=issue.description,
         )
-        if not existed:
-            projection.workflow.status = "queued"
+        projection.workflow.status = workflow_status
+        if workflow_status == "queued":
             projection.workflow.started_at = None
-            projection.workflow.updated_at = _now()
+            projection.workflow.finished_at = None
+        elif projection.workflow.started_at is None:
+            projection.workflow.started_at = _now()
+        projection.workflow.updated_at = _now()
         return ParentWorkflowReconciliationResult(
             issue_key=issue.key,
             workflow_id=projection.workflow.workflow_id,
@@ -808,6 +879,22 @@ class JiraProjectReconciliationWorkflowService:
             if isinstance(item, dict)
         ]
         return sorted(items, key=lambda item: item.issue.key)
+
+    def _scan_is_complete(self) -> bool:
+        operation = _operation_by_type(
+            session=self._session,
+            workflow_id=self.workflow.workflow_id,
+            operation_type=JIRA_PROJECT_RECONCILIATION_STEP_SCAN,
+        )
+        page_outputs = _completed_unit_outputs(
+            session=self._session,
+            operation_id=operation.operation_id,
+            unit_key=JIRA_PROJECT_RECONCILIATION_WU_PAGE_FETCH,
+            idempotency_key_prefix=f"{self._idempotency_scope}:cursor-page:",
+        )
+        if not page_outputs:
+            return True
+        return page_outputs[-1].get("next_page_token") is None
 
     def _parent_reconciliation_results(self) -> list[ParentWorkflowReconciliationResult]:
         operation = _operation_by_type(

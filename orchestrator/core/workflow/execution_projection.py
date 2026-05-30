@@ -16,6 +16,8 @@ from orchestrator.core.workflow.execution_status import (
 from orchestrator.core.workflow.operation_service import (
     complete_workflow_operation,
     fail_workflow_operation,
+    OPERATION_STATUS_COMPLETED,
+    OPERATION_STATUS_WAITING_FOR_INPUT,
     mark_workflow_operation_waiting_for_input,
     OPERATION_STATUS_PENDING,
     OPERATION_STATUS_RUNNING,
@@ -260,6 +262,25 @@ class WorkflowExecutionProjection:
         mark_workflow_failed(workflow=self.workflow, message=message, now=_now())
         self.session.commit()
 
+    def retry_started_operation(
+        self,
+        *,
+        operation: WorkflowOperation,
+        attempt: WorkflowOperationAttempt,
+        category: str,
+        message: str,
+    ) -> None:
+        fail_workflow_operation(
+            self.session,
+            operation=operation,
+            attempt=attempt,
+            category=category,
+            message=message,
+            next_retry_at=_now(),
+        )
+        mark_workflow_running(workflow=self.workflow, now=_now())
+        self.session.commit()
+
     def wait_started_operation(
         self,
         *,
@@ -275,6 +296,75 @@ class WorkflowExecutionProjection:
         )
         mark_workflow_waiting_for_input(workflow=self.workflow, now=_now())
         self.session.commit()
+
+    def complete_waiting_operation_attempt(
+        self,
+        *,
+        operation_type: str,
+        summary: str,
+    ) -> tuple[WorkflowOperation, WorkflowOperationAttempt]:
+        self.workflow_type.step(operation_type)
+        operation = self.session.execute(
+            select(WorkflowOperation)
+            .where(
+                WorkflowOperation.workflow_id == self.workflow.workflow_id,
+                WorkflowOperation.operation_type == operation_type,
+                WorkflowOperation.status == OPERATION_STATUS_WAITING_FOR_INPUT,
+            )
+            .order_by(desc(WorkflowOperation.updated_at))
+            .limit(1)
+        ).scalar_one_or_none()
+        if operation is None:
+            completed_operation = self.session.execute(
+                select(WorkflowOperation)
+                .where(
+                    WorkflowOperation.workflow_id == self.workflow.workflow_id,
+                    WorkflowOperation.operation_type == operation_type,
+                    WorkflowOperation.status == OPERATION_STATUS_COMPLETED,
+                )
+                .order_by(desc(WorkflowOperation.updated_at))
+                .limit(1)
+            ).scalar_one_or_none()
+            if completed_operation is not None:
+                completed_attempt = self.session.execute(
+                    select(WorkflowOperationAttempt)
+                    .where(
+                        WorkflowOperationAttempt.operation_id == completed_operation.operation_id,
+                        WorkflowOperationAttempt.status == OPERATION_STATUS_COMPLETED,
+                    )
+                    .order_by(desc(WorkflowOperationAttempt.attempt_number))
+                    .limit(1)
+                ).scalar_one_or_none()
+                if completed_attempt is not None:
+                    return completed_operation, completed_attempt
+            raise RuntimeError(
+                "Cannot complete workflow operation "
+                f"{operation_type}; no waiting-for-input operation exists for workflow {self.workflow.workflow_id}."
+            )
+        attempt = self.session.execute(
+            select(WorkflowOperationAttempt)
+            .where(
+                WorkflowOperationAttempt.operation_id == operation.operation_id,
+                WorkflowOperationAttempt.status == OPERATION_STATUS_WAITING_FOR_INPUT,
+            )
+            .order_by(desc(WorkflowOperationAttempt.attempt_number))
+            .limit(1)
+        ).scalar_one_or_none()
+        if attempt is None:
+            raise RuntimeError(
+                "Cannot complete workflow operation "
+                f"{operation_type}; no waiting-for-input attempt exists for operation {operation.operation_id}."
+            )
+        self._invalidate_descendant_operations(operation_type=operation_type)
+        complete_workflow_operation(
+            self.session,
+            operation=operation,
+            attempt=attempt,
+            summary=summary,
+        )
+        self.mark_completed_if_ready()
+        self.session.commit()
+        return operation, attempt
 
     def mark_completed_if_ready(self) -> None:
         recompute_workflow_status(session=self.session, workflow=self.workflow, now=_now())
