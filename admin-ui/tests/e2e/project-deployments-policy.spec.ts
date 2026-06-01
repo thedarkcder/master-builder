@@ -220,10 +220,27 @@ test("configured deployment policy renders as settings instead of setup wizard",
   await page.goto("/bsktpay-2/projects/bsktpay-2-default/deployment");
 
   await expect(page.getByRole("heading", { name: "Deployment policy" })).toBeVisible();
+  await expect(page.getByTestId("deployment-policy-page")).not.toHaveClass(/max-w-5xl|mx-auto/);
   await expect(page.getByLabel("Deployment setup steps")).toHaveCount(0);
   await expect(page.getByLabel("Production branch")).toHaveValue("main");
   await expect(page.getByLabel("Generated URLs")).toHaveValue("production");
+  await expect(page.getByLabel("Environment branch scope")).toHaveValue("main");
   await expect(page.getByLabel("Environment variable APP_MODE value")).toHaveValue("production");
+  await page.getByLabel("Environment variable APP_MODE name").evaluate((element, text) => {
+    const clipboardData = new DataTransfer();
+    clipboardData.setData("text/plain", text);
+    element.dispatchEvent(new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData }));
+  }, "NODE_ENV=production;API_URL=https://api.example.test,FEATURE_FLAG=true|CACHE_TTL=60.VERSION=2");
+  await expect(page.getByLabel("Environment variable NODE_ENV value")).toHaveValue("production");
+  await expect(page.getByLabel("Environment variable API_URL value")).toHaveValue("https://api.example.test");
+  await expect(page.getByLabel("Environment variable FEATURE_FLAG value")).toHaveValue("true");
+  await expect(page.getByLabel("Environment variable CACHE_TTL value")).toHaveValue("60");
+  await expect(page.getByLabel("Environment variable VERSION value")).toHaveValue("2");
+  await page.getByLabel("Environment branch scope").selectOption("develop");
+  await expect(page.getByText("No environment variables configured.")).toBeVisible();
+  await page.getByRole("button", { name: "Add variable" }).click();
+  await page.getByLabel("Environment variable ENV_1 name").fill("DEVELOP_ONLY");
+  await page.getByLabel("Environment variable DEVELOP_ONLY value").fill("enabled");
   await page.getByRole("radio", { name: "Disabled" }).check();
   await page.getByRole("button", { name: "Save policy" }).click();
 
@@ -231,6 +248,22 @@ test("configured deployment policy renders as settings instead of setup wizard",
     enabled: false,
     production_branch: "main",
     generated_domain_policy: "production",
+    branch_settings: {
+      main: {
+        environment: {
+          API_URL: "https://api.example.test",
+          CACHE_TTL: "60",
+          FEATURE_FLAG: "true",
+          NODE_ENV: "production",
+          VERSION: "2",
+        },
+      },
+      develop: {
+        environment: {
+          DEVELOP_ONLY: "enabled",
+        },
+      },
+    },
   });
   await expect(page).toHaveURL(/\/bsktpay-2\/projects\/bsktpay-2-default\/deployment$/);
 });
@@ -292,7 +325,7 @@ test("lists existing deployments and opens the deployment admin route from manag
     name: "docker",
     slug: "docker",
     status: "ready",
-    source_path: "api/docker",
+    source_path: ".",
     latest_release_name: "main @ abcdef12",
     latest_release_status: "live",
     latest_release_git_ref: "main",
@@ -345,12 +378,19 @@ test("lists existing deployments and opens the deployment admin route from manag
     if (pathname === "/api/bff/api/app/auth/me") return fulfillJson(route, makePlatformAdminPrincipal());
     if (pathname === "/api/bff/api/admin/tenants/bsktpay-2") return fulfillJson(route, tenant);
     if (pathname === "/api/bff/api/admin/tenants/bsktpay-2/projects/bsktpay-2-default") return fulfillJson(route, project);
+    if (pathname === "/api/bff/api/admin/tenants/bsktpay-2/projects/bsktpay-2-default/github/branches") {
+      return fulfillJson(route, [
+        { name: "main", protected: true },
+        { name: "stage", protected: true },
+      ]);
+    }
     if (pathname === "/api/bff/api/admin/tenants/bsktpay-2/projects/bsktpay-2-default/apps") return fulfillJson(route, [app]);
     if (pathname === "/api/bff/api/admin/tenants/bsktpay-2/projects/bsktpay-2-default/apps/app-1") return fulfillJson(route, app);
     if (pathname === "/api/bff/api/admin/tenants/bsktpay-2/projects/bsktpay-2-default/apps/analysis-runs") return fulfillJson(route, []);
     if (pathname.endsWith("/api/admin/tenants/bsktpay-2/projects/bsktpay-2-default/apps/app-1/deployment-config")) {
       return fulfillJson(route, makeProjectAppDeploymentConfig({
         app_id: app.app_id,
+        environment: { APP_MODE: "production" },
         resources: [
           {
             key: "activemq",
@@ -368,6 +408,18 @@ test("lists existing deployments and opens the deployment admin route from manag
     }
     if (pathname.endsWith("/api/admin/tenants/bsktpay-2/projects/bsktpay-2-default/apps/app-1/deployment-releases")) {
       return fulfillJson(route, [release]);
+    }
+    if (pathname.endsWith("/api/admin/tenants/bsktpay-2/projects/bsktpay-2-default/apps/app-1/deployment-releases/release-1/logs")) {
+      return fulfillJson(route, {
+        provider: "internal_coolify",
+        release_id: "release-1",
+        deployment_uuid: "deployment-1",
+        application_uuid: "application-1",
+        status: "success",
+        logs: "Pulling image\\nStarting container\\nDeployment complete",
+        truncated: false,
+        fetched_at: "2026-05-07T12:01:05Z",
+      });
     }
     if (pathname === "/api/bff/api/admin/tenants/bsktpay-2/projects/bsktpay-2-default/apps/app-1/deployment-backups/restore-runs") {
       return fulfillJson(route, []);
@@ -388,26 +440,221 @@ test("lists existing deployments and opens the deployment admin route from manag
   const appControls = page.getByLabel("Deployment technical controls");
   await expect(appControls.getByRole("button", { name: "Settings" })).toBeVisible();
   await expect(appControls.getByRole("button", { name: "Environment" })).toBeVisible();
-  await expect(appControls.getByRole("button", { name: "Deployments" })).toBeVisible();
+  await expect(appControls.getByRole("button", { name: "Releases" })).toBeVisible();
+  await expect(appControls.getByRole("button", { name: "Deployments" })).toHaveCount(0);
+  await expect(appControls.getByRole("button", { name: "Logs" })).toBeVisible();
+  await expect(appControls.getByRole("button", { name: "Diagnostics" })).toHaveCount(0);
   await expect(appControls.getByRole("button", { name: "Danger" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Deployment details" })).toBeVisible();
+  await expect(page.getByTestId("selected-release-heading").getByTestId("selected-release-status")).toHaveText("live");
+  await expect(page.getByTestId("selected-release-heading").getByText("live", { exact: true })).toHaveCount(1);
   await expect(page.getByRole("link", { name: "https://web.generated.example.com" }).first()).toBeVisible();
+  await expect(page.getByText("Coolify logs")).toBeVisible();
+  await expect(page.getByText("Pulling image")).toBeVisible();
+  await expect(page.getByText("Deployment complete")).toBeVisible();
+  const overviewLogs = page.getByTestId("release-logs-output");
+  await expect(overviewLogs).toHaveCSS("white-space", "pre-wrap");
+  await expect
+    .poll(() => overviewLogs.evaluate((node) => node.textContent ?? ""))
+    .toBe("Pulling image\nStarting container\nDeployment complete");
   await expect(page.getByText("Deployment history")).toBeVisible();
+  await appControls.getByRole("button", { name: "Logs" }).click();
+  await expect(page.getByRole("heading", { name: "Release logs" })).toBeVisible();
+  await expect(page.getByText("Pulling image")).toBeVisible();
+  await expect(page.getByText("Deployment complete")).toBeVisible();
+  const releaseLogs = page.getByTestId("release-logs-output");
+  await expect(releaseLogs).toHaveCSS("white-space", "pre-wrap");
+  await expect
+    .poll(() => releaseLogs.evaluate((node) => node.textContent ?? ""))
+    .toBe("Pulling image\nStarting container\nDeployment complete");
+  await expect(page.getByRole("heading", { name: "Analysis" })).toHaveCount(0);
+  await expect(page.getByRole("heading", { name: "Generated artifacts" })).toHaveCount(0);
+  await appControls.getByRole("button", { name: "Releases" }).click();
+  await expect(page.locator("input#manual-deploy-branch")).toHaveCount(0);
+  await expect(page.locator("input#manual-deploy-commit")).toHaveCount(0);
+  await expect(page.locator("select#manual-deploy-branch")).toHaveValue("main");
+  await expect(page.locator("select#manual-deploy-commit")).toHaveValue("abcdef1234567890");
   await appControls.getByRole("button", { name: "Settings" }).click();
   await expect(page.getByText("Allow MB to run this deployment")).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "Runtime" })).toBeVisible();
+  await appControls.getByRole("button", { name: "Services" }).click();
+  await expect(page.getByRole("heading", { name: "Services" })).toBeVisible();
+  await expect(page.getByText("Internal only")).toHaveCount(0);
+  await expect(page.getByRole("link", { name: "https://api.generated.example.com" })).toHaveCount(0);
   await appControls.getByRole("button", { name: "Environment" }).click();
   await expect(page.getByRole("heading", { name: "Environment" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Add variable" })).toBeVisible();
   await expect(page.getByRole("button", { name: "Add secret" })).toBeVisible();
+  await page.locator('input[value="APP_MODE"]').evaluate((element, text) => {
+    const clipboardData = new DataTransfer();
+    clipboardData.setData("text/plain", text);
+    element.dispatchEvent(new ClipboardEvent("paste", { bubbles: true, cancelable: true, clipboardData }));
+  }, "NODE_ENV=production;API_URL=https://api.example.test,FEATURE_FLAG=true|CACHE_TTL=60.VERSION=2");
+  await expect(page.locator('input[value="NODE_ENV"]')).toBeVisible();
+  await expect(page.locator('input[value="https://api.example.test"]')).toBeVisible();
+  await expect(page.locator('input[value="FEATURE_FLAG"]')).toBeVisible();
+  await expect(page.locator('input[value="60"]')).toBeVisible();
+  await expect(page.locator('input[value="VERSION"]')).toBeVisible();
   await appControls.getByRole("button", { name: "Resources" }).click();
   await expect(page.locator('input[value="activemq"]').first()).toBeVisible();
   await expect(page.locator('select:has(option:checked[value="postgres"])')).toHaveCount(0);
-  await expect(page.locator('select:has(option:checked[value="service"])')).toBeVisible();
   await appControls.getByRole("button", { name: "Domains" }).click();
   await expect(page.getByText("Generated release URLs")).toBeVisible();
   await expect(page.getByRole("link", { name: "https://api.generated.example.com" })).toBeVisible();
   await expect(page.getByText("No custom domains configured.")).toBeVisible();
+});
+
+test("regenerates a selected preview through the run preview endpoint", async ({ page }) => {
+  const tenant = makeTenant({ tenant_id: "bsktpay-2" });
+  const project = makeProject({
+    tenant_id: tenant.tenant_id,
+    project_id: "bsktpay-2-default",
+    name: "BsktPay",
+  });
+  const app = makeProjectAppRecord({
+    app_id: "app-1",
+    tenant_id: tenant.tenant_id,
+    project_id: project.project_id,
+    name: "align",
+    slug: "align",
+    status: "ready",
+    source_path: ".",
+    latest_release_name: "main @ abcdef12",
+    latest_release_status: "live",
+    latest_release_git_ref: "main",
+    latest_release_commit_sha: "abcdef1234567890",
+  });
+  const productionRelease = {
+    release_id: "production-1",
+    tenant_id: tenant.tenant_id,
+    project_id: project.project_id,
+    app_id: app.app_id,
+    provider: "internal_coolify",
+    release_kind: "production",
+    status: "live",
+    environment_name: "production",
+    source_strategy: "docker_compose",
+    git_ref: "main",
+    commit_sha: "abcdef1234567890",
+    release_name: "main @ abcdef12",
+    requested_by_user_id: null,
+    deployment_snapshot: {},
+    provider_context: {},
+    service_urls: [],
+    last_error: null,
+    requested_at: "2026-05-07T12:00:00Z",
+    created_at: "2026-05-07T12:00:00Z",
+    started_at: "2026-05-07T12:00:00Z",
+    completed_at: "2026-05-07T12:01:00Z",
+    updated_at: "2026-05-07T12:01:00Z",
+  };
+  const previewRelease = {
+    ...productionRelease,
+    release_id: "preview-1",
+    release_kind: "run_preview",
+    status: "route_activating",
+    git_ref: "mb/deploy/bsktpay-2-default/feature-ap-293-old",
+    commit_sha: "1111111111111111",
+    release_name: "AP-293: Add Equifax production credit bureau provider contract",
+    source_run_id: "run-1",
+    source_issue_key: "AP-293",
+    source_issue_summary: "Add Equifax production credit bureau provider contract",
+    service_urls: [
+      {
+        service_key: "admin-website",
+        service_name: "Admin Website",
+        service_kind: "website",
+        url: "http://admin.old.localhost:8088",
+        url_kind: "generated",
+        status: "pending",
+      },
+    ],
+    created_at: "2026-05-08T12:00:00Z",
+    updated_at: "2026-05-08T12:00:00Z",
+  };
+  const regeneratedPreview = {
+    ...previewRelease,
+    release_id: "preview-2",
+    git_ref: "mb/deploy/bsktpay-2-default/feature-ap-293-new",
+    commit_sha: "2222222222222222",
+    service_urls: [
+      {
+        service_key: "admin-website",
+        service_name: "Admin Website",
+        service_kind: "website",
+        url: "http://admin.preview.192-168-0-118.sslip.io:8088",
+        url_kind: "generated",
+        status: "pending",
+      },
+    ],
+    created_at: "2026-05-09T12:00:00Z",
+    updated_at: "2026-05-09T12:00:00Z",
+  };
+  let releases: Array<Record<string, unknown>> = [previewRelease, productionRelease];
+  let previewPostCount = 0;
+  let productionPostCount = 0;
+
+  await seedAdminSession(page);
+  await page.route("**/api/bff/api/**", async (route) => {
+    const url = new URL(route.request().url());
+    const pathname = url.pathname.replace(/\/$/, "");
+    const method = route.request().method().toUpperCase();
+    if (pathname === "/api/bff/api/app/auth/me") return fulfillJson(route, makePlatformAdminPrincipal());
+    if (pathname === "/api/bff/api/admin/tenants/bsktpay-2") return fulfillJson(route, tenant);
+    if (pathname === "/api/bff/api/admin/tenants/bsktpay-2/projects/bsktpay-2-default") return fulfillJson(route, project);
+    if (pathname === "/api/bff/api/admin/tenants/bsktpay-2/projects/bsktpay-2-default/apps") return fulfillJson(route, [app]);
+    if (pathname === "/api/bff/api/admin/tenants/bsktpay-2/projects/bsktpay-2-default/apps/app-1") return fulfillJson(route, app);
+    if (pathname === "/api/bff/api/admin/tenants/bsktpay-2/projects/bsktpay-2-default/apps/analysis-runs") return fulfillJson(route, []);
+    if (pathname === "/api/bff/api/admin/tenants/bsktpay-2/projects/bsktpay-2-default/apps/app-1/deployment-config") {
+      return fulfillJson(route, makeProjectAppDeploymentConfig({ app_id: app.app_id }));
+    }
+    if (pathname === "/api/bff/api/admin/tenants/bsktpay-2/projects/bsktpay-2-default/apps/app-1/deployment-releases") {
+      if (method === "POST") {
+        productionPostCount += 1;
+        return fulfillJson(route, productionRelease);
+      }
+      return fulfillJson(route, releases);
+    }
+    if (pathname === "/api/bff/api/admin/tenants/bsktpay-2/projects/bsktpay-2-default/apps/app-1/deployment-backups/restore-runs") {
+      return fulfillJson(route, []);
+    }
+    if (pathname === "/api/bff/api/admin/runs/run-1") {
+      return fulfillJson(route, {
+        run_id: "run-1",
+        tenant_id: tenant.tenant_id,
+        project_id: project.project_id,
+        issue_key: "AP-293",
+        issue_summary: "Add Equifax production credit bureau provider contract",
+        issue_url: "https://bsktpay.atlassian.net/browse/AP-293",
+        status: "succeeded",
+        created_at: "2026-05-08T10:00:00Z",
+        updated_at: "2026-05-08T11:00:00Z",
+      });
+    }
+    if (pathname === "/api/bff/api/admin/runs/run-1/preview" && method === "POST") {
+      expect(url.searchParams.get("force")).toBe("true");
+      previewPostCount += 1;
+      releases = [
+        regeneratedPreview,
+        { ...previewRelease, status: "destroyed", destroyed_at: "2026-05-09T12:00:00Z", updated_at: "2026-05-09T12:00:00Z" },
+        productionRelease,
+      ];
+      return fulfillJson(route, regeneratedPreview);
+    }
+    return route.fallback();
+  });
+
+  await page.goto("/bsktpay-2/projects/bsktpay-2-default/deployments/app-1?release=preview-1");
+
+  await expect(page.getByRole("button", { name: "Generate preview" })).toBeVisible();
+  await page.getByRole("button", { name: "Generate preview" }).click();
+
+  await expect(page.getByText("Preview started")).toBeVisible();
+  await expect(page).toHaveURL(/release=preview-2/);
+  await expect(page.getByRole("link", { name: "http://admin.preview.192-168-0-118.sslip.io:8088" })).toBeVisible();
+  await expect(page.getByRole("link", { name: "http://admin.old.localhost:8088" })).toHaveCount(0);
+  expect(previewPostCount).toBe(1);
+  expect(productionPostCount).toBe(0);
 });
 
 test("removes a deployment from the danger area after slug confirmation", async ({ page }) => {

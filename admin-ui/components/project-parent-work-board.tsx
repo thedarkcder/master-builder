@@ -2,7 +2,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { createPortal } from "react-dom";
-import { Clock3, ExternalLink, Play, X } from "lucide-react";
+import { Clock3, ExternalLink, Play, RefreshCw, X } from "lucide-react";
 
 import { useAuth } from "@/components/auth-provider";
 import { StatusBadge } from "@/components/ui/status-badge";
@@ -430,14 +430,13 @@ export function ProjectParentWorkBoard({
             type="button"
             variant="outline"
             size="sm"
-            className="h-8"
+            className="h-8 w-8 p-0"
             onClick={() => void syncJiraWork()}
             disabled={!ready || !credentials || syncing}
-            aria-label="Sync"
-            title="Sync"
+            aria-label="Sync Jira"
+            title="Sync Jira"
           >
-            <Play className="mr-1.5 h-3.5 w-3.5" />
-            {syncing ? "Syncing" : "Sync Jira"}
+            <RefreshCw className={`h-3.5 w-3.5 ${syncing ? "animate-spin" : ""}`} />
           </Button>
         </div>
       ) : null}
@@ -448,7 +447,7 @@ export function ProjectParentWorkBoard({
         </div>
       ) : null}
 
-      <div className="grid gap-4 md:grid-cols-2 2xl:grid-cols-5">
+      <div className="grid items-start gap-4 md:grid-cols-2 2xl:grid-cols-5">
         {BOARD_LANES.map((lane) => (
           <BoardColumn
             key={lane.key}
@@ -517,7 +516,7 @@ function BoardColumn({
   onStartSelectedPlanning: () => void;
 }) {
   return (
-    <section className="rounded-2xl border bg-muted/20" role="region" aria-label={lane.title}>
+    <section className="overflow-hidden rounded-2xl border bg-muted/20" role="region" aria-label={lane.title}>
       <div className="border-b bg-background/70 p-4">
         <h3 className="truncate text-sm font-semibold">{lane.title}</h3>
         {showAwaitingPlanningControls ? (

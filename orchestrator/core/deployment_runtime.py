@@ -16,6 +16,10 @@ from orchestrator.api.admin.deployment_release_service import (
 )
 from orchestrator.api.schemas import ProjectDeploymentReleaseStatusUpdate, TenantDeploymentPlaneRead
 from orchestrator.core.config import Settings, get_settings
+from orchestrator.core.local_preview_route_sync import (
+    ensure_local_preview_route_sync_command,
+    latest_local_preview_route_command,
+)
 from orchestrator.core.deployment_status import DEPLOYMENT_RELEASE_ACTIVE_STATUSES
 from orchestrator.core.platform.secret_service import resolve_platform_secret_ref
 from orchestrator.core.platform.secret_manager import normalize_secret_ref, resolve_scoped_secret_ref
@@ -252,8 +256,44 @@ def reconcile_deployment_release(
     if next_status == "live":
         verification = verify_release_route_bindings(release)
         if not verification.ok:
-            next_status = "route_activating"
-            last_error = verification.error
+            latest_route_command = latest_local_preview_route_command(session=session, release_id=release.release_id)
+            if str(release.release_kind or "").strip() == "run_preview":
+                if latest_route_command.command is None:
+                    ensure_local_preview_route_sync_command(
+                        session=session,
+                        tenant=tenant,
+                        project=project,
+                        release=release,
+                        deployment_uuid=observation.deployment_uuid,
+                    )
+                    next_status = "route_activating"
+                    last_error = verification.error
+                elif latest_route_command.deployment_uuid != observation.deployment_uuid:
+                    ensure_local_preview_route_sync_command(
+                        session=session,
+                        tenant=tenant,
+                        project=project,
+                        release=release,
+                        deployment_uuid=observation.deployment_uuid,
+                    )
+                    next_status = "route_activating"
+                    last_error = verification.error
+                elif latest_route_command.command.status in {"queued", "claimed", "running"}:
+                    next_status = "route_activating"
+                    last_error = verification.error
+                elif latest_route_command.command.status == "failed":
+                    next_status = "failed"
+                    last_error = (
+                        f"Local preview route sync failed: {latest_route_command.command.last_error}"
+                        if latest_route_command.command.last_error
+                        else "Local preview route sync failed"
+                    )
+                else:
+                    next_status = "failed"
+                    last_error = f"Local preview route remained inactive after sync: {verification.error}"
+            else:
+                next_status = "route_activating"
+                last_error = verification.error
 
     updated = update_project_deployment_release_status(
         session=session,
@@ -436,11 +476,9 @@ def _resolve_release_observation_transition(
         return "provisioning"
 
     if observed in _DEPLOYMENT_SUCCESS_STATUSES or "success" in observed:
-        if application is None or application in _DEPLOYMENT_SUCCESS_STATUSES or application == "running" or application.startswith("running:"):
-            return "live"
         if application in _DEPLOYMENT_FAILURE_STATUSES or "unhealthy" in application:
             return "rolled_back" if current == "live" else "failed"
-        return "deploying"
+        return "live"
 
     if observed in _DEPLOYMENT_FAILURE_STATUSES or "unhealthy" in observed:
         return "rolled_back" if current == "live" else "failed"

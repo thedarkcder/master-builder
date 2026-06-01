@@ -17,7 +17,7 @@ import {
 import { useAuth } from "@/components/auth-provider";
 import { ProjectParentWorkBoard } from "@/components/project-parent-work-board";
 import { ProjectAppIndexPage } from "@/components/project-apps/project-app-index-page";
-import { ProjectAutomationsContent, ProjectNotificationsContent } from "@/components/tenant-project-discord-page";
+import { ProjectAccessRequestsContent, ProjectAutomationsContent, ProjectNotificationsContent } from "@/components/tenant-project-discord-page";
 import { CodexModelSelect } from "@/components/codex-model-select";
 import { OverrideSegmentedControl } from "@/components/override-segmented-control";
 import { Badge } from "@/components/ui/badge";
@@ -316,7 +316,7 @@ export function TenantProjectDetailsPage() {
     if (allowProjectManagement) {
       return resolved;
     }
-    return resolved === "settings" || resolved === "notifications" || resolved === "automations" || resolved === "secrets" || resolved === "danger"
+    return resolved === "settings" || resolved === "notifications" || resolved === "access-requests" || resolved === "automations" || resolved === "secrets" || resolved === "danger"
       ? "overview"
       : resolved;
   }, [allowProjectManagement, isPlatformSuperAdmin, pathname]);
@@ -915,16 +915,18 @@ export function TenantProjectDetailsPage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex flex-wrap items-center gap-3">
-        <div className="flex items-center gap-2.5 min-w-0">
-          <h1 className="truncate text-xl font-semibold">{project?.name ?? params.projectId}</h1>
-          {project ? (
-            <Badge variant={project.is_archived ? "outline" : "success"} className="shrink-0">
-              {project.is_archived ? "Archived" : "Active"}
-            </Badge>
-          ) : null}
+      {activeTab === "overview" ? (
+        <div className="flex flex-wrap items-center gap-3">
+          <div className="flex min-w-0 items-center gap-2.5">
+            <h1 className="truncate text-xl font-semibold">{project?.name ?? params.projectId}</h1>
+            {project ? (
+              <Badge variant={project.is_archived ? "outline" : "success"} className="shrink-0">
+                {project.is_archived ? "Archived" : "Active"}
+              </Badge>
+            ) : null}
+          </div>
         </div>
-      </div>
+      ) : null}
 
       {/* ── Overview tab ─────────────────────────────────────────────────── */}
       {activeTab === "overview" ? (
@@ -1962,6 +1964,14 @@ export function TenantProjectDetailsPage() {
       {/* ── Notifications tab ────────────────────────────────────────────── */}
       {activeTab === "notifications" ? (
         <ProjectNotificationsContent
+          tenantId={params.tenantId}
+          projectId={params.projectId}
+          credentials={credentials}
+        />
+      ) : null}
+
+      {activeTab === "access-requests" ? (
+        <ProjectAccessRequestsContent
           tenantId={params.tenantId}
           projectId={params.projectId}
           credentials={credentials}

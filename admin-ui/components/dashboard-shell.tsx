@@ -18,6 +18,7 @@ import {
   LayoutDashboard,
   LogOut,
   Menu,
+  Network,
   PlugZap,
   Rocket,
   Settings2,
@@ -176,13 +177,13 @@ function ProjectWorkspaceNav({
       items: [
         { href: projectBase, label: "Board", icon: FolderKanban },
         { href: `${projectBase}/knowledge`, label: "Knowledge", icon: BookOpen, matchPrefix: `${projectBase}/knowledge` },
-        { href: `${projectBase}/architecture`, label: "Architecture", icon: BookOpen, matchPrefix: `${projectBase}/architecture` },
+        { href: `${projectBase}/architecture`, label: "Architecture", icon: Network, matchPrefix: `${projectBase}/architecture` },
       ],
     },
     ...(allowProjectManagement
       ? [
           {
-            label: "Deployments",
+            label: "Delivery",
             defaultOpen: pathname.startsWith(`${projectBase}/deployment`) || pathname.startsWith(`${projectBase}/deployments`),
             items: [
               { href: `${projectBase}/deployments`, label: "Releases", icon: Rocket, matchPrefix: `${projectBase}/deployments` },
@@ -195,6 +196,7 @@ function ProjectWorkspaceNav({
               { href: `${projectBase}/settings`, label: "Settings", icon: Settings2, matchPrefix: `${projectBase}/settings` },
               { href: `${projectBase}/secrets`, label: "Secrets", icon: KeyRound, matchPrefix: `${projectBase}/secrets` },
               { href: `${projectBase}/notifications`, label: "Notifications", icon: Bell, matchPrefix: `${projectBase}/notifications` },
+              { href: `${projectBase}/access-requests`, label: "Access Requests", icon: ShieldAlert, matchPrefix: `${projectBase}/access-requests` },
               { href: `${projectBase}/automations`, label: "Automations", icon: Workflow, matchPrefix: `${projectBase}/automations` },
               { href: `${projectBase}/installs`, label: "Installs", icon: PlugZap, matchPrefix: `${projectBase}/installs` },
               { href: `${projectBase}/danger`, label: "Danger", icon: ShieldAlert, matchPrefix: `${projectBase}/danger`, danger: true },

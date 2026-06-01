@@ -1,4 +1,5 @@
 import { readNdjsonStream, request, type Credentials } from "@/lib/api/http";
+import type { ProjectDeploymentReleaseRecord } from "@/lib/api/deployments";
 
 export const RUN_STATUSES = [
   "queued",
@@ -117,6 +118,21 @@ export function getRun(credentials: Credentials, runId: string): Promise<RunReco
 
 export function cancelRun(credentials: Credentials, runId: string): Promise<RunRecord> {
   return request<RunRecord>(credentials, `/api/admin/runs/${encodeURIComponent(runId)}/cancel`, {
+    method: "POST",
+  });
+}
+
+export function createRunPreview(
+  credentials: Credentials,
+  runId: string,
+  options: { force?: boolean } = {},
+): Promise<ProjectDeploymentReleaseRecord> {
+  const query = new URLSearchParams();
+  if (options.force) {
+    query.set("force", "true");
+  }
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  return request<ProjectDeploymentReleaseRecord>(credentials, `/api/admin/runs/${encodeURIComponent(runId)}/preview${suffix}`, {
     method: "POST",
   });
 }

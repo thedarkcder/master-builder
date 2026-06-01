@@ -1,7 +1,7 @@
 "use client";
 
 import { useRouter } from "next/navigation";
-import { useEffect, useState } from "react";
+import { type ClipboardEvent, useEffect, useState } from "react";
 
 import { useAuth } from "@/components/auth-provider";
 import { Button } from "@/components/ui/button";
@@ -69,6 +69,10 @@ function emptyPolicyForm(): PolicyFormState {
   };
 }
 
+function uniqueStrings(values: Array<string | null | undefined>): string[] {
+  return [...new Set(values.map((value) => value?.trim()).filter((value): value is string => Boolean(value)))];
+}
+
 function toForm(policy: ProjectDeploymentPolicyRecord | null): PolicyFormState {
   if (!policy) return emptyPolicyForm();
   return {
@@ -105,6 +109,29 @@ function setBranchEnvironmentValue(
         environment: {
           ...current.environment,
           [key]: value,
+        },
+      },
+    },
+  };
+}
+
+function setBranchEnvironmentEntries(
+  form: PolicyFormState,
+  branch: string,
+  entries: Array<[string, string]>,
+  replaceKey?: string,
+): PolicyFormState {
+  const current = branchSettingsFor(form, branch);
+  const { [replaceKey ?? ""]: _removed, ...remaining } = current.environment;
+  return {
+    ...form,
+    branch_settings: {
+      ...form.branch_settings,
+      [branch]: {
+        ...current,
+        environment: {
+          ...remaining,
+          ...Object.fromEntries(entries),
         },
       },
     },
@@ -169,6 +196,27 @@ function renameSecretRefKey(form: PolicyFormState, branch: string, oldKey: strin
   };
 }
 
+function parseEnvironmentVariablePaste(text: string): Array<[string, string]> {
+  const trimmedText = text.trim();
+  if (!trimmedText.includes("=")) return [];
+
+  const assignmentPattern = /(?:^|[;,.|]\s*)([A-Za-z_][A-Za-z0-9_]*)\s*=\s*/g;
+  const matches = Array.from(trimmedText.matchAll(assignmentPattern));
+  if (matches.length === 0) return [];
+
+  const entries: Array<[string, string]> = [];
+  for (const [index, match] of matches.entries()) {
+    const key = match[1]?.trim();
+    if (!key) continue;
+    const valueStart = match.index + match[0].length;
+    const nextMatch = matches[index + 1];
+    const valueEnd = nextMatch?.index ?? trimmedText.length;
+    const value = trimmedText.slice(valueStart, valueEnd).trim();
+    entries.push([key, value]);
+  }
+  return entries;
+}
+
 export function ProjectDeploymentPolicyPage({ tenantId, projectId }: ProjectDeploymentPolicyPageProps) {
   const { credentials, ready } = useAuth();
   const router = useRouter();
@@ -176,6 +224,7 @@ export function ProjectDeploymentPolicyPage({ tenantId, projectId }: ProjectDepl
   const [form, setForm] = useState<PolicyFormState>(() => emptyPolicyForm());
   const [activeStep, setActiveStep] = useState<SetupStepIndex>(0);
   const [branches, setBranches] = useState<ProjectGitHubBranchRecord[]>([]);
+  const [environmentBranch, setEnvironmentBranch] = useState("");
   const [policyConfigured, setPolicyConfigured] = useState(false);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -197,7 +246,14 @@ export function ProjectDeploymentPolicyPage({ tenantId, projectId }: ProjectDepl
     ])
       .then(([policy, branchRecords]) => {
         if (cancelled) return;
-        setForm(toForm(policy));
+        const nextForm = toForm(policy);
+        setForm(nextForm);
+        setEnvironmentBranch(
+          nextForm.production_branch.trim()
+            || Object.keys(nextForm.branch_settings).find((branch) => branch.trim())?.trim()
+            || branchRecords[0]?.name
+            || "",
+        );
         setPolicyConfigured(Boolean(policy.enabled || policy.production_branch));
         setBranches(branchRecords);
       })
@@ -240,10 +296,6 @@ export function ProjectDeploymentPolicyPage({ tenantId, projectId }: ProjectDepl
       setError("Branches must load before deployments can be enabled.");
       return;
     }
-    if (form.preview_prs_enabled) {
-      setError("Preview PR deployments are not available until the GitHub deployment worker supports PR release events.");
-      return;
-    }
     setSaving(true);
     setError("");
     try {
@@ -278,6 +330,12 @@ export function ProjectDeploymentPolicyPage({ tenantId, projectId }: ProjectDepl
     form.production_branch && !selectedBranchExists
       ? [{ name: form.production_branch, protected: false }, ...branches]
       : branches;
+  const branchScopeOptions = uniqueStrings([
+    form.production_branch,
+    environmentBranch,
+    ...Object.keys(form.branch_settings),
+    ...branchOptions.map((branch) => branch.name),
+  ]);
   const canMoveNext =
     activeStep === 0
       ? true
@@ -300,10 +358,22 @@ export function ProjectDeploymentPolicyPage({ tenantId, projectId }: ProjectDepl
     setActiveStep((current) => (current < 4 ? ((current + 1) as SetupStepIndex) : current));
   }
 
-  const activeBranch = form.production_branch.trim();
+  const activeBranch = environmentBranch.trim() || form.production_branch.trim();
   const activeBranchSettings = activeBranch ? branchSettingsFor(form, activeBranch) : { environment: {}, secret_refs: {} };
   const environmentRows = Object.entries(activeBranchSettings.environment);
   const secretRefRows = Object.entries(activeBranchSettings.secret_refs);
+
+  function handleEnvironmentVariablePaste(
+    event: ClipboardEvent<HTMLInputElement>,
+    branch: string,
+    replaceKey: string,
+  ) {
+    const pastedText = event.clipboardData.getData("text/plain") || event.clipboardData.getData("text");
+    const entries = parseEnvironmentVariablePaste(pastedText);
+    if (entries.length === 0) return;
+    event.preventDefault();
+    setForm((current) => setBranchEnvironmentEntries(current, branch, entries, replaceKey));
+  }
 
   function previousStep() {
     setError("");
@@ -312,7 +382,7 @@ export function ProjectDeploymentPolicyPage({ tenantId, projectId }: ProjectDepl
 
   if (policyConfigured) {
     return (
-      <main className="mx-auto max-w-5xl p-6">
+      <main className="p-6" data-testid="deployment-policy-page">
         <div className="mb-8 flex flex-wrap items-center justify-between gap-3">
           <h1 className="text-2xl font-semibold tracking-tight">Deployment policy</h1>
           <Button onClick={() => void savePolicy({ runSetup: false })} disabled={saving}>
@@ -360,7 +430,11 @@ export function ProjectDeploymentPolicyPage({ tenantId, projectId }: ProjectDepl
                     aria-label="Production branch"
                     className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
                     value={form.production_branch}
-                    onChange={(event) => setForm((current) => ({ ...current, production_branch: event.target.value }))}
+                    onChange={(event) => {
+                      const nextBranch = event.target.value;
+                      setForm((current) => ({ ...current, production_branch: nextBranch }));
+                      setEnvironmentBranch((current) => current || nextBranch);
+                    }}
                     disabled={saving || branchOptions.length === 0}
                   >
                     <option value="">Select a branch</option>
@@ -390,6 +464,20 @@ export function ProjectDeploymentPolicyPage({ tenantId, projectId }: ProjectDepl
                     <option value="disabled">Do not generate URLs</option>
                   </select>
                 </label>
+                <label className="flex cursor-pointer items-start justify-between gap-4 rounded-xl border px-4 py-3">
+                  <span>
+                    <span className="block text-sm font-medium">Preview deployments</span>
+                  </span>
+                  <input
+                    type="checkbox"
+                    checked={form.preview_prs_enabled}
+                    onChange={(event) =>
+                      setForm((current) => ({ ...current, preview_prs_enabled: event.target.checked }))
+                    }
+                    className="mt-1 h-4 w-4"
+                    disabled={saving || !form.enabled}
+                  />
+                </label>
               </div>
             </div>
           </section>
@@ -399,12 +487,25 @@ export function ProjectDeploymentPolicyPage({ tenantId, projectId }: ProjectDepl
               <div>
                 <h2 className="text-lg font-semibold">Environment</h2>
                 <p className="mt-1 text-sm text-muted-foreground">
-                  Branch-scoped values used when MB creates deployment releases.
+                  Releases use the values configured for their Git branch.
                 </p>
               </div>
-              <span className="rounded-full border px-3 py-1 text-xs text-muted-foreground">
-                {activeBranch || "No branch selected"}
-              </span>
+              <label className="min-w-[220px] space-y-1.5">
+                <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Branch scope</span>
+                <select
+                  aria-label="Environment branch scope"
+                  className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                  value={activeBranch}
+                  onChange={(event) => setEnvironmentBranch(event.target.value)}
+                  disabled={saving || branchScopeOptions.length === 0}
+                >
+                  {branchScopeOptions.map((branch) => (
+                    <option key={branch} value={branch}>
+                      {branch}
+                    </option>
+                  ))}
+                </select>
+              </label>
             </div>
 
             {!activeBranch ? (
@@ -440,6 +541,7 @@ export function ProjectDeploymentPolicyPage({ tenantId, projectId }: ProjectDepl
                         <Input
                           value={key}
                           onChange={(event) => setForm((current) => renameEnvironmentKey(current, activeBranch, key, event.target.value))}
+                          onPaste={(event) => handleEnvironmentVariablePaste(event, activeBranch, key)}
                           aria-label={`Environment variable ${key} name`}
                           placeholder="APP_MODE"
                           disabled={saving}
@@ -447,6 +549,7 @@ export function ProjectDeploymentPolicyPage({ tenantId, projectId }: ProjectDepl
                         <Input
                           value={value}
                           onChange={(event) => setForm((current) => setBranchEnvironmentValue(current, activeBranch, key, event.target.value))}
+                          onPaste={(event) => handleEnvironmentVariablePaste(event, activeBranch, key)}
                           aria-label={`Environment variable ${key} value`}
                           placeholder="production"
                           disabled={saving}
@@ -507,7 +610,7 @@ export function ProjectDeploymentPolicyPage({ tenantId, projectId }: ProjectDepl
   }
 
   return (
-    <main className="mx-auto max-w-5xl p-6">
+    <main className="p-6" data-testid="deployment-policy-page">
       <div className="mb-8">
         <h1 className="text-2xl font-semibold tracking-tight">Deployments</h1>
       </div>
@@ -583,7 +686,11 @@ export function ProjectDeploymentPolicyPage({ tenantId, projectId }: ProjectDepl
                     aria-label="Production branch"
                     className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
                     value={form.production_branch}
-                    onChange={(event) => setForm((current) => ({ ...current, production_branch: event.target.value }))}
+                    onChange={(event) => {
+                      const nextBranch = event.target.value;
+                      setForm((current) => ({ ...current, production_branch: nextBranch }));
+                      setEnvironmentBranch((current) => current || nextBranch);
+                    }}
                     disabled={!form.enabled || saving || branchOptions.length === 0}
                   >
                     <option value="">Select a branch</option>
@@ -627,6 +734,20 @@ export function ProjectDeploymentPolicyPage({ tenantId, projectId }: ProjectDepl
                     <option value="disabled">Do not generate URLs</option>
                   </select>
                 </label>
+                <label className="mt-6 flex cursor-pointer items-start justify-between gap-4 rounded-2xl border px-4 py-4">
+                  <span>
+                    <span className="block text-sm font-medium">Preview deployments</span>
+                  </span>
+                  <input
+                    type="checkbox"
+                    checked={form.preview_prs_enabled}
+                    onChange={(event) =>
+                      setForm((current) => ({ ...current, preview_prs_enabled: event.target.checked }))
+                    }
+                    className="mt-1 h-4 w-4"
+                    disabled={saving || !form.enabled}
+                  />
+                </label>
               </div>
             ) : null}
 
@@ -634,11 +755,27 @@ export function ProjectDeploymentPolicyPage({ tenantId, projectId }: ProjectDepl
               <div className="max-w-2xl">
                 <h2 className="text-lg font-semibold">Environment</h2>
                 <p className="mt-2 text-sm leading-6 text-muted-foreground">
-                  Add values for the {activeBranch || "selected"} deployment branch. Use secret refs for credentials.
+                  Add values for the selected Git branch. Matching releases use these values.
                 </p>
+                <label className="mt-6 block max-w-md space-y-1.5">
+                  <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Branch scope</span>
+                  <select
+                    aria-label="Environment branch scope"
+                    className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                    value={activeBranch}
+                    onChange={(event) => setEnvironmentBranch(event.target.value)}
+                    disabled={saving || branchScopeOptions.length === 0}
+                  >
+                    {branchScopeOptions.map((branch) => (
+                      <option key={branch} value={branch}>
+                        {branch}
+                      </option>
+                    ))}
+                  </select>
+                </label>
                 {!activeBranch ? (
                   <p className="mt-8 rounded-xl border px-4 py-3 text-sm text-muted-foreground">
-                    Choose a production branch before adding environment settings.
+                    Choose a branch before adding environment settings.
                   </p>
                 ) : (
                   <div className="mt-8 space-y-8">
@@ -676,6 +813,7 @@ export function ProjectDeploymentPolicyPage({ tenantId, projectId }: ProjectDepl
                               onChange={(event) =>
                                 setForm((current) => renameEnvironmentKey(current, activeBranch, key, event.target.value))
                               }
+                              onPaste={(event) => handleEnvironmentVariablePaste(event, activeBranch, key)}
                               aria-label={`Environment variable ${key} name`}
                               placeholder="APP_MODE"
                               disabled={saving}
@@ -685,6 +823,7 @@ export function ProjectDeploymentPolicyPage({ tenantId, projectId }: ProjectDepl
                               onChange={(event) =>
                                 setForm((current) => setBranchEnvironmentValue(current, activeBranch, key, event.target.value))
                               }
+                              onPaste={(event) => handleEnvironmentVariablePaste(event, activeBranch, key)}
                               aria-label={`Environment variable ${key} value`}
                               placeholder="Value"
                               disabled={saving}

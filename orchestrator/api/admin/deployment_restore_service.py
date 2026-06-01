@@ -402,6 +402,7 @@ def create_project_deployment_restore_run(
             project_id=project_id,
             app_id=app_id,
             restore_run_id=run.restore_run_id,
+            release_id=None,
             payload_json={"restore_run_id": run.restore_run_id},
         ),
     )

@@ -9,9 +9,11 @@ import { Button } from "@/components/ui/button";
 import { Card, CardContent } from "@/components/ui/card";
 import {
   listProjectAppAnalysisRuns,
+  listProjectAppReleases,
   listProjectApps,
   type Credentials,
   type ProjectAppAnalysisRunRecord,
+  type ProjectAppDeploymentReleaseRecord,
   type ProjectAppRecord,
 } from "@/lib/api/deployments";
 
@@ -62,6 +64,23 @@ function appLatestReleaseDisplayName(app: ProjectAppRecord): string | null {
   return null;
 }
 
+function branchLabelForGitRef(gitRef: string | null | undefined, releaseKind?: string): string {
+  if (releaseKind === "run_preview") return "Preview";
+  const normalizedRef = gitRef?.trim().toLowerCase() ?? "";
+  const tail = normalizedRef.split("/").filter(Boolean).at(-1) ?? normalizedRef;
+  if (tail === "stage" || tail === "staging" || tail.startsWith("stage-") || tail.startsWith("staging-")) {
+    return "Stage";
+  }
+  if (tail === "main" || tail === "master" || tail.startsWith("main-") || tail.startsWith("master-")) {
+    return "Main";
+  }
+  return "Branch";
+}
+
+function appBranchLabel(app: ProjectAppRecord): string {
+  return branchLabelForGitRef(app.latest_release_git_ref);
+}
+
 function deploymentTitle(app: ProjectAppRecord, index: number): string {
   return appLatestReleaseDisplayName(app) ?? `Deployment ${index + 1}`;
 }
@@ -72,8 +91,70 @@ function deploymentSummary(app: ProjectAppRecord): string {
   return "Awaiting first GitHub release";
 }
 
+function isActivePreviewRelease(release: ProjectAppDeploymentReleaseRecord): boolean {
+  if (release.release_kind !== "run_preview" || release.destroyed_at) {
+    return false;
+  }
+  const normalizedStatus = release.status.trim().toLowerCase();
+  return !["destroyed", "failed", "rolled_back"].includes(normalizedStatus);
+}
+
+function activePreviewReleasesByBranch(releases: ProjectAppDeploymentReleaseRecord[]): ProjectAppDeploymentReleaseRecord[] {
+  const byBranch = new Map<string, ProjectAppDeploymentReleaseRecord>();
+  const newestFirst = [...releases].sort((left, right) => right.created_at.localeCompare(left.created_at));
+  for (const release of newestFirst) {
+    if (!isActivePreviewRelease(release)) {
+      continue;
+    }
+    const key = release.git_ref.trim() || release.source_run_id || release.release_id;
+    if (!byBranch.has(key)) {
+      byBranch.set(key, release);
+    }
+  }
+  return [...byBranch.values()];
+}
+
+function releaseBranchLabel(release: ProjectAppDeploymentReleaseRecord): string {
+  return branchLabelForGitRef(release.git_ref, release.release_kind);
+}
+
+function releaseDisplayName(release: ProjectAppDeploymentReleaseRecord): string {
+  return `${release.git_ref} @ ${release.commit_sha.slice(0, 8)}`;
+}
+
+function previewIssueKey(release: ProjectAppDeploymentReleaseRecord): string | null {
+  const explicit = release.source_issue_key?.trim().toUpperCase();
+  if (explicit) {
+    return explicit;
+  }
+  const matches = [...release.git_ref.toUpperCase().matchAll(/\b[A-Z][A-Z0-9_]+-\d+\b/g)];
+  return matches.at(-1)?.[0] ?? null;
+}
+
+function previewIssueTitle(release: ProjectAppDeploymentReleaseRecord): string {
+  const issueKey = previewIssueKey(release);
+  const summary = release.source_issue_summary?.trim();
+  if (issueKey && summary) {
+    return `${issueKey}: ${summary}`;
+  }
+  if (issueKey) {
+    return issueKey;
+  }
+  return "Ticket context unavailable";
+}
+
+function previewPrimaryUrl(release: ProjectAppDeploymentReleaseRecord): string | null {
+  return release.service_urls.find((serviceUrl) => serviceUrl.service_kind === "website")?.url ?? release.service_urls[0]?.url ?? null;
+}
+
+type PreviewRow = {
+  app: ProjectAppRecord;
+  release: ProjectAppDeploymentReleaseRecord;
+};
+
 export function ProjectAppIndexPage({ tenantId, projectId, credentials }: ProjectAppIndexPageProps) {
   const [apps, setApps] = useState<ProjectAppRecord[]>([]);
+  const [previewRows, setPreviewRows] = useState<PreviewRow[]>([]);
   const [latestSetupRun, setLatestSetupRun] = useState<ProjectAppAnalysisRunRecord | null>(null);
   const [loading, setLoading] = useState(true);
   const [statusLine, setStatusLine] = useState("");
@@ -94,23 +175,36 @@ export function ProjectAppIndexPage({ tenantId, projectId, credentials }: Projec
         limit: APP_PAGE_SIZE + 1,
         offset: (page - 1) * APP_PAGE_SIZE,
       });
+      const projectDeployments = loaded.filter(isProjectDeployment);
+      const visibleDeployments = projectDeployments.slice(0, APP_PAGE_SIZE);
+      const releaseGroups = await Promise.all(
+        visibleDeployments.map(async (app) => ({
+          app,
+          releases: await listProjectAppReleases(activeCredentials, tenantId, projectId, app.app_id),
+        })),
+      );
       const latestRuns = loaded.length === 0 ? await listProjectAppAnalysisRuns(activeCredentials, tenantId, projectId) : [];
       return {
-        apps: loaded.filter(isProjectDeployment),
+        apps: projectDeployments,
+        previewRows: releaseGroups.flatMap(({ app, releases }) =>
+          activePreviewReleasesByBranch(releases).map((release) => ({ app, release })),
+        ),
         latestSetupRun:
           latestRuns.find((run) => run.request_payload?.analysis_source === "deployment_setup") ?? null,
       };
     }
     void loadDeployments()
-      .then(({ apps: loaded, latestSetupRun: loadedSetupRun }) => {
+      .then(({ apps: loaded, previewRows: loadedPreviewRows, latestSetupRun: loadedSetupRun }) => {
         if (cancelled) return;
         setApps(loaded.slice(0, APP_PAGE_SIZE));
+        setPreviewRows(loadedPreviewRows);
         setHasNextPage(loaded.length > APP_PAGE_SIZE);
         setLatestSetupRun(loadedSetupRun);
       })
       .catch((error) => {
         if (cancelled) return;
         setStatusLine(`Failed to load deployments: ${(error as Error).message}`);
+        setPreviewRows([]);
         setHasNextPage(false);
         setLatestSetupRun(null);
       })
@@ -181,6 +275,7 @@ export function ProjectAppIndexPage({ tenantId, projectId, credentials }: Projec
             >
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center gap-2">
+                  <Badge variant="outline">{appBranchLabel(app)}</Badge>
                   <p className="truncate text-sm font-semibold">{deploymentTitle(app, index)}</p>
                   <Badge variant={appStatusVariant(app.latest_release_status || app.status)}>
                     {appStatusLabel(app.latest_release_status || app.status)}
@@ -191,6 +286,27 @@ export function ProjectAppIndexPage({ tenantId, projectId, credentials }: Projec
               </div>
               <span className="inline-flex items-center text-sm font-medium text-primary">
                 Manage
+                <ArrowRight className="ml-2 h-4 w-4" />
+              </span>
+            </Link>
+          ))}
+          {previewRows.map(({ app, release }) => (
+            <Link
+              key={release.release_id}
+              href={`${deploymentPath(tenantId, projectId, encodeURIComponent(app.app_id))}?release=${encodeURIComponent(release.release_id)}`}
+              className="grid w-full gap-3 px-5 py-4 text-left transition-colors hover:bg-muted/40 md:grid-cols-[minmax(0,1fr)_auto] md:items-center"
+            >
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2">
+                  <Badge variant="outline">{releaseBranchLabel(release)}</Badge>
+                  <p className="truncate text-sm font-semibold">{previewIssueTitle(release)}</p>
+                  <Badge variant={appStatusVariant(release.status)}>{appStatusLabel(release.status)}</Badge>
+                </div>
+                <p className="mt-1 truncate text-xs text-muted-foreground">{releaseDisplayName(release)}</p>
+                {release.last_error ? <p className="mt-2 text-xs text-destructive">{release.last_error}</p> : null}
+              </div>
+              <span className="inline-flex items-center text-sm font-medium text-primary">
+                Details
                 <ArrowRight className="ml-2 h-4 w-4" />
               </span>
             </Link>

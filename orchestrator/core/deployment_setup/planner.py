@@ -344,7 +344,7 @@ _VITE_RUNTIME_DOCKERFILE_TEMPLATE = """\
 FROM node:22-alpine AS build
 WORKDIR /app
 COPY package*.json ./
-RUN npm ci
+RUN npm ci --legacy-peer-deps
 COPY . .
 RUN npx vite build
 
@@ -995,6 +995,13 @@ def _resource_compose_service(resource: DeploymentPlanResource) -> str:
     return configured_service or resource.key
 
 
+def _resource_internal_alias(*, service_name: str) -> str:
+    normalized = "".join(character.lower() if character.isalnum() else "-" for character in service_name).strip("-")
+    while "--" in normalized:
+        normalized = normalized.replace("--", "-")
+    return f"mb-{normalized or 'resource'}"
+
+
 def _required_resource_environment(
     *,
     resource: DeploymentPlanResource,
@@ -1016,6 +1023,7 @@ def _maven_resource_environment(*, plan: DeploymentPlan, compose_services: dict[
     }
     for resource in plan.resources:
         service_name = _resource_compose_service(resource)
+        internal_host = _resource_internal_alias(service_name=service_name)
         if resource.kind == "postgres":
             resource_environment = _required_resource_environment(resource=resource, compose_services=compose_services)
             required_keys = ("POSTGRES_DB", "POSTGRES_USER", "POSTGRES_PASSWORD")
@@ -1025,7 +1033,7 @@ def _maven_resource_environment(*, plan: DeploymentPlan, compose_services: dict[
                     f"postgres resource {resource.key} must declare {', '.join(missing_keys)} "
                     "so Maven services can connect to the generated compose database"
                 )
-            jdbc_url = f"jdbc:postgresql://{service_name}:5432/{resource_environment['POSTGRES_DB']}"
+            jdbc_url = f"jdbc:postgresql://{internal_host}:5432/{resource_environment['POSTGRES_DB']}"
             environment.update(
                 {
                     "POSTGRES_DB_URL": jdbc_url,
@@ -1038,15 +1046,15 @@ def _maven_resource_environment(*, plan: DeploymentPlan, compose_services: dict[
             )
         elif resource.kind == "activemq":
             environment["SPRING_ACTIVEMQ_BROKER_URL"] = (
-                f"tcp://{service_name}:61616?wireFormat.maxInactivityDuration=0"
+                f"tcp://{internal_host}:61616?wireFormat.maxInactivityDuration=0"
             )
         elif resource.kind == "kafka":
-            environment["SPRING_KAFKA_BOOTSTRAP_SERVERS"] = f"{service_name}:9092"
+            environment["SPRING_KAFKA_BOOTSTRAP_SERVERS"] = f"{internal_host}:9092"
         elif resource.kind == "elasticsearch":
             environment.update(
                 {
-                    "SPRING_ELASTICSEARCH_URIS": f"http://{service_name}:9200",
-                    "SPRING_ELASTICSEARCH_HOST": service_name,
+                    "SPRING_ELASTICSEARCH_URIS": f"http://{internal_host}:9200",
+                    "SPRING_ELASTICSEARCH_HOST": internal_host,
                     "SPRING_ELASTICSEARCH_PORT": "9200",
                     "SPRING_ELASTICSEARCH_PROTOCOL": "http",
                 }
@@ -1056,7 +1064,7 @@ def _maven_resource_environment(*, plan: DeploymentPlan, compose_services: dict[
             smtp_port = resource_environment.get("MP_SMTP_BIND_ADDR", ":1025").rsplit(":", maxsplit=1)[-1] or "1025"
             environment.update(
                 {
-                    "spring.mail.host": service_name,
+                    "spring.mail.host": internal_host,
                     "spring.mail.port": smtp_port,
                     "spring.mail.username": resource_environment.get("SPRING_MAIL_USERNAME", ""),
                     "spring.mail.password": resource_environment.get("SPRING_MAIL_PASSWORD", ""),
@@ -1065,7 +1073,7 @@ def _maven_resource_environment(*, plan: DeploymentPlan, compose_services: dict[
                     "base.email.errorTo": "errors@localhost",
                     "base.email.emailFrom": "noreply@localhost",
                     "base.email.errorSubject": "Deployment runtime warning",
-                    "SPRING_MAIL_HOST": service_name,
+                    "SPRING_MAIL_HOST": internal_host,
                     "SPRING_MAIL_PORT": smtp_port,
                     "SPRING_MAIL_USERNAME": resource_environment.get("SPRING_MAIL_USERNAME", ""),
                     "SPRING_MAIL_PASSWORD": resource_environment.get("SPRING_MAIL_PASSWORD", ""),
@@ -1091,11 +1099,12 @@ def _maven_service_database_environment(
         if resource.kind != "postgres":
             continue
         service_name = _resource_compose_service(resource)
+        internal_host = _resource_internal_alias(service_name=service_name)
         resource_environment = _required_resource_environment(resource=resource, compose_services=compose_services)
         postgres_db = resource_environment.get("POSTGRES_DB")
         if not postgres_db:
             raise ValueError(f"postgres resource {resource.key} must declare POSTGRES_DB")
-        jdbc_url = f"jdbc:postgresql://{service_name}:5432/{postgres_db}"
+        jdbc_url = f"jdbc:postgresql://{internal_host}:5432/{postgres_db}"
         return {
             "POSTGRES_DB_URL": jdbc_url,
             "SPRING_DATASOURCE_URL": jdbc_url,
@@ -1285,6 +1294,57 @@ def _normalize_postgres_resource_bootstrap(*, plan: DeploymentPlan) -> Deploymen
         }
         if service_config.get("healthcheck") != expected_healthcheck:
             service_config["healthcheck"] = expected_healthcheck
+            changed = True
+
+    if not changed:
+        return plan
+    normalized_payload = plan.model_dump()
+    normalized_payload["compose_raw"] = yaml.safe_dump(compose_payload, sort_keys=False)
+    return DeploymentPlan.model_validate(normalized_payload)
+
+
+def _normalize_resource_internal_aliases(*, plan: DeploymentPlan) -> DeploymentPlan:
+    compose_payload = yaml.safe_load(plan.compose_raw) or {}
+    compose_services = compose_payload.get("services")
+    if not isinstance(compose_services, dict):
+        return plan
+
+    changed = False
+    for resource in plan.resources:
+        service_name = _resource_compose_service(resource)
+        service_config = compose_services.get(service_name)
+        if not isinstance(service_config, dict):
+            continue
+        alias = _resource_internal_alias(service_name=service_name)
+        networks = service_config.get("networks")
+        if networks is None:
+            service_config["networks"] = {"default": {"aliases": [alias]}}
+            changed = True
+            continue
+        if isinstance(networks, list):
+            network_mapping: dict[str, object] = {str(name): {} for name in networks if str(name).strip()}
+            network_mapping.setdefault("default", {})
+            networks = network_mapping
+            service_config["networks"] = networks
+            changed = True
+        if not isinstance(networks, dict):
+            raise ValueError(f"compose service {service_name} networks must be a mapping or list")
+        default_network = networks.get("default")
+        if default_network is None:
+            default_network = {}
+            networks["default"] = default_network
+            changed = True
+        if not isinstance(default_network, dict):
+            raise ValueError(f"compose service {service_name} default network config must be a mapping")
+        aliases = default_network.get("aliases")
+        if aliases is None:
+            default_network["aliases"] = [alias]
+            changed = True
+            continue
+        if not isinstance(aliases, list):
+            raise ValueError(f"compose service {service_name} default network aliases must be a list")
+        if alias not in aliases:
+            aliases.append(alias)
             changed = True
 
     if not changed:
@@ -1706,6 +1766,9 @@ def _normalize_maven_service_builds(*, plan: DeploymentPlan, checkout_path: str)
         if merged_environment != existing_environment:
             service_config["environment"] = merged_environment
             changed = True
+        if any("mb-" in value for value in merged_environment.values()):
+            _ensure_default_network_membership(service_config)
+            changed = True
         if not isinstance(service_config.get("healthcheck"), dict):
             service_config["healthcheck"] = {
                 "test": [
@@ -1724,6 +1787,21 @@ def _normalize_maven_service_builds(*, plan: DeploymentPlan, checkout_path: str)
     normalized_payload = plan.model_dump()
     normalized_payload["compose_raw"] = yaml.safe_dump(compose_payload, sort_keys=False)
     return DeploymentPlan.model_validate(normalized_payload)
+
+
+def _ensure_default_network_membership(service_config: dict[object, object]) -> None:
+    networks = service_config.get("networks")
+    if networks is None:
+        service_config["networks"] = {"default": {}}
+        return
+    if isinstance(networks, list):
+        network_mapping = {str(network): {} for network in networks if str(network).strip()}
+        network_mapping.setdefault("default", {})
+        service_config["networks"] = network_mapping
+        return
+    if not isinstance(networks, dict):
+        raise ValueError("compose service networks must be a mapping or list")
+    networks.setdefault("default", {})
 
 
 def _validate_no_host_source_mounts(*, service_name: str, volumes: object) -> None:
@@ -2055,6 +2133,7 @@ def run_project_deployment_planning(
     deployment_plan = _normalize_compose_healthchecks(plan=response.deployment)
     deployment_plan = _normalize_plan_volume_names(plan=deployment_plan)
     deployment_plan = _normalize_postgres_resource_bootstrap(plan=deployment_plan)
+    deployment_plan = _normalize_resource_internal_aliases(plan=deployment_plan)
     deployment_plan = _normalize_elasticsearch_resource_images(plan=deployment_plan)
     deployment_plan = _normalize_vite_service_builds(
         plan=deployment_plan,

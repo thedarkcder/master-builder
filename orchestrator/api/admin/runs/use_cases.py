@@ -14,17 +14,19 @@ from orchestrator.api.admin.runs.runtime_logs_service import (
 )
 from orchestrator.api.admin.runs.service import (
     cancel_run_admin as cancel_run_admin_impl,
+    create_run_preview_admin as create_run_preview_admin_impl,
     get_run as get_run_impl,
     list_run_events as list_run_events_impl,
     list_run_logging_pane_events as list_run_logging_pane_events_impl,
     list_runs as list_runs_impl,
 )
 from orchestrator.api.admin.schema_mappers import run_to_schema
-from orchestrator.api.schemas import LoggingPaneEventRead, RunEventRead, RunRead
+from orchestrator.api.schemas import LoggingPaneEventRead, ProjectDeploymentReleaseRead, RunEventRead, RunRead
 from orchestrator.core.config import get_settings
 from orchestrator.core.integrations.atlassian.links import tenant_jira_issue_url
-from orchestrator.core.security import AuthenticatedPrincipal, require_tenant_workspace_access
-from orchestrator.storage.models import Run, Tenant
+from orchestrator.core.platform.access import PERMISSION_PROJECTS_MANAGE
+from orchestrator.core.security import AuthenticatedPrincipal, require_tenant_permission, require_tenant_workspace_access
+from orchestrator.storage.models import Project, Run, Tenant
 
 
 def list_runs(
@@ -88,6 +90,32 @@ def cancel_run(*, session: Session, run_id: str) -> RunRead:
         run_model=Run,
         run_to_schema_fn=run_to_schema,
         cancelled_by="admin",
+    )
+
+
+def create_run_preview(
+    *,
+    session: Session,
+    principal: AuthenticatedPrincipal,
+    run_id: str,
+    force: bool = False,
+) -> ProjectDeploymentReleaseRead:
+    run = session.get(Run, run_id)
+    if run is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
+    require_tenant_permission(
+        principal=principal,
+        tenant_id=run.tenant_id,
+        permission_key=PERMISSION_PROJECTS_MANAGE,
+    )
+    return create_run_preview_admin_impl(
+        session=session,
+        run_id=run_id,
+        run_model=Run,
+        tenant_model=Tenant,
+        project_model=Project,
+        settings=get_settings(),
+        force=force,
     )
 
 

@@ -79,6 +79,7 @@ from orchestrator.api.schemas import (
     ProjectDeploymentPolicyWrite,
     ProjectDeploymentSetupStartRead,
     ProjectDeploymentReleaseCreate,
+    ProjectDeploymentReleaseLogsRead,
     ProjectDeploymentReleaseRead,
     ProjectDeploymentReleaseStatusUpdate,
     ProjectDeploymentResourceApplyRequest,
@@ -1674,6 +1675,28 @@ def get_project_app_deployment_release(
 ) -> ProjectDeploymentReleaseRead:
     require_tenant_membership(principal=principal, tenant_id=tenant_id)
     return admin_project_service().get_project_app_deployment_release(
+        session=session,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        app_id=app_id,
+        release_id=release_id,
+    )  # type: ignore[return-value]
+
+
+@router.get(
+    "/tenants/{tenant_id}/projects/{project_id}/apps/{app_id}/deployment-releases/{release_id}/logs",
+    response_model=ProjectDeploymentReleaseLogsRead,
+)
+def get_project_app_deployment_release_logs(
+    tenant_id: str,
+    project_id: str,
+    app_id: str,
+    release_id: str,
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
+    session: Session = Depends(get_session),
+) -> ProjectDeploymentReleaseLogsRead:
+    require_tenant_membership(principal=principal, tenant_id=tenant_id)
+    return admin_project_service().get_project_app_deployment_release_logs(
         session=session,
         tenant_id=tenant_id,
         project_id=project_id,

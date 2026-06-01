@@ -37,6 +37,7 @@ from orchestrator.api.deployment_schemas import (  # noqa: F401
     ProjectDeploymentPolicyWrite,
     ProjectDeploymentSetupStartRead,
     ProjectDeploymentReleaseCreate,
+    ProjectDeploymentReleaseLogsRead,
     ProjectDeploymentReleaseRead,
     ProjectDeploymentReleaseStatusUpdate,
     ProjectDeploymentResourceApplyRequest,

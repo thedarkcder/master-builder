@@ -5,6 +5,7 @@ from datetime import datetime
 from sqlalchemy import desc, select
 from fastapi import HTTPException, status
 
+from orchestrator.core.deployment_previews import create_run_preview_deployment
 from orchestrator.core.observability.logging_pane import list_run_logging_pane_events as list_run_logging_pane_events_core
 from orchestrator.core.runs.service import RunStateTransitionError, cancel_run as cancel_run_execution
 from orchestrator.storage.models import AgentLifecycleEvent, WorkflowExecution
@@ -131,6 +132,61 @@ def cancel_run_admin(
         return run_to_schema_fn(cancelled_run, workflow_execution_id=workflow_execution_id)
     except RunStateTransitionError as exc:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+
+
+def create_run_preview_admin(
+    *,
+    session,
+    run_id: str,
+    run_model,
+    tenant_model,
+    project_model,
+    settings,
+    force: bool = False,
+):  # noqa: ANN001
+    run = session.get(run_model, run_id)
+    if run is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Run not found")
+    if str(getattr(run, "status", "") or "").strip() != "succeeded":
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Preview generation requires a succeeded run",
+        )
+    project_id = str(getattr(run, "project_id", "") or "").strip()
+    if not project_id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Preview generation requires a project-scoped run",
+        )
+    tenant = session.get(tenant_model, run.tenant_id)
+    if tenant is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Tenant not found")
+    project = session.get(project_model, project_id)
+    if project is None or str(getattr(project, "tenant_id", "") or "").strip() != str(run.tenant_id):
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+
+    try:
+        preview_result = create_run_preview_deployment(
+            session=session,
+            tenant=tenant,
+            project=project,
+            run=run,
+            settings=settings,
+            pr_url=getattr(run, "pr_url", None),
+            force=force,
+        )
+    except RuntimeError as exc:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail=str(exc)) from exc
+    if preview_result.release is None:
+        detail_by_reason = {
+            "deployments_disabled": "Project deployments are disabled",
+            "preview_prs_disabled": "Preview deployments are not enabled for this project",
+        }
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=detail_by_reason.get(preview_result.reason, f"Preview was not created: {preview_result.reason}"),
+        )
+    return preview_result.release
 
 
 def list_run_events(*, session, run_id: str, run_model, run_event_schema_cls, limit: int = 200):  # noqa: ANN001

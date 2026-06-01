@@ -15,6 +15,7 @@ import { useToast } from "@/components/ui/toast-provider";
 import { TokenStackedBarChart } from "@/components/charts";
 import {
   cancelRun,
+  createRunPreview,
   createWorkflowAttempt,
   getRun,
   getWorkflow,
@@ -28,6 +29,11 @@ import {
   type WorkflowAttemptCreatePayload,
   type TokenTimelineRecord
 } from "@/lib/api";
+import {
+  listProjectAppReleases,
+  listProjectApps,
+  type ProjectDeploymentReleaseRecord,
+} from "@/lib/api/deployments";
 import { formatTimeAgo, formatTimestamp } from "@/lib/datetime";
 import { buildRunDetailPath, resolveRunRouteContext } from "@/lib/dashboard-paths";
 import { useRunEventStream } from "@/hooks/use-run-event-stream";
@@ -110,6 +116,30 @@ type WorkflowDiagnosticsHistoryEntry = {
 };
 
 type RunPanelTab = "overview" | "agents" | "diagnostics" | "cost";
+
+type RunPreviewReleaseLink = {
+  appId: string | null;
+  release: ProjectDeploymentReleaseRecord;
+};
+
+function isUsableRunPreviewRelease(release: ProjectDeploymentReleaseRecord, runId: string): boolean {
+  if (release.release_kind !== "run_preview" || release.source_run_id !== runId || release.destroyed_at) {
+    return false;
+  }
+  const normalizedStatus = release.status.trim().toLowerCase();
+  return !["destroyed", "failed", "rolled_back"].includes(normalizedStatus);
+}
+
+function previewReleasePrimaryUrl(release: ProjectDeploymentReleaseRecord): string | null {
+  const urls = release.service_urls.filter((serviceUrl) => serviceUrl.url.trim());
+  return (
+    urls.find((serviceUrl) => serviceUrl.status === "active" && serviceUrl.service_kind === "website")?.url ??
+    urls.find((serviceUrl) => serviceUrl.service_kind === "website")?.url ??
+    urls.find((serviceUrl) => serviceUrl.status === "active")?.url ??
+    urls[0]?.url ??
+    null
+  );
+}
 type AgentStage = "pm" | "dev" | "test" | "review";
 const CHAT_PAGE_SIZE = 40;
 
@@ -123,7 +153,7 @@ type RerunAttemptOption = {
 const PANEL_TABS: { id: RunPanelTab; label: string }[] = [
   { id: "overview", label: "Overview" },
   { id: "agents", label: "Agents" },
-  { id: "diagnostics", label: "Diagnostics" },
+  { id: "diagnostics", label: "Logs" },
   { id: "cost", label: "Cost" }
 ];
 
@@ -484,6 +514,9 @@ export default function RunDetailPage() {
   const [logs, setLogs] = useState<RuntimeLogEventRecord[]>([]);
   const [busy, setBusy] = useState(false);
   const [rerunBusy, setRerunBusy] = useState(false);
+  const [previewBusy, setPreviewBusy] = useState(false);
+  const [previewLookupBusy, setPreviewLookupBusy] = useState(false);
+  const [existingPreview, setExistingPreview] = useState<RunPreviewReleaseLink | null>(null);
   const [forceRerunBusy, setForceRerunBusy] = useState(false);
   const [statusLine, setStatusLine] = useState("");
   const [tokenTimeline, setTokenTimeline] = useState<TokenTimelineRecord | null>(null);
@@ -564,6 +597,52 @@ export default function RunDetailPage() {
       void loadRun();
     }
   }, [ready, credentials, loadRun]);
+
+  useEffect(() => {
+    if (!credentials || !run || run.status !== "succeeded" || !run.project_id) {
+      setExistingPreview(null);
+      setPreviewLookupBusy(false);
+      return;
+    }
+    const projectId = run.project_id;
+    let cancelled = false;
+    setPreviewLookupBusy(true);
+    void (async () => {
+      try {
+        const apps = await listProjectApps(credentials, run.tenant_id, projectId, { limit: 100 });
+        const releaseGroups = await Promise.all(
+          apps.map(async (app) => ({
+            app,
+            releases: await listProjectAppReleases(credentials, run.tenant_id, projectId, app.app_id),
+          })),
+        );
+        if (cancelled) {
+          return;
+        }
+        const previews = releaseGroups
+          .flatMap(({ app, releases }) =>
+            releases
+              .filter((release) => isUsableRunPreviewRelease(release, run.run_id))
+              .map((release) => ({ appId: release.app_id ?? app.app_id, release })),
+          )
+          .sort((left, right) => right.release.created_at.localeCompare(left.release.created_at));
+        setExistingPreview(previews[0] ?? null);
+      } catch (error) {
+        if (cancelled) {
+          return;
+        }
+        setExistingPreview(null);
+        setStatusLine(`Failed to load preview deployment: ${(error as Error).message}`);
+      } finally {
+        if (!cancelled) {
+          setPreviewLookupBusy(false);
+        }
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [credentials, run]);
 
   const refreshLiveRunSnapshot = useCallback(async () => {
     if (!credentials) {
@@ -673,6 +752,29 @@ export default function RunDetailPage() {
     }
   }
 
+  async function handleGeneratePreview() {
+    if (!credentials || !run) {
+      return;
+    }
+    setPreviewBusy(true);
+    try {
+      const release = await createRunPreview(credentials, run.run_id);
+      const firstUrl = release.service_urls.find((serviceUrl) => serviceUrl.status === "active")?.url
+        ?? release.service_urls[0]?.url
+        ?? null;
+      showToast({
+        title: "Preview requested",
+        description: firstUrl ? `Release ${release.release_name}: ${firstUrl}` : `Release ${release.release_name} is ${release.status}.`,
+        tone: "success",
+      });
+      setExistingPreview({ appId: release.app_id ?? null, release });
+    } catch (error) {
+      showToast({ title: "Generate preview failed", description: (error as Error).message, tone: "error" });
+    } finally {
+      setPreviewBusy(false);
+    }
+  }
+
   async function handleLoadOlderLogs() {
     if (!credentials || logs.length === 0 || loadingOlderLogs || !hasMoreLogs) {
       return;
@@ -698,6 +800,14 @@ export default function RunDetailPage() {
 
   const isRerunnable = Boolean(run);
   const isActiveRun = run?.status === "queued" || run?.status === "running";
+  const canUsePreview = run?.status === "succeeded" && Boolean(run.project_id);
+  const existingPreviewUrl = existingPreview ? previewReleasePrimaryUrl(existingPreview.release) : null;
+  const existingPreviewManageHref =
+    existingPreview && run?.tenant_id && run.project_id && existingPreview.appId
+      ? `/${encodeURIComponent(run.tenant_id)}/projects/${encodeURIComponent(run.project_id)}/deployments/${encodeURIComponent(existingPreview.appId)}?release=${encodeURIComponent(existingPreview.release.release_id)}`
+      : null;
+  const canGeneratePreview = canUsePreview && !existingPreview && !previewLookupBusy;
+  const runDisplayTitle = run?.issue_summary?.trim() || run?.issue_key || run?.run_id || params.runId;
   const liveStageUpdates = useMemo(() => {
     if (!isRecord(run?.plan)) {
       return [] as Array<Record<string, unknown>>;
@@ -1355,6 +1465,38 @@ export default function RunDetailPage() {
       });
     }
 
+    const stageOrder: AgentStage[] = ["pm", "dev", "test", "review"];
+    const stagesWithTelemetry = new Set(
+      segments
+        .filter((segment) => segment.stage !== "queue_wait")
+        .map((segment) => segment.stage),
+    );
+    let checkpointCursorMs = Number.isFinite(startedMs) ? startedMs : Number.isFinite(createdMs) ? createdMs : NaN;
+    for (const stage of stageOrder) {
+      const checkpoint = stageCheckpoints[stage];
+      if (!checkpoint || stagesWithTelemetry.has(stage)) {
+        continue;
+      }
+      const checkpointEndMs = checkpoint.completedAt ? new Date(checkpoint.completedAt).getTime() : NaN;
+      if (!Number.isFinite(checkpointCursorMs) || !Number.isFinite(checkpointEndMs)) {
+        continue;
+      }
+      const startMs = checkpointCursorMs;
+      const endMs = Math.max(startMs + 1, checkpointEndMs);
+      segments.push({
+        key: `checkpoint-${stage}`,
+        label: stage.toUpperCase(),
+        stage,
+        startMs,
+        endMs,
+        durationMs: endMs - startMs,
+        color: stageColor(stage),
+        detail: checkpoint.summary || "checkpoint completed",
+      });
+      stagesWithTelemetry.add(stage);
+      checkpointCursorMs = endMs;
+    }
+
     if (segments.length === 0) {
       return null;
     }
@@ -1378,7 +1520,7 @@ export default function RunDetailPage() {
       stageMs,
       resumedCount,
     };
-  }, [invocationSessionRows, isActiveRun, logs, run]);
+  }, [invocationSessionRows, isActiveRun, logs, run, stageCheckpoints]);
   const chatTimelineEntries = useMemo(() => {
     const stageUpdates = isRecord(run?.plan) && Array.isArray(run.plan["stage_updates"]) ? run.plan["stage_updates"] : [];
     const stageUpdateEntries: ChatTimelineEntry[] = stageUpdates
@@ -1503,34 +1645,61 @@ export default function RunDetailPage() {
         {/* Row 1: status + id + chips; actions wrap on narrow screens */}
         <div className="flex min-w-0 flex-col gap-3 sm:flex-row sm:flex-wrap sm:items-center">
           <div className="flex min-w-0 flex-wrap items-center gap-2">
-          {run ? <StatusBadge status={run.status} /> : null}
-          <code className="max-w-full truncate rounded bg-muted px-2 py-0.5 text-xs font-mono">{run?.run_id ?? params.runId}</code>
-          {run?.issue_key ? (
-            run.issue_url ? (
+            {run ? <StatusBadge status={run.status} /> : null}
+            <h1 data-testid="run-title" className="min-w-0 max-w-[min(48rem,100%)] truncate text-sm font-semibold text-foreground">
+              {runDisplayTitle}
+            </h1>
+            {run?.issue_key ? (
+              run.issue_url ? (
+                <Link
+                  href={run.issue_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-xs font-medium text-primary hover:bg-muted"
+                >
+                  {run.issue_key}
+                  <ArrowLeft className="h-3 w-3 rotate-[135deg]" />
+                </Link>
+              ) : (
+                <span className="rounded-md border px-2 py-0.5 text-xs font-medium">{run.issue_key}</span>
+              )
+            ) : null}
+            {run?.pr_url ? (
               <Link
-                href={run.issue_url}
+                href={run.pr_url}
                 target="_blank"
-                rel="noopener noreferrer"
-                className="inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-xs font-medium text-primary hover:bg-muted"
+                className="inline-flex items-center gap-1 rounded-md border border-primary/30 bg-primary/5 px-2 py-0.5 text-xs font-medium text-primary hover:bg-primary/10"
               >
-                {run.issue_key}
-                <ArrowLeft className="h-3 w-3 rotate-[135deg]" />
+                PR <ArrowLeft className="h-3 w-3 rotate-[135deg]" />
               </Link>
-            ) : (
-              <span className="rounded-md border px-2 py-0.5 text-xs font-medium">{run.issue_key}</span>
-            )
-          ) : null}
-          {run?.pr_url ? (
-            <Link
-              href={run.pr_url}
-              target="_blank"
-              className="inline-flex items-center gap-1 rounded-md border border-primary/30 bg-primary/5 px-2 py-0.5 text-xs font-medium text-primary hover:bg-primary/10"
-            >
-              PR <ArrowLeft className="h-3 w-3 rotate-[135deg]" />
-            </Link>
-          ) : null}
+            ) : null}
           </div>
           <div className="flex min-h-9 flex-wrap items-center gap-1.5 sm:ml-auto">
+            {existingPreviewUrl ? (
+              <Button asChild variant="secondary" size="sm" className="h-9 min-h-9 text-xs sm:h-7 sm:min-h-0">
+                <a href={existingPreviewUrl} target="_blank" rel="noreferrer">
+                  Open preview
+                </a>
+              </Button>
+            ) : existingPreviewManageHref ? (
+              <Button asChild variant="secondary" size="sm" className="h-9 min-h-9 text-xs sm:h-7 sm:min-h-0">
+                <Link href={existingPreviewManageHref}>Open preview</Link>
+              </Button>
+            ) : previewLookupBusy && canUsePreview ? (
+              <Button variant="secondary" size="sm" className="h-9 min-h-9 text-xs sm:h-7 sm:min-h-0" disabled>
+                Checking preview...
+              </Button>
+            ) : canGeneratePreview ? (
+              <Button
+                variant="secondary"
+                size="sm"
+                className="h-9 min-h-9 text-xs sm:h-7 sm:min-h-0"
+                onClick={() => void handleGeneratePreview()}
+                disabled={previewBusy}
+              >
+                {previewBusy ? "Generating preview..." : "Generate preview"}
+              </Button>
+            ) : null}
             {isRerunnable ? (
               <details className="relative" data-testid="run-rerun-menu">
                 <summary data-testid="run-rerun-trigger" className="flex h-9 min-h-9 cursor-pointer list-none items-center rounded-md border border-input bg-background px-3 text-xs text-foreground sm:h-7 sm:min-h-0">
@@ -1580,6 +1749,7 @@ export default function RunDetailPage() {
         {/* Row 2: metadata chips */}
         {run ? (
           <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-muted-foreground">
+            <span data-testid="run-id"><span className="font-medium text-foreground">Run ID</span> <code className="rounded bg-muted px-1">{run.run_id}</code></span>
             <span><span className="font-medium text-foreground">Tenant</span> {run.tenant_id}</span>
             {run.project_id ? <span><span className="font-medium text-foreground">Project</span> {run.project_id}</span> : null}
             {run.branch ? (
@@ -1929,6 +2099,7 @@ export default function RunDetailPage() {
                         return (
                           <div
                             key={segment.key}
+                            data-testid={`run-timeline-segment-${segment.stage}`}
                             className="absolute top-0 h-8 text-[10px] font-semibold text-white"
                             style={{ left: `${leftPct}%`, width: `${widthPct}%`, backgroundColor: segment.color }}
                             title={`${segment.label}: ${formatDuration(segment.durationMs)} (${segment.detail})`}

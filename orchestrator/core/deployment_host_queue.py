@@ -29,6 +29,7 @@ class DeploymentHostCommandEnqueueRequest:
     project_id: str | None
     app_id: str | None
     restore_run_id: str | None
+    release_id: str | None
     payload_json: dict[str, object]
 
 
@@ -49,6 +50,7 @@ def enqueue_deployment_host_command(
         project_id=request.project_id,
         app_id=request.app_id,
         restore_run_id=request.restore_run_id,
+        release_id=request.release_id,
         kind=request.kind,
         status="queued",
         claim_id=None,

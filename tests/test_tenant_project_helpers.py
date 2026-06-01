@@ -3,7 +3,8 @@ from __future__ import annotations
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
 
-from orchestrator.api.admin.tenant_project_helpers import resolve_project_discord_channel_binding
+from orchestrator.api.admin.tenant_project_helpers import ensure_default_project_for_tenant, resolve_project_discord_channel_binding
+from orchestrator.storage.models import Project
 from orchestrator.tools.discord_api import DiscordApiError
 
 
@@ -20,6 +21,30 @@ def _tenant() -> SimpleNamespace:
 
 def _project() -> SimpleNamespace:
     return SimpleNamespace(project_id="project-1", name="Alpha Project", jira_project_key="TP")
+
+
+def test_ensure_default_project_uses_opaque_project_id() -> None:
+    session = Mock()
+    session.get.return_value = None
+    session.execute.return_value.scalar_one_or_none.return_value = None
+    added: list[Project] = []
+    session.add.side_effect = added.append
+    tenant = SimpleNamespace(
+        tenant_id="tenant-1",
+        repos_config={"github_repository": "https://github.com/example/align"},
+        jira_config={"project_keys": ["AP"]},
+    )
+
+    ensure_default_project_for_tenant(
+        session,
+        tenant=tenant,
+        default_project_name_from_repo_fn=lambda **_: "align",
+    )
+
+    assert len(added) == 1
+    assert added[0].project_id.startswith("proj_")
+    assert "tenant-1" not in added[0].project_id
+    assert added[0].name == "align"
 
 
 def test_resolve_project_discord_channel_binding_preserves_existing_text_and_voice_channels() -> None:

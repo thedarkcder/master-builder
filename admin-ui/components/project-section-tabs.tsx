@@ -18,6 +18,7 @@ const PROJECT_SECTION_TABS: ProjectSectionTab[] = [
   { id: "runs", label: "Runs", visibility: "platform" },
   { id: "webhooks", label: "Webhooks", visibility: "manager" },
   { id: "notifications", label: "Notifications", visibility: "manager" },
+  { id: "access-requests", label: "Access Requests", visibility: "manager" },
   { id: "automations", label: "Automations", visibility: "manager" },
   { id: "secrets", label: "Secrets", visibility: "manager" },
   { id: "danger", label: "Danger", visibility: "manager" },
