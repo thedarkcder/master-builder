@@ -13,7 +13,7 @@ from orchestrator.core.security import (
     require_authenticated_principal,
 )
 from orchestrator.api.admin.runs import use_cases
-from orchestrator.api.schemas import LoggingPaneEventRead, RunEventRead, RunRead
+from orchestrator.api.schemas import LoggingPaneEventRead, ProjectDeploymentReleaseRead, RunEventRead, RunRead
 
 router = APIRouter(prefix="/api/admin", tags=["admin"])
 
@@ -60,6 +60,15 @@ def cancel_run(
     session: Session = Depends(get_session),
 ) -> RunRead:
     return use_cases.cancel_run(session=session, run_id=run_id)
+
+@router.post("/runs/{run_id}/preview", response_model=ProjectDeploymentReleaseRead)
+def create_run_preview(
+    run_id: str,
+    force: bool = Query(default=False),
+    principal: AuthenticatedPrincipal = Depends(require_authenticated_principal),
+    session: Session = Depends(get_session),
+) -> ProjectDeploymentReleaseRead:
+    return use_cases.create_run_preview(session=session, principal=principal, run_id=run_id, force=force)
 
 @router.get("/runs/{run_id}/events", response_model=list[RunEventRead])
 def list_run_events(

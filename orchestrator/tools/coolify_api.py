@@ -2,12 +2,25 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass
-from urllib.error import HTTPError
+from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 
 class CoolifyApiError(RuntimeError):
-    pass
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int | None = None,
+        method: str | None = None,
+        path: str | None = None,
+        body: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.method = method
+        self.path = path
+        self.body = body
 
 
 @dataclass(frozen=True)
@@ -51,7 +64,15 @@ class CoolifyApiClient:
                 response_body = response.read().decode("utf-8")
         except HTTPError as exc:
             error_body = exc.read().decode("utf-8")
-            raise CoolifyApiError(f"Coolify API request failed ({exc.code}) for {method} {path}: {error_body}") from exc
+            raise CoolifyApiError(
+                f"Coolify API request failed ({exc.code}) for {method} {path}: {error_body}",
+                status_code=exc.code,
+                method=method,
+                path=path,
+                body=error_body,
+            ) from exc
+        except URLError as exc:
+            raise CoolifyApiError(f"Coolify API request failed for {method} {path}: {exc.reason}") from exc
 
         if not response_body:
             return {}

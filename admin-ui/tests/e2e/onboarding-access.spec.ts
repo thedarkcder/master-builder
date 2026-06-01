@@ -383,6 +383,19 @@ test("workspace home summarizes projects and project overview shows parent Jira 
     pending_input_request_id: "input-mab-250",
     runs: [],
   });
+  const boardWorkflows = [readyParent, idleReadyParent, blockedParent].map((workflow) => ({
+    ...workflow,
+    work_item_id: `parent:${workflow.execution_id}`,
+    startable: workflow.status === "completed",
+    start_label: workflow.status === "completed" ? "Start engineering" : null,
+    start_blocked_reason: workflow.status === "completed" ? null : "waiting_for_input",
+    run_count: workflow.runs.length,
+    active_run_count: 0,
+    failed_run_count: 0,
+    latest_run: workflow.runs[0] ?? null,
+    latest_activity_at: workflow.finished_at ?? workflow.started_at ?? workflow.created_at,
+    children: [],
+  }));
 
   await seedTenantSession(page, { principal, userEmail: principal.email, userName: principal.full_name });
   await installBffApiMocks(page, [
@@ -424,7 +437,7 @@ test("workspace home summarizes projects and project overview shows parent Jira 
         if (url.searchParams.has("project_id")) {
           expect(url.searchParams.get("project_id")).toBe("example-default");
         }
-        return fulfillJson(route, [readyParent, idleReadyParent, blockedParent]);
+        return fulfillJson(route, boardWorkflows);
       },
     },
   ]);
@@ -451,6 +464,7 @@ test("workspace home summarizes projects and project overview shows parent Jira 
   await expect(page.getByRole("heading", { name: "Needs input" })).toHaveCount(0);
 
   await expect(projectCard).toHaveAttribute("href", "/example/projects/example-default");
+  await page.setViewportSize({ width: 1700, height: 900 });
   await page.goto("/example/projects/example-default");
   await expect(page).toHaveURL(/\/example\/projects\/example-default$/);
   await expect(page.getByRole("link", { name: "Knowledge" })).toHaveAttribute(
@@ -459,6 +473,14 @@ test("workspace home summarizes projects and project overview shows parent Jira 
   );
   await expect(page.getByRole("heading", { name: "Ready to start" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Needs input" })).toBeVisible();
+  const laneTopPixels = await Promise.all(
+    ["Needs input", "Awaiting planning", "Ready to start", "Engineering active", "Done"].map(async (laneName) => {
+      const box = await page.getByRole("region", { name: laneName }).boundingBox();
+      expect(box).not.toBeNull();
+      return Math.round(box?.y ?? -1);
+    }),
+  );
+  expect(new Set(laneTopPixels).size).toBe(1);
   await expect(page.getByRole("heading", { name: "Repository" })).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "Effective AI policy" })).toHaveCount(0);
   await expect(page.getByText("Browse knowledge")).toHaveCount(0);
@@ -466,7 +488,7 @@ test("workspace home summarizes projects and project overview shows parent Jira 
   await expect(page.getByText("Identity redesign")).toBeVisible();
   const readyCard = page.locator("article").filter({ hasText: "MAB-243" });
   await expect(readyCard.getByText("1 run")).not.toBeVisible();
-  await readyCard.click();
+  await page.getByRole("button", { name: "Open MAB-243 details" }).click();
   const detailsDrawer = page.getByRole("dialog", { name: "MAB-243 details" });
   await expect(detailsDrawer).toBeVisible();
   await expect(detailsDrawer.getByText("1 run")).toBeVisible();

@@ -203,6 +203,8 @@ def test_create_project_clones_repository_after_commit() -> None:
     assert checkout_calls == [("t1", "https://github.com/example/repo", 1)]
     created_project = session.added[0]
     assert isinstance(created_project, Project)
+    assert created_project.project_id.startswith("proj_")
+    assert "t1" not in created_project.project_id
     assert "run_board_id" not in created_project.policy_overrides
 
 

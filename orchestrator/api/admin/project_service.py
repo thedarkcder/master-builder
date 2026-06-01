@@ -17,6 +17,7 @@ from orchestrator.api.admin.deployment_config_service import (
     project_deployment_policy_to_schema,
     tenant_deployment_plane_to_schema,
 )
+from orchestrator.api.admin.tenant_project_helpers import allocate_project_id
 from orchestrator.api.admin.deployment_restore_service import (
     create_project_deployment_restore_run,
     get_project_deployment_restore_run,
@@ -304,7 +305,7 @@ class AdminProjectService:
 
         settings = self._settings_factory()
         project = Project(
-            project_id=str(uuid4()),
+            project_id=allocate_project_id(session),
             tenant_id=tenant_id,
             name=normalized_name,
             github_repository=normalized_repo,
@@ -540,6 +541,25 @@ class AdminProjectService:
         release_id: str,
     ) -> object:
         return get_project_deployment_release(
+            session=session,
+            tenant_id=tenant_id,
+            project_id=project_id,
+            release_id=release_id,
+            app_id=app_id,
+        )
+
+    def get_project_app_deployment_release_logs(
+        self,
+        *,
+        session,
+        tenant_id: str,
+        project_id: str,
+        app_id: str,
+        release_id: str,
+    ) -> object:
+        from orchestrator.api.admin.deployment_release_service import get_project_deployment_release_logs
+
+        return get_project_deployment_release_logs(
             session=session,
             tenant_id=tenant_id,
             project_id=project_id,

@@ -117,11 +117,12 @@ class Settings(BaseSettings):
     deployment_host_agent_bootstrap_token_path: str = ""
     deployment_host_agent_access_token: str = ""
     deployment_host_agent_access_token_path: str = ""
-    deployment_host_agent_capabilities: str = "restore_database,postgres,mysql,mariadb"
+    deployment_host_agent_capabilities: str = "restore_database,postgres,mysql,mariadb,local_preview_routes"
     deployment_host_agent_poll_seconds: int = 5
     deployment_host_agent_heartbeat_interval_seconds: int = 30
     deployment_host_agent_command_timeout_seconds: int = 900
     deployment_host_agent_container_runtime_command: str = "docker"
+    deployment_host_agent_local_preview_proxy_dynamic_dir: str = ""
     workflow_orchestrated_run_timeout_minutes: int = 90
     orchestration_backend: Literal["legacy", "temporal"] = "legacy"
     temporal_target_host: str = "127.0.0.1:60008"

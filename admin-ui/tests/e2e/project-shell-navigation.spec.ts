@@ -40,6 +40,8 @@ test("project routes use project-scoped nav with a project picker instead of in-
   await expect(page.getByRole("link", { name: "Board" })).toHaveAttribute("href", "/example/projects/example-default");
   await expect(page.getByRole("link", { name: "Knowledge" })).toHaveAttribute("href", "/example/projects/example-default/knowledge");
   await expect(page.getByRole("link", { name: "Architecture" })).toHaveAttribute("href", "/example/projects/example-default/architecture");
+  await expect(page.locator("summary").filter({ hasText: "Delivery" })).toBeVisible();
+  await expect(page.locator("summary").filter({ hasText: "Deployments" })).toHaveCount(0);
   await expect(page.getByRole("link", { name: "Releases" })).toHaveAttribute("href", "/example/projects/example-default/deployments");
   await expect(page.getByRole("link", { name: "Policy" })).toHaveAttribute("href", "/example/projects/example-default/deployment");
   await page.locator("summary").filter({ hasText: "Project" }).click();

@@ -32,6 +32,13 @@ export MASTER_BUILDER_API_PORT="${MASTER_BUILDER_API_PORT:-60001}"
 export MASTER_BUILDER_POSTGRES_PORT="${MASTER_BUILDER_POSTGRES_PORT:-60003}"
 export MASTER_BUILDER_CLICKHOUSE_HTTP_PORT="${MASTER_BUILDER_CLICKHOUSE_HTTP_PORT:-60006}"
 export MASTER_BUILDER_OTEL_HTTP_PORT="${MASTER_BUILDER_OTEL_HTTP_PORT:-60010}"
+LOCAL_COOLIFY_ENABLED="${LOCAL_COOLIFY_ENABLED:-auto}"
+LOCAL_COOLIFY_DIR="${LOCAL_COOLIFY_DIR:-${HOME}/.master-builder-coolify/source}"
+LOCAL_COOLIFY_PROXY_DIR="${LOCAL_COOLIFY_PROXY_DIR:-${LOCAL_COOLIFY_DIR%/source}/proxy}"
+LOCAL_COOLIFY_PORT="${LOCAL_COOLIFY_PORT:-8000}"
+LOCAL_COOLIFY_API_BASE_URL="${LOCAL_COOLIFY_API_BASE_URL:-http://localhost:${LOCAL_COOLIFY_PORT}/api/v1}"
+LOCAL_COOLIFY_COMPOSE_PROJECT_NAME="${LOCAL_COOLIFY_COMPOSE_PROJECT_NAME:-master-builder-coolify}"
+LOCAL_PREVIEW_PROXY_PORT="${LOCAL_PREVIEW_PROXY_PORT:-8088}"
 LOCAL_PUBLIC_API_BASE_URL="http://localhost:${MASTER_BUILDER_API_PORT}"
 LOCAL_ADMIN_UI_BASE_URL="http://localhost:${ADMIN_UI_PORT}"
 LOCAL_DATABASE_URL="postgresql+psycopg://orchestrator:orchestrator@127.0.0.1:${MASTER_BUILDER_POSTGRES_PORT}/orchestrator"
@@ -46,6 +53,126 @@ DOCKER_DATABASE_URL="${MASTER_BUILDER_DOCKER_DATABASE_URL:-postgresql+psycopg://
 
 docker_compose() {
   ORCHESTRATOR_DATABASE_URL="$DOCKER_DATABASE_URL" POSTGRES_URL="$DOCKER_DATABASE_URL" docker compose "$@"
+}
+
+local_coolify_config_available() {
+  [[ -f "${LOCAL_COOLIFY_DIR}/.env" && -f "${LOCAL_COOLIFY_DIR}/docker-compose.yml" && -f "${LOCAL_COOLIFY_DIR}/docker-compose.prod.yml" ]]
+}
+
+local_coolify_proxy_config_available() {
+  [[ -f "${LOCAL_COOLIFY_PROXY_DIR}/docker-compose.yml" ]]
+}
+
+local_coolify_enabled() {
+  case "$LOCAL_COOLIFY_ENABLED" in
+    always)
+      return 0
+      ;;
+    never)
+      return 1
+      ;;
+    auto)
+      local_coolify_config_available
+      ;;
+    *)
+      echo "LOCAL_COOLIFY_ENABLED must be one of: auto, always, never." >&2
+      return 2
+      ;;
+  esac
+}
+
+local_coolify_health_ready() {
+  local health_url="${LOCAL_COOLIFY_API_BASE_URL%/api/v1}/api/health"
+  curl -fsS "$health_url" >/dev/null 2>&1
+}
+
+wait_for_local_coolify_ready() {
+  local timeout_seconds="$1"
+  local poll_seconds="$2"
+  local start_ts
+  local now_ts
+  start_ts="$(date +%s)"
+
+  echo "Waiting for local Coolify to become ready..."
+  while true; do
+    if local_coolify_health_ready; then
+      echo "Local Coolify ready."
+      return 0
+    fi
+
+    now_ts="$(date +%s)"
+    if (( now_ts - start_ts >= timeout_seconds )); then
+      echo "Timed out waiting for local Coolify readiness (${timeout_seconds}s)."
+      return 1
+    fi
+    sleep "$poll_seconds"
+  done
+}
+
+ensure_local_coolify_env() {
+  local env_file="${LOCAL_COOLIFY_DIR}/.env"
+  if grep -q '^MUX_ENABLED=' "$env_file"; then
+    sed -i.bak 's/^MUX_ENABLED=.*/MUX_ENABLED=false/' "$env_file"
+  else
+    printf '\nMUX_ENABLED=false\n' >> "$env_file"
+  fi
+  rm -f "${env_file}.bak"
+}
+
+start_local_coolify_if_configured() {
+  if ! local_coolify_enabled; then
+    local enabled_exit_code="$?"
+    if (( enabled_exit_code > 1 )); then
+      return "$enabled_exit_code"
+    fi
+    echo "Local Coolify startup skipped."
+    return 0
+  fi
+
+  if ! local_coolify_config_available; then
+    echo "Local Coolify config not found at ${LOCAL_COOLIFY_DIR}."
+    return 1
+  fi
+
+  echo "Starting local Coolify..."
+  ensure_local_coolify_env
+  docker network inspect coolify >/dev/null 2>&1 || docker network create coolify >/dev/null
+  (
+    cd "$LOCAL_COOLIFY_DIR"
+    docker compose --project-name "$LOCAL_COOLIFY_COMPOSE_PROJECT_NAME" --env-file .env -f docker-compose.yml -f docker-compose.prod.yml up -d
+  )
+  start_local_coolify_proxy
+  wait_for_local_coolify_ready "$DOCKER_WAIT_TIMEOUT_SECONDS" "$DOCKER_WAIT_INTERVAL_SECONDS"
+}
+
+start_local_coolify_proxy() {
+  if ! local_coolify_proxy_config_available; then
+    echo "Local Coolify proxy config not found at ${LOCAL_COOLIFY_PROXY_DIR}."
+    return 1
+  fi
+
+  echo "Starting local Coolify proxy..."
+  (
+    cd "$LOCAL_COOLIFY_PROXY_DIR"
+    docker compose -f docker-compose.yml up -d --force-recreate
+  )
+}
+
+bootstrap_local_coolify_if_configured() {
+  if ! local_coolify_enabled; then
+    local enabled_exit_code="$?"
+    if (( enabled_exit_code > 1 )); then
+      return "$enabled_exit_code"
+    fi
+    return 0
+  fi
+
+  echo "Configuring local Coolify for Master Builder previews..."
+  LOCAL_COOLIFY_API_BASE_URL="$LOCAL_COOLIFY_API_BASE_URL" \
+    LOCAL_PREVIEW_BASE_DOMAIN="${LOCAL_PREVIEW_BASE_DOMAIN:-}" \
+    LOCAL_PREVIEW_LAN_IP="${LOCAL_PREVIEW_LAN_IP:-}" \
+    LOCAL_PREVIEW_PROXY_PORT="$LOCAL_PREVIEW_PROXY_PORT" \
+    "${VENV_DIR}/bin/python" "${ROOT_DIR}/scripts/bootstrap_local_coolify.py"
 }
 
 DOCKER_BASE_SERVICES=(
@@ -103,6 +230,8 @@ DOCKER_READY_SERVICES=(
 DOCKER_BUILD_SERVICES=(
   migrate
   "${DOCKER_APP_SERVICES[@]}"
+  deployment-host-bootstrap
+  deployment-host-agent
 )
 
 sha256_stream() {
@@ -474,6 +603,32 @@ admin_ui_listener_cwd() {
   lsof -a -p "$pid" -d cwd -Fn 2>/dev/null | awk '/^n/ { sub(/^n/, ""); print; exit }'
 }
 
+compose_admin_ui_container_id() {
+  docker_compose ps -q admin-ui 2>/dev/null || true
+}
+
+compose_admin_ui_publishes_admin_port() {
+  local container_id
+  container_id="$(compose_admin_ui_container_id)"
+  [[ -n "$container_id" ]] || return 1
+
+  docker inspect --format '{{range $containerPort, $bindings := .NetworkSettings.Ports}}{{range $bindings}}{{println .HostPort}}{{end}}{{end}}' "$container_id" 2>/dev/null \
+    | grep -qx "$ADMIN_UI_PORT"
+}
+
+wait_for_admin_ui_port_free() {
+  local deadline
+  deadline="$(( $(date +%s) + 15 ))"
+  while [[ -n "$(admin_ui_listener_pids)" ]]; do
+    if (( $(date +%s) >= deadline )); then
+      echo "Timed out waiting for admin UI port ${ADMIN_UI_PORT} to become free."
+      return 1
+    fi
+    sleep 1
+  done
+  return 0
+}
+
 local_worker_candidate_pids() {
   ps -axo pid=,command= | awk '/[[:space:]]-m orchestrator worker-runs([[:space:]]|$)/ { print $1 }'
 }
@@ -522,6 +677,13 @@ restart_existing_admin_ui_if_owned() {
     return 0
   fi
 
+  if compose_admin_ui_publishes_admin_port; then
+    echo "Stopping existing Docker admin UI on port ${ADMIN_UI_PORT}..."
+    docker_compose stop admin-ui >/dev/null
+    wait_for_admin_ui_port_free
+    return $?
+  fi
+
   local pid
   local pid_cwd
   for pid in $listener_pids; do
@@ -537,16 +699,7 @@ restart_existing_admin_ui_if_owned() {
     kill "$pid" >/dev/null 2>&1 || true
   done
 
-  local deadline
-  deadline="$(( $(date +%s) + 15 ))"
-  while [[ -n "$(admin_ui_listener_pids)" ]]; do
-    if (( $(date +%s) >= deadline )); then
-      echo "Timed out waiting for admin UI port ${ADMIN_UI_PORT} to become free."
-      return 1
-    fi
-    sleep 1
-  done
-  return 0
+  wait_for_admin_ui_port_free
 }
 
 UI_PID=""
@@ -562,6 +715,7 @@ cleanup_dead_project_containers
 restart_existing_local_worker_if_owned
 stop_existing_app_services_before_migration
 
+start_local_coolify_if_configured
 run_compose_up
 
 echo "Waiting for Docker services to become healthy/ready..."
@@ -624,6 +778,7 @@ else
 fi
 
 wait_for_local_database_ready "$DOCKER_WAIT_TIMEOUT_SECONDS" "$DOCKER_WAIT_INTERVAL_SECONDS"
+bootstrap_local_coolify_if_configured
 
 cd "${ROOT_DIR}/admin-ui"
 if [[ -n "$(admin_ui_listener_pids)" ]]; then

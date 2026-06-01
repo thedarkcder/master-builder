@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
-import { useRouter } from "next/navigation";
+import { type ClipboardEvent, useEffect, useMemo, useState } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 
 import { useAuth } from "@/components/auth-provider";
 import { Badge } from "@/components/ui/badge";
@@ -17,10 +17,11 @@ import {
   applyProjectAppDeploymentResources,
   applyProjectAppDeploymentVolumes,
   createProjectAppDeploymentRelease,
-  createProjectAppAnalysisRun,
   deleteProjectApp,
   getProjectApp,
   getProjectAppDeploymentConfig,
+  getProjectAppDeploymentReleaseLogs,
+  listProjectGitHubBranches,
   listProjectAppAnalysisRuns,
   listProjectAppDeploymentBackupExecutions,
   listProjectAppDeploymentRestoreRuns,
@@ -35,6 +36,8 @@ import {
   type ProjectAppDeploymentConfigRecord,
   type ProjectAppDeploymentReleaseRecord,
   type ProjectAppRecord,
+  type ProjectGitHubBranchRecord,
+  type ProjectDeploymentReleaseLogsRecord,
   type ProjectDeploymentBackupExecutionListRecord,
   type ProjectDeploymentBackupExecutionRecord,
   type ProjectDeploymentApplyBackupsPayload,
@@ -53,7 +56,8 @@ import {
   type ProjectDeploymentVolumeRecord,
   type ProjectAppDeploymentConfigUpdatePayload,
 } from "@/lib/api/deployments";
-import { ArrowLeft, ArrowRight, ExternalLink, Plus, RefreshCw, Save, Search, Server, Trash2 } from "lucide-react";
+import { createRunPreview, getRun, type RunRecord } from "@/lib/api/run-events";
+import { ArrowLeft, ArrowRight, ExternalLink, Plus, RefreshCw, Save, Server, Trash2 } from "lucide-react";
 
 type ProjectAppAdminPageProps = {
   tenantId: string;
@@ -181,14 +185,14 @@ const SERVICE_BUILD_STRATEGY_OPTIONS = [
 const APP_SECTIONS: { id: AppSection; label: string }[] = [
   { id: "overview", label: "Overview" },
   { id: "services", label: "Services" },
-  { id: "releases", label: "Deployments" },
+  { id: "releases", label: "Releases" },
   { id: "settings", label: "Settings" },
   { id: "environment", label: "Environment" },
   { id: "domains", label: "Domains" },
   { id: "resources", label: "Resources" },
   { id: "volumes", label: "Volumes" },
   { id: "backups", label: "Backups" },
-  { id: "diagnostics", label: "Diagnostics" },
+  { id: "diagnostics", label: "Logs" },
   { id: "danger", label: "Danger" },
 ];
 
@@ -240,8 +244,8 @@ function AppAdminSectionTabs({
   onSectionChange: (section: AppSection) => void;
 }) {
   return (
-    <div className="overflow-x-auto border-b">
-      <nav className="-mb-px flex min-w-max gap-1" aria-label="Deployment technical controls">
+    <div className="overflow-x-auto border-b md:overflow-visible">
+      <nav className="-mb-px flex min-w-max gap-1 md:min-w-0 md:flex-wrap" aria-label="Deployment technical controls">
         {APP_SECTIONS.map((section) => {
           const isDanger = section.id === "danger";
           return (
@@ -406,35 +410,6 @@ function OperationResultSummary({ result }: { result: ProjectDeploymentOperation
     <div className="divide-y rounded-xl border bg-muted/10">
       {rows.map(([label, value]) => (
         <div key={label} className="grid gap-1 px-3 py-2 text-sm sm:grid-cols-[minmax(0,0.25fr)_minmax(0,1fr)]">
-          <span className="font-medium text-muted-foreground">{label}</span>
-          <span className="break-words">{value}</span>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function AnalysisResultSummary({ result }: { result: Record<string, unknown> }) {
-  const generatedFiles = asStringArray(result.generated_files);
-  const appCandidates = Array.isArray(result.app_candidates) ? result.app_candidates.length : null;
-  const serviceCount = Array.isArray(result.services) ? result.services.length : null;
-  const rows: [string, string][] = [];
-  if (appCandidates != null) {
-    rows.push(["Deployment candidates", String(appCandidates)]);
-  }
-  if (serviceCount != null) {
-    rows.push(["Services", String(serviceCount)]);
-  }
-  if (generatedFiles.length > 0) {
-    rows.push(["Generated files", generatedFiles.join(", ")]);
-  }
-  if (rows.length === 0) {
-    return <p className="rounded-xl border border-dashed px-4 py-6 text-sm text-muted-foreground">No generated artifact summary is available.</p>;
-  }
-  return (
-    <div className="divide-y rounded-xl border bg-muted/10">
-      {rows.map(([label, value]) => (
-        <div key={label} className="grid gap-1 px-3 py-2 text-sm sm:grid-cols-[minmax(0,0.3fr)_minmax(0,1fr)]">
           <span className="font-medium text-muted-foreground">{label}</span>
           <span className="break-words">{value}</span>
         </div>
@@ -670,28 +645,6 @@ function extractArtifactPrMetadata(result: Record<string, unknown> | null): {
   return { prUrl, generatedFiles, generatedFileCount };
 }
 
-function readAnalysisRunId(run: ProjectAppAnalysisRunRecord | null): string | null {
-  if (!run) {
-    return null;
-  }
-  if (typeof run.analysis_run_id === "string" && run.analysis_run_id.trim()) {
-    return run.analysis_run_id;
-  }
-  const fallback = (run as unknown as Record<string, unknown>).run_id;
-  return typeof fallback === "string" && fallback.trim() ? fallback : null;
-}
-
-function readAnalysisRunError(run: ProjectAppAnalysisRunRecord | null): string | null {
-  if (!run) {
-    return null;
-  }
-  if (typeof run.last_error === "string" && run.last_error.trim()) {
-    return run.last_error;
-  }
-  const fallback = (run as unknown as Record<string, unknown>).error;
-  return typeof fallback === "string" && fallback.trim() ? fallback : null;
-}
-
 function readAnalysisRunResult(run: ProjectAppAnalysisRunRecord | null): Record<string, unknown> | null {
   if (!run) {
     return null;
@@ -785,6 +738,70 @@ function releaseDisplayName(release: ProjectAppDeploymentReleaseRecord | null): 
   return `${release.git_ref} @ ${release.commit_sha.slice(0, 8)}`;
 }
 
+function formatProviderLogs(logs: string): string {
+  const normalized = logs.replace(/\r\n?/g, "\n");
+  if (normalized.includes("\n")) {
+    return normalized;
+  }
+  return normalized.replace(/\\r\\n|\\n|\\r/g, "\n");
+}
+
+function releaseBranchLabel(release: ProjectAppDeploymentReleaseRecord): string {
+  if (release.release_kind === "run_preview") {
+    return "Preview";
+  }
+  const normalizedRef = release.git_ref.trim().toLowerCase();
+  const tail = normalizedRef.split("/").filter(Boolean).at(-1) ?? normalizedRef;
+  if (tail === "stage" || tail === "staging" || tail.startsWith("stage-") || tail.startsWith("staging-")) {
+    return "Stage";
+  }
+  if (tail === "main" || tail === "master" || tail.startsWith("main-") || tail.startsWith("master-")) {
+    return "Main";
+  }
+  return "Branch";
+}
+
+function releaseSelectorLabel(release: ProjectAppDeploymentReleaseRecord): string {
+  if (release.release_kind === "run_preview") {
+    const issueKey = release.source_issue_key?.trim().toUpperCase();
+    const summary = release.source_issue_summary?.trim();
+    if (issueKey && summary) {
+      return `Preview: ${issueKey}: ${summary}`;
+    }
+    if (issueKey) {
+      return `Preview: ${issueKey}`;
+    }
+  }
+  return `${releaseBranchLabel(release)}: ${release.git_ref} @ ${release.commit_sha.slice(0, 8)}`;
+}
+
+function isRunPreviewRelease(release: ProjectAppDeploymentReleaseRecord): boolean {
+  return release.release_kind === "run_preview";
+}
+
+function isActivePreviewRelease(release: ProjectAppDeploymentReleaseRecord): boolean {
+  if (!isRunPreviewRelease(release) || release.destroyed_at) {
+    return false;
+  }
+  const normalizedStatus = release.status.trim().toLowerCase();
+  return !["destroyed", "failed", "rolled_back"].includes(normalizedStatus);
+}
+
+function activePreviewReleasesByBranch(releases: ProjectAppDeploymentReleaseRecord[]): ProjectAppDeploymentReleaseRecord[] {
+  const byBranch = new Map<string, ProjectAppDeploymentReleaseRecord>();
+  const newestFirst = [...releases].sort((left, right) => right.created_at.localeCompare(left.created_at));
+  for (const release of newestFirst) {
+    if (!isActivePreviewRelease(release)) {
+      continue;
+    }
+    const key = release.git_ref.trim() || release.source_run_id || release.release_id;
+    if (!byBranch.has(key)) {
+      byBranch.set(key, release);
+    }
+  }
+  return [...byBranch.values()];
+}
+
 function appLatestReleaseDisplayName(app: ProjectAppRecord): string | null {
   const releaseName = app.latest_release_name?.trim();
   if (releaseName) {
@@ -798,21 +815,36 @@ function appLatestReleaseDisplayName(app: ProjectAppRecord): string | null {
   return null;
 }
 
+function uniqueStrings(values: Array<string | null | undefined>): string[] {
+  return [...new Set(values.map((value) => value?.trim()).filter((value): value is string => Boolean(value)))];
+}
+
+function parseEnvironmentVariablePaste(text: string): EnvironmentVariableDraft[] {
+  const trimmedText = text.trim();
+  if (!trimmedText.includes("=")) return [];
+
+  const assignmentPattern = /(?:^|[;,.|]\s*)([A-Za-z_][A-Za-z0-9_]*)\s*=\s*/g;
+  const matches = Array.from(trimmedText.matchAll(assignmentPattern));
+  if (matches.length === 0) return [];
+
+  const entries: EnvironmentVariableDraft[] = [];
+  for (const [index, match] of matches.entries()) {
+    const key = match[1]?.trim();
+    if (!key) continue;
+    const valueStart = match.index + match[0].length;
+    const nextMatch = matches[index + 1];
+    const valueEnd = nextMatch?.index ?? trimmedText.length;
+    entries.push({ key, value: trimmedText.slice(valueStart, valueEnd).trim() });
+  }
+  return entries;
+}
+
 function deploymentDisplayName(
   app: ProjectAppRecord,
   latestRelease: ProjectAppDeploymentReleaseRecord | null,
   fallbackIndex?: number,
 ): string {
   return releaseDisplayName(latestRelease) ?? appLatestReleaseDisplayName(app) ?? `Deployment ${fallbackIndex != null ? fallbackIndex + 1 : ""}`.trim();
-}
-
-function analysisStatusVariant(status: string): "default" | "secondary" | "outline" | "success" | "warning" | "destructive" | "info" {
-  const normalized = status.trim().toLowerCase();
-  if (normalized === "completed") return "success";
-  if (normalized === "running") return "warning";
-  if (normalized === "queued") return "info";
-  if (normalized === "failed") return "destructive";
-  return "outline";
 }
 
 function buildStrategyLabel(strategy: string | null | undefined): string {
@@ -1232,10 +1264,18 @@ export function ProjectAppAdminPage({
   const { ready } = useAuth();
   const { showToast } = useToast();
   const router = useRouter();
+  const searchParams = useSearchParams();
+  const requestedReleaseId = searchParams.get("release");
   const [apps, setDeployments] = useState<ProjectAppRecord[]>([]);
   const [analysisRuns, setAnalysisRuns] = useState<ProjectAppAnalysisRunRecord[]>([]);
   const [selectedAppId, setSelectedAppId] = useState<string | null>(appId);
   const [selectedAppReleases, setSelectedAppReleases] = useState<ProjectAppDeploymentReleaseRecord[]>([]);
+  const [selectedReleaseId, setSelectedReleaseId] = useState<string | null>(null);
+  const [selectedReleaseSourceRun, setSelectedReleaseSourceRun] = useState<RunRecord | null>(null);
+  const [selectedReleaseLogs, setSelectedReleaseLogs] = useState<ProjectDeploymentReleaseLogsRecord | null>(null);
+  const [selectedReleaseLogsLoading, setSelectedReleaseLogsLoading] = useState(false);
+  const [selectedReleaseLogsError, setSelectedReleaseLogsError] = useState("");
+  const [githubBranches, setGithubBranches] = useState<ProjectGitHubBranchRecord[]>([]);
   const [selectedSection, setSelectedSection] = useState<AppSection>("overview");
   const [selectedDeploymentSection, setSelectedDeploymentSection] = useState<DeploymentSubsection>("runtime");
   const [selectedBackupSection, setSelectedBackupSection] = useState<BackupSubsection>("policies");
@@ -1252,7 +1292,6 @@ export function ProjectAppAdminPage({
   const [restoreStatusLine, setRestoreStatusLine] = useState("");
   const [busy, setBusy] = useState(false);
   const [loadingSurface, setLoadingSurface] = useState(false);
-  const [analysisBusy, setAnalysisBusy] = useState(false);
   const [savingConfig, setSavingConfig] = useState(false);
   const [manualDeployBusy, setManualDeployBusy] = useState(false);
   const [manualDeployGitRef, setManualDeployGitRef] = useState("");
@@ -1276,8 +1315,6 @@ export function ProjectAppAdminPage({
     () => [...analysisRuns].sort((left, right) => right.created_at.localeCompare(left.created_at))[0] ?? null,
     [analysisRuns],
   );
-  const latestAnalysisRunId = useMemo(() => readAnalysisRunId(latestAnalysisRun), [latestAnalysisRun]);
-  const latestAnalysisRunError = useMemo(() => readAnalysisRunError(latestAnalysisRun), [latestAnalysisRun]);
   const latestAnalysisRunResult = useMemo(() => readAnalysisRunResult(latestAnalysisRun), [latestAnalysisRun]);
   const latestArtifactPrMetadata = useMemo(
     () => extractArtifactPrMetadata(latestAnalysisRunResult),
@@ -1287,7 +1324,18 @@ export function ProjectAppAdminPage({
     () => [...selectedAppReleases].sort((left, right) => right.created_at.localeCompare(left.created_at)),
     [selectedAppReleases],
   );
-  const latestRelease = appReleases[0] ?? null;
+  const deploymentReleases = useMemo(
+    () => appReleases.filter((release) => !isRunPreviewRelease(release)),
+    [appReleases],
+  );
+  const latestProductionRelease = deploymentReleases[0] ?? null;
+  const selectedRelease = selectedReleaseId ? appReleases.find((release) => release.release_id === selectedReleaseId) ?? null : null;
+  const latestRelease = selectedRelease ?? latestProductionRelease ?? null;
+  const latestReleaseIsPreview = latestRelease ? isRunPreviewRelease(latestRelease) : false;
+  const activePreviewReleases = useMemo(
+    () => activePreviewReleasesByBranch(appReleases),
+    [appReleases],
+  );
   const latestServiceUrlGroups = useMemo(
     () => groupServiceUrls(latestRelease?.service_urls ?? []),
     [latestRelease],
@@ -1311,6 +1359,28 @@ export function ProjectAppAdminPage({
   const latestReleaseSource = releaseDisplayName(latestRelease);
   const latestReleaseEnvironment = latestRelease?.environment_name ?? null;
   const selectedDeploymentName = selectedApp ? deploymentDisplayName(selectedApp, latestRelease) : "Deployment";
+  const latestReleaseIssueKey = latestRelease?.source_issue_key?.trim().toUpperCase() || selectedReleaseSourceRun?.issue_key?.trim().toUpperCase() || null;
+  const latestReleaseIssueSummary = latestRelease?.source_issue_summary?.trim() || selectedReleaseSourceRun?.issue_summary?.trim() || null;
+  const latestReleaseIssueUrl = latestRelease?.source_issue_url?.trim() || selectedReleaseSourceRun?.issue_url?.trim() || null;
+  const selectedDeploymentTitle = latestReleaseIssueKey
+    ? `${latestReleaseIssueKey}${latestReleaseIssueSummary ? `: ${latestReleaseIssueSummary}` : ""}`
+    : selectedDeploymentName;
+  const selectedReleaseLabel = latestRelease ? releaseBranchLabel(latestRelease) : "Deployment";
+  const selectedStatus = latestRelease?.status ?? selectedApp?.status ?? "";
+  const manualDeployBranchOptions = useMemo(
+    () => uniqueStrings([...githubBranches.map((branch) => branch.name), ...deploymentReleases.map((release) => release.git_ref), selectedApp?.latest_release_git_ref]),
+    [deploymentReleases, githubBranches, selectedApp?.latest_release_git_ref],
+  );
+  const manualDeployCommitOptions = useMemo(
+    () =>
+      uniqueStrings([
+        ...deploymentReleases
+          .filter((release) => release.git_ref === manualDeployGitRef)
+          .map((release) => release.commit_sha),
+        selectedApp?.latest_release_git_ref === manualDeployGitRef ? selectedApp.latest_release_commit_sha : null,
+      ]),
+    [deploymentReleases, manualDeployGitRef, selectedApp?.latest_release_commit_sha, selectedApp?.latest_release_git_ref],
+  );
   const restoreRunList = useMemo(
     () => [...restoreRuns].sort((left, right) => right.created_at.localeCompare(left.created_at)),
     [restoreRuns],
@@ -1322,6 +1392,102 @@ export function ProjectAppAdminPage({
     () => deploymentForm.backup_policies.find((policy) => normalizeKey(policy.key) === normalizeKey(restoreBackupKey)) ?? null,
     [deploymentForm.backup_policies, restoreBackupKey],
   );
+
+  useEffect(() => {
+    const sourceRunId = latestRelease?.source_run_id?.trim();
+    if (!credentials || !sourceRunId) {
+      setSelectedReleaseSourceRun(null);
+      return;
+    }
+    let cancelled = false;
+    void getRun(credentials, sourceRunId)
+      .then((run) => {
+        if (cancelled) return;
+        setSelectedReleaseSourceRun(run);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setSelectedReleaseSourceRun(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [credentials, latestRelease?.source_run_id]);
+
+  useEffect(() => {
+    if (!credentials) {
+      setGithubBranches([]);
+      return;
+    }
+    let cancelled = false;
+    void listProjectGitHubBranches(credentials, tenantId, projectId)
+      .then((branches) => {
+        if (cancelled) return;
+        setGithubBranches(branches);
+      })
+      .catch(() => {
+        if (cancelled) return;
+        setGithubBranches([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [credentials, projectId, tenantId]);
+
+  async function loadSelectedReleaseLogs(release: ProjectAppDeploymentReleaseRecord | null = latestRelease) {
+    if (!credentials || !release || !selectedAppId || release.provider !== "internal_coolify") {
+      setSelectedReleaseLogs(null);
+      setSelectedReleaseLogsError("");
+      return;
+    }
+    setSelectedReleaseLogsLoading(true);
+    setSelectedReleaseLogsError("");
+    try {
+      const logs = await getProjectAppDeploymentReleaseLogs(
+        credentials,
+        tenantId,
+        projectId,
+        selectedAppId,
+        release.release_id,
+      );
+      setSelectedReleaseLogs(logs);
+    } catch (error) {
+      setSelectedReleaseLogs(null);
+      setSelectedReleaseLogsError((error as Error).message);
+    } finally {
+      setSelectedReleaseLogsLoading(false);
+    }
+  }
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!credentials || !latestRelease || !selectedAppId || latestRelease.provider !== "internal_coolify") {
+      setSelectedReleaseLogs(null);
+      setSelectedReleaseLogsError("");
+      setSelectedReleaseLogsLoading(false);
+      return;
+    }
+    setSelectedReleaseLogsLoading(true);
+    setSelectedReleaseLogsError("");
+    void getProjectAppDeploymentReleaseLogs(credentials, tenantId, projectId, selectedAppId, latestRelease.release_id)
+      .then((logs) => {
+        if (cancelled) return;
+        setSelectedReleaseLogs(logs);
+      })
+      .catch((error) => {
+        if (cancelled) return;
+        setSelectedReleaseLogs(null);
+        setSelectedReleaseLogsError((error as Error).message);
+      })
+      .finally(() => {
+        if (cancelled) return;
+        setSelectedReleaseLogsLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [credentials, latestRelease, projectId, selectedAppId, tenantId]);
+
   const selectedRestoreResource = useMemo(
     () => deploymentForm.resources.find((resource) => normalizeKey(resource.key) === normalizeKey(restoreResourceKey)) ?? null,
     [deploymentForm.resources, restoreResourceKey],
@@ -1356,6 +1522,7 @@ export function ProjectAppAdminPage({
         setSelectedAppId(appId);
       } else {
         setSelectedAppId(null);
+        setSelectedReleaseId(null);
       }
     } catch (error) {
       if (!silent) {
@@ -1388,6 +1555,7 @@ export function ProjectAppAdminPage({
         return [appRecord, ...withoutLoaded];
       });
       setSelectedAppReleases(releases);
+      setSelectedReleaseId((current) => (current && releases.some((release) => release.release_id === current) ? current : null));
       setRestoreRuns(restoreRunRows);
       setRestoreExecutions(null);
       setRestoreBackupKey("");
@@ -1431,11 +1599,35 @@ export function ProjectAppAdminPage({
   }, [selectedAppId]);
 
   useEffect(() => {
+    if (!requestedReleaseId) {
+      return;
+    }
+    if (selectedAppReleases.some((release) => release.release_id === requestedReleaseId)) {
+      setSelectedReleaseId(requestedReleaseId);
+    }
+  }, [requestedReleaseId, selectedAppReleases]);
+
+  useEffect(() => {
     const nextGitRef = latestRelease?.git_ref ?? selectedApp?.latest_release_git_ref ?? "";
     const nextCommitSha = latestRelease?.commit_sha ?? selectedApp?.latest_release_commit_sha ?? "";
     setManualDeployGitRef((current) => current || nextGitRef);
     setManualDeployCommitSha((current) => current || nextCommitSha);
   }, [latestRelease?.git_ref, latestRelease?.commit_sha, selectedApp?.latest_release_git_ref, selectedApp?.latest_release_commit_sha]);
+
+  useEffect(() => {
+    if (manualDeployBranchOptions.length === 0) {
+      return;
+    }
+    setManualDeployGitRef((current) => (current && manualDeployBranchOptions.includes(current) ? current : manualDeployBranchOptions[0] ?? ""));
+  }, [manualDeployBranchOptions]);
+
+  useEffect(() => {
+    if (manualDeployCommitOptions.length === 0) {
+      setManualDeployCommitSha("");
+      return;
+    }
+    setManualDeployCommitSha((current) => (current && manualDeployCommitOptions.includes(current) ? current : manualDeployCommitOptions[0] ?? ""));
+  }, [manualDeployCommitOptions]);
 
   useEffect(() => {
     const refreshOnVisibility = () => {
@@ -1570,30 +1762,6 @@ export function ProjectAppAdminPage({
     }
   }
 
-  async function analyzeRepo() {
-    if (!credentials) {
-      return;
-    }
-    setAnalysisBusy(true);
-    try {
-      await createProjectAppAnalysisRun(credentials, tenantId, projectId);
-      showToast({
-        title: "Analysis queued",
-        description: "Repo analysis has started.",
-        tone: "success",
-      });
-      await refreshAll({ silent: true });
-    } catch (error) {
-      showToast({
-        title: "Analysis failed",
-        description: (error as Error).message,
-        tone: "error",
-      });
-    } finally {
-      setAnalysisBusy(false);
-    }
-  }
-
   async function saveDeploymentConfig() {
     if (!credentials || !selectedApp) {
       return;
@@ -1700,6 +1868,53 @@ export function ProjectAppAdminPage({
     }
   }
 
+  async function triggerPreviewDeploy() {
+    if (!credentials || !selectedApp || !latestRelease) {
+      return;
+    }
+    const sourceRunId = latestRelease.source_run_id?.trim();
+    if (!latestReleaseIsPreview || !sourceRunId) {
+      showToast({
+        title: "Preview needs a source run",
+        tone: "error",
+      });
+      return;
+    }
+    setManualDeployBusy(true);
+    try {
+      const release = await createRunPreview(credentials, sourceRunId, { force: true });
+      const appRelease: ProjectAppDeploymentReleaseRecord = {
+        ...release,
+        app_id: release.app_id ?? selectedApp.app_id,
+      };
+      setSelectedAppReleases((current) => [appRelease, ...current.filter((item) => item.release_id !== appRelease.release_id)]);
+      setSelectedReleaseId(appRelease.release_id);
+      router.push(`${deploymentsHref}/${encodeURIComponent(selectedApp.app_id)}?release=${encodeURIComponent(appRelease.release_id)}`);
+      showToast({
+        title: "Preview started",
+        tone: "success",
+      });
+      await refreshAll({ silent: true });
+      await loadSelectedAppSurface(selectedApp.app_id);
+    } catch (error) {
+      showToast({
+        title: "Preview failed",
+        description: (error as Error).message,
+        tone: "error",
+      });
+    } finally {
+      setManualDeployBusy(false);
+    }
+  }
+
+  async function triggerReleaseAction() {
+    if (latestReleaseIsPreview) {
+      await triggerPreviewDeploy();
+      return;
+    }
+    await triggerManualDeploy();
+  }
+
   function appendDomain() {
     setDeploymentForm((current) => ({
       ...current,
@@ -1767,6 +1982,21 @@ export function ProjectAppAdminPage({
     setDeploymentForm((current) => ({
       ...current,
       environment: [...current.environment, { key: "", value: "" }],
+    }));
+  }
+
+  function handleEnvironmentVariablePaste(event: ClipboardEvent<HTMLInputElement>, index: number) {
+    const pastedText = event.clipboardData.getData("text/plain") || event.clipboardData.getData("text");
+    const entries = parseEnvironmentVariablePaste(pastedText);
+    if (entries.length === 0) return;
+    event.preventDefault();
+    setDeploymentForm((current) => ({
+      ...current,
+      environment: [
+        ...current.environment.slice(0, index),
+        ...entries,
+        ...current.environment.slice(index + 1),
+      ],
     }));
   }
 
@@ -1943,6 +2173,48 @@ export function ProjectAppAdminPage({
   const latestAnalysisNeedsMerge = String(selectedApp?.status ?? "").trim().toLowerCase() === "needs_pr_merge";
   const deploymentsHref = `/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/deployments`;
   const deleteConfirmationMatches = Boolean(selectedApp && deleteConfirmationValue.trim() === selectedApp.slug.trim());
+  const releaseLogsContent = latestRelease?.provider === "internal_coolify" ? (
+    <div>
+      <div className="mb-3 flex items-center justify-between gap-3">
+        <div>
+          <p className="text-sm font-semibold">Coolify logs</p>
+          {selectedReleaseLogs?.status ? (
+            <p className="mt-1 text-xs text-muted-foreground">Status {selectedReleaseLogs.status}</p>
+          ) : null}
+        </div>
+        <Button
+          type="button"
+          variant="outline"
+          size="sm"
+          onClick={() => void loadSelectedReleaseLogs()}
+          disabled={selectedReleaseLogsLoading}
+        >
+          {selectedReleaseLogsLoading ? "Refreshing..." : "Refresh"}
+        </Button>
+      </div>
+      {selectedReleaseLogsError ? (
+        <p className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+          {selectedReleaseLogsError}
+        </p>
+      ) : selectedReleaseLogsLoading && !selectedReleaseLogs ? (
+        <p className="rounded-lg border px-3 py-2 text-xs text-muted-foreground">Loading logs...</p>
+      ) : selectedReleaseLogs?.logs.trim() ? (
+        <pre
+          data-testid="release-logs-output"
+          className="max-h-[520px] overflow-auto whitespace-pre-wrap break-words rounded-lg bg-slate-950 p-3 font-mono text-[11px] leading-5 text-slate-100"
+        >
+          {selectedReleaseLogs.truncated ? "[showing latest log output]\n" : ""}
+          {formatProviderLogs(selectedReleaseLogs.logs)}
+        </pre>
+      ) : (
+        <p className="rounded-lg border px-3 py-2 text-xs text-muted-foreground">No logs yet.</p>
+      )}
+    </div>
+  ) : (
+    <p className="rounded-lg border px-3 py-2 text-xs text-muted-foreground">
+      No provider logs are available for this release.
+    </p>
+  );
 
   if (busy && !selectedApp) {
     return (
@@ -1967,10 +2239,21 @@ export function ProjectAppAdminPage({
           <label htmlFor="deployment-selector" className="sr-only">Deployment selector</label>
           <select
             id="deployment-selector"
-            value={selectedApp?.app_id ?? selectedAppId ?? ""}
+            value={selectedReleaseId ? `release:${selectedReleaseId}` : selectedApp ? `app:${selectedApp.app_id}` : ""}
             onChange={(event) => {
-              const nextAppId = event.target.value;
+              const value = event.target.value;
+              if (!value) return;
+              if (value.startsWith("release:")) {
+                const nextReleaseId = value.slice("release:".length);
+                setSelectedReleaseId(nextReleaseId);
+                if (selectedApp) {
+                  router.push(`${deploymentsHref}/${encodeURIComponent(selectedApp.app_id)}?release=${encodeURIComponent(nextReleaseId)}`);
+                }
+                return;
+              }
+              const nextAppId = value.startsWith("app:") ? value.slice("app:".length) : value;
               if (!nextAppId) return;
+              setSelectedReleaseId(null);
               router.push(`${deploymentsHref}/${encodeURIComponent(nextAppId)}`);
             }}
             className="h-9 w-full rounded-md border bg-background px-3 text-sm font-semibold outline-none transition-colors focus:border-primary"
@@ -1978,30 +2261,42 @@ export function ProjectAppAdminPage({
           >
             {selectedApp ? null : <option value="">Select deployment</option>}
             {apps.map((app, index) => (
-              <option key={app.app_id} value={app.app_id}>
-                {deploymentDisplayName(app, app.app_id === selectedApp?.app_id ? latestRelease : null, index)}
+              <option key={app.app_id} value={`app:${app.app_id}`}>
+                {app.app_id === selectedApp?.app_id && latestProductionRelease ? releaseSelectorLabel(latestProductionRelease) : deploymentDisplayName(app, null, index)}
+              </option>
+            ))}
+            {activePreviewReleases.map((release) => (
+              <option key={release.release_id} value={`release:${release.release_id}`}>
+                {release.release_id === selectedReleaseId ? `Preview: ${selectedDeploymentTitle}` : releaseSelectorLabel(release)}
               </option>
             ))}
           </select>
         </div>
       </div>
       {selectedApp ? (
-        <Card id={selectedApp.app_id}>
-          <CardHeader className="space-y-4 pb-0">
+        <Card id={selectedApp.app_id} className="border-0 bg-transparent shadow-none dark:ring-0">
+          <CardHeader className="space-y-4 px-0 pb-0 pt-0">
             <div className="flex flex-wrap items-start justify-between gap-4">
               <div className="space-y-2">
-                <div className="flex flex-wrap items-center gap-2">
-                  <CardTitle className="text-base">{selectedDeploymentName}</CardTitle>
-                  <Badge variant={appStatusVariant(selectedApp.status)}>{selectedApp.status}</Badge>
+                <div className="flex flex-wrap items-center gap-2" data-testid="selected-release-heading">
+                  <Badge variant="outline">{selectedReleaseLabel}</Badge>
+                  <CardTitle className="text-base">{selectedDeploymentTitle}</CardTitle>
+                  {selectedStatus ? <Badge variant={appStatusVariant(selectedStatus)} data-testid="selected-release-status">{selectedStatus}</Badge> : null}
                   {latestAnalysisNeedsMerge ? <Badge variant="warning">PR required</Badge> : null}
                 </div>
+                {latestReleaseIssueUrl ? (
+                  <a href={latestReleaseIssueUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-sm text-primary underline-offset-4 hover:underline">
+                    Open Jira
+                    <ExternalLink className="h-3.5 w-3.5" />
+                  </a>
+                ) : null}
               </div>
             </div>
 
             <AppAdminSectionTabs selectedSection={selectedSection} onSectionChange={setSelectedSection} />
           </CardHeader>
 
-          <CardContent className="space-y-4 pt-6">
+          <CardContent className="space-y-4 px-0 pt-6">
             {selectedApp.status === "needs_pr_merge" ? (
               <div className="space-y-3 rounded-xl border border-warning/30 bg-warning/10 px-4 py-3 text-sm text-warning">
                 <p>Generated deployment files must be merged before this deployment can run.</p>
@@ -2036,19 +2331,24 @@ export function ProjectAppAdminPage({
 
             {selectedSection === "overview" ? (
               <div className="space-y-6">
-                <section className="overflow-hidden rounded-xl border bg-background">
-                  <div className="flex flex-wrap items-center justify-between gap-3 border-b px-4 py-3">
-                    <h2 className="text-sm font-semibold">Deployment details</h2>
+                <section className="space-y-6">
+                  <div className="flex flex-wrap items-center justify-between gap-3 border-b pb-4">
+                    <div>
+                      <h2 className="text-sm font-semibold">Deployment details</h2>
+                      {latestReleaseSource ? (
+                        <p className="mt-1 max-w-3xl truncate text-sm text-muted-foreground">{latestReleaseSource}</p>
+                      ) : null}
+                    </div>
                     <div className="flex flex-wrap items-center gap-2">
                       <Button variant="outline" size="sm" onClick={() => {
                         setSelectedSection("releases");
                         setSelectedReleaseSection("history");
                       }}>
-                        Deployments
+                        Releases
                       </Button>
-                      <Button size="sm" onClick={() => void triggerManualDeploy()} disabled={manualDeployBusy || loadingSurface || !selectedApp}>
+                      <Button size="sm" onClick={() => void triggerReleaseAction()} disabled={manualDeployBusy || loadingSurface || !selectedApp}>
                         {manualDeployBusy ? <RefreshCw className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <ArrowRight className="mr-1.5 h-3.5 w-3.5" />}
-                        {manualDeployBusy ? "Deploying..." : "Deploy"}
+                        {manualDeployBusy ? (latestReleaseIsPreview ? "Generating..." : "Deploying...") : latestReleaseIsPreview ? "Generate preview" : "Deploy"}
                       </Button>
                       {firstVisitUrl ? (
                         <Button asChild size="sm" className="bg-foreground text-background hover:bg-foreground/90">
@@ -2061,14 +2361,14 @@ export function ProjectAppAdminPage({
                     </div>
                   </div>
 
-                  <div className="grid gap-6 p-4 lg:grid-cols-[400px_minmax(0,1fr)]">
-                    <div className="overflow-hidden rounded-lg border bg-muted/20">
+                  <div className="grid items-start gap-6 lg:grid-cols-[420px_minmax(0,1fr)]">
+                    <Card className="min-w-0 overflow-hidden">
                       {firstVisitUrl ? (
                         <div className="flex min-h-[280px] flex-col bg-background">
-                          <div className="flex items-center justify-between gap-3 border-b bg-muted/40 px-3 py-2">
+                          <div className="flex items-center justify-between gap-3 border-b px-3 py-2">
                             <div className="min-w-0">
                               <p className="truncate text-xs font-medium text-muted-foreground">Preview</p>
-                              <p className="truncate text-sm font-semibold">{previewServiceUrl?.service_name || selectedDeploymentName}</p>
+                              <p className="truncate text-sm font-semibold">{previewServiceUrl?.service_name || selectedDeploymentTitle}</p>
                             </div>
                             <a
                               href={firstVisitUrl}
@@ -2084,7 +2384,7 @@ export function ProjectAppAdminPage({
                             <iframe
                               key={firstVisitUrl}
                               src={firstVisitUrl}
-                              title={`${selectedDeploymentName} preview`}
+                              title={`${selectedDeploymentTitle} preview`}
                               className="border-0 bg-white"
                               style={{
                                 width: "1440px",
@@ -2105,41 +2405,52 @@ export function ProjectAppAdminPage({
                           </div>
                         </div>
                       )}
-                    </div>
+                    </Card>
 
-                    <div className="min-w-0 space-y-5">
-                      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
-                        <div>
-                          <p className="text-xs text-muted-foreground">Created</p>
-                          <p className="mt-1 truncate text-sm font-medium">{relativeTimestamp(latestReleaseCreatedAt)}</p>
-                          <p className="mt-0.5 truncate text-xs text-muted-foreground">{formatTimestamp(latestReleaseCreatedAt)}</p>
+                    <Card className="min-w-0">
+                      <CardContent className="space-y-6 p-4">
+                      <div className="divide-y text-sm">
+                        <div className="grid gap-1 py-3 sm:grid-cols-[120px_minmax(0,1fr)]">
+                          <span className="text-muted-foreground">Created</span>
+                          <span>
+                            {relativeTimestamp(latestReleaseCreatedAt)}
+                            <span className="ml-2 text-xs text-muted-foreground">{formatTimestamp(latestReleaseCreatedAt)}</span>
+                          </span>
                         </div>
-                        <div>
-                          <p className="text-xs text-muted-foreground">Status</p>
-                          <div className="mt-1 flex items-center gap-2">
+                        <div className="grid gap-1 py-3 sm:grid-cols-[120px_minmax(0,1fr)]">
+                          <span className="text-muted-foreground">Status</span>
+                          <span>
                             <Badge variant={appStatusVariant(latestRelease?.status ?? selectedApp.status)}>
                               {latestRelease?.status ?? selectedApp.status}
                             </Badge>
-                          </div>
+                          </span>
                         </div>
-                        <div>
-                          <p className="text-xs text-muted-foreground">Duration</p>
-                          <p className="mt-1 text-sm font-medium">{latestReleaseDuration}</p>
+                        <div className="grid gap-1 py-3 sm:grid-cols-[120px_minmax(0,1fr)]">
+                          <span className="text-muted-foreground">Duration</span>
+                          <span>{latestReleaseDuration}</span>
                         </div>
-                        <div>
-                          <p className="text-xs text-muted-foreground">Environment</p>
-                          <p className="mt-1 truncate text-sm font-medium">{latestReleaseEnvironment}</p>
+                        <div className="grid gap-1 py-3 sm:grid-cols-[120px_minmax(0,1fr)]">
+                          <span className="text-muted-foreground">Environment</span>
+                          <span className="truncate">{latestReleaseEnvironment}</span>
+                        </div>
+                        <div className="grid gap-1 py-3 sm:grid-cols-[120px_minmax(0,1fr)]">
+                          <span className="text-muted-foreground">Runtime</span>
+                          <span>{appRuntimeLabel(selectedApp.detected_runtime)}</span>
+                        </div>
+                        <div className="grid gap-1 py-3 sm:grid-cols-[120px_minmax(0,1fr)]">
+                          <span className="text-muted-foreground">Build</span>
+                          <span>{compactBuildStrategyLabel(selectedApp.build_strategy)}</span>
                         </div>
                       </div>
 
-                      <div className="space-y-2">
-                        <p className="text-xs text-muted-foreground">Domains</p>
+                      <div className="mt-6 space-y-3">
+                        <p className="text-sm font-semibold">URLs</p>
                         {latestServiceUrls.length > 0 ? (
-                          <div className="space-y-1.5">
+                          <div className="divide-y border-y">
                             {latestServiceUrls.map((serviceUrl) => (
-                              <div key={`${serviceUrl.service_key}-${serviceUrl.url_kind}-${serviceUrl.domain_key ?? serviceUrl.url}`} className="flex min-w-0 items-center gap-2 text-sm">
-                                <Badge variant="outline" className="shrink-0">{serviceUrl.service_name || serviceUrl.service_kind}</Badge>
-                                <a href={serviceUrl.url} target="_blank" rel="noreferrer" className="truncate text-primary underline-offset-4 hover:underline">
+                              <div key={`${serviceUrl.service_key}-${serviceUrl.url_kind}-${serviceUrl.domain_key ?? serviceUrl.url}`} className="grid gap-1 py-3 text-sm">
+                                <span className="text-xs text-muted-foreground">{serviceUrl.service_name || serviceUrl.service_kind}</span>
+                                <a href={serviceUrl.url} target="_blank" rel="noreferrer" className="break-all text-primary underline-offset-4 hover:underline">
                                   {serviceUrl.url}
                                 </a>
                               </div>
@@ -2150,53 +2461,38 @@ export function ProjectAppAdminPage({
                         )}
                       </div>
 
-                      <div className="space-y-2">
-                        <p className="text-xs text-muted-foreground">Source</p>
-                        <div className="space-y-1 text-sm">
-                          <p className="truncate">{latestReleaseSource ?? "No GitHub deployment yet"}</p>
-                        </div>
-                      </div>
-
-                      <div className="grid gap-3 border-t pt-4 sm:grid-cols-3">
-                        <div>
-                          <p className="text-xs text-muted-foreground">Runtime</p>
-                          <p className="mt-1 truncate text-sm font-medium">{appRuntimeLabel(selectedApp.detected_runtime)}</p>
-                        </div>
-                        <div>
-                          <p className="text-xs text-muted-foreground">Build</p>
-                          <p className="mt-1 truncate text-sm font-medium">{compactBuildStrategyLabel(selectedApp.build_strategy)}</p>
-                        </div>
-                        <div>
-                          <p className="text-xs text-muted-foreground">Last deploy</p>
-                          <p className="mt-1 truncate text-sm font-medium">{relativeTimestamp(latestRelease?.created_at ?? null)}</p>
-                        </div>
-                      </div>
-
                       {latestRelease?.last_error ? (
-                        <p className="rounded-lg border border-destructive/30 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+                        <p className="border-y border-destructive/30 py-3 text-xs text-destructive">
                           {latestRelease.last_error}
                         </p>
                       ) : null}
-                    </div>
+
+                      {latestRelease?.provider === "internal_coolify" ? (
+                        <div className="border-t pt-4">
+                          {releaseLogsContent}
+                        </div>
+                      ) : null}
+                      </CardContent>
+                    </Card>
                   </div>
 
-                  <div className="divide-y border-t">
-                    <button type="button" className="flex w-full items-center justify-between px-4 py-3 text-left text-sm hover:bg-muted/30" onClick={() => setSelectedSection("settings")}>
+                  <div className="grid border-y md:grid-cols-3 md:divide-x">
+                    <button type="button" className="flex w-full items-center justify-between px-1 py-3 text-left text-sm hover:bg-muted/30 md:px-4" onClick={() => setSelectedSection("settings")}>
                       <span className="font-medium">Deployment settings</span>
                       <ArrowRight className="h-4 w-4 text-muted-foreground" />
                     </button>
                     <button
                       type="button"
-                      className="flex w-full items-center justify-between px-4 py-3 text-left text-sm hover:bg-muted/30"
+                      className="flex w-full items-center justify-between border-t px-1 py-3 text-left text-sm hover:bg-muted/30 md:border-t-0 md:px-4"
                       onClick={() => {
                         setSelectedSection("releases");
                         setSelectedReleaseSection("history");
                       }}
                     >
                       <span className="font-medium">Deployment history</span>
-                      <span className="text-muted-foreground">{appReleases.length} release{appReleases.length === 1 ? "" : "s"}</span>
+                      <span className="text-muted-foreground">{deploymentReleases.length} release{deploymentReleases.length === 1 ? "" : "s"}</span>
                     </button>
-                    <button type="button" className="flex w-full items-center justify-between px-4 py-3 text-left text-sm hover:bg-muted/30" onClick={() => setSelectedSection("domains")}>
+                    <button type="button" className="flex w-full items-center justify-between border-t px-1 py-3 text-left text-sm hover:bg-muted/30 md:border-t-0 md:px-4" onClick={() => setSelectedSection("domains")}>
                       <span className="font-medium">Domains</span>
                       <span className="text-muted-foreground">{latestServiceUrls.length} URL{latestServiceUrls.length === 1 ? "" : "s"}</span>
                     </button>
@@ -2214,17 +2510,17 @@ export function ProjectAppAdminPage({
                     </Button>
                   </div>
                   <div className="overflow-hidden rounded-xl border">
-                    {appReleases.length === 0 ? (
+                    {deploymentReleases.length === 0 ? (
                       <div className="px-5 py-8 text-sm text-muted-foreground">No deployments yet.</div>
                     ) : (
-                      appReleases.slice(0, 5).map((release) => (
+                      deploymentReleases.slice(0, 5).map((release) => (
                         <div key={release.release_id} className="grid gap-3 border-b px-5 py-4 last:border-b-0 md:grid-cols-[minmax(0,1fr)_auto] md:items-center">
                           <div className="min-w-0">
                             <div className="flex flex-wrap items-center gap-2">
                               <p className="truncate text-sm font-medium">{release.git_ref} @ {release.commit_sha.slice(0, 8)}</p>
                               <Badge variant={appStatusVariant(release.status)}>{release.status}</Badge>
                             </div>
-                            <p className="mt-1 truncate font-mono text-xs text-muted-foreground">{release.release_id}</p>
+                            <p className="mt-1 truncate font-mono text-xs text-muted-foreground">{release.source_issue_key ? `${release.source_issue_key}${release.source_issue_summary ? `: ${release.source_issue_summary}` : ""}` : release.release_id}</p>
                           </div>
                           <div className="text-sm text-muted-foreground">{relativeTimestamp(release.created_at)}</div>
                         </div>
@@ -2351,6 +2647,7 @@ export function ProjectAppAdminPage({
                                           currentIndex === index ? { ...item, key: event.target.value } : item
                                         )),
                                       }))}
+                                      onPaste={(event) => handleEnvironmentVariablePaste(event, index)}
                                       placeholder="NODE_ENV"
                                       disabled={savingConfig || deploying}
                                     />
@@ -2365,6 +2662,7 @@ export function ProjectAppAdminPage({
                                           currentIndex === index ? { ...item, value: event.target.value } : item
                                         )),
                                       }))}
+                                      onPaste={(event) => handleEnvironmentVariablePaste(event, index)}
                                       placeholder="production"
                                       disabled={savingConfig || deploying}
                                     />
@@ -2508,7 +2806,7 @@ export function ProjectAppAdminPage({
                 ) : (
                   <div className="divide-y rounded-xl border">
                     {serviceRows.map((service) => (
-                      <div key={service.key} className="grid gap-4 p-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,0.8fr)_minmax(0,0.7fr)_minmax(0,1.5fr)]">
+                      <div key={service.key} className="grid gap-4 p-4 xl:grid-cols-[minmax(0,1.2fr)_minmax(0,0.8fr)_minmax(0,0.7fr)]">
                         <div className="min-w-0 space-y-2">
                           <div className="flex flex-wrap items-center gap-2">
                             <p className="truncate text-sm font-semibold">{service.name}</p>
@@ -2537,28 +2835,6 @@ export function ProjectAppAdminPage({
                         <div className="space-y-1.5">
                           <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">Port</span>
                           <p className="h-10 rounded-md border bg-muted/20 px-3 py-2 text-sm">{service.containerPort ?? "—"}</p>
-                        </div>
-                        <div className="min-w-0 space-y-2">
-                          <span className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">URLs</span>
-                          {!service.public ? (
-                            <p className="rounded-md border border-dashed px-3 py-2 text-sm text-muted-foreground">Internal only</p>
-                          ) : service.urls.length === 0 ? (
-                            <p className="rounded-md border border-dashed px-3 py-2 text-sm text-muted-foreground">No URLs yet.</p>
-                          ) : (
-                            <div className="space-y-1">
-                              {service.urls.map((serviceUrl) => (
-                                <a
-                                  key={`${serviceUrl.url_kind}-${serviceUrl.domain_key ?? serviceUrl.url}`}
-                                  href={serviceUrl.url}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                  className="block truncate text-sm text-primary underline-offset-4 hover:underline"
-                                >
-                                  {serviceUrl.url}
-                                </a>
-                              ))}
-                            </div>
-                          )}
                         </div>
                       </div>
                     ))}
@@ -2713,15 +2989,21 @@ export function ProjectAppAdminPage({
                           </div>
                           <div className="mt-3 space-y-1">
                             {service.urls.map((serviceUrl) => (
-                              <a
-                                key={`${serviceUrl.url_kind}-${serviceUrl.domain_key ?? serviceUrl.url}`}
-                                href={serviceUrl.url}
-                                target="_blank"
-                                rel="noreferrer"
-                                className="block truncate text-sm text-primary underline-offset-4 hover:underline"
-                              >
-                                {serviceUrl.url}
-                              </a>
+                              <div key={`${serviceUrl.url_kind}-${serviceUrl.domain_key ?? serviceUrl.url}`} className="space-y-1">
+                                <a
+                                  href={serviceUrl.url}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="block truncate text-sm text-primary underline-offset-4 hover:underline"
+                                >
+                                  {serviceUrl.url}
+                                </a>
+                                {serviceUrl.internal_url ? (
+                                  <p className="truncate font-mono text-[11px] text-muted-foreground">
+                                    {serviceUrl.internal_url} {"->"} {serviceUrl.host ?? serviceUrl.url}
+                                  </p>
+                                ) : null}
+                              </div>
                             ))}
                           </div>
                         </div>
@@ -3121,25 +3403,40 @@ export function ProjectAppAdminPage({
                       <div className="grid gap-3 rounded-xl border p-4 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto] md:items-end">
                         <div className="space-y-1.5">
                           <label htmlFor="manual-deploy-branch" className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Branch</label>
-                          <Input
+                          <select
                             id="manual-deploy-branch"
+                            className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
                             value={manualDeployGitRef}
-                            onChange={(event) => setManualDeployGitRef(event.target.value)}
-                            placeholder="main"
-                            disabled={manualDeployBusy}
-                          />
+                            onChange={(event) => {
+                              setManualDeployGitRef(event.target.value);
+                              setManualDeployCommitSha("");
+                            }}
+                            disabled={manualDeployBusy || manualDeployBranchOptions.length === 0}
+                          >
+                            {manualDeployBranchOptions.map((branch) => (
+                              <option key={branch} value={branch}>
+                                {branch}
+                              </option>
+                            ))}
+                          </select>
                         </div>
                         <div className="space-y-1.5">
                           <label htmlFor="manual-deploy-commit" className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Commit</label>
-                          <Input
+                          <select
                             id="manual-deploy-commit"
+                            className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
                             value={manualDeployCommitSha}
                             onChange={(event) => setManualDeployCommitSha(event.target.value)}
-                            placeholder="abcdef1234567890"
-                            disabled={manualDeployBusy}
-                          />
+                            disabled={manualDeployBusy || manualDeployCommitOptions.length === 0}
+                          >
+                            {manualDeployCommitOptions.map((commitSha) => (
+                              <option key={commitSha} value={commitSha}>
+                                {commitSha}
+                              </option>
+                            ))}
+                          </select>
                         </div>
-                        <Button onClick={() => void triggerManualDeploy()} disabled={manualDeployBusy || loadingSurface || !selectedApp}>
+                        <Button onClick={() => void triggerManualDeploy()} disabled={manualDeployBusy || loadingSurface || !selectedApp || manualDeployBranchOptions.length === 0 || manualDeployCommitOptions.length === 0}>
                           {manualDeployBusy ? <RefreshCw className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <ArrowRight className="mr-1.5 h-3.5 w-3.5" />}
                           {manualDeployBusy ? "Deploying..." : "Deploy"}
                         </Button>
@@ -3148,10 +3445,10 @@ export function ProjectAppAdminPage({
                         <div>
                           <h3 className="text-base font-semibold">Release history</h3>
                         </div>
-                        <Badge variant="outline">{appReleases.length} total</Badge>
+                        <Badge variant="outline">{deploymentReleases.length} total</Badge>
                       </div>
                     <div className="overflow-hidden rounded-xl border">
-                    {appReleases.length === 0 ? (
+                    {deploymentReleases.length === 0 ? (
                       <div className="px-6 py-12 text-center text-sm text-muted-foreground">No releases found for this deployment.</div>
                     ) : (
                       <Table>
@@ -3164,12 +3461,17 @@ export function ProjectAppAdminPage({
                         </TableRow>
                       </TableHeader>
                         <TableBody>
-                          {appReleases.map((release) => (
+                          {deploymentReleases.map((release) => (
                             <TableRow key={release.release_id}>
                               <TableCell>
                                 <div className="space-y-1">
-                                  <p className="font-medium">{release.git_ref} @ {release.commit_sha.slice(0, 8)}</p>
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <p className="font-medium">{release.git_ref} @ {release.commit_sha.slice(0, 8)}</p>
+                                  </div>
                                   <p className="font-mono text-xs text-muted-foreground">{release.release_id}</p>
+                                  {release.source_run_id ? (
+                                    <p className="font-mono text-xs text-muted-foreground">Run {release.source_run_id}</p>
+                                  ) : null}
                                 </div>
                               </TableCell>
                               <TableCell>
@@ -3199,69 +3501,29 @@ export function ProjectAppAdminPage({
             ) : null}
 
             {selectedSection === "diagnostics" ? (
-              <div className="grid gap-4 xl:grid-cols-[minmax(0,0.8fr)_minmax(0,1.2fr)]">
-                <Card>
-                  <CardHeader className="flex flex-row items-start justify-between gap-3 space-y-0">
-                    <div>
-                      <CardTitle className="text-sm">Analysis</CardTitle>
-                    </div>
-                    <Button size="sm" onClick={() => void analyzeRepo()} disabled={analysisBusy || busy}>
-                      <Search className="mr-1.5 h-3.5 w-3.5" />
-                      {analysisBusy ? "Analyzing..." : "Analyze repo"}
-                    </Button>
-                  </CardHeader>
-                  <CardContent className="space-y-3">
-                    {latestAnalysisRun ? (
-                      <div className="space-y-2">
-                        <div className="flex flex-wrap items-center gap-2">
-                          <Badge variant={analysisStatusVariant(latestAnalysisRun.status)}>{latestAnalysisRun.status}</Badge>
-                          {latestAnalysisRunId ? <Badge variant="outline">{latestAnalysisRunId}</Badge> : null}
-                          <span className="text-xs text-muted-foreground">{formatTimestamp(latestAnalysisRun.created_at)}</span>
-                        </div>
-                        {latestAnalysisRunError ? (
-                          <div className="rounded-xl border border-destructive/30 bg-destructive/10 px-3 py-2 text-sm text-destructive">
-                            {latestAnalysisRunError}
-                          </div>
-                        ) : null}
-                      </div>
-                    ) : (
-                      <p className="rounded-xl border border-dashed px-4 py-6 text-sm text-muted-foreground">No analysis runs recorded.</p>
-                    )}
-                  </CardContent>
-                </Card>
-
+              <div className="space-y-4">
                 <Card>
                   <CardHeader>
-                    <CardTitle className="text-sm">Generated artifacts</CardTitle>
+                    <div>
+                      <CardTitle className="text-sm">Release logs</CardTitle>
+                      {latestReleaseSource ? (
+                        <p className="mt-1 text-xs text-muted-foreground">{latestReleaseSource}</p>
+                      ) : null}
+                    </div>
                   </CardHeader>
-                  <CardContent className="space-y-3">
-                    {latestArtifactPrMetadata ? (
-                      <div className="space-y-3">
-                        {latestArtifactPrMetadata.prUrl ? (
-                          <a
-                            href={latestArtifactPrMetadata.prUrl}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="text-sm font-medium text-primary underline-offset-4 hover:underline"
-                          >
-                            Open PR
-                          </a>
-                        ) : null}
-                        <p className="text-sm text-muted-foreground">
-                          {latestArtifactPrMetadata.generatedFileCount ?? latestArtifactPrMetadata.generatedFiles.length} generated file
-                          {(latestArtifactPrMetadata.generatedFileCount ?? latestArtifactPrMetadata.generatedFiles.length) === 1 ? "" : "s"}
-                        </p>
-                        {latestArtifactPrMetadata.generatedFiles.length > 0 ? (
-                          <p className="text-xs text-muted-foreground">{latestArtifactPrMetadata.generatedFiles.join(", ")}</p>
-                        ) : null}
-                      </div>
-                    ) : latestAnalysisRunResult ? (
-                      <AnalysisResultSummary result={latestAnalysisRunResult} />
-                    ) : (
-                      <p className="rounded-xl border border-dashed px-4 py-6 text-sm text-muted-foreground">No generated artifacts recorded.</p>
-                    )}
-                  </CardContent>
+                  <CardContent>{releaseLogsContent}</CardContent>
                 </Card>
+
+                {latestRelease?.last_error ? (
+                  <Card className="border-destructive/30">
+                    <CardHeader>
+                      <CardTitle className="text-sm text-destructive">Release error</CardTitle>
+                    </CardHeader>
+                    <CardContent>
+                      <p className="whitespace-pre-wrap text-sm text-destructive">{latestRelease.last_error}</p>
+                    </CardContent>
+                  </Card>
+                ) : null}
               </div>
             ) : null}
 

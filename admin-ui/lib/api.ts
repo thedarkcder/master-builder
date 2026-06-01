@@ -4,6 +4,7 @@ import type { RunRecord } from "@/lib/api/run-events";
 export type { Credentials } from "@/lib/api/http";
 export {
   cancelRun,
+  createRunPreview,
   getRun,
   listRunEvents,
   listRunLogs,
@@ -34,6 +35,7 @@ export type {
   ProjectDeploymentPolicyRecord,
   ProjectDeploymentPolicyUpdatePayload,
   ProjectDeploymentResourceRecord,
+  ProjectDeploymentReleaseRecord,
   ProjectDeploymentServiceRecord,
   ProjectDeploymentVolumeRecord,
   ProjectDeploymentRestoreRequestPayload,

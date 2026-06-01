@@ -8,15 +8,18 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from orchestrator.api.admin.deployment_release_service import create_project_deployment_release
+from orchestrator.api.admin.deployment_release_service import deployment_release_routes_match_base_domain
 from orchestrator.api.admin.deployment_release_service import destroy_project_deployment_preview_release
+from orchestrator.api.admin.deployment_release_service import project_deployment_release_to_schema
 from orchestrator.api.deployment_schemas import ProjectDeploymentPolicyRead
 from orchestrator.api.schemas import ProjectDeploymentReleaseCreate, ProjectDeploymentReleaseRead
+from orchestrator.core.deployment_runtime import reconcile_deployment_release
 from orchestrator.core.deployment_setup.artifacts import (
     checkout_branch_commit,
     ensure_deployment_compose_artifact,
     run_git,
 )
-from orchestrator.core.deployment_setup.compose_normalizer import normalize_compose_for_coolify
+from orchestrator.core.deployment_setup.compose_normalizer import normalize_generated_compose_for_coolify
 from orchestrator.core.platform.secret_service import resolve_platform_secret_ref
 from orchestrator.core.platform.tenant_secret_service import resolve_scoped_secret_ref
 from orchestrator.core.workflow.execution_artifacts import latest_pushed_execution_artifact_for_run
@@ -38,6 +41,9 @@ class PreviewCleanupResult:
     destroyed_release_ids: tuple[str, ...]
 
 
+_REUSABLE_PREVIEW_RELEASE_STATUSES = {"queued", "provisioning", "deploying", "route_activating", "live"}
+_RECONCILE_BEFORE_REUSE_STATUSES = {"provisioning", "deploying", "route_activating"}
+
 
 def create_run_preview_deployment(
     *,
@@ -47,12 +53,36 @@ def create_run_preview_deployment(
     run: Run,
     settings,
     pr_url: str | None = None,
+    force: bool = False,
 ) -> RunPreviewDeploymentResult:  # noqa: ANN001
     policy = ProjectDeploymentPolicyRead.model_validate(dict(getattr(project, "deployment_config", None) or {}))
     if not policy.enabled:
         return RunPreviewDeploymentResult(created=False, reason="deployments_disabled")
     if not policy.preview_prs_enabled:
         return RunPreviewDeploymentResult(created=False, reason="preview_prs_disabled")
+
+    if not force:
+        existing_release = _reusable_existing_preview_release(
+            session=session,
+            tenant_id=tenant.tenant_id,
+            project_id=project.project_id,
+            run_id=run.run_id,
+            current_base_domain=_normalize_optional_string((tenant.deployment_plane_config or {}).get("base_domain")),
+        )
+        if existing_release is not None:
+            return RunPreviewDeploymentResult(
+                created=False,
+                reason="existing",
+                release=project_deployment_release_to_schema(existing_release),
+            )
+
+    _destroy_active_preview_releases_for_run(
+        session=session,
+        tenant_id=tenant.tenant_id,
+        project_id=project.project_id,
+        run_id=run.run_id,
+        reason="preview_replaced",
+    )
 
     artifact = latest_pushed_execution_artifact_for_run(session=session, run_id=run.run_id)
     if artifact is None:
@@ -94,7 +124,7 @@ def create_run_preview_deployment(
             project_id=project.project_id,
             source_branch=artifact.branch,
             source_commit_sha=artifact.commit_sha,
-            compose_raw=normalize_compose_for_coolify(generated_compose_raw).compose_raw,
+            compose_raw=normalize_generated_compose_for_coolify(generated_compose_raw).compose_raw,
             npm_service_source_paths=_npm_service_source_paths(deployment_config),
             token=github_client.get_installation_token(),
         )
@@ -122,6 +152,85 @@ def create_run_preview_deployment(
         deployment_config_override=deployment_config_override,
     )
     return RunPreviewDeploymentResult(created=True, reason="created", release=release)
+
+
+def _reusable_existing_preview_release(
+    *,
+    session: Session,
+    tenant_id: str,
+    project_id: str,
+    run_id: str,
+    current_base_domain: str | None,
+) -> ProjectDeploymentRelease | None:
+    existing_release = session.execute(
+        select(ProjectDeploymentRelease)
+        .where(
+            ProjectDeploymentRelease.tenant_id == tenant_id,
+            ProjectDeploymentRelease.project_id == project_id,
+            ProjectDeploymentRelease.release_kind == "run_preview",
+            ProjectDeploymentRelease.source_run_id == run_id,
+            ProjectDeploymentRelease.status.in_(_REUSABLE_PREVIEW_RELEASE_STATUSES),
+            ProjectDeploymentRelease.destroyed_at.is_(None),
+        )
+        .order_by(ProjectDeploymentRelease.created_at.desc(), ProjectDeploymentRelease.release_id.desc())
+    ).scalars().first()
+    if existing_release is None:
+        return None
+    if current_base_domain is not None:
+        provider_context = existing_release.provider_context if isinstance(existing_release.provider_context, dict) else {}
+        if _normalize_optional_string(provider_context.get("base_domain")) != current_base_domain:
+            return None
+        if not deployment_release_routes_match_base_domain(
+            provider_context=provider_context,
+            base_domain=current_base_domain,
+            require_preview_wildcard_shape=True,
+        ):
+            return None
+    if str(existing_release.status or "").strip() in _RECONCILE_BEFORE_REUSE_STATUSES:
+        reconcile_deployment_release(session=session, release=existing_release)
+        session.flush()
+        session.refresh(existing_release)
+    if str(existing_release.status or "").strip() not in _REUSABLE_PREVIEW_RELEASE_STATUSES:
+        return None
+    return existing_release
+
+
+def _normalize_optional_string(value: object) -> str | None:
+    normalized = str(value or "").strip()
+    return normalized or None
+
+
+def _destroy_active_preview_releases_for_run(
+    *,
+    session: Session,
+    tenant_id: str,
+    project_id: str,
+    run_id: str,
+    reason: str,
+) -> PreviewCleanupResult:
+    releases = session.execute(
+        select(ProjectDeploymentRelease)
+        .where(
+            ProjectDeploymentRelease.tenant_id == tenant_id,
+            ProjectDeploymentRelease.project_id == project_id,
+            ProjectDeploymentRelease.release_kind == "run_preview",
+            ProjectDeploymentRelease.source_run_id == run_id,
+            ProjectDeploymentRelease.status.in_(_REUSABLE_PREVIEW_RELEASE_STATUSES),
+            ProjectDeploymentRelease.destroyed_at.is_(None),
+        )
+        .order_by(ProjectDeploymentRelease.created_at.asc(), ProjectDeploymentRelease.release_id.asc())
+    ).scalars().all()
+    destroyed: list[str] = []
+    for release in releases:
+        destroyed_release = destroy_project_deployment_preview_release(
+            session=session,
+            tenant_id=tenant_id,
+            project_id=project_id,
+            release_id=release.release_id,
+            reason=reason,
+        )
+        destroyed.append(destroyed_release.release_id)
+    return PreviewCleanupResult(destroyed_release_ids=tuple(destroyed))
 
 
 def destroy_run_preview_deployments_for_pr(

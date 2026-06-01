@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 from collections import Counter
 from datetime import datetime, timezone
+from uuid import uuid4
 
 from sqlalchemy import select
 from sqlalchemy.orm import Session
@@ -27,6 +28,13 @@ def allocate_tenant_id(session: Session, *, name: str) -> str:
         candidate = f"{base}-{suffix}"
         suffix += 1
     return candidate
+
+
+def allocate_project_id(session: Session) -> str:
+    while True:
+        candidate = f"proj_{uuid4().hex[:16]}"
+        if session.get(Project, candidate) is None:
+            return candidate
 
 
 def primary_jira_project_key(jira_config: dict) -> str | None:
@@ -232,7 +240,7 @@ def ensure_default_project_for_tenant(
     now = datetime.now(timezone.utc)
     session.add(
         Project(
-            project_id=f"{tenant.tenant_id}-default",
+            project_id=allocate_project_id(session),
             tenant_id=tenant.tenant_id,
             name=default_project_name_from_repo_fn(repo_url=repo_url, tenant_id=tenant.tenant_id),
             github_repository=repo_url,

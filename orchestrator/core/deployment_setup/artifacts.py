@@ -36,20 +36,6 @@ def run_git(args: list[str], *, cwd: Path, token: str | None = None) -> str:
     return process.stdout
 
 
-def run_command(args: list[str], *, cwd: Path) -> str:
-    process = subprocess.run(
-        args,
-        cwd=str(cwd),
-        capture_output=True,
-        text=True,
-        check=False,
-    )
-    if process.returncode != 0:
-        message = (process.stderr or process.stdout or "command failed").strip()
-        raise RuntimeError(message)
-    return process.stdout
-
-
 def checkout_branch_commit(*, repo_dir: Path, branch: str, commit_sha: str) -> None:
     if not (repo_dir / ".git").exists():
         raise RuntimeError(f"Project repository checkout is missing git metadata at {repo_dir}")
@@ -74,29 +60,38 @@ def resolve_repo_path(*, repo_dir: Path, relative_path: str) -> Path:
     return resolved
 
 
-def sync_npm_lockfiles_for_deployment_branch(
+def validate_npm_lockfiles_for_deployment_branch(
     *,
     repo_dir: Path,
     npm_service_source_paths: tuple[str, ...],
-    run_command_fn=run_command,  # noqa: ANN001
 ) -> tuple[str, ...]:
-    changed_lockfiles: set[str] = set()
+    tracked_lockfiles: set[str] = set()
     for source_path in sorted({str(path or "").strip() for path in npm_service_source_paths if str(path or "").strip()}):
         service_dir = resolve_repo_path(repo_dir=repo_dir, relative_path=source_path)
         package_json = service_dir / "package.json"
         if not package_json.exists():
             raise RuntimeError(f"NPM deployment service at {source_path} is missing package.json")
-        run_command_fn(
-            ["npm", "install", "--package-lock-only", "--ignore-scripts", "--no-audit", "--no-fund"],
-            cwd=service_dir,
-        )
+        package_json_relative = str(package_json.relative_to(repo_dir.resolve()))
+        try:
+            run_git(["ls-files", "--error-unmatch", package_json_relative], cwd=repo_dir)
+        except RuntimeError as exc:
+            raise RuntimeError(f"NPM deployment service at {source_path} has an uncommitted package.json") from exc
         lockfiles = [service_dir / "npm-shrinkwrap.json", service_dir / "package-lock.json"]
         existing_lockfiles = [path for path in lockfiles if path.exists()]
         if not existing_lockfiles:
-            raise RuntimeError(f"NPM deployment service at {source_path} did not produce a lockfile")
+            raise RuntimeError(f"NPM deployment service at {source_path} is missing a committed npm lockfile")
+        tracked_for_service: list[str] = []
         for lockfile in existing_lockfiles:
-            changed_lockfiles.add(str(lockfile.relative_to(repo_dir.resolve())))
-    return tuple(sorted(changed_lockfiles))
+            lockfile_relative = str(lockfile.relative_to(repo_dir.resolve()))
+            try:
+                run_git(["ls-files", "--error-unmatch", lockfile_relative], cwd=repo_dir)
+            except RuntimeError:
+                continue
+            tracked_for_service.append(lockfile_relative)
+        if not tracked_for_service:
+            raise RuntimeError(f"NPM deployment service at {source_path} is missing a committed npm lockfile")
+        tracked_lockfiles.update(tracked_for_service)
+    return tuple(sorted(tracked_lockfiles))
 
 
 def ensure_deployment_compose_artifact(
@@ -120,7 +115,7 @@ def ensure_deployment_compose_artifact(
         run_git(["checkout", "-B", artifact_branch, f"origin/{artifact_branch}"], cwd=repo_dir)
     except RuntimeError:
         run_git(["checkout", "-B", artifact_branch, source_commit_sha], cwd=repo_dir)
-    npm_lockfile_paths = sync_npm_lockfiles_for_deployment_branch(
+    validate_npm_lockfiles_for_deployment_branch(
         repo_dir=repo_dir,
         npm_service_source_paths=npm_service_source_paths,
     )
@@ -129,7 +124,7 @@ def ensure_deployment_compose_artifact(
     artifact_path.write_text(compose_raw.rstrip() + "\n", encoding="utf-8")
     runtime_env_path = repo_dir / COOLIFY_RUNTIME_ENV_ARTIFACT_PATH
     runtime_env_path.write_text(COOLIFY_RUNTIME_ENV_ARTIFACT, encoding="utf-8")
-    run_git(["add", DEPLOYMENT_COMPOSE_ARTIFACT_PATH, *npm_lockfile_paths], cwd=repo_dir)
+    run_git(["add", DEPLOYMENT_COMPOSE_ARTIFACT_PATH], cwd=repo_dir)
     run_git(["add", "-f", COOLIFY_RUNTIME_ENV_ARTIFACT_PATH], cwd=repo_dir)
     changed = run_git(["diff", "--cached", "--name-only"], cwd=repo_dir).strip()
     if changed:

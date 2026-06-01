@@ -10,7 +10,9 @@ import type {
   ProjectAutomationRecord,
   ProjectAppAnalysisRunRecord,
   ProjectAppDeploymentConfigRecord,
+  ProjectAppDeploymentReleaseRecord,
   ProjectAppRecord,
+  ProjectDeploymentReleaseRecord,
   ProjectRecord,
   RunEventRecord,
   RuntimeLogEventRecord,
@@ -878,10 +880,14 @@ export async function mockRunDetailApis(
     tokenTimeline?: TokenTimelineRecord;
     tenant?: TenantRecord;
     projects?: ProjectRecord[];
+    deploymentApps?: ProjectAppRecord[];
+    deploymentReleasesByAppId?: Record<string, ProjectAppDeploymentReleaseRecord[]>;
+    previewReleaseResponse?: ProjectDeploymentReleaseRecord;
     nextAttemptResponse?: RunRecord;
     streamEvents?: Array<RunEventRecord | RuntimeLogEventRecord>;
     onRunEventStreamRequest?: () => void;
     onCreateAttempt?: (payload: WorkflowAttemptCreatePayload) => void;
+    onCreatePreview?: () => void;
     onCancelRun?: () => void;
   },
 ): Promise<void> {
@@ -903,6 +909,8 @@ export async function mockRunDetailApis(
       pr_url: null,
     });
   const runResponses = options.runResponses ?? [options.run];
+  const deploymentApps = options.deploymentApps ?? [];
+  const deploymentReleasesByAppId = options.deploymentReleasesByAppId ?? {};
   const workflowResponses =
     options.workflowResponses ??
     (options.workflow
@@ -1032,6 +1040,59 @@ export async function mockRunDetailApis(
       method: "GET",
       pathname: `/api/bff/api/admin/tenants/${encodeURIComponent(options.run.tenant_id)}/projects`,
       handler: (route) => fulfillJson(route, projects),
+    },
+    {
+      method: "GET",
+      pathname: new RegExp(`^/api/bff/api/admin/tenants/${encodeURIComponent(options.run.tenant_id)}/projects/[^/]+/apps$`),
+      handler: (route) => fulfillJson(route, deploymentApps),
+    },
+    {
+      method: "GET",
+      pathname: new RegExp(`^/api/bff/api/admin/tenants/${encodeURIComponent(options.run.tenant_id)}/projects/[^/]+/apps/[^/]+/deployment-releases$`),
+      handler: (route, url) => {
+        const appId = decodeURIComponent(url.pathname.split("/").at(-2) ?? "");
+        return fulfillJson(route, deploymentReleasesByAppId[appId] ?? []);
+      },
+    },
+    {
+      method: "POST",
+      pathname: `/api/bff/api/admin/runs/${encodeURIComponent(options.run.run_id)}/preview`,
+      handler: (route) => {
+        options.onCreatePreview?.();
+        return fulfillJson(
+          route,
+          options.previewReleaseResponse ??
+            ({
+              release_id: "preview-release-1",
+              tenant_id: options.run.tenant_id,
+              project_id: options.run.project_id ?? projects[0]?.project_id ?? "example-default",
+              app_id: deploymentApps[0]?.app_id ?? "app-1",
+              provider: "internal_coolify",
+              release_kind: "run_preview",
+              status: "route_activating",
+              environment_name: "production",
+              source_strategy: "docker_compose",
+              git_ref: options.run.branch ?? "feature/preview",
+              commit_sha: "abcdef1234567890",
+              release_name: `${options.run.issue_key}: preview`,
+              source_run_id: options.run.run_id,
+              source_issue_key: options.run.issue_key,
+              source_issue_summary: options.run.issue_summary,
+              source_issue_url: options.run.issue_url,
+              pr_number: null,
+              requested_by_user_id: null,
+              deployment_snapshot: {},
+              provider_context: {},
+              service_urls: [],
+              last_error: null,
+              requested_at: "2026-03-27T17:15:00Z",
+              started_at: "2026-03-27T17:15:00Z",
+              completed_at: null,
+              created_at: "2026-03-27T17:15:00Z",
+              updated_at: "2026-03-27T17:15:00Z",
+            } satisfies ProjectDeploymentReleaseRecord),
+        );
+      },
     },
     {
       method: "POST",

@@ -435,20 +435,18 @@ export function ProjectAutomationsContent({
   );
 }
 
-// ─── Discord notifications & allowlist (Notifications project tab) ─────────────
+// ─── Discord notifications (Notifications project tab) ────────────────────────
 
 type ProjectNotificationsContentProps = {
   tenantId: string;
   projectId: string;
   credentials: Credentials | null;
-  onAllowlistRequestsChange?: (requests: DiscordAllowlistRequestRecord[]) => void;
 };
 
 export function ProjectNotificationsContent({
   tenantId,
   projectId,
   credentials,
-  onAllowlistRequestsChange,
 }: ProjectNotificationsContentProps) {
   const { showToast } = useToast();
   const [project, setProject] = useState<ProjectRecord | null>(null);
@@ -459,26 +457,19 @@ export function ProjectNotificationsContent({
   const [liveVoiceEnabled, setLiveVoiceEnabled] = useState(false);
   const [liveVoiceChannelId, setLiveVoiceChannelId] = useState("");
   const [linkedTextChannelId, setLinkedTextChannelId] = useState("");
-  const [allowlistRequests, setAllowlistRequests] = useState<DiscordAllowlistRequestRecord[]>([]);
-  const [allowlistBusyUserId, setAllowlistBusyUserId] = useState<string | null>(null);
 
   useEffect(() => {
     if (!credentials) return;
     void (async () => {
       setBusy(true);
       try {
-        const [payload, requests] = await Promise.all([
-          getProject(credentials, tenantId, projectId),
-          listDiscordAllowlistRequests(credentials, tenantId, projectId),
-        ]);
+        const payload = await getProject(credentials, tenantId, projectId);
         setProject(payload);
         setDiscordEnabled(Boolean(payload.discord));
         setNotifyEvents(payload.discord?.notify_events ?? []);
         setLiveVoiceEnabled(Boolean(payload.discord?.live_voice_enabled));
         setLiveVoiceChannelId(payload.discord?.live_voice_channel_id ?? "");
         setLinkedTextChannelId(payload.discord?.live_voice_linked_text_channel_id ?? "");
-        setAllowlistRequests(requests);
-        onAllowlistRequestsChange?.(requests);
         setStatusLine("");
       } catch (error) {
         setStatusLine(`Failed to load project: ${(error as Error).message}`);
@@ -486,7 +477,7 @@ export function ProjectNotificationsContent({
         setBusy(false);
       }
     })();
-  }, [credentials, onAllowlistRequestsChange, tenantId, projectId]);
+  }, [credentials, tenantId, projectId]);
 
   function toggleNotifyEvent(eventValue: string, enabled: boolean): void {
     setNotifyEvents((current) =>
@@ -545,22 +536,6 @@ export function ProjectNotificationsContent({
     }
   }
 
-  async function approveAllowlistRequest(userId: string) {
-    if (!credentials) return;
-    setAllowlistBusyUserId(userId);
-    try {
-      const result = await approveDiscordAllowlistRequest(credentials, tenantId, projectId, userId);
-      const requests = await listDiscordAllowlistRequests(credentials, tenantId, projectId);
-      setAllowlistRequests(requests);
-      onAllowlistRequestsChange?.(requests);
-      showToast({ title: "Allowlist request approved", description: result.details, tone: "success" });
-    } catch (error) {
-      showToast({ title: "Allowlist approval failed", description: (error as Error).message, tone: "error" });
-    } finally {
-      setAllowlistBusyUserId(null);
-    }
-  }
-
   return (
     <div className="space-y-6">
       {statusLine ? (
@@ -594,26 +569,43 @@ export function ProjectNotificationsContent({
                   type="checkbox"
                   className="h-4 w-4 rounded border-input"
                   checked={liveVoiceEnabled}
-                  onChange={(event) => setLiveVoiceEnabled(event.target.checked)}
+                  onChange={(event) => {
+                    setLiveVoiceEnabled(event.target.checked);
+                    setStatusLine("");
+                  }}
                 />
                 <span>Enable live voice rooms for this project</span>
               </label>
               {liveVoiceEnabled ? (
                 <div className="grid gap-4 md:grid-cols-2">
                   <div className="space-y-1">
-                    <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Voice Channel ID</p>
+                    <label htmlFor="project-live-voice-channel-id" className="block text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                      Voice Channel ID
+                    </label>
                     <Input
+                      id="project-live-voice-channel-id"
+                      aria-label="Voice channel ID"
                       value={liveVoiceChannelId}
-                      onChange={(event) => setLiveVoiceChannelId(event.target.value)}
-                      placeholder="123456789012345678"
+                      onChange={(event) => {
+                        setLiveVoiceChannelId(event.target.value);
+                        setStatusLine("");
+                      }}
+                      placeholder="Paste Discord voice channel ID"
                     />
                   </div>
                   <div className="space-y-1">
-                    <p className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Linked Text Channel / Thread ID</p>
+                    <label htmlFor="project-live-voice-linked-text-channel-id" className="block text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                      Linked Text Channel / Thread ID
+                    </label>
                     <Input
+                      id="project-live-voice-linked-text-channel-id"
+                      aria-label="Linked text channel or thread ID"
                       value={linkedTextChannelId}
-                      onChange={(event) => setLinkedTextChannelId(event.target.value)}
-                      placeholder="987654321098765432"
+                      onChange={(event) => {
+                        setLinkedTextChannelId(event.target.value);
+                        setStatusLine("");
+                      }}
+                      placeholder="Paste Discord text channel or thread ID"
                     />
                   </div>
                 </div>
@@ -627,8 +619,60 @@ export function ProjectNotificationsContent({
           </div>
         </div>
       </div>
+    </div>
+  );
+}
 
-      {/* Access Requests */}
+type ProjectAccessRequestsContentProps = {
+  tenantId: string;
+  projectId: string;
+  credentials: Credentials | null;
+};
+
+export function ProjectAccessRequestsContent({
+  tenantId,
+  projectId,
+  credentials,
+}: ProjectAccessRequestsContentProps) {
+  const { showToast } = useToast();
+  const [statusLine, setStatusLine] = useState("");
+  const [allowlistRequests, setAllowlistRequests] = useState<DiscordAllowlistRequestRecord[]>([]);
+  const [allowlistBusyUserId, setAllowlistBusyUserId] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!credentials) return;
+    void (async () => {
+      try {
+        const requests = await listDiscordAllowlistRequests(credentials, tenantId, projectId);
+        setAllowlistRequests(requests);
+        setStatusLine("");
+      } catch (error) {
+        setStatusLine(`Failed to load access requests: ${(error as Error).message}`);
+      }
+    })();
+  }, [credentials, tenantId, projectId]);
+
+  async function approveAllowlistRequest(userId: string) {
+    if (!credentials) return;
+    setAllowlistBusyUserId(userId);
+    try {
+      const result = await approveDiscordAllowlistRequest(credentials, tenantId, projectId, userId);
+      const requests = await listDiscordAllowlistRequests(credentials, tenantId, projectId);
+      setAllowlistRequests(requests);
+      showToast({ title: "Access request approved", description: result.details, tone: "success" });
+    } catch (error) {
+      showToast({ title: "Access request approval failed", description: (error as Error).message, tone: "error" });
+    } finally {
+      setAllowlistBusyUserId(null);
+    }
+  }
+
+  return (
+    <div className="space-y-6">
+      {statusLine ? (
+        <p className="rounded-lg border bg-muted/40 px-4 py-2.5 text-sm text-muted-foreground">{statusLine}</p>
+      ) : null}
+
       <div className="overflow-hidden rounded-2xl border bg-background">
         <div className="p-6 pb-3">
           <div className="flex items-center justify-between gap-2">
@@ -653,7 +697,7 @@ export function ProjectNotificationsContent({
                 key={request.user_id}
                 className="flex flex-wrap items-start justify-between gap-3 px-6 py-4"
               >
-                <div className="space-y-1.5 min-w-0">
+                <div className="min-w-0 space-y-1.5">
                   <div className="flex flex-wrap items-center gap-2">
                     <span className="inline-flex items-center gap-1.5 rounded-full bg-muted px-2.5 py-0.5 text-xs font-medium">
                       <User className="h-3 w-3" />

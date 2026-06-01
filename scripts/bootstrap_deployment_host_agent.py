@@ -449,7 +449,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--region", default=None)
     parser.add_argument(
         "--capabilities",
-        default="restore_database,postgres,mysql,mariadb",
+        default="restore_database,postgres,mysql,mariadb,local_preview_routes",
         help="Comma or newline separated host capabilities.",
     )
     parser.add_argument(

@@ -424,8 +424,9 @@ services:
       ORCHESTRATOR_DEPLOYMENT_HOST_AGENT_API_BASE_URL: http://api:4000
       ORCHESTRATOR_DEPLOYMENT_HOST_AGENT_BOOTSTRAP_TOKEN_PATH: /var/lib/master-builder/deployment-host/bootstrap-token
       ORCHESTRATOR_DEPLOYMENT_HOST_AGENT_ACCESS_TOKEN_PATH: /var/lib/master-builder/deployment-host/access-token
-      ORCHESTRATOR_DEPLOYMENT_HOST_AGENT_CAPABILITIES: ${MASTER_BUILDER_DEPLOYMENT_HOST_CAPABILITIES:-restore_database,postgres,mysql,mariadb}
+      ORCHESTRATOR_DEPLOYMENT_HOST_AGENT_CAPABILITIES: ${MASTER_BUILDER_DEPLOYMENT_HOST_CAPABILITIES:-restore_database,postgres,mysql,mariadb,local_preview_routes}
       ORCHESTRATOR_DEPLOYMENT_HOST_AGENT_CONTAINER_RUNTIME_COMMAND: docker
+      ORCHESTRATOR_DEPLOYMENT_HOST_AGENT_LOCAL_PREVIEW_PROXY_DYNAMIC_DIR: /var/lib/master-builder/coolify-proxy-dynamic
     command:
       - python
       - -m
@@ -434,6 +435,7 @@ services:
     volumes:
       - deployment-host-state:/var/lib/master-builder/deployment-host
       - /var/run/docker.sock:/var/run/docker.sock
+      - ${HOME}/.master-builder-coolify/proxy/dynamic:/var/lib/master-builder/coolify-proxy-dynamic
 
 
   project-automation:

@@ -236,6 +236,7 @@ class DeploymentHostCommand(Base):
     __table_args__ = (
         Index("ix_deployment_host_commands_host_status_available_at", "host_id", "status", "available_at"),
         Index("ix_deployment_host_commands_restore_run_id", "restore_run_id"),
+        Index("ix_deployment_host_commands_release_id_kind_status", "release_id", "kind", "status"),
         Index("ix_deployment_host_commands_tenant_project_created_at", "tenant_id", "project_id", "created_at"),
     )
 
@@ -268,6 +269,12 @@ class DeploymentHostCommand(Base):
         String(64),
         ForeignKey("project_deployment_restore_runs.restore_run_id", ondelete="SET NULL"),
         nullable=True,
+    )
+    release_id: Mapped[str | None] = mapped_column(
+        String(64),
+        ForeignKey("project_deployment_releases.release_id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
     )
     kind: Mapped[str] = mapped_column(String(64), nullable=False, index=True)
     status: Mapped[str] = mapped_column(String(32), nullable=False, default="queued", index=True)

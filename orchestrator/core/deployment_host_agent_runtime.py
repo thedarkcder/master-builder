@@ -15,6 +15,10 @@ from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 
 from orchestrator.core.config import Settings, get_settings
+from orchestrator.core.deployment_host_local_preview_routes import (
+    LocalPreviewRouteSyncConfig,
+    sync_local_preview_routes,
+)
 from orchestrator.core.deployment_restore_executor import (
     DeploymentRestoreExecutionContext,
     build_docker_exec_restore_command_text,
@@ -47,6 +51,7 @@ class DeploymentHostAgentConfig:
     command_timeout_seconds: int
     agent_version: str
     container_runtime_command: str
+    local_preview_proxy_dynamic_dir: Path | None
 
 
 @dataclass(frozen=True)
@@ -119,6 +124,13 @@ def resolve_deployment_host_agent_config(*, settings: Settings | None = None) ->
         container_runtime_command=(
             _normalize_optional_string(getattr(resolved_settings, "deployment_host_agent_container_runtime_command", "docker"))
             or "docker"
+        ),
+        local_preview_proxy_dynamic_dir=(
+            Path(local_preview_proxy_dynamic_dir).expanduser()
+            if (local_preview_proxy_dynamic_dir := _normalize_optional_string(
+                getattr(resolved_settings, "deployment_host_agent_local_preview_proxy_dynamic_dir", ""),
+            )) is not None
+            else None
         ),
     )
 
@@ -491,7 +503,63 @@ class DeploymentHostAgent:
             raise DeploymentHostAgentError("Claimed deployment host command is missing payload")
 
         self._call_control_plane(lambda active_client: active_client.start_command(command_id=command_id, claim_id=claim_id))
-        if kind != "restore_database":
+        if kind == "restore_database":
+            status, result, last_error = execute_restore_command(
+                payload=command_payload,
+                container_runtime_command=self._config.container_runtime_command,
+                timeout_seconds=self._config.command_timeout_seconds,
+                subprocess_run_fn=self._subprocess_run_fn,
+            )
+            self._call_control_plane(
+                lambda active_client: active_client.complete_command(
+                    command_id=command_id,
+                    claim_id=claim_id,
+                    status=status,
+                    result=result,
+                    last_error=last_error,
+                )
+            )
+            self._health_state = "active" if status == "succeeded" else "degraded"
+            return DeploymentHostAgentResult(processed=True, command_id=command_id)
+        if kind == "sync_local_preview_routes":
+            if self._config.local_preview_proxy_dynamic_dir is None:
+                raise DeploymentHostAgentError(
+                    "Deployment host agent local preview proxy directory is not configured",
+                )
+            try:
+                result = sync_local_preview_routes(
+                    config=LocalPreviewRouteSyncConfig(
+                        dynamic_dir=self._config.local_preview_proxy_dynamic_dir,
+                        container_runtime_command=self._config.container_runtime_command,
+                    ),
+                    payload=command_payload,
+                    subprocess_run_fn=self._subprocess_run_fn,
+                )
+            except Exception as exc:  # noqa: BLE001
+                error_message = str(exc)
+                self._call_control_plane(
+                    lambda active_client: active_client.complete_command(
+                        command_id=command_id,
+                        claim_id=claim_id,
+                        status="failed",
+                        result={"kind": kind},
+                        last_error=error_message,
+                    )
+                )
+                self._health_state = "degraded"
+                return DeploymentHostAgentResult(processed=True, command_id=command_id)
+            self._call_control_plane(
+                lambda active_client: active_client.complete_command(
+                    command_id=command_id,
+                    claim_id=claim_id,
+                    status="succeeded",
+                    result=result,
+                    last_error=None,
+                )
+            )
+            self._health_state = "active"
+            return DeploymentHostAgentResult(processed=True, command_id=command_id)
+        else:
             result = {"kind": kind}
             self._call_control_plane(
                 lambda active_client: active_client.complete_command(
@@ -504,24 +572,6 @@ class DeploymentHostAgent:
             )
             self._health_state = "degraded"
             return DeploymentHostAgentResult(processed=True, command_id=command_id)
-
-        status, result, last_error = execute_restore_command(
-            payload=command_payload,
-            container_runtime_command=self._config.container_runtime_command,
-            timeout_seconds=self._config.command_timeout_seconds,
-            subprocess_run_fn=self._subprocess_run_fn,
-        )
-        self._call_control_plane(
-            lambda active_client: active_client.complete_command(
-                command_id=command_id,
-                claim_id=claim_id,
-                status=status,
-                result=result,
-                last_error=last_error,
-            )
-        )
-        self._health_state = "active" if status == "succeeded" else "degraded"
-        return DeploymentHostAgentResult(processed=True, command_id=command_id)
 
     def run(self, *, stop_event: threading.Event | None = None) -> None:
         local_stop_event = stop_event or threading.Event()

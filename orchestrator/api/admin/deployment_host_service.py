@@ -81,6 +81,7 @@ def deployment_host_command_to_schema(
         project_id=command.project_id,
         app_id=command.app_id,
         restore_run_id=command.restore_run_id,
+        release_id=command.release_id,
         kind=command.kind,
         status=command.status,  # type: ignore[arg-type]
         claim_id=command.claim_id,

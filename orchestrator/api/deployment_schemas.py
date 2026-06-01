@@ -469,6 +469,7 @@ class DeploymentHostCommandRead(BaseModel):
     project_id: str | None = None
     app_id: str | None = None
     restore_run_id: str | None = None
+    release_id: str | None = None
     kind: str
     status: Literal["queued", "claimed", "running", "succeeded", "failed", "expired", "canceled"]
     claim_id: str | None = None
@@ -1141,6 +1142,9 @@ class ProjectDeploymentReleaseRead(BaseModel):
     commit_sha: str
     release_name: str
     source_run_id: str | None = None
+    source_issue_key: str | None = None
+    source_issue_summary: str | None = None
+    source_issue_url: str | None = None
     pr_number: int | None = None
     requested_by_user_id: str | None = None
     deployment_snapshot: dict[str, object] = Field(default_factory=dict)
@@ -1154,6 +1158,17 @@ class ProjectDeploymentReleaseRead(BaseModel):
     destroyed_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
+
+
+class ProjectDeploymentReleaseLogsRead(BaseModel):
+    provider: str
+    release_id: str
+    deployment_uuid: str | None = None
+    application_uuid: str | None = None
+    status: str | None = None
+    logs: str
+    truncated: bool = False
+    fetched_at: datetime
 
 
 class ProjectDeploymentReleaseStatusUpdate(BaseModel):

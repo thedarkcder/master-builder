@@ -107,22 +107,41 @@ export type ProjectDeploymentReleaseRecord = {
   project_id: string;
   provider: string;
   app_id?: string | null;
+  release_kind: "production" | "run_preview" | string;
   status: string;
   environment_name: string | null;
   source_strategy: string | null;
   git_ref: string;
   commit_sha: string;
   release_name: string;
+  source_run_id?: string | null;
+  source_issue_key?: string | null;
+  source_issue_summary?: string | null;
+  source_issue_url?: string | null;
+  pr_number?: number | null;
   requested_by_user_id: string | null;
   deployment_snapshot: Record<string, unknown>;
   provider_context: Record<string, unknown>;
+  delivery_metadata?: Record<string, unknown>;
   service_urls: ProjectDeploymentServiceUrlRecord[];
   last_error: string | null;
   requested_at: string;
   started_at: string | null;
   completed_at: string | null;
+  destroyed_at?: string | null;
   created_at: string;
   updated_at: string;
+};
+
+export type ProjectDeploymentReleaseLogsRecord = {
+  provider: string;
+  release_id: string;
+  deployment_uuid?: string | null;
+  application_uuid?: string | null;
+  status?: string | null;
+  logs: string;
+  truncated: boolean;
+  fetched_at: string;
 };
 
 export type ProjectDeploymentServiceUrlRecord = {
@@ -229,8 +248,6 @@ export type ProjectAppDeploymentConfigUpdatePayload = {
 export type ProjectAppDeploymentReleaseRecord = ProjectDeploymentReleaseRecord & {
   app_id: string;
 };
-
-export type ProjectAppAnalysisRunCreatePayload = Record<string, never>;
 
 export type TenantDeploymentsOverviewFailureRecord = {
   tenant_id: string;
@@ -516,22 +533,6 @@ export function deleteProjectApp(
   );
 }
 
-export function createProjectAppAnalysisRun(
-  credentials: Credentials,
-  tenantId: string,
-  projectId: string,
-  payload: ProjectAppAnalysisRunCreatePayload = {},
-): Promise<ProjectAppAnalysisRunRecord> {
-  return request<ProjectAppAnalysisRunRecord>(
-    credentials,
-    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/apps/analyze`,
-    {
-      method: "POST",
-      body: JSON.stringify(payload),
-    }
-  );
-}
-
 export function listProjectAppAnalysisRuns(
   credentials: Credentials,
   tenantId: string,
@@ -677,6 +678,19 @@ export function getProjectAppDeploymentRelease(
   return request<ProjectAppDeploymentReleaseRecord>(
     credentials,
     `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/apps/${encodeURIComponent(appId)}/deployment-releases/${encodeURIComponent(releaseId)}`
+  );
+}
+
+export function getProjectAppDeploymentReleaseLogs(
+  credentials: Credentials,
+  tenantId: string,
+  projectId: string,
+  appId: string,
+  releaseId: string,
+): Promise<ProjectDeploymentReleaseLogsRecord> {
+  return request<ProjectDeploymentReleaseLogsRecord>(
+    credentials,
+    `/api/admin/tenants/${encodeURIComponent(tenantId)}/projects/${encodeURIComponent(projectId)}/apps/${encodeURIComponent(appId)}/deployment-releases/${encodeURIComponent(releaseId)}/logs`
   );
 }
 

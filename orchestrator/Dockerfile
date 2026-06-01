@@ -7,9 +7,7 @@ ARG LIBDAVE_VERSION=v1.1.0
 ARG LIBDAVE_FORCE_BUILD=0
 ENV SHELL=/bin/sh
 
-RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
-    apt-get update && \
+RUN apt-get update -o Acquire::Retries=3 && \
     apt-get install -y --no-install-recommends \
       ca-certificates \
       build-essential \
@@ -62,9 +60,7 @@ ARG CODEX_NPM_VERSION=latest
 
 WORKDIR /app
 
-RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
-    apt-get update && \
+RUN apt-get update -o Acquire::Retries=3 && \
     apt-get install -y --no-install-recommends \
       ca-certificates \
       curl \
@@ -125,9 +121,7 @@ ENV PATH="${PATH}:/opt/android-sdk/cmdline-tools/latest/bin:/opt/android-sdk/pla
 
 ARG ANDROID_CMDLINE_TOOLS_VERSION=11076708
 
-RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
-    apt-get update && \
+RUN apt-get update -o Acquire::Retries=3 && \
     apt-get install -y --no-install-recommends \
       default-jdk-headless \
       maven && \
@@ -171,9 +165,7 @@ ENV ORCHESTRATOR_LIVE_VOICE_TRANSPORT_STARTUP_TIMEOUT_SECONDS=10
 ENV ORCHESTRATOR_LIVE_VOICE_TRANSPORT_REQUEST_TIMEOUT_SECONDS=10
 ENV LD_LIBRARY_PATH=/root/.local/lib
 
-RUN --mount=type=cache,target=/var/cache/apt,sharing=locked \
-    --mount=type=cache,target=/var/lib/apt/lists,sharing=locked \
-    apt-get update && \
+RUN apt-get update -o Acquire::Retries=3 && \
     apt-get install -y --no-install-recommends \
       ffmpeg \
       libopus0 && \

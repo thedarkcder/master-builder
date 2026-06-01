@@ -1490,6 +1490,7 @@ services:
     compose_raw = result.app.deployment_config["generated_compose_raw"]
     compose_payload = yaml.safe_load(compose_raw)
     assert compose_payload["services"]["app-web"]["build"]["context"] == "./web/app"
+    assert "RUN npm ci --legacy-peer-deps" in compose_raw
     assert "RUN npx vite build" in compose_raw
     assert "RUN npm run build" not in compose_raw
     assert 'CMD ["serve", "-s", "dist", "-l", "4173"]' in compose_raw
@@ -1680,8 +1681,9 @@ services:
     assert "COPY --from=build /tmp/app.jar /app/app.jar" in dockerfile_inline
     assert "--spring.profiles.active=aws-prod" not in dockerfile_inline
     environment = compose_payload["services"]["customer-api"]["environment"]
-    assert environment["POSTGRES_DB_URL"] == "jdbc:postgresql://postgres:5432/bsktpay"
-    assert environment["SPRING_DATASOURCE_URL"] == "jdbc:postgresql://postgres:5432/bsktpay"
+    assert compose_payload["services"]["customer-api"]["networks"]["default"] == {}
+    assert environment["POSTGRES_DB_URL"] == "jdbc:postgresql://mb-postgres:5432/bsktpay"
+    assert environment["SPRING_DATASOURCE_URL"] == "jdbc:postgresql://mb-postgres:5432/bsktpay"
     assert environment["SPRING_DATASOURCE_USERNAME"] == "postgres"
     assert environment["SPRING_DATASOURCE_PASSWORD"] == "postgres"
     assert environment["TENANT_DATASOURCE_USERNAME"] == "postgres"
@@ -1706,13 +1708,13 @@ services:
     assert environment["SPRING_JPA_HIBERNATE_DDL_AUTO"] == "none"
     assert environment["SPRING_FLYWAY_POSTGRESQL_TRANSACTIONAL_LOCK"] == "false"
     assert environment["BASE_WEB_PUBLIC_IMAGE_URL"] == "http://web-app:4173"
-    assert environment["SPRING_ACTIVEMQ_BROKER_URL"] == "tcp://activemq:61616?wireFormat.maxInactivityDuration=0"
-    assert environment["SPRING_KAFKA_BOOTSTRAP_SERVERS"] == "kafka:9092"
-    assert environment["SPRING_ELASTICSEARCH_URIS"] == "http://elasticsearch:9200"
-    assert environment["SPRING_ELASTICSEARCH_HOST"] == "elasticsearch"
+    assert environment["SPRING_ACTIVEMQ_BROKER_URL"] == "tcp://mb-activemq:61616?wireFormat.maxInactivityDuration=0"
+    assert environment["SPRING_KAFKA_BOOTSTRAP_SERVERS"] == "mb-kafka:9092"
+    assert environment["SPRING_ELASTICSEARCH_URIS"] == "http://mb-elasticsearch:9200"
+    assert environment["SPRING_ELASTICSEARCH_HOST"] == "mb-elasticsearch"
     assert environment["AUTH0_AUDIENCE"] == ""
     assert environment["AUTH0_DOMAIN"] == ""
-    assert environment["spring.mail.host"] == "mailpit"
+    assert environment["spring.mail.host"] == "mb-mailpit"
     assert environment["spring.mail.port"] == "1025"
     assert environment["base.email.errorTo"] == "errors@localhost"
     assert environment["BASE_EMAIL_ERROR_TO"] == "errors@localhost"
@@ -1721,6 +1723,7 @@ services:
     healthcheck_test = compose_payload["services"]["customer-api"]["healthcheck"]["test"]
     assert healthcheck_test == ["CMD-SHELL", "curl -f http://localhost:8081/actuator/health/ || exit 1"]
     postgres_service = compose_payload["services"]["postgres"]
+    assert postgres_service["networks"]["default"]["aliases"] == ["mb-postgres"]
     assert postgres_service["build"]["context"] == "."
     postgres_dockerfile = postgres_service["build"]["dockerfile_inline"]
     assert "FROM postgis/postgis:16-3.4" in postgres_dockerfile
