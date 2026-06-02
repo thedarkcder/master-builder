@@ -144,9 +144,28 @@ class DockerBuildContractTests(unittest.TestCase):
         )[0]
 
         self.assertIn("ANDROID_SDK_ROOT", android_target)
+        self.assertIn('/opt/android-sdk/build-tools/34.0.0', android_target)
         self.assertIn("sdkmanager", android_target)
         self.assertIn("default-jdk-headless", android_target)
+        self.assertIn("ffmpeg", android_target)
         self.assertIn("maven", android_target)
+        self.assertNotIn('"emulator"', android_target)
+        self.assertNotIn("system-images;", android_target)
+
+    def test_common_base_installs_browser_runtime_deps_without_playwright_with_deps(self) -> None:
+        dockerfile = (ROOT / "orchestrator" / "Dockerfile").read_text(encoding="utf-8")
+        common_base = dockerfile.split("FROM python:3.11-slim-trixie AS python-common-base", 1)[1].split(
+            "COPY pyproject.toml ./",
+            1,
+        )[0]
+
+        self.assertIn("fonts-freefont-ttf", common_base)
+        self.assertIn("fonts-unifont", common_base)
+        self.assertIn("xvfb", common_base)
+        self.assertIn("playwright install chromium", common_base)
+        self.assertNotIn("playwright install --with-deps chromium", common_base)
+        self.assertNotIn("ttf-unifont", common_base)
+        self.assertNotIn("ttf-ubuntu-font-family", common_base)
 
     def test_dockerignore_excludes_local_workdirs_from_build_context(self) -> None:
         dockerignore = (ROOT / ".dockerignore").read_text(encoding="utf-8").splitlines()

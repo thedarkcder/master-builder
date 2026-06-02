@@ -18,13 +18,18 @@ from orchestrator.core.runs.service import (
     mark_run_running,
     mark_run_terminal,
 )
+from orchestrator.core.worker.run_lifecycle import finalize_workflow_result, persist_stage_checkpoint
 from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
+from orchestrator.core.workflow.runner import QaRecording, QaResult, QaScenario, WorkflowResult, WorkflowStageCheckpoint
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
-from orchestrator.storage.models import Run, Tenant, WorkflowExecution
+from orchestrator.storage.models import Run, Tenant, WorkflowCheckpoint, WorkflowExecution
 
 
 class RunLifecycleTests(unittest.TestCase):
+    _WORKER_ID = "worker-macos-local:runs"
+    _CLAIM_ID = "claim-test"
+
     def setUp(self) -> None:
         self.temp_dir = TemporaryDirectory()
         self.database_url = f"sqlite:///{self.temp_dir.name}/runs_test.db"
@@ -502,3 +507,101 @@ class RunLifecycleTests(unittest.TestCase):
         self.assertTrue(result.enqueued)
         self.assertEqual(result.run.parent_run_id, enqueue.run.run_id)
         self.assertEqual(result.run.entry_mode, "resume")
+
+    def test_persist_stage_checkpoint_writes_qa_execution_checkpoint_and_projects_pr_url(self) -> None:
+        with self.session_factory() as session:
+            enqueue = enqueue_run(
+                session,
+                tenant_id="tenant-runs",
+                project_id=None,
+                issue_key="TP-915",
+                precheck_outcome="ready_for_agent",
+            )
+            running = mark_run_running(session, run_id=enqueue.run.run_id)
+            running.worker_service_instance_id = self._WORKER_ID
+            running.claim_id = self._CLAIM_ID
+            running.pr_url = "https://github.com/example/repo/pull/15"
+            session.commit()
+
+            qa_result = QaResult(
+                summary=["qa recorded 4 demos"],
+                scenarios=[
+                    QaScenario(
+                        name="Fresh install",
+                        objective="Prove the onboarding flow records successfully",
+                        capture_target="ios",
+                    )
+                ],
+                recordings=[
+                    QaRecording(
+                        name="Fresh install",
+                        artifact_url="https://cdn.example/qa-demo-1.mp4",
+                        object_key="tenant-runs/default/TP-915/qa-demo-1.mp4",
+                        capture_reference="ios-simulator://configured",
+                        capture_target="ios",
+                    )
+                ],
+            )
+
+            persist_stage_checkpoint(
+                session,
+                run=running,
+                checkpoint=WorkflowStageCheckpoint(
+                    stage="qa",
+                    attempt=1,
+                    status="completed",
+                    summary="qa recorded 4 demos",
+                    qa_result=qa_result,
+                ),
+                expected_worker_service_instance_id=self._WORKER_ID,
+                expected_claim_id=self._CLAIM_ID,
+            )
+
+            workflow = self._get_workflow(session, issue_key="TP-915")
+            assert workflow is not None
+            checkpoint = session.query(WorkflowCheckpoint).filter_by(
+                run_id=running.run_id,
+                checkpoint_kind="execution",
+            ).one()
+
+            self.assertEqual(checkpoint.stage, "qa")
+            self.assertEqual(workflow.latest_checkpoint_id, checkpoint.checkpoint_id)
+            self.assertEqual(workflow.pr_url, "https://github.com/example/repo/pull/15")
+
+    def test_finalize_workflow_result_preserves_existing_pr_url_when_result_omits_it(self) -> None:
+        with self.session_factory() as session:
+            enqueue = enqueue_run(
+                session,
+                tenant_id="tenant-runs",
+                project_id=None,
+                issue_key="TP-916",
+                precheck_outcome="ready_for_agent",
+            )
+            running = mark_run_running(session, run_id=enqueue.run.run_id)
+            running.worker_service_instance_id = self._WORKER_ID
+            running.claim_id = self._CLAIM_ID
+            running.pr_url = "https://github.com/example/repo/pull/16"
+            session.commit()
+
+            finalized = finalize_workflow_result(
+                session,
+                run=running,
+                workflow_result=WorkflowResult(
+                    outcome="success",
+                    plan=None,
+                    pr_url=None,
+                    summary=["completed"],
+                    test_guidance=[],
+                    attempts=1,
+                ),
+                stage_updates=[],
+                expected_worker_service_instance_id=self._WORKER_ID,
+                expected_claim_id=self._CLAIM_ID,
+            )
+
+            workflow = self._get_workflow(session, issue_key="TP-916")
+            assert workflow is not None
+
+            self.assertEqual(finalized.status, RUN_STATUS_SUCCEEDED)
+            self.assertEqual(finalized.pr_url, "https://github.com/example/repo/pull/16")
+            self.assertEqual(workflow.pr_url, "https://github.com/example/repo/pull/16")

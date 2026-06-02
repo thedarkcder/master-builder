@@ -40,12 +40,13 @@ test("project routes use project-scoped nav with a project picker instead of in-
   await expect(page.getByRole("link", { name: "Board" })).toHaveAttribute("href", "/example/projects/example-default");
   await expect(page.getByRole("link", { name: "Knowledge" })).toHaveAttribute("href", "/example/projects/example-default/knowledge");
   await expect(page.getByRole("link", { name: "Architecture" })).toHaveAttribute("href", "/example/projects/example-default/architecture");
-  await expect(page.locator("summary").filter({ hasText: "Delivery" })).toBeVisible();
   await expect(page.locator("summary").filter({ hasText: "Deployments" })).toHaveCount(0);
+  await expect(page.locator("summary").filter({ hasText: "Development" })).toBeVisible();
+  await expect(page.locator("summary").filter({ hasText: "Delivery" })).toBeVisible();
+  await expect(page.locator("summary")).toHaveText(["Work", "Project", "Development", "Delivery"]);
   await expect(page.getByRole("link", { name: "Releases" })).toHaveAttribute("href", "/example/projects/example-default/deployments");
   await expect(page.getByRole("link", { name: "Policy" })).toHaveAttribute("href", "/example/projects/example-default/deployment");
   await page.locator("summary").filter({ hasText: "Project" }).click();
-  await expect(page.locator("summary").filter({ hasText: "Development" })).toBeVisible();
   await page.locator("summary").filter({ hasText: "Development" }).click();
   await expect(page.getByRole("link", { name: "Webhooks" })).toHaveAttribute("href", "/example/projects/example-default/webhooks");
   await expect(page.getByRole("link", { name: "Installs" })).toHaveAttribute("href", "/example/projects/example-default/installs");

@@ -8,10 +8,12 @@ import subprocess
 import tempfile
 import threading
 import time
+from pathlib import Path
 from urllib import error as urllib_error
 from urllib import request as urllib_request
 from collections.abc import Callable
 from dataclasses import dataclass
+from textwrap import dedent
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
@@ -610,7 +612,7 @@ def _build_codex_subprocess_env(
     runtime_kind: str = "codex_cli",
 ) -> dict[str, str]:
     env: dict[str, str] = {}
-    for key in ("LANG", "LC_ALL", "PATH", "SHELL", "TERM", "TMPDIR", "USER"):
+    for key in ("HOME", "LANG", "LC_ALL", "PATH", "SHELL", "TERM", "TMPDIR", "USER"):
         value = str(os.environ.get(key) or "").strip()
         if value:
             env[key] = value
@@ -620,8 +622,17 @@ def _build_codex_subprocess_env(
         runtime_kind=str(runtime_kind or "codex_cli").strip().lower() or "codex_cli",
     )
     subprocess_home.mkdir(parents=True, exist_ok=True)
-    env["HOME"] = str(subprocess_home)
-    env["XDG_CONFIG_HOME"] = str(subprocess_home / ".config")
+    codex_home = subprocess_home / ".codex"
+    xdg_config_home = subprocess_home / ".config"
+    codex_home.mkdir(parents=True, exist_ok=True)
+    xdg_config_home.mkdir(parents=True, exist_ok=True)
+    _prepare_native_tool_shims(subprocess_home=subprocess_home, env=env, working_dir=working_dir)
+    if not str(env.get("HOME") or "").strip():
+        env["HOME"] = str(subprocess_home)
+    env["CODEX_HOME"] = str(codex_home)
+    env["XDG_CONFIG_HOME"] = str(xdg_config_home)
+    if working_dir:
+        env["ORCHESTRATOR_EXECUTION_REPO_DIR"] = str(working_dir)
     tool_database_url = _resolve_codex_tool_database_url(
         database_url=str(getattr(settings, "database_url", "") or "").strip(),
         tool_database_url=str(getattr(settings, "codex_tool_database_url", "") or "").strip(),
@@ -629,6 +640,102 @@ def _build_codex_subprocess_env(
     if tool_database_url:
         env["ORCHESTRATOR_DATABASE_URL"] = tool_database_url
     return env
+
+
+def _prepare_native_tool_shims(*, subprocess_home: Path, env: dict[str, str], working_dir: str | None) -> None:
+    lock_dir = subprocess_home / ".native-tool-locks"
+    shim_dir = subprocess_home / ".tool-shims"
+    lock_dir.mkdir(parents=True, exist_ok=True)
+    shim_dir.mkdir(parents=True, exist_ok=True)
+
+    xcodebuild_path = shutil.which("xcodebuild")
+    xcrun_path = shutil.which("xcrun")
+    if not xcodebuild_path or not xcrun_path:
+        return
+
+    env["ORCHESTRATOR_REAL_XCODEBUILD"] = xcodebuild_path
+    env["ORCHESTRATOR_REAL_XCRUN"] = xcrun_path
+    env["ORCHESTRATOR_NATIVE_TOOL_LOCK_DIR"] = str(lock_dir)
+    if working_dir:
+        env["ORCHESTRATOR_EXECUTION_REPO_DIR"] = str(working_dir)
+
+    xcodebuild_wrapper = shim_dir / "xcodebuild"
+    xcrun_wrapper = shim_dir / "xcrun"
+    xcodebuild_wrapper.write_text(_xcodebuild_wrapper_script(), encoding="utf-8")
+    xcrun_wrapper.write_text(_xcrun_wrapper_script(), encoding="utf-8")
+    xcodebuild_wrapper.chmod(0o755)
+    xcrun_wrapper.chmod(0o755)
+
+    existing_path = str(env.get("PATH") or "").strip()
+    env["PATH"] = f"{shim_dir}:{existing_path}" if existing_path else str(shim_dir)
+
+
+def _xcodebuild_wrapper_script() -> str:
+    return dedent(
+        """\
+        #!/usr/bin/env python3
+        import fcntl
+        import hashlib
+        import os
+        import sys
+        from pathlib import Path
+
+        real_path = str(os.environ.get("ORCHESTRATOR_REAL_XCODEBUILD") or "").strip()
+        lock_dir = str(os.environ.get("ORCHESTRATOR_NATIVE_TOOL_LOCK_DIR") or "").strip()
+        scope_source = (
+            str(os.environ.get("ORCHESTRATOR_EXECUTION_REPO_DIR") or "").strip()
+            or str(os.getcwd() or "").strip()
+            or "global"
+        )
+        if not real_path:
+            raise SystemExit("ORCHESTRATOR_REAL_XCODEBUILD is required")
+        if not lock_dir:
+            raise SystemExit("ORCHESTRATOR_NATIVE_TOOL_LOCK_DIR is required")
+        Path(lock_dir).mkdir(parents=True, exist_ok=True)
+        scope = hashlib.sha256(scope_source.encode("utf-8")).hexdigest()
+        lock_path = Path(lock_dir) / f"xcodebuild-{scope}.lock"
+        with open(lock_path, "w", encoding="utf-8") as handle:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            os.execv(real_path, [real_path, *sys.argv[1:]])
+        """
+    )
+
+
+def _xcrun_wrapper_script() -> str:
+    return dedent(
+        """\
+        #!/usr/bin/env python3
+        import fcntl
+        import hashlib
+        import os
+        import sys
+        from pathlib import Path
+
+        real_path = str(os.environ.get("ORCHESTRATOR_REAL_XCRUN") or "").strip()
+        lock_dir = str(os.environ.get("ORCHESTRATOR_NATIVE_TOOL_LOCK_DIR") or "").strip()
+        if not real_path:
+            raise SystemExit("ORCHESTRATOR_REAL_XCRUN is required")
+        if not lock_dir:
+            raise SystemExit("ORCHESTRATOR_NATIVE_TOOL_LOCK_DIR is required")
+
+        args = [real_path, *sys.argv[1:]]
+        should_lock = len(sys.argv) > 1 and sys.argv[1] == "simctl"
+        if not should_lock:
+            os.execv(real_path, args)
+
+        scope_source = (
+            str(os.environ.get("ORCHESTRATOR_EXECUTION_REPO_DIR") or "").strip()
+            or str(os.getcwd() or "").strip()
+            or "global"
+        )
+        Path(lock_dir).mkdir(parents=True, exist_ok=True)
+        scope = hashlib.sha256(scope_source.encode("utf-8")).hexdigest()
+        lock_path = Path(lock_dir) / f"xcrun-simctl-{scope}.lock"
+        with open(lock_path, "w", encoding="utf-8") as handle:
+            fcntl.flock(handle.fileno(), fcntl.LOCK_EX)
+            os.execv(real_path, args)
+        """
+    )
 
 
 def build_codex_runtime(
@@ -1074,6 +1181,8 @@ def build_cli_runtime(
                     [
                         "-c",
                         f'reasoning.effort="{normalized_reasoning_effort}"',
+                        "-c",
+                        'web_search="disabled"',
                         "--model",
                         resolved_model,
                         "--json",
@@ -1093,6 +1202,8 @@ def build_cli_runtime(
                     settings.codex_sandbox_mode,
                     "-c",
                     f'reasoning.effort="{normalized_reasoning_effort}"',
+                    "-c",
+                    'web_search="disabled"',
                     "--color",
                     "never",
                     "--model",

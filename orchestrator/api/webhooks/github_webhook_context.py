@@ -22,9 +22,10 @@ from orchestrator.api.webhooks.contracts import (
 )
 from orchestrator.core.communications.integration_contracts import TransportActionExecutor
 from orchestrator.core.github.transport_executor import GitHubTransportExecutor
-from orchestrator.core.review.reviewer import ReviewAgentGate
 from orchestrator.core.platform.secret_service import resolve_platform_secret_ref
 from orchestrator.core.platform.tenant_secret_service import resolve_scoped_secret_ref
+from orchestrator.core.projects.policy import resolve_effective_policy
+from orchestrator.core.review.reviewer import ReviewAgentGate
 from orchestrator.tools.github_app import github_client_from_tenant_config
 
 
@@ -263,8 +264,15 @@ def build_github_review_runtime(*, session, settings, tenant, project):
             encryption_key=settings.secrets_encryption_key,
         ),
     )
+    effective_policy = resolve_effective_policy(
+        tenant_policy=dict(getattr(tenant, "policy_config", {}) or {}),
+        project_overrides=dict(getattr(project, "policy_overrides", {}) or {}),
+        default_codex_model=getattr(settings, "codex_model", None),
+        default_codex_reasoning_effort=getattr(settings, "codex_reasoning_effort", None),
+    )
     reviewer_gate = ReviewAgentGate(
         github_client,
+        require_demo_evidence=bool(effective_policy.get("qa_demo_recording_enabled")),
         tenant_id=tenant.tenant_id,
         project_id=project.project_id,
     )

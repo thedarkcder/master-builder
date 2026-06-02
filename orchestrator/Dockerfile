@@ -57,6 +57,7 @@ ENV VIRTUAL_ENV=/opt/venv
 ENV PATH="${VIRTUAL_ENV}/bin:${PATH}"
 
 ARG CODEX_NPM_VERSION=latest
+ARG PLAYWRIGHT_NPM_VERSION=1.51.1
 
 WORKDIR /app
 
@@ -68,11 +69,42 @@ RUN apt-get update -o Acquire::Retries=3 && \
       docker-compose \
       gh \
       git \
+      fonts-freefont-ttf \
+      fonts-ipafont-gothic \
+      fonts-liberation \
+      fonts-noto-color-emoji \
+      fonts-tlwg-loma-otf \
+      fonts-unifont \
+      fonts-wqy-zenhei \
+      libasound2t64 \
+      libatk-bridge2.0-0t64 \
+      libatk1.0-0t64 \
+      libatspi2.0-0t64 \
+      libcairo2 \
+      libcups2t64 \
+      libdbus-1-3 \
+      libdrm2 \
+      libgbm1 \
+      libglib2.0-0t64 \
+      libnspr4 \
+      libnss3 \
+      libpango-1.0-0 \
+      libx11-6 \
+      libxcb1 \
+      libxcomposite1 \
+      libxdamage1 \
+      libxext6 \
+      libxfixes3 \
+      libxkbcommon0 \
+      libxrandr2 \
       nodejs \
       npm \
       ripgrep \
-      unzip && \
-    npm install -g "@openai/codex@${CODEX_NPM_VERSION}" && \
+      unzip \
+      xvfb \
+      xfonts-scalable && \
+    npm install -g "@openai/codex@${CODEX_NPM_VERSION}" "playwright@${PLAYWRIGHT_NPM_VERSION}" && \
+    playwright install chromium && \
     rm -rf /var/lib/apt/lists/*
 
 COPY pyproject.toml ./
@@ -98,6 +130,9 @@ COPY README.md ./
 COPY .codex ./.codex
 COPY orchestrator ./orchestrator
 COPY scripts/bootstrap_deployment_host_agent.py ./scripts/bootstrap_deployment_host_agent.py
+COPY scripts/qa_demo_android_recorder.py ./scripts/qa_demo_android_recorder.py
+COPY scripts/qa_demo_mobile_recorder.py ./scripts/qa_demo_mobile_recorder.py
+COPY scripts/qa_demo_recorder.mjs ./scripts/qa_demo_recorder.mjs
 COPY alembic.ini ./alembic.ini
 
 RUN printf '#!/usr/bin/env sh\nexec python -m orchestrator "$@"\n' > "${VIRTUAL_ENV}/bin/orchestrator" && \
@@ -117,13 +152,14 @@ FROM python-common-base AS python-android-base
 ENV ANDROID_SDK_ROOT=/opt/android-sdk
 ENV ANDROID_HOME=/opt/android-sdk
 ENV JAVA_HOME=/usr/lib/jvm/default-java
-ENV PATH="${PATH}:/opt/android-sdk/cmdline-tools/latest/bin:/opt/android-sdk/platform-tools"
+ENV PATH="${PATH}:/opt/android-sdk/cmdline-tools/latest/bin:/opt/android-sdk/platform-tools:/opt/android-sdk/build-tools/34.0.0"
 
 ARG ANDROID_CMDLINE_TOOLS_VERSION=11076708
 
 RUN apt-get update -o Acquire::Retries=3 && \
     apt-get install -y --no-install-recommends \
       default-jdk-headless \
+      ffmpeg \
       maven && \
     mkdir -p "${ANDROID_SDK_ROOT}/cmdline-tools" && \
     curl -fsSL "https://dl.google.com/android/repository/commandlinetools-linux-${ANDROID_CMDLINE_TOOLS_VERSION}_latest.zip" \
@@ -146,6 +182,9 @@ FROM python-android-base AS android-runtime
 COPY README.md ./
 COPY .codex ./.codex
 COPY orchestrator ./orchestrator
+COPY scripts/qa_demo_android_recorder.py ./scripts/qa_demo_android_recorder.py
+COPY scripts/qa_demo_mobile_recorder.py ./scripts/qa_demo_mobile_recorder.py
+COPY scripts/qa_demo_recorder.mjs ./scripts/qa_demo_recorder.mjs
 COPY alembic.ini ./alembic.ini
 
 RUN printf '#!/usr/bin/env sh\nexec python -m orchestrator "$@"\n' > "${VIRTUAL_ENV}/bin/orchestrator" && \

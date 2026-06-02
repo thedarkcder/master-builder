@@ -17,6 +17,7 @@ from orchestrator.core.workflow.definition import (
     WorkflowWorkUnitDefinition,
     WorkflowWorkUnitKind,
 )
+from orchestrator.core.workflow.operation_heartbeat import WorkflowOperationAttemptHeartbeatController
 from orchestrator.core.workflow.operation_logging import emit_workflow_operation_log
 from orchestrator.core.workflow.type_catalog import get_workflow_type
 from orchestrator.storage.models import (
@@ -365,6 +366,12 @@ def run_work_unit(
             "input_fingerprint": fingerprint,
         },
     )
+    heartbeat_controller = WorkflowOperationAttemptHeartbeatController(
+        database_url=session.get_bind().url.render_as_string(hide_password=False),
+        attempt_id=operation_attempt.attempt_id,
+        lease_owner="workflow_work_units",
+    )
+    heartbeat_controller.start()
     try:
         result = execute(context)
     except Exception as exc:
@@ -404,6 +411,8 @@ def run_work_unit(
         )
         session.flush()
         raise
+    finally:
+        heartbeat_controller.stop()
 
     serializer = serialize or _default_serialize
     output_payload = serializer(result)

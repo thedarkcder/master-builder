@@ -214,6 +214,75 @@ class CoreRunsEdgeTests(unittest.TestCase):
         self.assertEqual(run.required_worker_capability, "macos")
         self.assertEqual(run.required_runtime_kinds_json, ["codex_cli"])
 
+    def test_enqueue_infers_required_worker_capability_from_project_policy(self) -> None:
+        session = MagicMock()
+        added_rows: list[object] = []
+        session.add.side_effect = added_rows.append
+        session.get.side_effect = lambda model, key: (  # noqa: ARG005, ANN001
+            SimpleNamespace(policy_overrides={"default_worker_capability": "macos"})
+            if getattr(model, "__name__", "") == "Project"
+            else None
+        )
+
+        with (
+            patch("orchestrator.core.runs.service._active_workflow_for_issue", return_value=None),
+            patch("orchestrator.core.runs.service._active_run_count_for_tenant", return_value=0),
+            patch("orchestrator.core.runs.service.notify_run_enqueued"),
+            patch("orchestrator.core.runs.service._resolve_required_runtime_kinds", return_value=["codex_cli"]),
+        ):
+            result = enqueue_run(
+                session,
+                tenant_id="tenant-a",
+                project_id="project-a",
+                issue_key="TP-9",
+                issue_summary="GirlPower shell flow",
+                issue_description="Ship the SwiftUI onboarding flow on iOS",
+                precheck_outcome="ready_for_agent",
+            )
+
+        run_rows = [row for row in added_rows if getattr(row, "__class__", type("", (), {})).__name__ == "Run"]
+        self.assertEqual(len(run_rows), 1)
+        run = run_rows[0]
+        self.assertTrue(result.enqueued)
+        self.assertEqual(run.required_worker_capability, "macos")
+
+    def test_enqueue_infers_required_worker_capability_from_inherited_tenant_policy(self) -> None:
+        session = MagicMock()
+        added_rows: list[object] = []
+        session.add.side_effect = added_rows.append
+
+        def fake_get(model, key):  # noqa: ANN001
+            model_name = getattr(model, "__name__", "")
+            if model_name == "Tenant":
+                return SimpleNamespace(policy_config={"default_worker_capability": "macos"})
+            if model_name == "Project":
+                return SimpleNamespace(policy_overrides={})
+            return None
+
+        session.get.side_effect = fake_get
+
+        with (
+            patch("orchestrator.core.runs.service._active_workflow_for_issue", return_value=None),
+            patch("orchestrator.core.runs.service._active_run_count_for_tenant", return_value=0),
+            patch("orchestrator.core.runs.service.notify_run_enqueued"),
+            patch("orchestrator.core.runs.service._resolve_required_runtime_kinds", return_value=["codex_cli"]),
+        ):
+            result = enqueue_run(
+                session,
+                tenant_id="tenant-a",
+                project_id="project-a",
+                issue_key="TP-9A",
+                issue_summary="Desktop shell flow",
+                issue_description="Use the inherited native worker policy for capture",
+                precheck_outcome="ready_for_agent",
+            )
+
+        run_rows = [row for row in added_rows if getattr(row, "__class__", type("", (), {})).__name__ == "Run"]
+        self.assertEqual(len(run_rows), 1)
+        run = run_rows[0]
+        self.assertTrue(result.enqueued)
+        self.assertEqual(run.required_worker_capability, "macos")
+
     def test_enqueue_promotes_trigger_context_pr_url_to_run_row(self) -> None:
         session = MagicMock()
         added_rows: list[object] = []

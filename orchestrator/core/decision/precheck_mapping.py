@@ -63,6 +63,7 @@ def evaluate_with_labels(
         source=source,
         tenant_id=tenant.tenant_id,
         project_id=project.project_id if project is not None else None,
+        project_policy_overrides=project.policy_overrides if project is not None else {},
         issue_key=issue_key,
         issue_summary=issue_summary,
         issue_description=issue_description,

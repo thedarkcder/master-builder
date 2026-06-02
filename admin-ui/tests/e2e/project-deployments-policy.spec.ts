@@ -222,8 +222,13 @@ test("configured deployment policy renders as settings instead of setup wizard",
   await expect(page.getByRole("heading", { name: "Deployment policy" })).toBeVisible();
   await expect(page.getByTestId("deployment-policy-page")).not.toHaveClass(/max-w-5xl|mx-auto/);
   await expect(page.getByLabel("Deployment setup steps")).toHaveCount(0);
+  await expect(page.getByRole("tab", { name: "Automation" })).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByRole("tab", { name: "Variables" })).toBeVisible();
+  await expect(page.getByRole("tab", { name: "Secret refs" })).toBeVisible();
   await expect(page.getByLabel("Production branch")).toHaveValue("main");
   await expect(page.getByLabel("Generated URLs")).toHaveValue("production");
+  await expect(page.getByLabel("Environment branch scope")).toHaveCount(0);
+  await page.getByRole("tab", { name: "Variables" }).click();
   await expect(page.getByLabel("Environment branch scope")).toHaveValue("main");
   await expect(page.getByLabel("Environment variable APP_MODE value")).toHaveValue("production");
   await page.getByLabel("Environment variable APP_MODE name").evaluate((element, text) => {
@@ -241,6 +246,10 @@ test("configured deployment policy renders as settings instead of setup wizard",
   await page.getByRole("button", { name: "Add variable" }).click();
   await page.getByLabel("Environment variable ENV_1 name").fill("DEVELOP_ONLY");
   await page.getByLabel("Environment variable DEVELOP_ONLY value").fill("enabled");
+  await page.getByRole("tab", { name: "Secret refs" }).click();
+  await expect(page.getByLabel("Secret refs branch scope")).toHaveValue("develop");
+  await expect(page.getByText("No secret refs configured.")).toBeVisible();
+  await page.getByRole("tab", { name: "Automation" }).click();
   await page.getByRole("radio", { name: "Disabled" }).check();
   await page.getByRole("button", { name: "Save policy" }).click();
 

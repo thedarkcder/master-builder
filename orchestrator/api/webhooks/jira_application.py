@@ -335,6 +335,7 @@ def _process_jira_webhook_context(
             actions=(
                 build_jira_enqueue_skipped_notification_action(
                     context=context,
+                    session=session,
                     admission=admission,
                 ),
             ),

@@ -46,14 +46,34 @@ def test_infer_required_worker_capability_prefers_explicit_label() -> None:
         issue_summary="Build backend",
         issue_description="No mobile code",
         issue_labels=["worker:macos"],
+        project_default_worker_capability="linux",
     )
     assert inferred == "macos"
 
 
-def test_infer_required_worker_capability_returns_empty_without_explicit_label() -> None:
+def test_infer_required_worker_capability_uses_project_default_when_present() -> None:
+    inferred = infer_required_worker_capability(
+        issue_summary="Build backend",
+        issue_description="No mobile code",
+        issue_labels=[],
+        project_default_worker_capability="macos",
+    )
+    assert inferred == "macos"
+
+
+def test_infer_required_worker_capability_uses_apple_native_keywords_without_label() -> None:
     inferred = infer_required_worker_capability(
         issue_summary="Implement SwiftUI onboarding",
-        issue_description="Use Xcode and XCTest",
+        issue_description="Use Xcode and XCTest on the iOS simulator",
+        issue_labels=[],
+    )
+    assert inferred == "macos"
+
+
+def test_infer_required_worker_capability_returns_empty_without_signals() -> None:
+    inferred = infer_required_worker_capability(
+        issue_summary="Build backend",
+        issue_description="No mobile code",
         issue_labels=[],
     )
     assert inferred == ""

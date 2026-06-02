@@ -29,6 +29,7 @@ from orchestrator.core.runtime.payload_models import (
     WorkerCapabilityRequirement,
 )
 from orchestrator.core.workflow.runner import DevResult, PmPlan, ReviewResult, TestResult
+from orchestrator.core.workflow.runner import QaResult
 
 
 PromptDomainContract = type[
@@ -48,6 +49,7 @@ PromptDomainContract = type[
     | ParentFeatureBriefNormalization
     | PmParentSeedPlan
     | PmPlan
+    | QaResult
     | PRReady
     | PRReviewFindings
     | PrecheckMessage
@@ -91,6 +93,8 @@ _DOMAIN_MODELS_BY_TEMPLATE: dict[str, PromptDomainContract] = {
     "workflow/test_user.j2": TestResult,
     "workflow/review_system.j2": ReviewResult,
     "workflow/review_user.j2": ReviewResult,
+    "workflow/qa_system.j2": QaResult,
+    "workflow/qa_user.j2": QaResult,
     "workflow/standup_voice_brief_system.j2": StandupVoiceBrief,
     "workflow/retro_voice_brief_system.j2": RetroVoiceBrief,
     "repo_setup/prepare_user.j2": RepoSetup,

@@ -58,6 +58,7 @@ from orchestrator.core.runtime.agent_execution_profiles import (
     normalize_execution_profiles,
 )
 from orchestrator.core.runtime.models import normalize_codex_model, normalize_codex_reasoning_effort
+from orchestrator.core.worker.capability_normalization import parse_worker_capability
 from orchestrator.core.guardrails import enforce_safe_command
 
 
@@ -114,6 +115,7 @@ class ObservabilityPolicyConfig(BaseModel):
 
 
 class PolicyConfig(BaseModel):
+    default_worker_capability: Literal["linux", "macos"] | None = None
     allow_jira_transitions: bool = False
     allow_pr_creation: bool = True
     allow_code_reviews: bool = True
@@ -153,6 +155,12 @@ class PolicyConfig(BaseModel):
     @classmethod
     def normalize_codex_reasoning_effort(cls, value: str | None) -> str | None:
         return normalize_codex_reasoning_effort(value)
+
+    @field_validator("default_worker_capability")
+    @classmethod
+    def normalize_default_worker_capability(cls, value: str | None) -> str | None:
+        parsed = parse_worker_capability(value)
+        return parsed.value if parsed is not None else None
 
     @field_validator("execution_profiles")
     @classmethod

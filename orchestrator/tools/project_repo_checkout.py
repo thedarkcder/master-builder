@@ -330,6 +330,35 @@ def _write_run_metadata(
     )
 
 
+def _write_execution_repo_metadata(
+    *,
+    repo_dir: Path,
+    run_id: str,
+    issue_key: str,
+    execution_branch: str,
+    workspace_key: str,
+    start_point_ref: str,
+    start_point_sha: str,
+    repo_kind: str,
+) -> None:
+    _execution_repo_metadata_path(repo_dir=repo_dir).write_text(
+        json.dumps(
+            {
+                "run_id": run_id,
+                "issue_key": issue_key,
+                "workspace_key": workspace_key,
+                "execution_branch": execution_branch,
+                "start_point_ref": start_point_ref,
+                "start_point_sha": start_point_sha,
+                "repo_kind": repo_kind,
+            },
+            sort_keys=True,
+        )
+        + "\n",
+        encoding="utf-8",
+    )
+
+
 def _read_run_metadata(*, repo_dir: Path | str) -> dict[str, str] | None:
     path = _run_metadata_path(repo_dir=repo_dir)
     if not path.exists():
@@ -620,6 +649,16 @@ def ensure_run_worktree(
                 and str(metadata.get("start_point_sha") or "") == start_point_sha
             ):
                 _sync_agent_workspace_files(repo_dir=run_repo)
+                _write_execution_repo_metadata(
+                    repo_dir=run_repo,
+                    run_id=run_id,
+                    issue_key=issue_key,
+                    execution_branch=execution_branch,
+                    workspace_key=normalized_workspace_key,
+                    start_point_ref=start_point_ref,
+                    start_point_sha=start_point_sha,
+                    repo_kind="run_worktree",
+                )
                 return run_repo, execution_branch
             _remove_run_worktree(repo_dir=repo_dir, run_repo_dir=run_repo)
             _run_git(["worktree", "prune"], cwd=repo_dir)
@@ -642,6 +681,16 @@ def ensure_run_worktree(
         workspace_key=normalized_workspace_key,
         start_point_ref=start_point_ref,
         start_point_sha=start_point_sha,
+    )
+    _write_execution_repo_metadata(
+        repo_dir=run_repo,
+        run_id=run_id,
+        issue_key=issue_key,
+        execution_branch=execution_branch,
+        workspace_key=normalized_workspace_key,
+        start_point_ref=start_point_ref,
+        start_point_sha=start_point_sha,
+        repo_kind="run_worktree",
     )
     return run_repo, execution_branch
 

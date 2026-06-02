@@ -183,14 +183,6 @@ function ProjectWorkspaceNav({
     ...(allowProjectManagement
       ? [
           {
-            label: "Delivery",
-            defaultOpen: pathname.startsWith(`${projectBase}/deployment`) || pathname.startsWith(`${projectBase}/deployments`),
-            items: [
-              { href: `${projectBase}/deployments`, label: "Releases", icon: Rocket, matchPrefix: `${projectBase}/deployments` },
-              { href: `${projectBase}/deployment`, label: "Policy", icon: Settings2, matchPrefix: `${projectBase}/deployment` },
-            ],
-          },
-          {
             label: "Project",
             items: [
               { href: `${projectBase}/settings`, label: "Settings", icon: Settings2, matchPrefix: `${projectBase}/settings` },
@@ -211,6 +203,18 @@ function ProjectWorkspaceNav({
             items: [
               { href: `${projectBase}/runs`, label: "Runs", icon: Activity, matchPrefix: `${projectBase}/runs` },
               { href: `${projectBase}/webhooks`, label: "Webhooks", icon: PlugZap, matchPrefix: `${projectBase}/webhooks` },
+            ],
+          },
+        ]
+      : []),
+    ...(allowProjectManagement
+      ? [
+          {
+            label: "Delivery",
+            defaultOpen: pathname.startsWith(`${projectBase}/deployment`) || pathname.startsWith(`${projectBase}/deployments`),
+            items: [
+              { href: `${projectBase}/deployments`, label: "Releases", icon: Rocket, matchPrefix: `${projectBase}/deployments` },
+              { href: `${projectBase}/deployment`, label: "Policy", icon: Settings2, matchPrefix: `${projectBase}/deployment` },
             ],
           },
         ]

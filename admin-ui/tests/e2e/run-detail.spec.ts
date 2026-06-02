@@ -179,6 +179,75 @@ test("renders completed checkpoint stages in the run timeline without telemetry"
   await expect(page.getByText("Stage runtime").locator("..")).toContainText("12m 0s");
 });
 
+test("renders QA demo evidence links when the QA checkpoint is present", async ({ page }) => {
+  const run = makeRun({
+    status: "succeeded",
+    plan: makeExecutionSnapshotPlan({
+      stages: {
+        pm: {
+          status: "completed",
+          completed_at: "2026-03-27T16:53:00Z",
+          summary: "PM plan captured.",
+        },
+        dev: {
+          status: "completed",
+          completed_at: "2026-03-27T16:58:00Z",
+          summary: "Implementation completed.",
+        },
+        test: {
+          status: "completed",
+          completed_at: "2026-03-27T17:00:00Z",
+          summary: "Tests completed.",
+        },
+        review: {
+          status: "completed",
+          completed_at: "2026-03-27T17:02:00Z",
+          summary: "Review completed.",
+        },
+        qa: {
+          status: "completed",
+          completed_at: "2026-03-27T17:05:00Z",
+          summary: "QA recorded 2 demos across 2 walkthroughs.",
+          artifact: {
+            summary: ["QA recorded 2 demos across 2 walkthroughs."],
+            scenarios: [
+              { name: "Happy path", objective: "Show the feature works" },
+              { name: "Break path", objective: "Try invalid inputs" },
+            ],
+            recordings: [
+              {
+                name: "Happy path demo",
+                artifact_url: "https://cdn.example/qa/happy.webm",
+              },
+              {
+                name: "Break path demo",
+                artifact_url: "https://cdn.example/qa/break.webm",
+              },
+            ],
+            outcome: "continue",
+          },
+        },
+      },
+    }),
+  });
+
+  await seedAdminSession(page);
+  await mockRunDetailApis(page, { run, logs: [] });
+
+  await page.goto(`/runs/${run.run_id}/agents`);
+
+  await expect(page.getByText("Loading run details...")).toHaveCount(0, { timeout: 15000 });
+  await expect(page.getByTestId("run-stage-qa")).toHaveAttribute("data-stage-status", "completed");
+  await expect(page.getByRole("link", { name: "Happy path demo" })).toHaveAttribute(
+    "href",
+    "https://cdn.example/qa/happy.webm",
+  );
+  await expect(page.getByRole("link", { name: "Break path demo" })).toHaveAttribute(
+    "href",
+    "https://cdn.example/qa/break.webm",
+  );
+});
+
 test("links to the current preview when a succeeded run already has one", async ({ page }) => {
   const run = makeRun({
     run_id: "faedabdf-8433-4a65-a8ea-ca956314fa19",
@@ -253,8 +322,76 @@ test("links to the current preview when a succeeded run already has one", async 
   await expect(page.getByTestId("run-id")).toContainText(`Run ID ${run.run_id}`);
   await expect(page.getByRole("button", { name: "Generate preview" })).toHaveCount(0);
   const previewLink = page.getByRole("link", { name: "Open preview" });
-  await expect(previewLink).toHaveAttribute("href", "http://admin.preview.align.192-168-0-118.sslip.io:8088");
+  await expect(previewLink).toHaveAttribute(
+    "href",
+    "/bsktpay-2/projects/bsktpay-2-default/deployments/app-1?release=preview-release-1",
+  );
   expect(previewPostCount).toBe(0);
+});
+
+test("links to the preview release page even when service URL is not active", async ({ page }) => {
+  const run = makeRun({
+    run_id: "faedabdf-8433-4a65-a8ea-ca956314fa19",
+    tenant_id: "bsktpay-2",
+    project_id: "bsktpay-2-default",
+    issue_key: "AP-293",
+    issue_summary: "Add Equifax production credit bureau provider contract",
+    status: "succeeded",
+    branch: "feature/AP-293",
+    finished_at: "2026-05-29T18:43:07Z",
+  });
+  const app = makeProjectAppRecord({
+    app_id: "app-1",
+    tenant_id: run.tenant_id,
+    project_id: run.project_id ?? "bsktpay-2-default",
+    name: "align",
+  });
+  const previewRelease = {
+    release_id: "preview-release-1",
+    tenant_id: run.tenant_id,
+    project_id: run.project_id ?? "bsktpay-2-default",
+    app_id: app.app_id,
+    provider: "internal_coolify",
+    release_kind: "run_preview" as const,
+    status: "route_activating",
+    environment_name: "production",
+    source_strategy: "docker_compose",
+    git_ref: "mb/deploy/align/feature-ap-293",
+    commit_sha: "abcdef1234567890",
+    release_name: "AP-293: Add Equifax production credit bureau provider contract",
+    source_run_id: run.run_id,
+    source_issue_key: "AP-293",
+    source_issue_summary: "Add Equifax production credit bureau provider contract",
+    source_issue_url: "https://example.atlassian.net/browse/AP-293",
+    pr_number: null,
+    requested_by_user_id: null,
+    deployment_snapshot: {},
+    provider_context: {},
+    service_urls: [],
+    last_error: null,
+    requested_at: "2026-05-29T18:45:00Z",
+    started_at: "2026-05-29T18:45:00Z",
+    completed_at: null,
+    created_at: "2026-05-29T18:45:00Z",
+    updated_at: "2026-05-29T18:47:00Z",
+  };
+
+  await seedAdminSession(page);
+  await mockRunDetailApis(page, {
+    run,
+    deploymentApps: [app],
+    deploymentReleasesByAppId: { [app.app_id]: [previewRelease] },
+  });
+
+  await page.goto(`/runs/${run.run_id}`);
+
+  await expect(page.getByText("Loading run details...")).toHaveCount(0, { timeout: 15000 });
+  const previewLink = page.getByRole("link", { name: "Open preview" });
+  await expect(previewLink).toHaveAttribute(
+    "href",
+    "/bsktpay-2/projects/bsktpay-2-default/deployments/app-1?release=preview-release-1",
+  );
+  await expect(page.getByRole("button", { name: "Generate preview" })).toHaveCount(0);
 });
 
 test("refreshes active run checkpoints when live events advance the run", async ({ page }) => {

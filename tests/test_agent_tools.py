@@ -35,6 +35,33 @@ def test_allowed_tools_for_stage_dev_contains_github_and_jira() -> None:
     assert "exec.run_install" in tools
 
 
+def test_allowed_tools_for_stage_qa_is_local_first_and_excludes_native_web_tools() -> None:
+    tools = allowed_tools_for_stage("qa")
+    assert "repo.read" in tools
+    assert "web.search" not in tools
+    assert "web.fetch" not in tools
+    assert "browser.open" not in tools
+    assert "browser.snapshot" not in tools
+    assert "project.check_runtime_bindings" in tools
+    assert "run.request_human_input" in tools
+
+
+def test_qa_stage_exposes_no_native_codex_web_tools_even_on_codex_runtime() -> None:
+    governed = governed_allowed_tools_for_stage("qa", runtime_command="codex")
+    native = native_model_tools_for_stage("qa", runtime_command="codex")
+
+    assert "repo.read" in governed
+    assert native == set()
+
+
+def test_allowed_tools_for_stage_repo_setup_contains_repo_mutation_and_native_research_tools() -> None:
+    tools = allowed_tools_for_stage("repo_setup")
+    assert "repo.exec_bootstrap" in tools
+    assert "repo.read" in tools
+    assert "web.search" in tools
+    assert "web.fetch" in tools
+
+
 def test_allowed_tools_for_stage_pm_contains_evidence_tools() -> None:
     tools = allowed_tools_for_stage("pm")
     assert "jira.get_issue" in tools
@@ -96,6 +123,14 @@ def test_pr_ready_allows_declared_native_research_tools_for_codex_runtime() -> N
     native = native_model_tools_for_stage("pr_ready", runtime_command="codex")
 
     assert governed == set()
+    assert native == {"web.search", "web.fetch"}
+
+
+def test_repo_setup_allows_declared_native_research_tools_for_codex_runtime() -> None:
+    governed = governed_allowed_tools_for_stage("repo_setup", runtime_command="codex")
+    native = native_model_tools_for_stage("repo_setup", runtime_command="codex")
+
+    assert governed == {"repo.exec_bootstrap", "repo.read"}
     assert native == {"web.search", "web.fetch"}
 
 
@@ -611,6 +646,7 @@ def test_github_open_pr_reuses_existing_pull_request() -> None:
         def __init__(self) -> None:
             self.find_args: tuple[str, str, str, int] | None = None
             self.create_called = False
+            self.update_called = False
 
         def find_open_pull_request(
             self,
@@ -635,6 +671,10 @@ def test_github_open_pr_reuses_existing_pull_request() -> None:
             self.create_called = True
             raise AssertionError("create_pull_request should not be called when an open PR exists")
 
+        def update_pull_request(self, **_kwargs):  # noqa: ANN003, ANN202
+            self.update_called = True
+            raise AssertionError("update_pull_request should not be called without a body refresh request")
+
     fake_client = _FakeGitHubClient()
     with (
         patch("orchestrator.core.runtime.tools._resolve_context", return_value=_FakeContext()),
@@ -656,6 +696,85 @@ def test_github_open_pr_reuses_existing_pull_request() -> None:
     assert payload == {"pr_number": 42, "pr_url": "https://github.com/acme/repo/pull/42"}
     assert fake_client.find_args == ("acme/repo", "feature/MAB-1-shared", "staging", 100)
     assert fake_client.create_called is False
+    assert fake_client.update_called is False
+
+
+def test_github_open_pr_updates_existing_pull_request_body_when_requested() -> None:
+    class _FakeTenant:
+        tenant_id = "example"
+        github_config = {"installation_id": "12345"}
+        policy_config = {}
+
+    class _FakeProject:
+        project_id = "example-default"
+        github_repository = "https://github.com/acme/repo"
+        policy_overrides = {}
+        environment = {"default_branch": "staging"}
+
+    class _FakeRun:
+        branch = "feature/MAB-1-shared"
+
+    class _FakeContext:
+        tenant = _FakeTenant()
+        project = _FakeProject()
+        run = _FakeRun()
+        stage = "qa"
+        issue_key = "MAB-1"
+        run_id = "run-1"
+        repo_dir = Path("/tmp/repo")
+
+    class _FakeGitHubClient:
+        def __init__(self) -> None:
+            self.update_args: dict[str, object] | None = None
+
+        def find_open_pull_request(
+            self,
+            *,
+            repo_full_name: str,
+            head_branch: str,
+            base_branch: str | None = None,
+            limit: int = 100,
+        ) -> PullRequestSummary | None:
+            _ = (repo_full_name, head_branch, base_branch, limit)
+            return PullRequestSummary(
+                number=42,
+                title="MAB-1 existing PR",
+                state="open",
+                html_url="https://github.com/acme/repo/pull/42",
+                head_ref=head_branch,
+                base_ref=str(base_branch),
+                updated_at="2026-03-15T10:00:00Z",
+            )
+
+        def update_pull_request(self, **kwargs):  # noqa: ANN003, ANN202
+            self.update_args = dict(kwargs)
+            return SimpleNamespace(number=42, html_url="https://github.com/acme/repo/pull/42")
+
+        def create_pull_request(self, **_kwargs):  # noqa: ANN003, ANN202
+            raise AssertionError("create_pull_request should not be called when an open PR exists")
+
+    fake_client = _FakeGitHubClient()
+    with (
+        patch("orchestrator.core.runtime.tools._resolve_context", return_value=_FakeContext()),
+        patch("orchestrator.core.runtime.tools._ensure_repo_checkout_exists"),
+        patch("orchestrator.core.runtime.tools.github_client_from_tenant_config", return_value=fake_client),
+    ):
+        payload = execute_agent_tool(
+            session=SimpleNamespace(flush=lambda: None),  # type: ignore[arg-type]
+            settings=SimpleNamespace(secrets_encryption_key=""),
+            tenant_id="example",
+            project_id="example-default",
+            run_id="run-1",
+            issue_key="MAB-1",
+            stage="qa",
+            tool_name="github.open_pr",
+            tool_args={"title": "MAB-1: update", "body": "## Demo Evidence\n- https://demo.example/video.webm"},
+        )
+
+    assert payload == {"pr_number": 42, "pr_url": "https://github.com/acme/repo/pull/42"}
+    assert fake_client.update_args is not None
+    assert fake_client.update_args["pr_number"] == 42
+    assert fake_client.update_args["body"] == "## Demo Evidence\n- https://demo.example/video.webm"
 
 
 def test_github_open_pr_prefers_remediation_pr_number_when_open() -> None:
@@ -1016,6 +1135,47 @@ def test_repo_read_allows_read_only_git_branch_listing() -> None:
     assert payload["ok"] is True
     assert payload["stdout"] == "* main\n"
     run_mock.assert_called_once()
+
+
+def test_repo_read_uses_checkout_root_as_working_directory_during_repo_setup() -> None:
+    class _FakeTenant:
+        tenant_id = "example"
+        github_config = {}
+        policy_config = {}
+
+    class _FakeProject:
+        project_id = "example-default"
+        github_repository = "https://github.com/acme/repo"
+        policy_overrides = {}
+
+    class _FakeContext:
+        tenant = _FakeTenant()
+        project = _FakeProject()
+        stage = "repo_setup"
+        issue_key = "MAB-1"
+        run_id = "run-1"
+        repo_dir = Path("/tmp/checkout/repo")
+        checkout_root = Path("/tmp/checkout")
+
+    fake_process = SimpleNamespace(returncode=0, stdout="* main\n", stderr="")
+    with patch("orchestrator.core.runtime.tools._resolve_context", return_value=_FakeContext()):
+        with patch("orchestrator.core.runtime.tools._ensure_repo_checkout_exists"):
+            with patch("orchestrator.core.runtime.tools.subprocess.run", return_value=fake_process) as run_mock:
+                payload = execute_agent_tool(
+                    session=None,  # type: ignore[arg-type]
+                    settings=None,
+                    tenant_id="example",
+                    project_id="example-default",
+                    run_id="run-1",
+                    issue_key="MAB-1",
+                    stage="repo_setup",
+                    tool_name="repo.read",
+                    tool_args={"command": "git -C repo branch -a"},
+                )
+
+    assert payload["ok"] is True
+    run_mock.assert_called_once()
+    assert run_mock.call_args.kwargs["cwd"] == "/tmp/checkout"
 
 
 def test_repo_read_allows_git_c_inside_checkout_root() -> None:
@@ -1998,3 +2158,4 @@ def test_knowledge_read_uses_best_effort_embeddings_for_background_runs() -> Non
 
     assert payload == {"query": "bundle id", "text": "facts", "citations": []}
     assert knowledge_mock.call_args.kwargs["embedding_access_mode"] is KnowledgeEmbeddingAccessMode.BEST_EFFORT
+    assert knowledge_mock.call_args.kwargs["issue_key"] == "MAB-1"

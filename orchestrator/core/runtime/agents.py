@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import json
+import re
+import subprocess
 from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 from sqlalchemy.orm import Session
@@ -30,8 +33,13 @@ from orchestrator.core.runtime.stage_session import (
 from orchestrator.core.worker.capability_normalization import parse_worker_capability
 from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 from orchestrator.core.workflow.runner import (
+    DemoRequirement,
     DevResult,
     PmPlan,
+    QaRecording,
+    QaResult,
+    QaScenario,
+    QaStep,
     ReviewResult,
     StageOutcome,
     TestResult,
@@ -65,6 +73,158 @@ def _stage_has_governed_tools(
         worker_platform=worker_platform,
     )
     return bool(tooling.governed_tools)
+
+
+_ACCESSIBILITY_IDENTIFIER_RE = re.compile(r'accessibilityIdentifier\("([^"]+)"\)')
+_TEXT_LITERAL_RE = re.compile(r'Text\("([^"]+)"\)')
+_UI_TEST_SELECTOR_RE = re.compile(r'selector:\s*"((?:id|text)=[^"]+)"')
+_XCUITEST_TEXT_QUERY_RE = re.compile(r'app\.(?:buttons|staticTexts|otherElements|navigationBars)\["([^"]+)"\]')
+_ANDROID_RESOURCE_ID_RE = re.compile(r'android:id="@\+id/([^"]+)"')
+_ANDROID_TEXT_RE = re.compile(r'android:text="([^"@][^"]*)"')
+_ANDROID_COMPOSE_TEST_TAG_RE = re.compile(r'\.testTag\("([^"]+)"\)')
+_ANDROID_COMPOSE_TEXT_RE = re.compile(r'Text\(\s*"([^"]+)"')
+_NATIVE_INPUT_ID_HINTS = ("field", "input", "email", "password", "search", "username", "code", "otp")
+_TEST_VALIDATION_SCOPES = frozenset({"targeted_only", "current_head_acceptance", "full_suite"})
+_QA_CAPTURE_TARGETS = frozenset({"browser", "ios", "android", "desktop"})
+
+
+def _capture_target_constraints(value: str | None) -> dict[str, dict[str, object]]:
+    raw = str(value or "").strip()
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(parsed, list):
+        return {}
+    constraints: dict[str, dict[str, object]] = {}
+    for item in parsed:
+        if not isinstance(item, dict):
+            continue
+        capture_target = _optional_string(item.get("capture_target"))
+        if capture_target not in _QA_CAPTURE_TARGETS:
+            continue
+        constraints[capture_target] = {
+            "provider_available": bool(item.get("provider_available")),
+            "required_worker_platform": _optional_string(item.get("required_worker_platform")),
+            "availability_reason": _optional_string(item.get("availability_reason")),
+        }
+    return constraints
+
+
+def _native_selector_catalog(repo_dir: str | None) -> dict[str, list[str]]:
+    resolved_repo_dir = Path(str(repo_dir or "").strip())
+    if not resolved_repo_dir.exists():
+        return {"accessibility_ids": [], "text_anchors": [], "ui_test_selectors": []}
+
+    accessibility_ids: set[str] = set()
+    text_anchors: set[str] = set()
+    ui_test_selectors: set[str] = set()
+    for swift_file in resolved_repo_dir.rglob("*.swift"):
+        try:
+            source = swift_file.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        accessibility_ids.update(match.group(1) for match in _ACCESSIBILITY_IDENTIFIER_RE.finditer(source))
+        text_anchors.update(match.group(1) for match in _TEXT_LITERAL_RE.finditer(source))
+        ui_test_selectors.update(match.group(1) for match in _UI_TEST_SELECTOR_RE.finditer(source))
+        text_anchors.update(match.group(1) for match in _XCUITEST_TEXT_QUERY_RE.finditer(source))
+        for selector in list(ui_test_selectors):
+            if selector.startswith("text="):
+                text_anchors.add(selector[5:])
+    for native_file in [
+        *resolved_repo_dir.rglob("*.kt"),
+        *resolved_repo_dir.rglob("*.java"),
+        *resolved_repo_dir.rglob("*.xml"),
+    ]:
+        try:
+            source = native_file.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        accessibility_ids.update(match.group(1) for match in _ANDROID_RESOURCE_ID_RE.finditer(source))
+        accessibility_ids.update(match.group(1) for match in _ANDROID_COMPOSE_TEST_TAG_RE.finditer(source))
+        text_anchors.update(match.group(1) for match in _ANDROID_TEXT_RE.finditer(source))
+        text_anchors.update(match.group(1) for match in _ANDROID_COMPOSE_TEXT_RE.finditer(source))
+    return {
+        "accessibility_ids": sorted(accessibility_ids),
+        "text_anchors": sorted(text_anchors),
+        "ui_test_selectors": sorted(ui_test_selectors),
+    }
+
+
+def _current_head_diff_paths(repo_dir: str | None, base_branch: str | None) -> list[str]:
+    resolved_repo_dir = Path(str(repo_dir or "").strip())
+    resolved_base_branch = str(base_branch or "").strip()
+    if not resolved_base_branch or not resolved_repo_dir.exists():
+        return []
+    try:
+        result = subprocess.run(
+            ["git", "diff", "--name-only", f"{resolved_base_branch}...HEAD"],
+            cwd=resolved_repo_dir,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return []
+    paths = [line.strip() for line in result.stdout.splitlines() if line.strip()]
+    return sorted(dict.fromkeys(paths))
+
+
+def _path_requires_current_head_acceptance(path: str) -> bool:
+    normalized = path.strip().lower()
+    if not normalized:
+        return False
+    if normalized.endswith((".md", ".txt", ".json", ".yaml", ".yml", ".lock")):
+        return False
+    for marker in ("/tests/", "\\tests\\", "tests/", "test/"):
+        if marker in normalized:
+            return False
+    return True
+
+
+def _requires_current_head_acceptance_evidence(
+    *,
+    plan: PmPlan,
+    repo_dir: str | None,
+    base_branch: str | None,
+) -> tuple[bool, list[str]]:
+    current_head_diff_paths = _current_head_diff_paths(repo_dir, base_branch)
+    if not plan.demo_requirements:
+        return False, current_head_diff_paths
+    return any(_path_requires_current_head_acceptance(path) for path in current_head_diff_paths), current_head_diff_paths
+
+
+def _validate_native_qa_scenarios(*, scenarios: list[QaScenario], repo_dir: str | None) -> list[QaScenario]:
+    catalog = _native_selector_catalog(repo_dir)
+    valid_ids = set(catalog["accessibility_ids"])
+    valid_texts = set(catalog["text_anchors"])
+    for scenario in scenarios:
+        if scenario.capture_target == "browser":
+            continue
+        for step in scenario.steps:
+            selector = str(step.selector or "").strip()
+            if selector.startswith("id="):
+                native_id = selector[3:]
+                if valid_ids and native_id not in valid_ids:
+                    raise CodexRuntimeError(
+                        f"Codex qa response invented native accessibility identifier: {native_id}"
+                    )
+            elif selector.startswith("text="):
+                text_value = selector[5:]
+                if valid_texts and text_value not in valid_texts:
+                    raise CodexRuntimeError(f"Codex qa response invented native text anchor: {text_value}")
+            if step.action == "fill":
+                if not selector.startswith("id="):
+                    raise CodexRuntimeError(
+                        "Codex qa response used fill on a native selector that is not an accessibility identifier"
+                    )
+                if not any(hint in selector[3:].lower() for hint in _NATIVE_INPUT_ID_HINTS):
+                    raise CodexRuntimeError(
+                        f"Codex qa response used fill on non-input native selector: {selector}"
+                    )
+    return scenarios
 
 
 def _discord_tool_bridge_suffix(
@@ -213,6 +373,7 @@ class CodexWorkflowAgents:
         return {
             "review_summary": list(review_result.summary),
             "review_feedback": review_result.feedback,
+            "review_pr_url": review_result.pr_url,
         }
 
     def _invoke_stage_payload(
@@ -279,6 +440,7 @@ class CodexWorkflowAgents:
         last_dev_result: DevResult | None,
         last_test_result: TestResult | None,
         last_review_result: ReviewResult | None,
+        capture_target_constraints_json: str = "[]",
     ) -> PmPlan:
         runtime = self._runtime_for_stage(stage="pm", request=request)
         runtime_command = str(getattr(runtime, "command", "") or "")
@@ -331,6 +493,7 @@ class CodexWorkflowAgents:
                 available_worker_capabilities_json=json.dumps(
                     [capability.value for capability in request.available_worker_capabilities]
                 ),
+                qa_capture_target_constraints_json=capture_target_constraints_json,
                 human_inputs_json=json.dumps(request.human_inputs),
                 **_stage_prompt_tool_context(
                     tool_stage="pm",
@@ -362,6 +525,30 @@ class CodexWorkflowAgents:
             raise CodexRuntimeError("Codex pm response missing requeue_target for requeue outcome")
         if outcome == "requeue" and requeue_reason is None:
             raise CodexRuntimeError("Codex pm response missing requeue_reason for requeue outcome")
+        demo_requirements = _required_demo_requirements(payload.get("demo_requirements"), stage="pm")
+        target_constraints = _capture_target_constraints(capture_target_constraints_json)
+        for requirement in demo_requirements:
+            constraint = target_constraints.get(requirement.capture_target)
+            if constraint is None:
+                continue
+            if not bool(constraint.get("provider_available")):
+                reason = _optional_string(constraint.get("availability_reason"))
+                raise CodexRuntimeError(
+                    f"Codex pm response selected unavailable capture target '{requirement.capture_target}'"
+                    + (f": {reason}" if reason else "")
+                )
+            required_platform = _optional_string(constraint.get("required_worker_platform"))
+            if required_platform is not None and execution_worker_capability.value != required_platform:
+                raise CodexRuntimeError(
+                    "Codex pm response must choose "
+                    f"{required_platform} execution_worker_capability when {requirement.capture_target} demos are required"
+                )
+        if not target_constraints and execution_worker_capability.value != "macos" and any(
+            requirement.capture_target == "ios" for requirement in demo_requirements
+        ):
+            raise CodexRuntimeError(
+                "Codex pm response must choose macos execution_worker_capability when iOS demos are required"
+            )
         return PmPlan(
             plan_steps=_required_string_list(payload.get("plan_steps"), stage="pm", field="plan_steps"),
             acceptance_criteria=_required_string_list(
@@ -370,6 +557,7 @@ class CodexWorkflowAgents:
                 field="acceptance_criteria",
             ),
             risks=_string_list(payload.get("risks")),
+            demo_requirements=demo_requirements,
             outcome=outcome,
             next_stage=next_stage,
             execution_worker_capability=execution_worker_capability.value,
@@ -387,8 +575,13 @@ class CodexWorkflowAgents:
         attempt: int,
         feedback: str | None,
     ) -> DevResult:
+        resume_source_state = self._resume_source_state(request=request)
         runtime = self._runtime_for_stage(stage="dev", request=request)
         runtime_command = str(getattr(runtime, "command", "") or "")
+        current_head_diff_paths = _current_head_diff_paths(
+            request.execution_repo_dir,
+            request.base_branch,
+        )
         payload = self._invoke_stage_payload(
             request=request,
             stage="dev",
@@ -413,6 +606,11 @@ class CodexWorkflowAgents:
                 feedback=feedback or "none",
                 plan_json=json.dumps(plan.plan_steps),
                 acceptance_criteria_json=json.dumps(plan.acceptance_criteria),
+                current_head_diff_paths_json=json.dumps(current_head_diff_paths),
+                current_pr_url=(
+                    str(resume_source_state.get("review_pr_url") or "").strip()
+                    or "none"
+                ),
                 resolved_prerequisites_json=json.dumps(plan.resolved_prerequisites),
                 unresolved_prerequisites_json=json.dumps(plan.unresolved_prerequisites),
                 pm_outcome=plan.outcome,
@@ -447,6 +645,14 @@ class CodexWorkflowAgents:
     ) -> TestResult:
         runtime = self._runtime_for_stage(stage="test", request=request)
         runtime_command = str(getattr(runtime, "command", "") or "")
+        (
+            requires_current_head_acceptance_evidence,
+            current_head_diff_paths,
+        ) = _requires_current_head_acceptance_evidence(
+            plan=plan,
+            repo_dir=request.execution_repo_dir,
+            base_branch=request.base_branch,
+        )
         payload = self._invoke_stage_payload(
             request=request,
             stage="test",
@@ -468,8 +674,14 @@ class CodexWorkflowAgents:
                 pr_target_branch=request.pr_target_branch or "",
                 allow_pr_creation="true" if request.allow_pr_creation else "false",
                 attempt=attempt,
+                acceptance_criteria_json=json.dumps(plan.acceptance_criteria),
+                demo_requirements_json=json.dumps([item.__dict__ for item in plan.demo_requirements]),
                 dev_summary_json=json.dumps(dev_result.change_summary),
                 pr_url=dev_result.pr_url or "none",
+                current_head_diff_paths_json=json.dumps(current_head_diff_paths),
+                requires_current_head_acceptance_evidence=(
+                    "true" if requires_current_head_acceptance_evidence else "false"
+                ),
                 suggested_test_commands_json=json.dumps(request.suggested_test_commands),
                 resolved_prerequisites_json=json.dumps(plan.resolved_prerequisites),
                 unresolved_prerequisites_json=json.dumps(plan.unresolved_prerequisites),
@@ -490,8 +702,14 @@ class CodexWorkflowAgents:
         if outcome == "blocked" and blocker_message is None:
             raise CodexRuntimeError("Codex test response missing blocker_message for blocked outcome")
         guidance = _required_string_list(payload.get("guidance"), stage="test", field="guidance")
+        validation_scope = _required_test_validation_scope(payload.get("validation_scope"))
+        if outcome == "continue" and requires_current_head_acceptance_evidence and validation_scope == "targeted_only":
+            raise CodexRuntimeError(
+                "Codex test response cannot use targeted_only validation_scope when current-head acceptance evidence is required"
+            )
         return TestResult(
             guidance=guidance,
+            validation_scope=validation_scope,
             outcome=outcome,
             feedback=feedback,
             blocker_message=blocker_message,
@@ -508,6 +726,10 @@ class CodexWorkflowAgents:
         resume_source_state = self._resume_source_state(request=request)
         runtime = self._runtime_for_stage(stage="review", request=request)
         runtime_command = str(getattr(runtime, "command", "") or "")
+        current_head_diff_paths = _current_head_diff_paths(
+            request.execution_repo_dir,
+            request.base_branch,
+        )
         payload = self._invoke_stage_payload(
             request=request,
             stage="review",
@@ -533,9 +755,15 @@ class CodexWorkflowAgents:
                 acceptance_criteria_json=json.dumps(plan.acceptance_criteria),
                 dev_summary_json=json.dumps(dev_result.change_summary),
                 test_outcome=test_result.outcome,
+                test_validation_scope=test_result.validation_scope,
                 test_guidance_json=json.dumps(test_result.guidance),
                 test_feedback=test_result.feedback or "none",
-                pr_url=dev_result.pr_url or "none",
+                current_head_diff_paths_json=json.dumps(current_head_diff_paths),
+                pr_url=(
+                    str(resume_source_state.get("review_pr_url") or "").strip()
+                    or dev_result.pr_url
+                    or "none"
+                ),
                 resolved_prerequisites_json=json.dumps(plan.resolved_prerequisites),
                 unresolved_prerequisites_json=json.dumps(plan.unresolved_prerequisites),
                 human_inputs_json=json.dumps(request.human_inputs),
@@ -552,7 +780,11 @@ class CodexWorkflowAgents:
         feedback_raw = payload.get("feedback")
         feedback = str(feedback_raw).strip() if isinstance(feedback_raw, str) and str(feedback_raw).strip() else None
         pr_url_raw = payload.get("pr_url")
-        pr_url = str(pr_url_raw).strip() if isinstance(pr_url_raw, str) and str(pr_url_raw).strip() else dev_result.pr_url
+        pr_url = (
+            str(pr_url_raw).strip()
+            if isinstance(pr_url_raw, str) and str(pr_url_raw).strip()
+            else str(resume_source_state.get("review_pr_url") or "").strip() or dev_result.pr_url
+        )
         outcome = _require_stage_outcome(payload=payload, stage="review")
         blocker_message = _optional_string(payload.get("blocker_message"))
         if outcome == "blocked" and blocker_message is None:
@@ -562,6 +794,75 @@ class CodexWorkflowAgents:
             outcome=outcome,
             feedback=feedback,
             pr_url=pr_url,
+            blocker_message=blocker_message,
+        )
+
+    def qa(
+        self,
+        request: WorkflowRequest,
+        plan: PmPlan,
+        dev_result: DevResult,
+        test_result: TestResult,
+        review_result: ReviewResult,
+        browser_capture_reference: str,
+        available_capture_targets_json: str,
+        attempt: int,
+    ) -> QaResult:
+        runtime = self._runtime_for_stage(stage="qa", request=request)
+        runtime_command = str(getattr(runtime, "command", "") or "")
+        native_selector_catalog_json = json.dumps(_native_selector_catalog(request.execution_repo_dir))
+        payload = self._invoke_stage_payload(
+            request=request,
+            stage="qa",
+            attempt=attempt,
+            system_prompt=render_prompt("workflow/qa_system.j2"),
+            user_prompt=render_prompt(
+                "workflow/qa_user.j2",
+                tenant_id=request.tenant_id,
+                project_id=request.project_id or "",
+                project_name=request.project_name or "",
+                github_repository=request.github_repository or "",
+                jira_project_key=request.jira_project_key or "",
+                run_id=request.run_id,
+                issue_key=request.issue_key,
+                execution_repo_dir=request.execution_repo_dir or "",
+                execution_branch=request.execution_branch or "",
+                base_branch=request.base_branch or "",
+                integration_branch=request.integration_branch or "",
+                pr_target_branch=request.pr_target_branch or "",
+                attempt=attempt,
+                browser_capture_reference=browser_capture_reference,
+                available_capture_targets_json=available_capture_targets_json,
+                pr_url=review_result.pr_url or dev_result.pr_url or "none",
+                acceptance_criteria_json=json.dumps(plan.acceptance_criteria),
+                demo_requirements_json=json.dumps([item.__dict__ for item in plan.demo_requirements]),
+                native_selector_catalog_json=native_selector_catalog_json,
+                dev_summary_json=json.dumps(dev_result.change_summary),
+                test_guidance_json=json.dumps(test_result.guidance),
+                review_summary_json=json.dumps(review_result.summary),
+                human_inputs_json=json.dumps(request.human_inputs),
+                **_stage_prompt_tool_context(
+                    tool_stage="qa",
+                    runtime_command=runtime_command,
+                    worker_platform=request.current_worker_capability.value,
+                ),
+            ),
+            runtime_override=runtime,
+        )
+        outcome = _require_stage_outcome(payload=payload, stage="qa")
+        blocker_message = _optional_string(payload.get("blocker_message"))
+        if outcome == "blocked" and blocker_message is None:
+            raise CodexRuntimeError("Codex qa response missing blocker_message for blocked outcome")
+        feedback = _optional_string(payload.get("feedback"))
+        return QaResult(
+            summary=_required_string_list(payload.get("summary"), stage="qa", field="summary"),
+            scenarios=_validate_native_qa_scenarios(
+                scenarios=_required_qa_scenarios(payload.get("scenarios")),
+                repo_dir=request.execution_repo_dir,
+            ),
+            recordings=_qa_recordings(payload.get("recordings")),
+            outcome=outcome,
+            feedback=feedback,
             blocker_message=blocker_message,
         )
 
@@ -595,6 +896,136 @@ def _optional_string(value: object) -> str | None:
     if not value.strip():
         return None
     return value
+
+
+def _required_test_validation_scope(value: object) -> str:
+    if isinstance(value, str) and value in _TEST_VALIDATION_SCOPES:
+        return value
+    raise CodexRuntimeError("Codex test response missing required validation_scope")
+
+
+def _demo_requirements(value: object) -> list[DemoRequirement]:
+    if not isinstance(value, list):
+        return []
+    parsed: list[DemoRequirement] = []
+    for item in value:
+        if not isinstance(item, dict):
+            return []
+        title = _optional_string(item.get("title"))
+        acceptance_criterion = _optional_string(item.get("acceptance_criterion"))
+        capture_target = _optional_string(item.get("capture_target")) or "browser"
+        variants = _string_list(item.get("variants"))
+        if title is None or acceptance_criterion is None:
+            return []
+        if capture_target not in _QA_CAPTURE_TARGETS:
+            return []
+        parsed.append(
+            DemoRequirement(
+                title=title,
+                acceptance_criterion=acceptance_criterion,
+                capture_target=capture_target,  # type: ignore[arg-type]
+                variants=variants,
+            )
+        )
+    return parsed
+
+
+def _required_demo_requirements(value: object, *, stage: str) -> list[DemoRequirement]:
+    parsed = _demo_requirements(value)
+    if parsed:
+        return parsed
+    raise CodexRuntimeError(f"Codex {stage} response missing required non-empty demo_requirements")
+
+
+def _qa_steps(value: object) -> list[QaStep]:
+    if not isinstance(value, list):
+        return []
+    parsed: list[QaStep] = []
+    for item in value:
+        if not isinstance(item, dict):
+            return []
+        action = _optional_string(item.get("action"))
+        if action not in {
+            "goto",
+            "relaunch_app",
+            "click",
+            "fill",
+            "press",
+            "select_option",
+            "wait_for_text",
+            "wait_for_url",
+            "assert_text",
+            "assert_visible",
+        }:
+            return []
+        parsed.append(
+            QaStep(
+                action=action,  # type: ignore[arg-type]
+                selector=_optional_string(item.get("selector")),
+                value=_optional_string(item.get("value")),
+            )
+        )
+    return parsed
+
+
+def _required_qa_scenarios(value: object) -> list[QaScenario]:
+    if not isinstance(value, list) or not value:
+        raise CodexRuntimeError("Codex qa response missing required non-empty scenarios")
+    parsed: list[QaScenario] = []
+    for item in value:
+        if not isinstance(item, dict):
+            raise CodexRuntimeError("Codex qa response contained invalid scenario")
+        name = _optional_string(item.get("name"))
+        objective = _optional_string(item.get("objective"))
+        capture_target = _optional_string(item.get("capture_target")) or "browser"
+        start_path = _optional_string(item.get("start_path")) or "/"
+        expected_outcomes = _string_list(item.get("expected_outcomes"))
+        steps = _qa_steps(item.get("steps"))
+        if name is None or objective is None or not steps:
+            raise CodexRuntimeError("Codex qa response missing required scenario fields")
+        if capture_target not in _QA_CAPTURE_TARGETS:
+            raise CodexRuntimeError("Codex qa response contains invalid capture_target")
+        parsed.append(
+            QaScenario(
+                name=name,
+                objective=objective,
+                capture_target=capture_target,  # type: ignore[arg-type]
+                start_path=start_path,
+                expected_outcomes=expected_outcomes,
+                steps=steps,
+            )
+        )
+    return parsed
+
+
+def _qa_recordings(value: object) -> list[QaRecording]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        return []
+    parsed: list[QaRecording] = []
+    for item in value:
+        if not isinstance(item, dict):
+            return []
+        name = _optional_string(item.get("name"))
+        artifact_url = _optional_string(item.get("artifact_url"))
+        object_key = _optional_string(item.get("object_key"))
+        capture_target = _optional_string(item.get("capture_target")) or "browser"
+        capture_reference = _optional_string(item.get("capture_reference"))
+        if name is None or artifact_url is None or object_key is None or capture_reference is None:
+            return []
+        if capture_target not in _QA_CAPTURE_TARGETS:
+            return []
+        parsed.append(
+            QaRecording(
+                name=name,
+                artifact_url=artifact_url,
+                object_key=object_key,
+                capture_target=capture_target,  # type: ignore[arg-type]
+                capture_reference=capture_reference,
+            )
+        )
+    return parsed
 
 
 def _normalize_stage_outcome(value: object) -> StageOutcome | None:

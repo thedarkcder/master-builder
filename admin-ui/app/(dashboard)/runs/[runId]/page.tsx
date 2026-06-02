@@ -130,17 +130,8 @@ function isUsableRunPreviewRelease(release: ProjectDeploymentReleaseRecord, runI
   return !["destroyed", "failed", "rolled_back"].includes(normalizedStatus);
 }
 
-function previewReleasePrimaryUrl(release: ProjectDeploymentReleaseRecord): string | null {
-  const urls = release.service_urls.filter((serviceUrl) => serviceUrl.url.trim());
-  return (
-    urls.find((serviceUrl) => serviceUrl.status === "active" && serviceUrl.service_kind === "website")?.url ??
-    urls.find((serviceUrl) => serviceUrl.service_kind === "website")?.url ??
-    urls.find((serviceUrl) => serviceUrl.status === "active")?.url ??
-    urls[0]?.url ??
-    null
-  );
-}
-type AgentStage = "pm" | "dev" | "test" | "review";
+const AGENT_STAGES = ["pm", "dev", "test", "review", "qa"] as const;
+type AgentStage = (typeof AGENT_STAGES)[number];
 const CHAT_PAGE_SIZE = 40;
 
 type RerunAttemptOption = {
@@ -193,7 +184,7 @@ function parseStageCheckpoints(plan: Record<string, unknown> | null | undefined)
     return {};
   }
   const parsed: Partial<Record<AgentStage, StageCheckpointEntry>> = {};
-  for (const stage of ["pm", "dev", "test", "review"] as AgentStage[]) {
+  for (const stage of AGENT_STAGES) {
     const item = stagesRaw[stage];
     if (!isRecord(item)) {
       continue;
@@ -254,6 +245,51 @@ function parseStageArtifact(
   return isRecord(stageRaw["artifact"]) ? stageRaw["artifact"] : null;
 }
 
+type AgentOutcomeLink = {
+  label: string;
+  href: string;
+};
+
+function parseQaRecordingLinks(artifact: Record<string, unknown> | null): AgentOutcomeLink[] {
+  if (!artifact) {
+    return [];
+  }
+  const recordings = Array.isArray(artifact["recordings"]) ? artifact["recordings"] : [];
+  return recordings
+    .map((item) => {
+      if (!isRecord(item)) {
+        return null;
+      }
+      const label = String(item["name"] ?? "").trim() || "QA demo";
+      const href = String(item["artifact_url"] ?? "").trim();
+      if (!href) {
+        return null;
+      }
+      return { label, href } satisfies AgentOutcomeLink;
+    })
+    .filter((item): item is AgentOutcomeLink => item !== null);
+}
+
+function parseQaScenarioSummaries(artifact: Record<string, unknown> | null): string[] {
+  if (!artifact) {
+    return [];
+  }
+  const scenarios = Array.isArray(artifact["scenarios"]) ? artifact["scenarios"] : [];
+  return scenarios
+    .map((item) => {
+      if (!isRecord(item)) {
+        return null;
+      }
+      const name = String(item["name"] ?? "").trim();
+      const objective = String(item["objective"] ?? "").trim();
+      if (!name && !objective) {
+        return null;
+      }
+      return `Scenario: ${name || objective}${name && objective ? ` - ${objective}` : ""}`;
+    })
+    .filter((item): item is string => item !== null);
+}
+
 function stageFromCommand(command: string | null | undefined): string {
   const value = String(command ?? "").trim();
   if (!value) {
@@ -304,6 +340,8 @@ function stageColor(stage: string): string {
       return "#f59e0b";
     case "review":
       return "#ef4444";
+    case "qa":
+      return "#8b5cf6";
     case "orchestrated_run":
       return "#8b5cf6";
     default:
@@ -312,7 +350,7 @@ function stageColor(stage: string): string {
 }
 
 function stageDisplayLabel(stage: string): string {
-  if (stage === "pm" || stage === "dev" || stage === "test" || stage === "review") {
+  if (stage === "pm" || stage === "dev" || stage === "test" || stage === "review" || stage === "qa") {
     return stage.toUpperCase();
   }
   if (stage === "orchestrated_run") {
@@ -801,8 +839,7 @@ export default function RunDetailPage() {
   const isRerunnable = Boolean(run);
   const isActiveRun = run?.status === "queued" || run?.status === "running";
   const canUsePreview = run?.status === "succeeded" && Boolean(run.project_id);
-  const existingPreviewUrl = existingPreview ? previewReleasePrimaryUrl(existingPreview.release) : null;
-  const existingPreviewManageHref =
+  const existingPreviewReleaseHref =
     existingPreview && run?.tenant_id && run.project_id && existingPreview.appId
       ? `/${encodeURIComponent(run.tenant_id)}/projects/${encodeURIComponent(run.project_id)}/deployments/${encodeURIComponent(existingPreview.appId)}?release=${encodeURIComponent(existingPreview.release.release_id)}`
       : null;
@@ -1012,7 +1049,7 @@ export default function RunDetailPage() {
     }
     const syntheticBaseTimestamp = run?.started_at ?? run?.created_at ?? new Date().toISOString();
     for (const [index, item] of orchestrationTrace.stageEvents.entries()) {
-      if (!["pm", "dev", "test", "review"].includes(item.stage)) {
+      if (!AGENT_STAGES.includes(item.stage as AgentStage)) {
         continue;
       }
       const invocationId = item.invocationId ?? `orchestration-trace-${item.stage}-${item.order}`;
@@ -1173,6 +1210,7 @@ export default function RunDetailPage() {
     const devArtifact = parseStageArtifact(run?.plan ?? null, "dev");
     const testArtifact = parseStageArtifact(run?.plan ?? null, "test");
     const reviewArtifact = parseStageArtifact(run?.plan ?? null, "review");
+    const qaArtifact = parseStageArtifact(run?.plan ?? null, "qa");
     const checkpointSummaryForStage = (stage: AgentStage): string[] => {
       const checkpoint = stageCheckpoints[stage];
       if (!checkpoint || !checkpoint.summary) {
@@ -1204,11 +1242,19 @@ export default function RunDetailPage() {
       }
       return detail;
     });
+    const qaRecordingLinks = parseQaRecordingLinks(qaArtifact);
+    const qaItems = [
+      ...checkpointSummaryForStage("qa"),
+      ...toStringList(qaArtifact?.["summary"]),
+      ...parseQaScenarioSummaries(qaArtifact),
+      ...qaRecordingLinks.map((item) => `Recording: ${item.label}`),
+    ];
     return [
       {
         stage: "pm",
         label: "PM",
         items: pmItems,
+        links: [] as AgentOutcomeLink[],
         feedback: null as string | null,
         emptyText: "No PM output captured."
       },
@@ -1216,6 +1262,7 @@ export default function RunDetailPage() {
         stage: "dev",
         label: "Dev",
         items: [...checkpointSummaryForStage("dev"), ...toStringList(devArtifact?.["change_summary"]), ...workstreamSummaries],
+        links: [] as AgentOutcomeLink[],
         feedback: null as string | null,
         emptyText: "No Dev rationale captured."
       },
@@ -1223,6 +1270,7 @@ export default function RunDetailPage() {
         stage: "test",
         label: "Test",
         items: [...checkpointSummaryForStage("test"), ...toStringList(testArtifact?.["guidance"])],
+        links: [] as AgentOutcomeLink[],
         feedback: null as string | null,
         emptyText: "No test guidance captured."
       },
@@ -1230,14 +1278,23 @@ export default function RunDetailPage() {
         stage: "review",
         label: "Review",
         items: [...checkpointSummaryForStage("review"), ...toStringList(reviewArtifact?.["summary"]), ...reviewHistory],
+        links: [] as AgentOutcomeLink[],
         feedback: String(reviewArtifact?.["feedback"] ?? "").trim() || null,
         emptyText: "No review summary captured."
+      },
+      {
+        stage: "qa",
+        label: "QA",
+        items: qaItems,
+        links: qaRecordingLinks,
+        feedback: String(qaArtifact?.["feedback"] ?? "").trim() || null,
+        emptyText: "No QA demo evidence captured."
       }
     ];
   }, [orchestrationTrace.workstreamEvents, run?.plan, stageCheckpoints, workflowDiagnostics?.history]);
   const stageLiveSnapshots = useMemo(() => {
     const snapshots = new Map<AgentStage, { recordedAt: string; text: string }>();
-    const validStages = new Set<AgentStage>(["pm", "dev", "test", "review"]);
+    const validStages = new Set<AgentStage>(AGENT_STAGES);
     const ordered = logs
       .slice()
       .sort((a, b) => new Date(a.recorded_at).getTime() - new Date(b.recorded_at).getTime());
@@ -1262,7 +1319,7 @@ export default function RunDetailPage() {
   }, [logs]);
   const stageLogActivity = useMemo(() => {
     const activity = new Map<AgentStage, { firstAt: string; lastAt: string }>();
-    const validStages = new Set<AgentStage>(["pm", "dev", "test", "review"]);
+    const validStages = new Set<AgentStage>(AGENT_STAGES);
     const ordered = logs
       .slice()
       .sort((a, b) => new Date(a.recorded_at).getTime() - new Date(b.recorded_at).getTime());
@@ -1288,10 +1345,11 @@ export default function RunDetailPage() {
       pm: { status: "not_started", tileDetail: "not started", detail: "not started", sortKey: 0 },
       dev: { status: "not_started", tileDetail: "not started", detail: "not started", sortKey: 0 },
       test: { status: "not_started", tileDetail: "not started", detail: "not started", sortKey: 0 },
-      review: { status: "not_started", tileDetail: "not started", detail: "not started", sortKey: 0 }
+      review: { status: "not_started", tileDetail: "not started", detail: "not started", sortKey: 0 },
+      qa: { status: "not_started", tileDetail: "not started", detail: "not started", sortKey: 0 }
     };
     const timeOf = (value: string | null): number => (value ? new Date(value).getTime() : 0);
-    for (const stage of ["pm", "dev", "test", "review"] as AgentStage[]) {
+    for (const stage of AGENT_STAGES) {
       const checkpoint = stageCheckpoints[stage];
       if (!checkpoint) {
         continue;
@@ -1465,7 +1523,7 @@ export default function RunDetailPage() {
       });
     }
 
-    const stageOrder: AgentStage[] = ["pm", "dev", "test", "review"];
+    const stageOrder: AgentStage[] = [...AGENT_STAGES];
     const stagesWithTelemetry = new Set(
       segments
         .filter((segment) => segment.stage !== "queue_wait")
@@ -1675,15 +1733,9 @@ export default function RunDetailPage() {
             ) : null}
           </div>
           <div className="flex min-h-9 flex-wrap items-center gap-1.5 sm:ml-auto">
-            {existingPreviewUrl ? (
+            {existingPreviewReleaseHref ? (
               <Button asChild variant="secondary" size="sm" className="h-9 min-h-9 text-xs sm:h-7 sm:min-h-0">
-                <a href={existingPreviewUrl} target="_blank" rel="noreferrer">
-                  Open preview
-                </a>
-              </Button>
-            ) : existingPreviewManageHref ? (
-              <Button asChild variant="secondary" size="sm" className="h-9 min-h-9 text-xs sm:h-7 sm:min-h-0">
-                <Link href={existingPreviewManageHref}>Open preview</Link>
+                <Link href={existingPreviewReleaseHref}>Open preview</Link>
               </Button>
             ) : previewLookupBusy && canUsePreview ? (
               <Button variant="secondary" size="sm" className="h-9 min-h-9 text-xs sm:h-7 sm:min-h-0" disabled>
@@ -1823,7 +1875,7 @@ export default function RunDetailPage() {
         <>
           {/* Pipeline stage bar */}
           <div className="flex items-center gap-2 overflow-x-auto">
-            {(["pm", "dev", "test", "review"] as AgentStage[]).map((stage, idx) => {
+            {AGENT_STAGES.map((stage, idx) => {
               const progress = stageProgress[stage];
               const isRunning = progress.status === "running";
               const isDone = progress.status === "completed";
@@ -1857,7 +1909,7 @@ export default function RunDetailPage() {
                     </div>
                     <span data-testid={`run-stage-${stage}-detail`} className="text-[10px] text-muted-foreground">{progress.tileDetail}</span>
                   </div>
-                  {idx < 3 ? <span className="text-muted-foreground/40">→</span> : null}
+                  {idx < AGENT_STAGES.length - 1 ? <span className="text-muted-foreground/40">→</span> : null}
                 </div>
               );
             })}
@@ -1922,6 +1974,21 @@ export default function RunDetailPage() {
                       <p className="mt-2 rounded border border-warning/30 bg-warning/10 p-2 text-warning-foreground">
                         Feedback: {outcome.feedback}
                       </p>
+                    ) : null}
+                    {outcome.links && outcome.links.length > 0 ? (
+                      <div className="mt-2 flex flex-wrap gap-2">
+                        {outcome.links.map((link) => (
+                          <Link
+                            key={`${outcome.stage}-${link.href}`}
+                            href={link.href}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex items-center rounded-md border border-primary/30 bg-primary/5 px-2 py-1 text-[11px] font-medium text-primary hover:bg-primary/10"
+                          >
+                            {link.label}
+                          </Link>
+                        ))}
+                      </div>
                     ) : null}
                   </div>
                 </div>

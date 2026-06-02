@@ -28,6 +28,7 @@ Last review feedback: {{ last_review_feedback }}
 Last review summary: {{ last_review_summary_json }}
 Current worker capability: {{ current_worker_capability }}
 Available worker capabilities: {{ available_worker_capabilities_json }}
+QA capture target constraints: {{ qa_capture_target_constraints_json }}
 Answered transient human inputs for this run: {{ human_inputs_json }}
 Allowed governed tools for this stage: {{ governed_tools_json }}
 Native Codex tools available directly in this runtime: {{ native_tools_json }}
@@ -40,23 +41,40 @@ Structured tool bridge:
   {"type":"final_response","result":{...}}
 - Do not shell out to `python -m orchestrator agent-tool`.
 
+Preloaded repository governance context:
+- The runtime already loaded and enforced the repository policy/standards/operating context for this run.
+- Do not spend tool hops rereading `.codex/**`, `AGENTS.md`, or workflow skill files unless a specific ticket decision cannot be resolved without quoting one exact rule.
+- Prioritize scarce tool hops on ticket scope, product code, tests, build targets, and delivery risks.
+
 Required actions:
 1. Produce concrete, ordered execution steps.
 2. Convert requirements into observable acceptance criteria.
-3. Surface delivery risks that can block or degrade delivery.
-4. Use allowed tools to gather authoritative evidence before deciding prerequisite state instead of assuming.
-4a. Treat project metadata in this prompt as authoritative routing context. Do not fetch project_id, project_name, github_repository, or jira_project_key via project runtime tools.
-4b. Treat the run-owned worktree and branches in this prompt as the only authoritative local repository context for this run.
-4c. When evidence is missing or a blocker may be caused by install availability, binding presence, issue state, knowledge, or repo context, inspect the allowed tool list and use any relevant tool that can resolve that uncertainty before concluding the blocker is real.
-5. Decide next stage:
+3. Derive `demo_requirements` that tell QA exactly what must be demoed from the delivered work.
+   - Each demo requirement must map back to an acceptance criterion.
+   - Set `capture_target` to `browser`, `ios`, `android`, or `desktop` for each requirement.
+   - Use `ios` for native iOS app flows, `android` for native Android app flows, `desktop` for installed desktop application flows, and `browser` only for web-delivered UI.
+   - Include meaningful `variants` when QA should exercise alternate inputs, edge cases, or attempts to break the feature.
+   - Do not leave `demo_requirements` empty when acceptance criteria exist.
+   - Treat `QA capture target constraints` as authoritative for which capture targets are currently supported by the run infrastructure and which worker platform they require.
+   - If the ticket requires a capture target whose constraint says `provider_available=false`, do not continue planning as executable work; return `blocked` or `waiting_for_input` with a concrete `blocker_message`.
+4. Surface delivery risks that can block or degrade delivery.
+5. Use allowed tools to gather authoritative evidence before deciding prerequisite state instead of assuming.
+5a. Treat project metadata in this prompt as authoritative routing context. Do not fetch project_id, project_name, github_repository, or jira_project_key via project runtime tools.
+5b. Treat the run-owned worktree and branches in this prompt as the only authoritative local repository context for this run.
+5b1. When local repository evidence is needed, start with ticket-relevant product files, tests, and build metadata. Repository governance files are already preloaded context, not default discovery targets.
+5c. When evidence is missing or a blocker may be caused by install availability, binding presence, issue state, knowledge, or repo context, inspect the allowed tool list and use any relevant tool that can resolve that uncertainty before concluding the blocker is real.
+6. Decide next stage:
    - Use "dev" if code changes are still needed.
    - Use "test" only when prior dev output is sufficient and we should retest/validate.
-6. Choose execution worker capability for implementation stages (dev/test/review):
+7. Choose execution worker capability for implementation stages (dev/test/review):
    - Output "macos" when any required implementation or verification step needs Apple-only tooling.
+   - Output "macos" when any `demo_requirement.capture_target` is `ios`.
+   - Output "linux" when any `demo_requirement.capture_target` is `android` and no macOS-only implementation or verification work is required.
+   - Output the constraint's `required_worker_platform` when `QA capture target constraints` requires one for any selected `demo_requirement.capture_target`.
    - Treat these as mandatory macos signals: iOS, iPadOS, Xcode, xcodebuild, XCTest, XCUITest, Simulator, simctl, SwiftUI app test execution, Apple Sign In validation on simulator/device.
    - Never output "linux" when mandatory macos signals exist, even if the current worker is linux; choose "macos" and let orchestration requeue.
    - Output "linux" only when all required implementation and verification work can run without macOS-only tooling.
-7. Output only compact evidence conclusions:
+8. Output only compact evidence conclusions:
    - `decision_state` means the persisted Decision Gate / clarification state for this issue.
    - The only authoritative way to determine `decision_state` is the `decision.read_state` tool.
    - If `decision.read_state` succeeds and reports that no prior decision state exists, that is a valid result, not missing evidence.
@@ -64,23 +82,23 @@ Required actions:
    - `knowledge` means authoritative knowledge lookups loaded via `knowledge.read` or `knowledge.exact_read`.
    - resolved_prerequisites: concise prerequisite facts that are already satisfied.
    - unresolved_prerequisites: concise prerequisite facts that remain unresolved but are not raw source dumps.
-8. If evidence is missing because a tool was unavailable, incomplete, or inconclusive, continue with the best plan you can support from available evidence and record the uncertainty in risks or unresolved_prerequisites.
-9. Do not stop planning solely because a tool call failed or an advisory evidence source stayed unavailable.
-10. Keep prerequisite validation tightly scoped to this ticket's explicit acceptance criteria and code-change path. Do not widen scope by default.
-11. Use project runtime tools only to discover installed integrations, verify named binding presence, or request a missing install. Never expect those tools to return secret values.
-12. If a required integration or dependency capability is missing, create a structured `project.request_install` request. If an install exists but required bindings are missing, use `run.request_human_input` to ask the operator to configure them and do not treat that as terminal evidence failure.
-12a. `project.request_install` is the pause contract for missing project/platform install work. Use a stable capability label such as `hubspot`, `stripe`, `fastlane`, or `railway`; never include the Jira issue key or words like "install" in the label. Its `reason` must be plain English for the operator, not an internal exception. The `operator_decision` must answer: "What exactly am I approving, and what happens next?" Put reusable structured detail in `suggested_config` using these keys when known:
+9. If evidence is missing because a tool was unavailable, incomplete, or inconclusive, continue with the best plan you can support from available evidence and record the uncertainty in risks or unresolved_prerequisites.
+10. Do not stop planning solely because a tool call failed or an advisory evidence source stayed unavailable.
+11. Keep prerequisite validation tightly scoped to this ticket's explicit acceptance criteria and code-change path. Do not widen scope by default.
+12. Use project runtime tools only to discover installed integrations, verify named binding presence, or request a missing install. Never expect those tools to return secret values.
+13. If a required integration or dependency capability is missing, create a structured `project.request_install` request. If an install exists but required bindings are missing, use `run.request_human_input` to ask the operator to configure them and do not treat that as terminal evidence failure.
+13a. `project.request_install` is the pause contract for missing project/platform install work. Use a stable capability label such as `hubspot`, `stripe`, `fastlane`, or `railway`; never include the Jira issue key or words like "install" in the label. Its `reason` must be plain English for the operator, not an internal exception. The `operator_decision` must answer: "What exactly am I approving, and what happens next?" Put reusable structured detail in `suggested_config` using these keys when known:
    {"operator_decision":"<single yes/no question>","source_project_changes":["<changes the agent needs to make in the project repo>"],"master_builder_changes":["<changes the agent needs to make in Master Builder or its project configuration>"],"package_changes":["<package or dependency installs needed, if any>"],"secrets_or_bindings_needed":["<secret/binding names or none>"],"resume_when":"<what answer/action lets the run continue>"}
-12b. For stakeholder-facing install approval wording, do not say "unsupported install", "object/field contract", "plain English", "source_project_changes", or "master_builder_changes". Say what the operator is approving in business terms, for example: "Approve Master Builder to add HubSpot support for this project so AP-248 can continue. This may include project code changes, Master Builder project configuration, package changes if needed, and secret placeholders for credentials. Real credentials still need to be supplied separately."
-12b. For install/dependency pauses, make the decision simple: ask whether Master Builder may install or configure the needed source project and Master Builder dependencies so this issue can continue. Do not ask the PM for API field names, object-to-field contracts, package commands, or internal implementation identifiers unless the Jira issue explicitly asks for that technical contract.
-12c. `run.request_human_input` requires this exact argument shape:
+13b. For stakeholder-facing install approval wording, do not say "unsupported install", "object/field contract", "plain English", "source_project_changes", or "master_builder_changes". Say what the operator is approving in business terms, for example: "Approve Master Builder to add HubSpot support for this project so AP-248 can continue. This may include project code changes, Master Builder project configuration, package changes if needed, and secret placeholders for credentials. Real credentials still need to be supplied separately."
+13b. For install/dependency pauses, make the decision simple: ask whether Master Builder may install or configure the needed source project and Master Builder dependencies so this issue can continue. Do not ask the PM for API field names, object-to-field contracts, package commands, or internal implementation identifiers unless the Jira issue explicitly asks for that technical contract.
+13c. `run.request_human_input` requires this exact argument shape:
    {"prompt":"<human-readable request>","request_type":"<stable snake_case type>","instructions":"<optional short reply guidance>","expected_reply_format":"<optional format hint>","request_context":{"questions":[{"id":"<stable id>","question":"<question text>","options":["<option 1>","<option 2>"]}]}}
-12d. Put structured clarification items under `request_context.questions`. Never emit top-level `questions`, and never omit `request_type`.
-12e. When a Decision Gate clarification is required, use `request_type="decision_gate_clarification"`.
-13. If you can proceed, set outcome to `continue` and provide the plan fields.
-14. If the current worker cannot execute the required capability, set outcome to `requeue`, set execution_worker_capability to the required capability, and set `requeue_target` and `requeue_reason`.
-15. If you cannot proceed because of a real blocker, set outcome to `blocked` or `waiting_for_input` and provide `blocker_message`.
-16. Never guess that an evidence source is missing from ticket wording alone. For `decision_state`, `jira_issue`, and `knowledge`, first call the matching tool and use the result.
+13d. Put structured clarification items under `request_context.questions`. Never emit top-level `questions`, and never omit `request_type`.
+13e. When a Decision Gate clarification is required, use `request_type="decision_gate_clarification"`.
+14. If you can proceed, set outcome to `continue` and provide the plan fields.
+15. If the current worker cannot execute the required capability, set outcome to `requeue`, set execution_worker_capability to the required capability, and set `requeue_target` and `requeue_reason`.
+16. If you cannot proceed because of a real blocker, set outcome to `blocked` or `waiting_for_input` and provide `blocker_message`.
+17. Never guess that an evidence source is missing from ticket wording alone. For `decision_state`, `jira_issue`, and `knowledge`, first call the matching tool and use the result.
 
 Return JSON matching this domain model:
 {{ domain_model | tojson(indent=2) }}

@@ -63,6 +63,14 @@ class ReviewerGateTests(unittest.TestCase):
             project_id="example-default",
         )
 
+    def _gate_with_demo_requirement(self, client: _FakeGitHubClient) -> ReviewAgentGate:
+        return ReviewAgentGate(
+            client,
+            require_demo_evidence=True,
+            tenant_id="example",
+            project_id="example-default",
+        )
+
     def test_reviewer_emits_ready_only_when_checks_green(self) -> None:
         gate = self._gate(
             _FakeGitHubClient(
@@ -177,6 +185,83 @@ class ReviewerGateTests(unittest.TestCase):
         )
         self.assertFalse(signal.ready)
         self.assertEqual(signal.state, "missing_test_coverage")
+
+    def test_reviewer_blocks_housekeeping_files_mixed_into_source_pr(self) -> None:
+        gate = self._gate(
+            _FakeGitHubClient(
+                checks=[
+                    WorkflowCheckSuite(name="CI", status="completed", conclusion="success"),
+                    WorkflowCheckSuite(name="Security", status="completed", conclusion="success"),
+                ],
+                files=[
+                    PullRequestFileChange(filename="GirlPower/App/GirlPowerApp.swift", patch="+ change"),
+                    PullRequestFileChange(filename="tasks/lessons.md", patch="+ lesson"),
+                    PullRequestFileChange(filename="GirlPowerUITests/GirlPowerUITests.swift", patch="+ test"),
+                ],
+            )
+        )
+
+        signal = gate.evaluate_pr(
+            repo_full_name="example/repo",
+            pr_number=15,
+        )
+
+        self.assertFalse(signal.ready)
+        self.assertEqual(signal.state, "out_of_scope_changes")
+        self.assertIn("tasks/lessons.md", signal.message)
+
+    def test_reviewer_blocks_ready_signal_when_demo_evidence_missing(self) -> None:
+        gate = self._gate_with_demo_requirement(
+            _FakeGitHubClient(
+                checks=[
+                    WorkflowCheckSuite(name="CI", status="completed", conclusion="success"),
+                    WorkflowCheckSuite(name="Security", status="completed", conclusion="success"),
+                ],
+                files=[
+                    PullRequestFileChange(filename="orchestrator/core/reviewer.py", patch="+ change"),
+                    PullRequestFileChange(filename="tests/test_reviewer_gate.py", patch="+ test"),
+                ],
+            )
+        )
+
+        signal = gate.evaluate_pr(
+            repo_full_name="example/repo",
+            pr_number=15,
+        )
+
+        self.assertFalse(signal.ready)
+        self.assertEqual(signal.state, "missing_demo_evidence")
+
+    def test_reviewer_accepts_demo_evidence_links(self) -> None:
+        gate = self._gate_with_demo_requirement(
+            _FakeGitHubClient(
+                checks=[
+                    WorkflowCheckSuite(name="CI", status="completed", conclusion="success"),
+                    WorkflowCheckSuite(name="Security", status="completed", conclusion="success"),
+                ],
+                files=[
+                    PullRequestFileChange(filename="orchestrator/core/reviewer.py", patch="+ change"),
+                    PullRequestFileChange(filename="tests/test_reviewer_gate.py", patch="+ test"),
+                ],
+                review_body=(
+                    "Good:\n- implemented\n\n"
+                    "Risks:\n- low\n\n"
+                    "Must-fix:\n- none\n\n"
+                    "Tests:\n- pytest -q\n\n"
+                    "Questions:\n- none\n\n"
+                    "Follow-ups:\n- none\n\n"
+                    "## Demo Evidence\n- Happy path: https://cdn.example/qa/happy.webm\n"
+                ),
+            )
+        )
+
+        signal = gate.evaluate_pr(
+            repo_full_name="example/repo",
+            pr_number=16,
+        )
+
+        self.assertTrue(signal.ready)
+        self.assertEqual(signal.state, "ready")
 
     def test_reviewer_accepts_jest_test_js_coverage(self) -> None:
         gate = self._gate(

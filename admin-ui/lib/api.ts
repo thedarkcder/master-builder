@@ -67,6 +67,8 @@ export type ReposConfig = {
 };
 
 export type PolicyConfig = {
+  default_worker_capability?: "linux" | "macos" | null;
+  qa_demo_recording_enabled: boolean;
   allow_jira_transitions: boolean;
   allow_pr_creation: boolean;
   allow_code_reviews: boolean;
@@ -212,6 +214,8 @@ export type ProjectPolicyOverrides = Partial<
   Pick<
     PolicyConfig,
     | "allow_jira_transitions"
+    | "default_worker_capability"
+    | "qa_demo_recording_enabled"
     | "allow_pr_creation"
     | "allow_code_reviews"
     | "allow_pr_remediation"

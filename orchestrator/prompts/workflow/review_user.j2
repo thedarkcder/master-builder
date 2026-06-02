@@ -17,8 +17,10 @@ Plan steps: {{ plan_steps_json }}
 Acceptance criteria: {{ acceptance_criteria_json }}
 Dev summary: {{ dev_summary_json }}
 Test outcome: {{ test_outcome }}
+Test validation scope: {{ test_validation_scope }}
 Test guidance: {{ test_guidance_json }}
 Test feedback: {{ test_feedback }}
+Current published diff paths: {{ current_head_diff_paths_json }}
 Previous review summary: {{ previous_review_summary_json }}
 Previous review feedback: {{ previous_review_feedback }}
 PR URL: {{ pr_url }}
@@ -32,6 +34,9 @@ Structured tool bridge:
 - Use native Codex tools directly when they are available in this runtime. Do not emit tool_request for native Codex tools.
 - To call an allowed governed tool, return JSON only:
   {"type":"tool_request","tool_name":"<allowed tool>","tool_args":{...},"reason":"<optional short reason>"}
+- If a governed tool appears in `Allowed governed tools for this stage`, treat it as executable through this tool bridge unless an actual `tool_request` call fails.
+- Do not use native `tool_search`, plugin discovery, or deferred-tool lookup to verify whether a governed tool in `Allowed governed tools for this stage` exists. The allowed governed list is authoritative for this bridge.
+- An empty or irrelevant `tool_search` result is not evidence that a governed bridge tool is unavailable. If you need `github.push_branch`, `github.open_pr`, `jira.comment`, or `jira.transition`, issue the corresponding `tool_request` directly.
 - When review is complete, return JSON only:
   {"type":"final_response","result":{...}}
 - Do not shell out to `python -m orchestrator agent-tool`.
@@ -42,12 +47,21 @@ Required actions:
 3. Treat the PM evidence ledger as the current ticket prerequisite summary; do not invent new external blockers from missing repo evidence alone.
 3a. When acceptance depends on missing install availability, binding presence, issue state, or external context, inspect the allowed tool list and use any relevant tool that can resolve that uncertainty before concluding the run is blocked.
 4. If evidence shows remediable defects or incomplete work, return outcome="failed".
+4a. Treat the Test stage as the primary validation authority for the current publication candidate.
+    - If `Test outcome` is `continue` and `Test validation scope` is `current_head_acceptance`, that means fresh current-head acceptance evidence already exists for the PM acceptance/demo contract.
+    - In that case, do not require a broader/full-suite rerun solely because unrelated repo-wide tests are known to fail.
+    - Only treat additional failing tests as release blockers when you can tie them to the current published diff paths, the current acceptance criteria, or a concrete cross-cutting regression risk grounded in the changed files.
+    - When broader validation outside the published diff is red but the current-head acceptance evidence is green, summarize that debt as non-blocking background repo risk unless the evidence shows the current candidate caused it.
 5. If a one-time transient human input can unblock the remaining verification, request it with `run.request_human_input` before returning outcome="waiting_for_input".
 6. If PR creation required by policy is `true`, you must not approve the run unless a PR exists and `pr_url` is set.
 6a. Treat the Integration branch as the canonical PR head branch. A PR opened from the Execution branch (`run/...`) does not satisfy the contract unless the Integration branch itself is the remediation head branch.
 6b. Use `github.push_branch` for remote branch publication and `github.open_pr` for PR creation or update. Do not use raw `git push` or other ad hoc remote publication commands.
+6ba. Do not use raw `gh` CLI commands for PR lookup, PR creation, branch publication, or GitHub state inspection when an allowed governed GitHub tool can provide the answer.
 6c. If PR creation required by policy is `true` and `pr_url` is missing, you must attempt `github.push_branch` then `github.open_pr` in this review attempt before returning blocked or failed.
+6d. Do not claim the governed GitHub publication tools are unavailable, unbound, or not executable from this runtime unless you issued the corresponding `tool_request` and it failed with concrete evidence.
 7. When previous review feedback is present, treat it as the active review context for this resumed review pass.
+7a. Treat repo housekeeping and self-improvement files as out of scope for product acceptance unless the ticket explicitly targets them.
+    - If the published diff includes `tasks/lessons.md`, `AGENTS.md`, `.codex/**`, or similar repo-policy/agent-instruction files without clear ticket evidence they belong, return outcome="failed" and direct dev to remove them from the publication branch before approval.
 8. If you return outcome="blocked" or outcome="waiting_for_input", make `feedback` and any non-null `blocker_message` operator-friendly: keep the failure concise, then add a short `Troubleshooting:` section with 1-3 concrete operator actions supported by the observed evidence.
 
 Return JSON matching this domain model:

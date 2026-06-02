@@ -9,7 +9,12 @@ from orchestrator.core.workflow.checkpoint_codec import decode_test_result_paylo
 from orchestrator.core.workflow.checkpoint_codec import encode_pm_plan
 from orchestrator.core.workflow.checkpoint_codec import encode_stage_checkpoint_artifact
 from orchestrator.core.workflow.runner import DevResult
+from orchestrator.core.workflow.runner import DemoRequirement
 from orchestrator.core.workflow.runner import PmPlan
+from orchestrator.core.workflow.runner import QaRecording
+from orchestrator.core.workflow.runner import QaResult
+from orchestrator.core.workflow.runner import QaScenario
+from orchestrator.core.workflow.runner import QaStep
 from orchestrator.core.workflow.runner import ReviewResult
 from orchestrator.core.workflow.runner import TestResult
 from orchestrator.core.workflow.runner import WorkflowStageCheckpoint
@@ -21,6 +26,13 @@ class CheckpointCodecTests(unittest.TestCase):
             "plan_steps": ["step-1"],
             "acceptance_criteria": ["ac-1"],
             "risks": ["risk-1"],
+            "demo_requirements": [
+                {
+                    "title": "Show login",
+                    "acceptance_criterion": "User can sign in",
+                    "variants": ["Wrong password shows validation"],
+                }
+            ],
             "outcome": "continue",
             "next_stage": "dev",
             "execution_worker_capability": "linux",
@@ -34,6 +46,7 @@ class CheckpointCodecTests(unittest.TestCase):
         assert plan is not None
         self.assertEqual(plan.plan_steps, ["step-1"])
         self.assertEqual(plan.acceptance_criteria, ["ac-1"])
+        self.assertEqual(plan.demo_requirements[0].title, "Show login")
         self.assertEqual(plan.outcome, "continue")
         self.assertEqual(plan.next_stage, "dev")
         self.assertEqual(plan.execution_worker_capability, "linux")
@@ -74,6 +87,25 @@ class CheckpointCodecTests(unittest.TestCase):
 
         self.assertIsNone(decode_pm_plan_payload(payload))
 
+    def test_decode_pm_plan_payload_rejects_mobile_demo_requirements_without_macos_worker(self) -> None:
+        payload = {
+            "plan_steps": ["step-1"],
+            "acceptance_criteria": ["ac-1"],
+            "risks": [],
+            "demo_requirements": [
+                {
+                    "title": "Record iOS proof",
+                    "acceptance_criterion": "Native flow works",
+                    "capture_target": "ios",
+                }
+            ],
+            "outcome": "continue",
+            "next_stage": "dev",
+            "execution_worker_capability": "linux",
+        }
+
+        self.assertIsNone(decode_pm_plan_payload(payload))
+
     def test_decode_pm_plan_payload_rejects_empty_required_lists(self) -> None:
         payload = {
             "plan_steps": [],
@@ -103,6 +135,7 @@ class CheckpointCodecTests(unittest.TestCase):
             plan_steps=["step-1"],
             acceptance_criteria=["ac-1"],
             risks=[],
+            demo_requirements=[DemoRequirement(title="Login flow", acceptance_criterion="User signs in")],
             outcome="requeue",
             next_stage="dev",
             execution_worker_capability="linux",
@@ -140,6 +173,26 @@ class CheckpointCodecTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             encode_pm_plan(plan)
 
+    def test_encode_pm_plan_rejects_mobile_demo_requirements_without_macos_worker(self) -> None:
+        plan = PmPlan(
+            plan_steps=["step-1"],
+            acceptance_criteria=["ac-1"],
+            risks=[],
+            demo_requirements=[
+                DemoRequirement(
+                    title="Record iOS proof",
+                    acceptance_criterion="Native flow works",
+                    capture_target="ios",
+                )
+            ],
+            outcome="continue",
+            next_stage="dev",
+            execution_worker_capability="linux",
+        )
+
+        with self.assertRaises(ValueError):
+            encode_pm_plan(plan)
+
     def test_decode_stage_result_payloads_reject_blocked_without_blocker_message(self) -> None:
         self.assertIsNone(
             decode_dev_result_payload(
@@ -154,6 +207,7 @@ class CheckpointCodecTests(unittest.TestCase):
             decode_test_result_payload(
                 {
                     "guidance": ["pytest -q"],
+                    "validation_scope": "targeted_only",
                     "outcome": "blocked",
                     "feedback": "env missing",
                 }
@@ -180,6 +234,7 @@ class CheckpointCodecTests(unittest.TestCase):
                     plan_steps=["s1"],
                     acceptance_criteria=["ac1"],
                     risks=[],
+                    demo_requirements=[DemoRequirement(title="Demo", acceptance_criterion="Show feature")],
                 ),
             )
         )
@@ -198,7 +253,7 @@ class CheckpointCodecTests(unittest.TestCase):
                 attempt=1,
                 status="completed",
                 summary="test",
-                test_result=TestResult(guidance=["pytest -q"], feedback=None),
+                test_result=TestResult(guidance=["pytest -q"], validation_scope="targeted_only", feedback=None),
             )
         )
         review_artifact = encode_stage_checkpoint_artifact(
@@ -210,11 +265,64 @@ class CheckpointCodecTests(unittest.TestCase):
                 review_result=ReviewResult(summary=["ok"], feedback=None, pr_url="https://example/p/1"),
             )
         )
+        qa_artifact = encode_stage_checkpoint_artifact(
+            WorkflowStageCheckpoint(
+                stage="qa",
+                attempt=1,
+                status="completed",
+                summary="qa",
+                qa_result=QaResult(
+                    summary=["Recorded demos"],
+                    scenarios=[
+                        QaScenario(
+                            name="Happy path",
+                            objective="Show feature works",
+                            expected_outcomes=["Feature is visible"],
+                            steps=[
+                                QaStep(action="goto", value="/"),
+                                QaStep(action="assert_visible", selector="text=Feature"),
+                            ],
+                        )
+                    ],
+                    recordings=[
+                        QaRecording(
+                            name="Happy path",
+                            artifact_url="https://demo.example/happy.webm",
+                            object_key="demo/happy.webm",
+                            capture_reference="https://preview.example",
+                        )
+                    ],
+                ),
+            )
+        )
 
         self.assertEqual(pm_artifact["outcome"], "continue")
+        self.assertEqual(pm_artifact["demo_requirements"][0]["title"], "Demo")
         self.assertEqual(dev_artifact["change_summary"], ["c1"])
         self.assertEqual(test_artifact["guidance"], ["pytest -q"])
         self.assertEqual(review_artifact["summary"], ["ok"])
+        self.assertEqual(qa_artifact["recordings"][0]["object_key"], "demo/happy.webm")
+
+    def test_encode_stage_checkpoint_artifact_allows_blocked_qa_without_scenarios(self) -> None:
+        qa_artifact = encode_stage_checkpoint_artifact(
+            WorkflowStageCheckpoint(
+                stage="qa",
+                attempt=1,
+                status="blocked",
+                summary="qa blocked",
+                qa_result=QaResult(
+                    summary=["Preview lacks an executable demo path"],
+                    scenarios=[],
+                    recordings=[],
+                    outcome="blocked",
+                    blocker_message="Preview lacks an executable demo path",
+                ),
+            )
+        )
+
+        self.assertEqual(qa_artifact["outcome"], "blocked")
+        self.assertEqual(qa_artifact["scenarios"], [])
+        self.assertEqual(qa_artifact["recordings"], [])
 
 
 if __name__ == "__main__":

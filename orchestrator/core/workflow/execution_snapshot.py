@@ -17,12 +17,14 @@ from orchestrator.core.worker.stage_events import WorkerStageUpdate
 from orchestrator.core.workflow.checkpoint_codec import (
     decode_dev_result_payload,
     decode_pm_plan_payload,
+    decode_qa_result_payload,
     decode_review_result_payload,
     decode_test_result_payload,
     encode_stage_checkpoint_artifact,
 )
 from orchestrator.core.workflow.runner import DevResult
 from orchestrator.core.workflow.runner import PmPlan
+from orchestrator.core.workflow.runner import QaResult
 from orchestrator.core.workflow.runner import ReviewResult
 from orchestrator.core.workflow.runner import TestResult
 from orchestrator.core.workflow.runner import WorkflowResult
@@ -37,6 +39,7 @@ class StageName(str, Enum):
     DEV = "dev"
     TEST = "test"
     REVIEW = "review"
+    QA = "qa"
 
 
 @dataclass
@@ -230,6 +233,12 @@ class ExecutionSnapshot:
         if record is None or not isinstance(record.artifact, dict):
             return None
         return decode_review_result_payload(record.artifact)
+
+    def qa_result(self) -> QaResult | None:
+        record = self.stages.get("qa")
+        if record is None or not isinstance(record.artifact, dict):
+            return None
+        return decode_qa_result_payload(record.artifact)
 
 
 def _normalize_stage_update_payloads(

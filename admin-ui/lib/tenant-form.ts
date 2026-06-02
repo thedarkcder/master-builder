@@ -67,6 +67,7 @@ export function defaultTenantFormValues(): TenantFormValues {
       github_repository: null
     },
     policy: {
+      qa_demo_recording_enabled: false,
       allow_jira_transitions: false,
       allow_pr_creation: true,
       allow_code_reviews: true,

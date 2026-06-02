@@ -10,8 +10,10 @@ from sqlalchemy.orm import Session
 
 from orchestrator.core.decision.types import PrecheckOutcome
 from orchestrator.core.config import get_settings
+from orchestrator.core.projects.policy import resolve_effective_policy
 from orchestrator.core.runs.enqueue_types import EnqueueFailureReason
 from orchestrator.core.runtime.requirements import resolve_required_runtime_kinds_for_workflow
+from orchestrator.core.worker.capabilities import infer_required_worker_capability
 from orchestrator.core.worker.capability_normalization import parse_worker_capability
 from orchestrator.core.workflow.attempt_factory import (
     build_run_attempt,
@@ -30,7 +32,7 @@ from orchestrator.core.workflow.execution_snapshot import (
 )
 from orchestrator.core.workflow.trigger_context import GithubPrRemediationTriggerContext
 from orchestrator.core.workflow.transitions import ACTIVE_WORKFLOW_STATUSES as WORKFLOW_ACTIVE_STATUSES, is_workflow_terminal
-from orchestrator.storage.models import Run, WebhookDelivery, WorkflowExecution
+from orchestrator.storage.models import Project, Run, Tenant, WebhookDelivery, WorkflowExecution
 from orchestrator.storage.run_queue_events import notify_run_enqueued
 
 RUN_DEDUPE_SCOPE_ISSUE_EXECUTION = "issue_execution"
@@ -154,6 +156,51 @@ def resolve_required_worker_capability_for_enqueue(
     if normalized_capability is not None:
         return normalized_capability
     return resolve_required_worker_capability_from_plan(required_worker_capability_source_plan)
+
+
+def infer_required_worker_capability_for_enqueue(
+    *,
+    session: Session,
+    tenant_id: str,
+    project_id: str | None,
+    issue_key: str,
+    issue_summary: str | None,
+    issue_description: str | None,
+    required_worker_capability: str | None = None,
+    required_worker_capability_source_plan: object | None = None,
+) -> str | None:
+    normalized_capability = resolve_required_worker_capability_for_enqueue(
+        required_worker_capability=required_worker_capability,
+        required_worker_capability_source_plan=required_worker_capability_source_plan,
+    )
+    if normalized_capability is not None:
+        return normalized_capability
+    tenant_policy: dict[str, object] = {}
+    tenant = session.get(Tenant, tenant_id)
+    if tenant is not None and isinstance(getattr(tenant, "policy_config", None), dict):
+        tenant_policy = dict(tenant.policy_config or {})
+
+    project_default_worker_capability = ""
+    normalized_project_id = str(project_id or "").strip()
+    if normalized_project_id:
+        project = session.get(Project, normalized_project_id)
+        if project is not None:
+            effective_policy = resolve_effective_policy(
+                tenant_policy=tenant_policy,
+                project_overrides=dict(getattr(project, "policy_overrides", {}) or {}),
+            )
+            project_default_worker_capability = str(effective_policy.get("default_worker_capability") or "").strip()
+    inferred = infer_required_worker_capability(
+        issue_summary=issue_summary,
+        issue_description=issue_description,
+        issue_labels=None,
+        project_default_worker_capability=project_default_worker_capability,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        issue_key=issue_key,
+    )
+    normalized_inferred = str(inferred or "").strip()
+    return normalized_inferred or None
 
 
 def resolve_precheck_outcome_for_enqueue(
@@ -436,7 +483,13 @@ def enqueue_run(
         precheck_outcome=normalized_precheck_outcome,
         precheck_source_plan=precheck_source_plan,
     )
-    normalized_required_worker_capability = resolve_required_worker_capability_for_enqueue(
+    normalized_required_worker_capability = infer_required_worker_capability_for_enqueue(
+        session=session,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        issue_key=issue_key,
+        issue_summary=issue_summary,
+        issue_description=issue_description,
         required_worker_capability=required_worker_capability,
         required_worker_capability_source_plan=(
             bootstrap.plan if bootstrap is not None and isinstance(bootstrap.plan, dict) else precheck_source_plan

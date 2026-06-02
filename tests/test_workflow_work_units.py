@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
-
 import pytest
+from unittest.mock import patch
 
 from orchestrator.core.parent_feature_workflow.operations import (
     PARENT_OP_BACKLOG_PLANNING,
@@ -319,3 +319,46 @@ class WorkflowWorkUnitTests(SqliteTemplateDbTestCase):
 
             assert recovered == {"security": "done"}
             assert calls["security"] == 3
+
+    def test_run_work_unit_starts_and_stops_operation_heartbeat_controller(self) -> None:
+        now = datetime.now(timezone.utc)
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            workflow = _workflow(now)
+            operation = _operation(now)
+            attempt = _attempt(now, attempt_id="attempt-1", attempt_number=1)
+            session.add_all([workflow, operation, attempt])
+            session.commit()
+
+            controller_events: list[tuple[str, str | None, str | None]] = []
+
+            class _Controller:
+                def __init__(self, *, database_url: str, attempt_id: str, lease_owner: str) -> None:
+                    controller_events.append(("init", attempt_id, lease_owner))
+
+                def start(self) -> None:
+                    controller_events.append(("start", None, None))
+
+                def stop(self) -> None:
+                    controller_events.append(("stop", None, None))
+
+            with patch("orchestrator.core.workflow.work_units.WorkflowOperationAttemptHeartbeatController", _Controller):
+                result = run_work_unit(
+                    session,
+                    operation=operation,
+                    operation_attempt=attempt,
+                    unit_key=PARENT_WU_BACKLOG_ARCHITECTURE_MODEL,
+                    idempotency_key="MAB-900:architecture",
+                    input_payload={"brief": "same"},
+                    execute=lambda _context: controller_events.append(("execute", None, None)) or {"ok": True},
+                    serialize=lambda payload: {"result": payload},
+                    deserialize=lambda payload: dict(payload["result"]),
+                )
+
+            assert result == {"ok": True}
+            assert controller_events == [
+                ("init", "attempt-1", "workflow_work_units"),
+                ("start", None, None),
+                ("execute", None, None),
+                ("stop", None, None),
+            ]

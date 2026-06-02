@@ -118,6 +118,17 @@ TOOL_ALLOWLIST: dict[str, set[str]] = {
         "exec.run_install",
         "run.request_human_input",
     },
+    "qa": {
+        "knowledge.exact_read",
+        "jira.comment",
+        "github.open_pr",
+        "repo.read",
+        "project.list_installs",
+        "project.check_runtime_bindings",
+        "project.request_install",
+        "exec.run_install",
+        "run.request_human_input",
+    },
     "pr_ready": {
         "web.search",
         "web.fetch",
@@ -127,6 +138,8 @@ TOOL_ALLOWLIST: dict[str, set[str]] = {
         "web.fetch",
     },
     "repo_setup": {
+        "web.search",
+        "web.fetch",
         "repo.read",
         "repo.exec_bootstrap",
     },
@@ -703,9 +716,10 @@ def _tool_repo_read(*, context: AgentToolContext, args: dict[str, Any]) -> dict[
         command=command,
         checkout_root=getattr(context, "checkout_root", context.repo_dir),
     )
+    working_dir = context.checkout_root if context.stage == "repo_setup" else context.repo_dir
     process = subprocess.run(  # noqa: S603
         ["/bin/sh", "-lc", command],
-        cwd=str(context.repo_dir),
+        cwd=str(working_dir),
         capture_output=True,
         text=True,
         check=False,
@@ -1084,6 +1098,7 @@ def _execute_knowledge_tool(
         session=session,
         tenant_id=context.tenant.tenant_id,
         project_id=context.project.project_id,
+        issue_key=context.issue_key,
         query=query,
         max_items=max(1, min(max_items, 10)),
         max_chars=max(500, min(max_chars, 6000)),
@@ -1398,6 +1413,16 @@ def _execute_github_tool(
             limit=100,
         )
         if existing_pr is not None:
+            if body:
+                result = github_client.update_pull_request(
+                    repo_full_name=repo_full_name,
+                    github_repository=github_repository,
+                    pr_number=existing_pr.number,
+                    title=title,
+                    base_branch=base_branch,
+                    body=body,
+                )
+                return {"pr_number": result.number, "pr_url": result.html_url}
             return {"pr_number": existing_pr.number, "pr_url": existing_pr.html_url}
         result = github_client.create_pull_request(
             repo_full_name=repo_full_name,

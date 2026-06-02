@@ -1,28 +1,19 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
 
-from orchestrator.core.runtime.agent_runtime_resolver import (
-    resolve_execution_profile_for_selector,
-)
-from orchestrator.core.runtime.runtime import CodexRuntimeError, build_runtime_for_execution_profile
-from orchestrator.core.prompt_templates import render_prompt
-from orchestrator.core.runtime.invocation import AgentInvocationContext, RuntimeInvocationError
-from orchestrator.core.runtime.stage_session import RuntimeStageSession
-from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
+from orchestrator.core.platform.secret_service import resolve_platform_secret_ref
+from orchestrator.core.platform.tenant_secret_service import resolve_scoped_secret_ref
 from orchestrator.storage.models import Project, Run, Tenant
+from orchestrator.tools.github_app import GitHubApiError, github_client_from_tenant_config
 from orchestrator.tools.project_repo_checkout import (
     PreparedExecutionRepo,
     ProjectRepoCheckoutError,
-    execution_branch_name,
+    ensure_project_checkout,
+    ensure_run_worktree,
     project_checkout_root_dir,
-    project_repo_dir,
-    project_run_repo_dir,
     validate_execution_repo,
 )
-
-_REPO_SETUP_SELECTOR = "repo_setup.prepare"
 
 
 class RepoSetupError(RuntimeError):
@@ -44,12 +35,40 @@ class RepoSetupPreparation:
 
 
 def repo_setup_attempt_count_from_plan(plan: object | None) -> int:
+    from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
+
     snapshot = ExecutionSnapshot.require(plan, allow_empty=True)
     raw_attempts = snapshot.context.execution_context.get("repo_setup_attempts")
     try:
         return max(0, int(raw_attempts))
     except (TypeError, ValueError):
         return 0
+
+
+def _github_installation_token_for_project(
+    *,
+    session,
+    settings,
+    tenant: Tenant,
+    project: Project,
+) -> str:
+    github_config = tenant.github_config or {}
+    github_client = github_client_from_tenant_config(
+        github_config,
+        tenant_secret_lookup=lambda secret_ref: resolve_scoped_secret_ref(
+            session,
+            secret_ref=secret_ref,
+            encryption_key=settings.secrets_encryption_key,
+            tenant_id=tenant.tenant_id,
+            project_id=project.project_id,
+        ),
+        platform_secret_lookup=lambda secret_ref: resolve_platform_secret_ref(
+            session,
+            secret_ref=secret_ref,
+            encryption_key=settings.secrets_encryption_key,
+        ),
+    )
+    return github_client.get_installation_token()
 
 
 def prepare_execution_repo_for_run(
@@ -69,157 +88,50 @@ def prepare_execution_repo_for_run(
         project_id=project.project_id,
     )
     checkout_root.mkdir(parents=True, exist_ok=True)
-    expected_run_repo_dir = project_run_repo_dir(
-        base_dir=settings.project_repo_checkout_base_dir,
-        tenant_id=tenant.tenant_id,
-        project_id=project.project_id,
-        run_id=run.run_id,
-        workspace_key=workspace_key,
-    )
-    shared_repo_dir = project_repo_dir(
-        base_dir=settings.project_repo_checkout_base_dir,
-        tenant_id=tenant.tenant_id,
-        project_id=project.project_id,
-    )
-    execution_branch = execution_branch_name(issue_key=run.issue_key, run_id=run.run_id)
-    runtime_profile = resolve_execution_profile_for_selector(
-        session=session,
-        settings=settings,
-        tenant_id=tenant.tenant_id,
-        project_id=project.project_id,
-        selector=_REPO_SETUP_SELECTOR,
-    )
-    runtime = build_runtime_for_execution_profile(
-        session=session,
-        settings=settings,
-        profile=runtime_profile,
-    )
-    context = AgentInvocationContext(
-        channel="worker",
-        tenant_id=tenant.tenant_id,
-        project_id=project.project_id,
-        command="repo_setup",
-        stage="prepare",
-        working_dir=str(checkout_root),
-        workflow_id=getattr(run, "workflow_id", None),
-        issue_key=run.issue_key,
-        run_id=run.run_id,
-        attempt=int(getattr(run, "attempt_number", 1) or 1),
-        reasoning_effort="medium",
-        issue_description_chars=len(str(getattr(run, "issue_description", "") or "")),
-    )
-    stage_session = RuntimeStageSession.create(
-        runtime=runtime,
-        context=context,
-        policy_stage="repo_setup",
-        session=session,
-        settings=settings,
-        issue_key=run.issue_key,
-    )
-    prompt_context = {
-        "tenant_id": tenant.tenant_id,
-        "project_id": project.project_id,
-        "project_name": project.name,
-        "github_repository": project.github_repository,
-        "run_id": run.run_id,
-        "issue_key": run.issue_key,
-        "issue_summary": run.issue_summary or "",
-        "issue_description": run.issue_description or "",
-        "checkout_root": str(checkout_root),
-        "shared_repo_dir": str(shared_repo_dir),
-        "expected_run_repo_dir": str(expected_run_repo_dir),
-        "workspace_key": workspace_key,
-        "execution_branch": execution_branch,
-        "base_branch": base_branch,
-        "integration_branch": integration_branch,
-        **stage_session.tooling.governed_prompt_context(),
-    }
-    original_user_prompt = render_prompt("repo_setup/prepare_user.j2", **prompt_context)
-    try:
-        payload = stage_session.invoke_json(
-            system_prompt=render_prompt("repo_setup/prepare_system.j2"),
-            user_prompt=original_user_prompt,
-        )
-    except (CodexRuntimeError, RuntimeInvocationError) as exc:
-        raise RetryableRepoSetupError(f"Repo setup runtime failed: {exc}") from exc
 
-    payload, prepared_repo = _normalize_and_validate_repo_setup_payload(
-        checkout_root=checkout_root,
-        run=run,
-        payload=payload,
-        execution_branch=execution_branch,
-        workspace_key=workspace_key,
-    )
-    if prepared_repo is None:
-        try:
-            repair_payload = stage_session.invoke_json(
-                system_prompt=render_prompt("repo_setup/prepare_system.j2"),
-                user_prompt=render_prompt(
-                    "repo_setup/prepare_repair_user.j2",
-                    original_prompt=original_user_prompt,
-                    validation_error=str(payload["validation_error"]),
-                    previous_payload=payload["previous_payload"],
-                ),
-            )
-        except (CodexRuntimeError, RuntimeInvocationError) as exc:
-            raise RetryableRepoSetupError(f"Repo setup repair runtime failed: {exc}") from exc
-        payload, prepared_repo = _normalize_and_validate_repo_setup_payload(
+    try:
+        installation_token = _github_installation_token_for_project(
+            session=session,
+            settings=settings,
+            tenant=tenant,
+            project=project,
+        )
+    except (GitHubApiError, ProjectRepoCheckoutError, ValueError) as exc:
+        raise TerminalRepoSetupError(f"Repository checkout credentials are unavailable: {exc}") from exc
+
+    try:
+        ensure_project_checkout(
+            base_dir=settings.project_repo_checkout_base_dir,
+            tenant_id=tenant.tenant_id,
+            project=project,
+            github_installation_token=installation_token,
+        )
+        run_repo_dir, execution_branch = ensure_run_worktree(
+            base_dir=settings.project_repo_checkout_base_dir,
+            tenant_id=tenant.tenant_id,
+            project=project,
+            run_id=run.run_id,
+            issue_key=run.issue_key,
+            base_branch=base_branch,
+            integration_branch=integration_branch,
+            workspace_key=workspace_key,
+            github_installation_token=installation_token,
+        )
+        prepared_repo = validate_execution_repo(
             checkout_root=checkout_root,
-            run=run,
-            payload=repair_payload,
+            repo_dir=run_repo_dir,
+            run_id=run.run_id,
             execution_branch=execution_branch,
             workspace_key=workspace_key,
         )
-    if prepared_repo is None:
-        raise RetryableRepoSetupError(f"Repo setup validation failed: {payload['validation_error']}")
-    actions_taken = payload.get("actions_taken")
-    if not isinstance(actions_taken, list):
-        normalized_actions: tuple[str, ...] = ()
-    else:
-        normalized_actions = tuple(
-            text for text in (str(item or "").strip() for item in actions_taken) if text
-        )
+    except ProjectRepoCheckoutError as exc:
+        raise RetryableRepoSetupError(str(exc)) from exc
+
     return RepoSetupPreparation(
         prepared_repo=prepared_repo,
-        actions_taken=normalized_actions,
+        actions_taken=(
+            "Ensured shared repository checkout is present and current",
+            "Ensured execution worktree exists on the run branch with execution metadata",
+            "Validated execution repository metadata, branch, and cleanliness",
+        ),
     )
-
-
-def _normalize_and_validate_repo_setup_payload(
-    *,
-    checkout_root: Path,
-    run: Run,
-    payload: object,
-    execution_branch: str,
-    workspace_key: str,
-) -> tuple[dict[str, object], PreparedExecutionRepo | None]:
-    if not isinstance(payload, dict):
-        raise RetryableRepoSetupError("Repo setup runtime did not return a JSON object")
-
-    outcome = str(payload.get("outcome") or "").strip().lower()
-    if outcome == "retryable_failure":
-        failure_reason = str(payload.get("failure_reason") or "").strip() or "Repo setup returned retryable failure"
-        raise RetryableRepoSetupError(failure_reason)
-    if outcome == "terminal_failure":
-        failure_reason = str(payload.get("failure_reason") or "").strip() or "Repo setup returned terminal failure"
-        raise TerminalRepoSetupError(failure_reason)
-    if outcome != "ready":
-        raise RetryableRepoSetupError(f"Repo setup returned unsupported outcome '{outcome or '<missing>'}'")
-
-    execution_repo_dir = str(payload.get("execution_repo_dir") or "").strip()
-    if not execution_repo_dir:
-        raise RetryableRepoSetupError("Repo setup did not return execution_repo_dir")
-    try:
-        prepared_repo = validate_execution_repo(
-            checkout_root=checkout_root,
-            repo_dir=Path(execution_repo_dir),
-            run_id=run.run_id,
-            execution_branch=str(payload.get("execution_branch") or "").strip() or execution_branch,
-            workspace_key=str(payload.get("workspace_key") or "").strip() or workspace_key,
-        )
-        return payload, prepared_repo
-    except ProjectRepoCheckoutError as exc:
-        return {
-            "previous_payload": payload,
-            "validation_error": str(exc),
-        }, None

@@ -1051,6 +1051,7 @@ test("lets standard tenant users open Projects without showing project-managemen
             is_archived: false,
             policy_overrides: {},
             effective_policy: {
+              qa_demo_recording_enabled: false,
               allow_pr_creation: true,
               allow_jira_transitions: false,
               allow_code_reviews: true,
@@ -1089,6 +1090,7 @@ test("lets standard tenant users open Projects without showing project-managemen
           is_archived: false,
           policy_overrides: {},
           effective_policy: {
+            qa_demo_recording_enabled: false,
             allow_pr_creation: true,
             allow_jira_transitions: false,
             allow_code_reviews: true,
@@ -1570,11 +1572,17 @@ test("lets project managers configure the staging merge check in project setting
   await expect(page.getByRole("heading", { name: "Settings" })).toBeVisible();
   await page.getByRole("button", { name: "Automation" }).click();
   await expect(page.getByText("Staging merge check")).toBeVisible();
+  await page
+    .locator("label", { hasText: "QA demo recording" })
+    .locator("..")
+    .getByRole("button", { name: "On" })
+    .click();
   await page.getByPlaceholder("staging").fill("stage");
   await page.getByRole("button", { name: "Save settings" }).click();
 
   await expect(page.getByText("Project policy saved")).toBeVisible();
   await expect.poll(() => savedPolicyPayload).toEqual({
+    qa_demo_recording_enabled: true,
     staging_admission_enabled: true,
     staging_branch: "stage",
   });

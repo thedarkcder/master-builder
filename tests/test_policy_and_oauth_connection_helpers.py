@@ -16,7 +16,9 @@ class ProjectPolicyHelpersTests(unittest.TestCase):
     def test_normalize_project_policy_overrides(self) -> None:
         normalized = project_policy.normalize_project_policy_overrides(
             {
+                "default_worker_capability": " macos ",
                 "allow_jira_transitions": True,
+                "qa_demo_recording_enabled": True,
                 "allow_pr_creation": False,
                 "allow_code_reviews": True,
                 "allow_pr_remediation": False,
@@ -35,7 +37,9 @@ class ProjectPolicyHelpersTests(unittest.TestCase):
                 "ignored": "x",
             }
         )
+        self.assertEqual(normalized["default_worker_capability"], "macos")
         self.assertEqual(normalized["allow_jira_transitions"], True)
+        self.assertEqual(normalized["qa_demo_recording_enabled"], True)
         self.assertEqual(normalized["allow_pr_creation"], False)
         self.assertEqual(normalized["allow_code_reviews"], True)
         self.assertEqual(normalized["allow_pr_remediation"], False)
@@ -76,7 +80,9 @@ class ProjectPolicyHelpersTests(unittest.TestCase):
     def test_resolve_effective_policy_caps_and_intersections(self) -> None:
         effective = project_policy.resolve_effective_policy(
             tenant_policy={
+                "default_worker_capability": "linux",
                 "allow_jira_transitions": True,
+                "qa_demo_recording_enabled": True,
                 "allow_pr_creation": True,
                 "allow_code_reviews": True,
                 "allow_pr_remediation": True,
@@ -92,7 +98,9 @@ class ProjectPolicyHelpersTests(unittest.TestCase):
                 "codex_reasoning_effort": "medium",
             },
             project_overrides={
+                "default_worker_capability": "macos",
                 "allow_pr_creation": False,
+                "qa_demo_recording_enabled": False,
                 "allow_code_reviews": False,
                 "allow_pr_remediation": False,
                 "allow_manual_pr_fix_requests": False,
@@ -110,7 +118,9 @@ class ProjectPolicyHelpersTests(unittest.TestCase):
             default_codex_model="gpt-5.4",
             default_codex_reasoning_effort="medium",
         )
+        self.assertEqual(effective["default_worker_capability"], "macos")
         self.assertEqual(effective["allow_pr_creation"], False)
+        self.assertEqual(effective["qa_demo_recording_enabled"], False)
         self.assertEqual(effective["allow_code_reviews"], False)
         self.assertEqual(effective["allow_pr_remediation"], False)
         self.assertEqual(effective["allow_manual_pr_fix_requests"], False)
@@ -124,6 +134,17 @@ class ProjectPolicyHelpersTests(unittest.TestCase):
         self.assertEqual(effective["codex_reasoning_effort"], "high")
         self.assertEqual(effective["staging_admission_enabled"], True)
         self.assertEqual(effective["staging_branch"], "staging")
+
+    def test_resolve_effective_policy_allows_project_qa_demo_override(self) -> None:
+        effective = project_policy.resolve_effective_policy(
+            tenant_policy={
+                "allow_pr_creation": True,
+            },
+            project_overrides={
+                "qa_demo_recording_enabled": True,
+            },
+        )
+        self.assertEqual(effective["qa_demo_recording_enabled"], True)
 
     def test_resolve_agent_execution_profile_prefers_selector_specific_profile(self) -> None:
         settings = SimpleNamespace(

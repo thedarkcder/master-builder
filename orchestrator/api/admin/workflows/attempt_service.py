@@ -147,10 +147,19 @@ def resolve_required_worker_capability_for_admin_attempt(*, session, workflow, s
     case_capability = str(getattr(case, "required_worker_capability", "") or "").strip()
     if case_capability:
         return case_capability
+    project_default_worker_capability = ""
+    project_id = str(getattr(workflow, "project_id", "") or "").strip()
+    if project_id:
+        project = session.get(Project, project_id)
+        if project is not None:
+            project_default_worker_capability = str(
+                (dict(getattr(project, "policy_overrides", {}) or {})).get("default_worker_capability") or ""
+            ).strip()
     inferred = infer_required_worker_capability(
         issue_summary=workflow.display_name,
         issue_description=workflow.source_description,
         issue_labels=latest_decision_issue_labels_for_workflow(session=session, workflow=workflow),
+        project_default_worker_capability=project_default_worker_capability,
         tenant_id=workflow.tenant_id,
         project_id=workflow.project_id,
         issue_key=workflow.source_ref,

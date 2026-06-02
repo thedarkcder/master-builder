@@ -147,6 +147,36 @@ def test_pre_run_check_infers_macos_worker_requirement() -> None:
     assert result.required_worker_label_present is True
 
 
+def test_pre_run_check_uses_project_default_worker_capability() -> None:
+    with patch(
+        "orchestrator.core.precheck.pre_run_check.evaluate_precheck_policy",
+        return_value=_policy_result(
+            decision_gate=DecisionGateResult(
+                triggered=False,
+                reason="Decision Gate not required",
+                missing_sections=(),
+                questions=(),
+                recommendation="Proceed",
+                tags=(),
+            ),
+            gtd=GoodToDoValidationResult(
+                valid=True,
+                missing_criteria=(),
+                clarification_questions=(),
+            ),
+        ),
+    ):
+        result = evaluate_pre_run_check(
+            issue_summary="Backend cleanup",
+            issue_description="No mobile keywords",
+            issue_labels=["agent:ready"],
+            ready_label="agent:ready",
+            project_policy_overrides={"default_worker_capability": "macos"},
+        )
+    assert result.required_worker_capability == "macos"
+    assert result.required_worker_label == "worker:macos"
+
+
 def test_pre_run_check_requires_gtd_before_ready_for_agent() -> None:
     with (
         patch("orchestrator.core.precheck.pre_run_check.infer_required_worker_capability", return_value="linux"),

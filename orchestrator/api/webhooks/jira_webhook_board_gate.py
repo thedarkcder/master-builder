@@ -23,6 +23,7 @@ from orchestrator.core.decision.state_machine import (
     ExecutionAdmissionReason,
     build_execution_admission_block,
 )
+from orchestrator.core.integrations.atlassian.links import tenant_jira_issue_url
 
 logger = logging.getLogger(__name__)
 
@@ -168,6 +169,7 @@ def stage_handle_run_board_gate(
         actions=(
             _build_enqueue_skipped_notification_action(
                 context=context,
+                session=session,
                 admission=admission,
                 extra_detail=f"board_id={board_id}" if detail is None else f"board_id={board_id}; detail={detail}",
             ),
@@ -178,11 +180,13 @@ def stage_handle_run_board_gate(
 def _build_enqueue_skipped_notification_action(
     *,
     context: JiraWebhookContext,
+    session: Session,
     admission,
     extra_detail: str | None,
 ) -> DiscordTenantNotificationAction:
     message = format_jira_enqueue_skipped_message(
         issue_key=context.issue_key,
+        issue_url=tenant_jira_issue_url(session=session, tenant=context.tenant, issue_key=context.issue_key),
         issue_status=context.issue_status,
         admission=admission,
         extra_detail=extra_detail,

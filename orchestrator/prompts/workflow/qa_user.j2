@@ -1,0 +1,55 @@
+Stage: qa
+Tenant ID: {{ tenant_id }}
+Project ID: {{ project_id }}
+Project Name: {{ project_name }}
+GitHub Repository: {{ github_repository }}
+Jira Project Key: {{ jira_project_key }}
+Run ID: {{ run_id }}
+Issue key: {{ issue_key }}
+Execution worktree: {{ execution_repo_dir }}
+Execution branch: {{ execution_branch }}
+Base branch: {{ base_branch }}
+Integration branch: {{ integration_branch }}
+PR target branch: {{ pr_target_branch }}
+Attempt: {{ attempt }}
+Browser capture reference: {{ browser_capture_reference }}
+Available capture targets: {{ available_capture_targets_json }}
+PR URL: {{ pr_url }}
+Acceptance criteria: {{ acceptance_criteria_json }}
+PM demo requirements: {{ demo_requirements_json }}
+Native selector catalog: {{ native_selector_catalog_json }}
+Dev summary: {{ dev_summary_json }}
+Test guidance: {{ test_guidance_json }}
+Review summary: {{ review_summary_json }}
+Answered transient human inputs for this run: {{ human_inputs_json }}
+Allowed governed tools for this stage: {{ governed_tools_json }}
+Native Codex tools available directly in this runtime: {{ native_tools_json }}
+
+Required actions:
+1. Produce several walkthrough scenarios that a QA engineer would actually execute.
+2. Cover the acceptance criteria with realistic main-path and variant-path behavior.
+3. Include at least one attempt-to-break or misuse scenario when the criteria describe interactive behavior.
+4. Set `capture_target` on every scenario and only use targets listed in `Available capture targets`.
+5. For `capture_target="browser"`, keep the scenario executable against the supplied browser capture reference and use `start_path` relative to that reference when possible.
+6. For `capture_target="ios"`, `capture_target="android"`, or `capture_target="desktop"`, write selectors and assertions against stable visible text or accessibility identifiers that a run-owned native recorder can execute.
+7. For native capture targets, always prefix selectors explicitly:
+   - use `id=<accessibility_identifier>` for accessibility identifiers
+   - use `text=<visible text>` for visible text anchors
+   - never emit an unprefixed native selector
+8. For native capture targets, prefer interaction patterns and accessibility identifiers already present in the local repository and any existing native UI tests.
+8a. Treat `Native selector catalog` as authoritative. If a native `id=` selector does not appear there, do not invent it.
+8b. Treat `Native selector catalog.text_anchors` as the preferred visible-text allowlist for native `text=` selectors. If a text anchor is not supported by the catalog or repo evidence, do not invent it.
+8c. For native capture targets, do not use `fill` on buttons, labels, or static text. Only use `fill` for real input-field identifiers already evidenced in the repository.
+9. Do not make required assertions against intentionally transient native surfaces such as splash or loading screens unless the repository's own tests show those surfaces are stable enough to assert directly. Prefer proving the downstream routed state with stable onboarding, CTA, or screen-title evidence.
+10. For native capture targets, never use `id=splash_screen` as a required assertion or click target in the walkthrough plan. Prove routing with downstream stable surfaces instead.
+11. For native persistence or relaunch proofs, use `relaunch_app` instead of synthetic "returning user" shortcuts. Use `value="preserve"` to relaunch with existing app state and `value="reset"` only when the scenario needs a fresh install/reset.
+12. Only use `wait_for_url` for `capture_target="browser"`. Do not use it for native capture targets.
+13. Use only supported step actions.
+14. Return `recordings` as an empty list. Recording metadata is added after deterministic execution.
+15. If the required capture target is unavailable, or the acceptance criteria are insufficient to produce executable scenarios, return outcome=`blocked` with a concise blocker_message.
+16. Default to the supplied acceptance criteria, PM demo requirements, test guidance, review summary, and embedded knowledge excerpts. The QA stage is local-first and does not have native `web.search`, `web.fetch`, `browser.open`, or `browser.snapshot` available.
+17. If you still need additional evidence, prefer local repository inspection and the governed tools actually listed in the prompt context.
+18. Never issue an empty search/fetch request.
+
+Return JSON matching this domain model:
+{{ domain_model | tojson(indent=2) }}

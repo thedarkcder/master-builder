@@ -16,6 +16,8 @@ Attempt: {{ attempt }}
 Feedback from prior stage: {{ feedback }}
 Plan: {{ plan_json }}
 Acceptance criteria: {{ acceptance_criteria_json }}
+Current published PR URL: {{ current_pr_url }}
+Current published diff paths: {{ current_head_diff_paths_json }}
 Resolved prerequisites: {{ resolved_prerequisites_json }}
 Unresolved prerequisites: {{ unresolved_prerequisites_json }}
 PM outcome: {{ pm_outcome }}
@@ -23,10 +25,18 @@ Answered transient human inputs for this run: {{ human_inputs_json }}
 Allowed governed tools for this stage: {{ governed_tools_json }}
 Native Codex tools available directly in this runtime: {{ native_tools_json }}
 
+Preloaded repository governance context:
+- The runtime already loaded and enforced repository policy, engineering standards, operating rules, and required workflow skills for this run.
+- Do not spend shell commands or tool hops rereading `.codex/**`, `AGENTS.md`, or workflow skill files unless a ticket-specific ambiguity cannot be resolved from the current prompt, prior stage evidence, or the product code/tests you are changing.
+- Prioritize scarce execution time on ticket-relevant source files, tests, build targets, simulator/runtime evidence, and the current published diff.
+
 Structured tool bridge:
 - Use native Codex tools directly when they are available in this runtime. Do not emit tool_request for native Codex tools.
 - To call an allowed governed tool, return JSON only:
   {"type":"tool_request","tool_name":"<allowed tool>","tool_args":{...},"reason":"<optional short reason>"}
+- If a governed tool appears in `Allowed governed tools for this stage`, treat it as executable through this tool bridge unless an actual `tool_request` call fails.
+- Do not use native `tool_search`, plugin discovery, or deferred-tool lookup to verify whether a governed tool in `Allowed governed tools for this stage` exists. The allowed governed list is authoritative for this bridge.
+- An empty or irrelevant `tool_search` result is not evidence that a governed bridge tool is unavailable. If you need `github.push_branch`, `github.open_pr`, `jira.comment`, or `jira.transition`, issue the corresponding `tool_request` directly.
 - When implementation is complete, return JSON only:
   {"type":"final_response","result":{...}}
 - Do not shell out to `python -m orchestrator agent-tool`.
@@ -35,15 +45,34 @@ Required actions:
 1. Implement code changes that satisfy the acceptance criteria.
 2. Keep scope tight to this issue.
 3. Run relevant validation commands and use results to refine changes.
+3a. Validate in changed scope first.
+   - Start with the smallest build/test/lint command that proves the files you changed still work.
+   - Prefer file-scoped or target-scoped lint/test commands over whole-repo lint or full-suite reruns.
+   - Use `Current published diff paths` as the authoritative validation surface for remediation work.
+3b. Do not let unrelated pre-existing repo-wide validation failures become the reason this issue cannot advance.
+   - If a broad lint/test command reports failures in files outside `Current published diff paths` and outside the files changed in this attempt, treat those failures as background repo debt unless you gathered concrete evidence that your change caused or depends on them.
+   - In that case, fix any violations you introduced, summarize the unrelated pre-existing failures in `guidance`, and continue the run instead of reporting the issue blocked.
+3c. Only escalate from changed-scope validation to broader/full-project validation when the scoped checks passed and you still need broader evidence, or when the scoped failure indicates likely cross-cutting regression risk.
+3d. Never run multiple Apple-native validation commands concurrently in the same worktree.
+   - Treat `xcodebuild`, `xcrun simctl`, and other simulator-driving commands as exclusive operations for a repo worktree.
+   - Run them one at a time, wait for completion, then start the next native validation step.
 4. An empty repository is valid; scaffold what is required when needed.
 5. Treat the PM evidence ledger as the current ticket prerequisite summary; do not re-classify external blockers from scratch unless you have new authoritative tool evidence.
 5a. When a command fails because install availability, binding presence, issue state, or external context may be missing, inspect the allowed tool list and use any relevant tool that can resolve that uncertainty before concluding the run is blocked.
 6. Treat only this run-owned worktree as authoritative local repo state. Do not adapt to unrelated in-flight changes, wrong branches, or shared dirty state.
+6a. When `Current published PR URL` is not `none` or `Current published diff paths` is non-empty, treat the current published PR head as the remediation baseline.
+6b. Do not revert already-published PR-head changes solely because they predate the latest review feedback, were not touched in this attempt yet, or appear outside the newest failing test.
+6c. If you suspect a currently published file is unrelated drift, first gather concrete evidence from the current PR head or allowed GitHub tools. Preserve existing PR-head behavior unless the evidence shows that reverting it is necessary for this issue.
+6d. Keep repo housekeeping and self-improvement files out of product publication candidates.
+   - Do not edit `tasks/lessons.md`, `AGENTS.md`, `.codex/**`, or other repo-policy/agent-instruction files unless the issue explicitly targets them or they are already part of `Current published diff paths`.
+   - If one of those files changed only because repo automation or local instructions suggested it, remove that file from the issue branch before validation/publishing and mention it briefly in `guidance`.
 7. If you can keep implementing, return outcome="continue" even when validation finds defects you can still address in this run.
 8. Apply jira-feature-flow using allowed tools where side effects are required (Jira comments/transitions, branch publication, PR actions).
 8a. If branch or PR actions are needed, treat the Integration branch as the only valid PR head branch. Never open or update a PR from the Execution branch (`run/...`).
 8b. Use `github.push_branch` for remote branch publication and `github.open_pr` for PR creation or update. Do not use raw `git push` or other ad hoc remote publication commands.
+8ba. Do not use raw `gh` CLI commands for PR lookup, PR creation, branch publication, or GitHub state inspection when an allowed governed GitHub tool can provide the answer.
 8c. If PR creation required by policy is `true` and `pr_url` is currently missing, you must attempt `github.push_branch` then `github.open_pr` in this attempt before returning blocked or failed.
+8d. Do not claim the governed GitHub publication tools are unavailable, unbound, or not executable from this runtime unless you issued the corresponding `tool_request` and it failed with concrete evidence.
 9. If a one-time transient human input can unblock work, request it with `run.request_human_input` before returning outcome="waiting_for_input".
 10. If PR creation required by policy is `true`, do not treat implementation as complete until a PR exists and `pr_url` is set.
 11. If you return blocked or waiting_for_input, make `blocker_message` operator-friendly: keep the error concise, then add a short `Troubleshooting:` section with 1-3 concrete operator actions supported by the evidence you observed.
