@@ -5,6 +5,7 @@ from unittest.mock import patch
 from orchestrator.core.runs.service import RUN_DEDUPE_SCOPE_ISSUE_EXECUTION, enqueue_run
 from orchestrator.core.worker.capability_normalization import WorkerCapability
 from orchestrator.core.workflow.execution_artifacts import (
+    latest_pushed_execution_artifact_for_run,
     record_pushed_execution_artifact,
 )
 from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
@@ -504,6 +505,124 @@ class WorkerRunLifecycleTests(SqliteTemplateDbTestCase):
             )
             checkpoint = session.get(WorkflowCheckpoint, "run-dev-artifact-execution")
             self.assertIsNotNone(checkpoint)
+
+    def test_persist_execution_checkpoint_bootstraps_published_start_point_artifact(self) -> None:
+        now = datetime.now(timezone.utc)
+        with self.session_factory() as session:
+            _, run, _ = add_workflow_attempt(
+                session,
+                run_id="run-published-start-point",
+                tenant_id="tenant-a",
+                project_id="tenant-a-default",
+                issue_key="TA-207",
+                issue_summary="persist published execution checkpoints",
+                issue_description="desc",
+                repo_url="https://github.com/example/a",
+                branch="feature/TA-207",
+                plan=self._canonical_plan(trigger_context={"source": "manual"}),
+                workflow_status="running",
+                run_status="running",
+                created_at=now,
+                started_at=now,
+                last_heartbeat_at=now,
+                worker_service_instance_id="node-a:1234",
+            )
+            session.commit()
+            session.refresh(run)
+            self._claim_running_run(run)
+            session.commit()
+            session.refresh(run)
+
+            dev_checkpoint = WorkflowStageCheckpoint(
+                stage="dev",
+                attempt=1,
+                status="completed",
+                summary="Dev completed",
+                dev_result=DevResult(change_summary=["validated"], pr_url=None),
+            )
+            with patch(
+                "orchestrator.core.worker.run_lifecycle._current_git_head_sha",
+                return_value="b" * 40,
+            ):
+                persisted = persist_stage_checkpoint(
+                    session,
+                    run=run,
+                    checkpoint=dev_checkpoint,
+                    execution_context={
+                        "execution_repo_dir": "/tmp/run-published-start-point",
+                        "integration_branch": "feature/TA-207",
+                        "start_point_ref": "feature/TA-207",
+                        "start_point_sha": "b" * 40,
+                    },
+                    expected_worker_service_instance_id="node-a:1234",
+                    expected_claim_id="claim-1",
+                )
+
+            self.assertTrue(persisted.plan["context"]["execution_context"]["execution_checkpoint_reusable"])
+            checkpoint = session.get(WorkflowCheckpoint, "run-published-start-point-execution")
+            self.assertIsNotNone(checkpoint)
+            artifact = latest_pushed_execution_artifact_for_run(
+                session=session,
+                run_id=run.run_id,
+            )
+            assert artifact is not None
+            self.assertEqual(artifact.branch, "feature/TA-207")
+            self.assertEqual(artifact.commit_sha, "b" * 40)
+
+    def test_persist_execution_checkpoint_does_not_bootstrap_when_head_diverged_from_start_point(self) -> None:
+        now = datetime.now(timezone.utc)
+        with self.session_factory() as session:
+            _, run, _ = add_workflow_attempt(
+                session,
+                run_id="run-diverged-start-point",
+                tenant_id="tenant-a",
+                project_id="tenant-a-default",
+                issue_key="TA-208",
+                issue_summary="reject diverged published checkpoints",
+                issue_description="desc",
+                repo_url="https://github.com/example/a",
+                branch="feature/TA-208",
+                plan=self._canonical_plan(trigger_context={"source": "manual"}),
+                workflow_status="running",
+                run_status="running",
+                created_at=now,
+                started_at=now,
+                last_heartbeat_at=now,
+                worker_service_instance_id="node-a:1234",
+            )
+            session.commit()
+            session.refresh(run)
+            self._claim_running_run(run)
+            session.commit()
+            session.refresh(run)
+
+            dev_checkpoint = WorkflowStageCheckpoint(
+                stage="dev",
+                attempt=1,
+                status="completed",
+                summary="Dev completed",
+                dev_result=DevResult(change_summary=["validated"], pr_url=None),
+            )
+            with patch(
+                "orchestrator.core.worker.run_lifecycle._current_git_head_sha",
+                return_value="c" * 40,
+            ):
+                persisted = persist_stage_checkpoint(
+                    session,
+                    run=run,
+                    checkpoint=dev_checkpoint,
+                    execution_context={
+                        "execution_repo_dir": "/tmp/run-diverged-start-point",
+                        "integration_branch": "feature/TA-208",
+                        "start_point_ref": "feature/TA-208",
+                        "start_point_sha": "d" * 40,
+                    },
+                    expected_worker_service_instance_id="node-a:1234",
+                    expected_claim_id="claim-1",
+                )
+
+            self.assertFalse(persisted.plan["context"]["execution_context"]["execution_checkpoint_reusable"])
+            self.assertIsNone(session.get(WorkflowCheckpoint, "run-diverged-start-point-execution"))
 
     def test_start_run_returns_none_when_status_does_not_match_expected(self) -> None:
         now = datetime.now(timezone.utc)

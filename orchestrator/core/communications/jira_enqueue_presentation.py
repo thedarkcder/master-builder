@@ -67,14 +67,17 @@ def normalize_backlog_pre_run_check_text(raw_value: str | None, *, max_chars: in
 def format_jira_enqueue_skipped_message(
     *,
     issue_key: str,
+    issue_url: str | None = None,
     issue_status: str | None,
     admission: ExecutionAdmissionDecision,
     extra_detail: str | None = None,
 ) -> str:
     detail = f" ({extra_detail})" if extra_detail else ""
     guidance = str(admission.guidance or "").strip() or "Run was not queued due to current execution policy."
+    normalized_issue_url = str(issue_url or "").strip()
+    issue_reference = f"[{issue_key}]({normalized_issue_url})" if normalized_issue_url else f"`{issue_key}`"
     return (
-        f"Jira webhook did not queue a run for `{issue_key}`.\n"
+        f"Jira webhook did not queue a run for {issue_reference}.\n"
         f"Reason: `{admission.reason_code}`{detail}\n"
         f"Guidance: {guidance}\n"
         f"Status: `{issue_status or 'unknown'}`"

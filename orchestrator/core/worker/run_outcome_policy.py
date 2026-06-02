@@ -3,8 +3,16 @@ from __future__ import annotations
 from dataclasses import replace
 
 from orchestrator.core.deployment_previews import create_run_preview_deployment
+from orchestrator.core.qa.demo_service import (
+    execute_qa_demo_stage,
+    qa_demo_recording_enabled,
+    update_pull_request_with_demo_evidence,
+)
 from orchestrator.core.runs.service import RUN_STATUS_WAITING_FOR_INPUT
 from orchestrator.core.worker.finalization import CompletionTailExecutor, WorkflowFinalizer
+from orchestrator.core.workflow.execution_artifacts import latest_pushed_execution_artifact_for_run
+from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
+from orchestrator.core.workflow.runner import QaResult, WorkflowStageCheckpoint
 from orchestrator.core.worker.capabilities import worker_label_for_capability
 
 
@@ -108,31 +116,53 @@ class RunOutcomePolicy:
                 run_id=run.run_id,
                 issue_key=run.issue_key,
                 agent_id=prepared.agent_id,
-            )
+        )
+        demo_recording_required = qa_demo_recording_enabled(getattr(prepared, "effective_policy", None))
+        qa_plan = _workflow_plan_for_qa(workflow_result=workflow_result, persisted_plan=getattr(run, "plan", None))
         if workflow_result.outcome == "success":
+            preview_release = None
             try:
-                preview_result = create_run_preview_deployment(
-                    session=self._session,
-                    tenant=prepared.tenant,
-                    project=project,
-                    run=run,
-                    settings=self._settings,
-                    pr_url=workflow_result.pr_url,
-                )
-                if preview_result.created and preview_result.release is not None:
-                    self._deps.identity.logger.info(
-                        "worker_run_preview_deployment_created tenant_id=%s project_id=%s run_id=%s release_id=%s",
-                        run.tenant_id,
-                        project.project_id,
-                        run.run_id,
-                        preview_result.release.release_id,
+                if not demo_recording_required or qa_plan is not None:
+                    preview_result = create_run_preview_deployment(
+                        session=self._session,
+                        tenant=prepared.tenant,
+                        project=project,
+                        run=run,
+                        settings=self._settings,
+                        pr_url=workflow_result.pr_url,
                     )
+                    preview_release = preview_result.release
+                    if preview_result.created and preview_result.release is not None:
+                        self._deps.identity.logger.info(
+                            "worker_run_preview_deployment_created tenant_id=%s project_id=%s run_id=%s release_id=%s",
+                            run.tenant_id,
+                            project.project_id,
+                            run.run_id,
+                            preview_result.release.release_id,
+                        )
             except Exception as exc:  # noqa: BLE001
-                workflow_result = replace(
-                    workflow_result,
-                    outcome="failed",
-                    blocker_message=f"Run preview deployment failed: {type(exc).__name__}: {exc}",
+                preview_error = f"Run preview deployment failed: {type(exc).__name__}: {exc}"
+                workflow_result = (
+                    _workflow_result_with_qa_blocker(
+                        workflow_result=workflow_result,
+                        attempt=max(1, int(workflow_result.attempts or 1)),
+                        message=preview_error,
+                    )
+                    if demo_recording_required
+                    else replace(
+                        workflow_result,
+                        outcome="failed",
+                        blocker_message=preview_error,
+                    )
                 )
+            else:
+                if demo_recording_required:
+                    workflow_result = self._complete_required_qa_demo_stage(
+                        prepared=prepared,
+                        workflow_result=workflow_result,
+                        preview_release=preview_release,
+                        execution_context=execution_context,
+                    )
         capability_result = self._handle_capability_requeue(
             prepared=prepared,
             workflow_result=workflow_result,
@@ -226,6 +256,104 @@ class RunOutcomePolicy:
         ).execute(finalization)
         return finalization.run
 
+    def _complete_required_qa_demo_stage(
+        self,
+        *,
+        prepared,
+        workflow_result,
+        preview_release,
+        execution_context,
+    ):
+        snapshot = ExecutionSnapshot.require(getattr(prepared.run, "plan", None), allow_empty=True)
+        plan = workflow_result.plan or snapshot.plan()
+        dev_result = snapshot.dev_result()
+        test_result = snapshot.test_result()
+        review_result = snapshot.review_result()
+        if plan is None or dev_result is None or test_result is None or review_result is None:
+            return _workflow_result_with_qa_blocker(
+                workflow_result=workflow_result,
+                attempt=workflow_result.attempts,
+                message="QA demo recording requires persisted PM, dev, test, and review stage artifacts.",
+            )
+        if preview_release is None:
+            return _workflow_result_with_qa_blocker(
+                workflow_result=workflow_result,
+                attempt=workflow_result.attempts,
+                message=(
+                    "QA demo recording requires an available run preview deployment/release before recording."
+                ),
+            )
+        attempt = max(1, int(workflow_result.attempts or 1))
+        try:
+            qa_result = execute_qa_demo_stage(
+                session=self._session,
+                settings=self._settings,
+                tenant=prepared.tenant,
+                project=prepared.project,
+                run=prepared.run,
+                request=prepared.workflow_request,
+                plan=plan,
+                dev_result=dev_result,
+                test_result=test_result,
+                review_result=review_result,
+                preview_release=preview_release,
+            )
+        except Exception as exc:  # noqa: BLE001
+            message = f"QA demo recording failed: {type(exc).__name__}: {exc}"
+            qa_result = QaResult(
+                summary=[message],
+                scenarios=[],
+                outcome="blocked",
+                blocker_message=message,
+            )
+        self._deps.execution.persist_stage_checkpoint_fn(
+            self._session,
+            run=prepared.run,
+            checkpoint=WorkflowStageCheckpoint(
+                stage="qa",
+                attempt=attempt,
+                status=_checkpoint_status_for_stage_outcome(qa_result.outcome),
+                summary=_summarize_qa_result(qa_result),
+                qa_result=qa_result,
+            ),
+            execution_context=execution_context,
+            expected_worker_service_instance_id=prepared.worker_service_instance_id,
+            expected_claim_id=prepared.claim_id,
+        )
+        if qa_result.outcome != "continue":
+            return _workflow_result_with_qa_blocker(
+                workflow_result=workflow_result,
+                attempt=attempt,
+                message=qa_result.blocker_message or qa_result.feedback or _summarize_qa_result(qa_result),
+            )
+        try:
+            update_pull_request_with_demo_evidence(
+                session=self._session,
+                settings=self._settings,
+                tenant=prepared.tenant,
+                project=prepared.project,
+                workflow_result=workflow_result,
+                qa_result=qa_result,
+            )
+        except Exception as exc:  # noqa: BLE001
+            return _workflow_result_with_qa_blocker(
+                workflow_result=workflow_result,
+                attempt=attempt,
+                message=f"QA demo evidence PR update failed: {type(exc).__name__}: {exc}",
+            )
+        return replace(
+            workflow_result,
+            orchestration_stage_trace=[
+                *list(workflow_result.orchestration_stage_trace or []),
+                _stage_trace_entry(
+                    stage="qa",
+                    attempt=attempt,
+                    status="completed",
+                    summary=_summarize_qa_result(qa_result),
+                ),
+            ],
+        )
+
     def _handle_stale_snapshot(self, *, prepared, workflow_result, execution_context):
         if not (
             workflow_result.outcome == "success"
@@ -240,6 +368,8 @@ class RunOutcomePolicy:
             start_point_ref=prepared.workflow_request.start_point_ref,
             start_point_sha=prepared.workflow_request.start_point_sha,
         )
+        if self._stale_snapshot_was_self_published(prepared=prepared, freshness=freshness):
+            return None
         if not freshness.stale:
             return None
         error_text = freshness.message or "Branch snapshot stale; requeueing from latest snapshot."
@@ -279,6 +409,31 @@ class RunOutcomePolicy:
             expected_worker_service_instance_id=prepared.worker_service_instance_id,
             expected_claim_id=prepared.claim_id,
         )
+
+    def _stale_snapshot_was_self_published(self, *, prepared, freshness) -> bool:  # noqa: ANN001
+        if not bool(getattr(freshness, "stale", False)):
+            return False
+        current_sha = str(getattr(freshness, "current_start_point_sha", "") or "").strip()
+        if not current_sha:
+            return False
+        artifact = latest_pushed_execution_artifact_for_run(
+            session=self._session,
+            run_id=getattr(prepared.run, "run_id", None),
+        )
+        if artifact is None:
+            return False
+        artifact_commit_sha = str(getattr(artifact, "commit_sha", "") or "").strip()
+        if not artifact_commit_sha or artifact_commit_sha != current_sha:
+            return False
+        self._deps.identity.logger.info(
+            "worker_stale_snapshot_self_publication_ignored run_id=%s tenant_id=%s issue_key=%s start_ref=%s artifact_commit_sha=%s",
+            prepared.run.run_id,
+            prepared.run.tenant_id,
+            prepared.run.issue_key,
+            prepared.workflow_request.start_point_ref,
+            artifact_commit_sha,
+        )
+        return True
 
     def _handle_capability_requeue(self, *, prepared, workflow_result, execution_context):
         if workflow_result.outcome != "requeue" or workflow_result.requeue_target is None:
@@ -360,3 +515,58 @@ class RunOutcomePolicy:
             expected_claim_id=prepared.claim_id,
             mark_stale_snapshot=False,
         )
+
+
+def _stage_trace_entry(*, stage: str, attempt: int, status: str, summary: str) -> dict[str, object]:
+    return {
+        "stage": stage,
+        "status": status,
+        "attempt": attempt,
+        "summary": summary,
+    }
+
+
+def _checkpoint_status_for_stage_outcome(outcome: str) -> str:
+    normalized = str(outcome or "").strip().lower()
+    if normalized == "continue":
+        return "completed"
+    if normalized == "requeue":
+        return "requeue"
+    if normalized == "waiting_for_input":
+        return "waiting_for_input"
+    if normalized == "failed":
+        return "failed"
+    return "blocked"
+
+
+def _summarize_qa_result(result: QaResult) -> str:
+    if result.blocker_message:
+        return result.blocker_message
+    if result.feedback:
+        return result.feedback
+    if result.recordings:
+        return f"QA recorded {len(result.recordings)} demos across {max(1, len(result.scenarios))} walkthroughs."
+    if result.summary:
+        return "; ".join(result.summary[:2])
+    return "QA demo recording completed."
+
+
+def _workflow_plan_for_qa(*, workflow_result, persisted_plan):
+    if workflow_result.plan is not None:
+        return workflow_result.plan
+    snapshot = ExecutionSnapshot.load(persisted_plan)
+    if snapshot is None:
+        return None
+    return snapshot.plan()
+
+
+def _workflow_result_with_qa_blocker(*, workflow_result, attempt: int, message: str):
+    return replace(
+        workflow_result,
+        outcome="blocked",
+        blocker_message=message,
+        orchestration_stage_trace=[
+            *list(workflow_result.orchestration_stage_trace or []),
+            _stage_trace_entry(stage="qa", attempt=attempt, status="blocked", summary=message),
+        ],
+    )

@@ -1,5 +1,8 @@
 import unittest
 from dataclasses import replace
+from pathlib import Path
+import subprocess
+import tempfile
 
 from orchestrator.core.runtime.runtime import CodexRuntime
 from orchestrator.core.worker.capability_normalization import WorkerCapability
@@ -34,13 +37,33 @@ class _StubStageAgents:
         self.test_results = list(test_results)
         self.review_results = list(review_results)
         self.dev_feedback: list[str | None] = []
+        self.test_dev_results: list[DevResult] = []
         self.pm_calls = 0
         self.dev_calls = 0
         self.test_calls = 0
         self.review_calls = 0
 
-    def pm(self, request, attempt, feedback, history, last_dev_result, last_test_result, last_review_result):  # noqa: ANN001
-        _ = (request, attempt, feedback, history, last_dev_result, last_test_result, last_review_result)
+    def pm(  # noqa: ANN001
+        self,
+        request,
+        attempt,
+        feedback,
+        history,
+        last_dev_result,
+        last_test_result,
+        last_review_result,
+        capture_target_constraints_json="[]",
+    ):
+        _ = (
+            request,
+            attempt,
+            feedback,
+            history,
+            last_dev_result,
+            last_test_result,
+            last_review_result,
+            capture_target_constraints_json,
+        )
         self.pm_calls += 1
         return self.plan
 
@@ -53,6 +76,7 @@ class _StubStageAgents:
     def test(self, request, plan, dev_result, attempt):  # noqa: ANN001
         _ = (request, plan, dev_result, attempt)
         self.test_calls += 1
+        self.test_dev_results.append(dev_result)
         return self.test_results.pop(0)
 
     def review(self, request, plan, dev_result, test_result, attempt):  # noqa: ANN001
@@ -146,6 +170,22 @@ class OrchestratedRunRunnerTests(unittest.TestCase):
             )
         return snapshot.dump()
 
+    def _init_git_repo(self, repo_dir: str) -> None:
+        path = Path(repo_dir)
+        subprocess.run(["git", "init"], cwd=path, check=True, capture_output=True, text=True)
+        subprocess.run(["git", "config", "user.name", "Test User"], cwd=path, check=True, capture_output=True, text=True)
+        subprocess.run(["git", "config", "user.email", "test@example.com"], cwd=path, check=True, capture_output=True, text=True)
+        (path / "tracked.txt").write_text("base\n", encoding="utf-8")
+        subprocess.run(["git", "add", "tracked.txt"], cwd=path, check=True, capture_output=True, text=True)
+        subprocess.run(
+            ["git", "commit", "-m", "initial"],
+            cwd=path,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+        subprocess.run(["git", "branch", "-M", "main"], cwd=path, check=True, capture_output=True, text=True)
+
     def test_review_needs_changes_loops_back_to_dev_until_approved(self) -> None:
         stage_agents = _StubStageAgents(
             plan=PmPlan(plan_steps=["plan"], acceptance_criteria=["ac1"], risks=[]),
@@ -183,6 +223,112 @@ class OrchestratedRunRunnerTests(unittest.TestCase):
         self.assertEqual(stage_agents.review_calls, 2)
         self.assertEqual(stage_agents.dev_feedback, [None, "Fix Apple nonce handling"])
         self.assertEqual(result.pr_url, "https://example/pull/1")
+
+    def test_dev_continue_fails_when_tracked_changes_remain_unpublished(self) -> None:
+        with tempfile.TemporaryDirectory() as repo_dir:
+            self._init_git_repo(repo_dir)
+            Path(repo_dir, "tracked.txt").write_text("changed\n", encoding="utf-8")
+            stage_agents = _StubStageAgents(
+                plan=PmPlan(plan_steps=["plan"], acceptance_criteria=["ac1"], risks=[]),
+                dev_results=[DevResult(change_summary=["implemented"], pr_url="https://example/pull/1")],
+                test_results=[],
+                review_results=[],
+            )
+
+            result = self._executor(stage_agents).execute(
+                replace(
+                    self._request(),
+                    execution_repo_dir=repo_dir,
+                    max_dev_test_review_loops=1,
+                )
+            )
+
+        self.assertEqual(result.outcome, "failed")
+        self.assertEqual(result.diagnostics.stage, "dev")
+        self.assertIn("tracked changes still unpublished", result.diagnostics.message)
+        self.assertEqual(stage_agents.test_calls, 0)
+        self.assertEqual(stage_agents.review_calls, 0)
+
+    def test_dev_continue_ignores_untracked_artifacts_when_repo_is_clean(self) -> None:
+        with tempfile.TemporaryDirectory() as repo_dir:
+            self._init_git_repo(repo_dir)
+            Path(repo_dir, "artifacts").mkdir()
+            Path(repo_dir, "artifacts", "proof.log").write_text("ok\n", encoding="utf-8")
+            Path(repo_dir, ".deriveddata").mkdir()
+            Path(repo_dir, ".deriveddata", "temp.txt").write_text("cache\n", encoding="utf-8")
+            stage_agents = _StubStageAgents(
+                plan=PmPlan(plan_steps=["plan"], acceptance_criteria=["ac1"], risks=[]),
+                dev_results=[DevResult(change_summary=["implemented"], pr_url="https://example/pull/1")],
+                test_results=[TestResult(guidance=["pytest -q"])],
+                review_results=[
+                    ReviewResult(
+                        outcome="continue",
+                        summary=["Looks good"],
+                        feedback=None,
+                        pr_url="https://example/pull/1",
+                    )
+                ],
+            )
+
+            result = self._executor(stage_agents).execute(
+                replace(
+                    self._request(),
+                    execution_repo_dir=repo_dir,
+                    max_dev_test_review_loops=1,
+                )
+            )
+
+        self.assertEqual(result.outcome, "success")
+        self.assertEqual(stage_agents.test_calls, 1)
+        self.assertEqual(stage_agents.review_calls, 1)
+
+    def test_dev_continue_fails_when_product_diff_includes_tasks_lessons(self) -> None:
+        with tempfile.TemporaryDirectory() as repo_dir:
+            self._init_git_repo(repo_dir)
+            subprocess.run(
+                ["git", "checkout", "-b", "feature/MAB-100"],
+                cwd=repo_dir,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            Path(repo_dir, "Feature.swift").write_text("struct Feature {}\n", encoding="utf-8")
+            Path(repo_dir, "tasks").mkdir()
+            Path(repo_dir, "tasks", "lessons.md").write_text("lesson\n", encoding="utf-8")
+            subprocess.run(
+                ["git", "add", "Feature.swift", "tasks/lessons.md"],
+                cwd=repo_dir,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            subprocess.run(
+                ["git", "commit", "-m", "mixed scope"],
+                cwd=repo_dir,
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            stage_agents = _StubStageAgents(
+                plan=PmPlan(plan_steps=["plan"], acceptance_criteria=["ac1"], risks=[]),
+                dev_results=[DevResult(change_summary=["implemented"], pr_url="https://example/pull/1")],
+                test_results=[],
+                review_results=[],
+            )
+
+            result = self._executor(stage_agents).execute(
+                replace(
+                    self._request(),
+                    execution_repo_dir=repo_dir,
+                    max_dev_test_review_loops=1,
+                )
+            )
+
+        self.assertEqual(result.outcome, "failed")
+        self.assertEqual(result.diagnostics.stage, "dev")
+        self.assertIn("mixed repo housekeeping files", result.diagnostics.message)
+        self.assertEqual(stage_agents.test_calls, 0)
+        self.assertEqual(stage_agents.review_calls, 0)
 
     def test_stage_checkpoint_hook_emits_durable_stage_artifacts(self) -> None:
         stage_agents = _StubStageAgents(
@@ -764,6 +910,51 @@ class OrchestratedRunRunnerTests(unittest.TestCase):
         self.assertEqual(stage_agents.dev_calls, 0)
         self.assertEqual(stage_agents.test_calls, 1)
         self.assertEqual(stage_agents.review_calls, 1)
+
+    def test_pm_can_start_fresh_run_at_test_without_running_dev(self) -> None:
+        stage_agents = _StubStageAgents(
+            plan=PmPlan(
+                plan_steps=["validate published head"],
+                acceptance_criteria=["ac1"],
+                risks=[],
+                next_stage="test",
+            ),
+            dev_results=[],
+            test_results=[TestResult(outcome="continue", guidance=["pytest -q"], feedback=None)],
+            review_results=[
+                ReviewResult(
+                    outcome="continue",
+                    summary=["Approved after direct validation"],
+                    feedback=None,
+                    pr_url="https://example/pull/10",
+                )
+            ],
+        )
+
+        result = self._executor(stage_agents).execute(
+            replace(
+                self._request(),
+                trigger_context={"pr_url": "https://example/pull/10"},
+            )
+        )
+
+        self.assertEqual(result.outcome, "success")
+        self.assertEqual(stage_agents.pm_calls, 1)
+        self.assertEqual(stage_agents.dev_calls, 0)
+        self.assertEqual(stage_agents.test_calls, 1)
+        self.assertEqual(stage_agents.review_calls, 1)
+        self.assertEqual(
+            stage_agents.test_dev_results[0],
+            DevResult(
+                outcome="continue",
+                change_summary=["PM directed the workflow to start at test without a fresh dev attempt."],
+                pr_url="https://example/pull/10",
+            ),
+        )
+        self.assertEqual(
+            [entry["stage"] for entry in result.orchestration_stage_trace],
+            ["pm", "dev", "test", "review"],
+        )
 
     def test_review_resume_invalid_artifacts_do_not_mark_dev_and_test_completed(self) -> None:
         stage_agents = _StubStageAgents(

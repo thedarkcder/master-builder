@@ -633,6 +633,43 @@ def _jira_attachment_asset_ref(issue_key: str, attachment_id: str) -> str:
     return f"attachment:{issue_key}:{attachment_id}"
 
 
+def _issue_key_from_jira_asset(*, source_type: str, source_ref: str | None, metadata_json: dict[str, Any] | None) -> str | None:
+    metadata_issue_key = str((metadata_json or {}).get("issue_key") or "").strip().upper()
+    if metadata_issue_key:
+        return metadata_issue_key
+    normalized_ref = str(source_ref or "").strip()
+    if not normalized_ref:
+        return None
+    normalized_type = str(source_type or "").strip().lower()
+    if normalized_type == "jira_issue" and normalized_ref.startswith("issue:"):
+        return normalized_ref.removeprefix("issue:").strip().upper() or None
+    if normalized_type == "jira_comment" and normalized_ref.startswith("comment:"):
+        _, _, remainder = normalized_ref.partition(":")
+        issue_key, _, _ = remainder.partition(":")
+        return issue_key.strip().upper() or None
+    if normalized_type == "jira_attachment" and normalized_ref.startswith("attachment:"):
+        _, _, remainder = normalized_ref.partition(":")
+        issue_key, _, _ = remainder.partition(":")
+        return issue_key.strip().upper() or None
+    return None
+
+
+def _asset_matches_issue_scope(*, asset: KnowledgeAsset, issue_key: str | None) -> bool:
+    normalized_issue_key = str(issue_key or "").strip().upper()
+    if not normalized_issue_key:
+        return True
+    if str(asset.source_type or "").strip().lower() not in {"jira_issue", "jira_comment", "jira_attachment"}:
+        return True
+    return (
+        _issue_key_from_jira_asset(
+            source_type=str(asset.source_type or ""),
+            source_ref=asset.source_ref,
+            metadata_json=asset.metadata_json if isinstance(asset.metadata_json, dict) else None,
+        )
+        == normalized_issue_key
+    )
+
+
 def _store_asset_facts(
     *,
     session: Session,
@@ -1363,6 +1400,7 @@ def _match_facts(
     project_id: str,
     normalized_query: str,
     max_items: int,
+    issue_key: str | None = None,
 ) -> tuple[list[str], list[dict[str, Any]]]:
     query_tokens = _candidate_tokens(normalized_query)
     if not query_tokens:
@@ -1389,6 +1427,8 @@ def _match_facts(
     now = datetime.now(timezone.utc)
     scored: list[tuple[float, KnowledgeFact, KnowledgeAsset]] = []
     for fact, asset in rows:
+        if not _asset_matches_issue_scope(asset=asset, issue_key=issue_key):
+            continue
         candidate_text = " ".join(
             part
             for part in (
@@ -1620,6 +1660,7 @@ def _sqlite_fallback_context(
     max_items: int,
     max_chars: int,
     embedding_access_mode: KnowledgeEmbeddingAccessMode,
+    issue_key: str | None = None,
 ) -> KnowledgePromptContext:
     query_tokens = _candidate_tokens(normalized_query)
     query_embedding = _embed_texts(
@@ -1645,6 +1686,8 @@ def _sqlite_fallback_context(
 
     scored: list[tuple[float, KnowledgeChunk, KnowledgeAsset]] = []
     for chunk, asset in rows:
+        if not _asset_matches_issue_scope(asset=asset, issue_key=issue_key):
+            continue
         lexical = _lexical_score(query_tokens=query_tokens, text=chunk.content)
         semantic = 0.0
         chunk_embedding = chunk.embedding if isinstance(chunk.embedding, list) else None
@@ -1724,6 +1767,7 @@ def _postgres_hybrid_context(
     max_items: int,
     max_chars: int,
     embedding_access_mode: KnowledgeEmbeddingAccessMode,
+    issue_key: str | None = None,
 ) -> KnowledgePromptContext:
     query_tokens = _candidate_tokens(normalized_query)
     query_embedding = _embed_texts(
@@ -1809,6 +1853,8 @@ def _postgres_hybrid_context(
     scored: list[tuple[float, KnowledgeChunk, KnowledgeAsset]] = []
     now = datetime.now(timezone.utc)
     for chunk, asset in rows:
+        if not _asset_matches_issue_scope(asset=asset, issue_key=issue_key):
+            continue
         signals = candidate_scores.get(chunk.chunk_id, {})
         lexical = signals.get("lexical")
         if lexical is None:
@@ -1831,6 +1877,7 @@ def build_knowledge_prompt_context(
     session: Session,
     tenant_id: str,
     project_id: str | None,
+    issue_key: str | None = None,
     query: str,
     max_items: int = 5,
     max_chars: int = 3200,
@@ -1850,6 +1897,7 @@ def build_knowledge_prompt_context(
         project_id=project_id,
         normalized_query=normalized_query,
         max_items=max(1, min(max_items, 3)),
+        issue_key=issue_key,
     )
     bind = session.get_bind()
     chunk_context: KnowledgePromptContext
@@ -1863,6 +1911,7 @@ def build_knowledge_prompt_context(
                 max_items=max_items,
                 max_chars=max_chars,
                 embedding_access_mode=embedding_access_mode,
+                issue_key=issue_key,
             )
         except Exception:  # noqa: BLE001
             chunk_context = _sqlite_fallback_context(
@@ -1873,6 +1922,7 @@ def build_knowledge_prompt_context(
                 max_items=max_items,
                 max_chars=max_chars,
                 embedding_access_mode=embedding_access_mode,
+                issue_key=issue_key,
             )
     else:
         chunk_context = _sqlite_fallback_context(
@@ -1883,6 +1933,7 @@ def build_knowledge_prompt_context(
             max_items=max_items,
             max_chars=max_chars,
             embedding_access_mode=embedding_access_mode,
+            issue_key=issue_key,
         )
 
     sections = []

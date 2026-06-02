@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import subprocess
 from uuid import uuid4
 
 from sqlalchemy import update
@@ -19,6 +20,7 @@ from orchestrator.core.workflow.checkpoints import (
 )
 from orchestrator.core.workflow.execution_artifacts import (
     latest_pushed_execution_artifact_for_run,
+    record_pushed_execution_artifact,
     snapshot_requires_durable_execution_artifact,
 )
 from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
@@ -39,6 +41,59 @@ RUN_STATUS_BLOCKED = "blocked"
 
 def _load_or_init_snapshot(plan: object | None) -> ExecutionSnapshot:
     return ExecutionSnapshot.require(plan, allow_empty=True)
+
+
+def _current_git_head_sha(*, repo_dir: str | None) -> str | None:
+    normalized_repo_dir = str(repo_dir or "").strip()
+    if not normalized_repo_dir:
+        return None
+    try:
+        result = subprocess.run(
+            ["git", "rev-parse", "HEAD"],
+            cwd=normalized_repo_dir,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return None
+    head_sha = str(result.stdout or "").strip()
+    return head_sha or None
+
+
+def _bootstrap_published_execution_artifact(
+    session: Session,
+    *,
+    run: Run,
+    execution_context: dict[str, str] | None,
+) -> bool:
+    context = dict(execution_context or {})
+    start_point_sha = str(context.get("start_point_sha") or "").strip()
+    repo_dir = str(context.get("execution_repo_dir") or "").strip()
+    repo_url = str(getattr(run, "repo_url", "") or "").strip()
+    branch_name = str(
+        context.get("integration_branch")
+        or context.get("start_point_ref")
+        or getattr(run, "branch", "")
+        or ""
+    ).strip()
+    if not start_point_sha or not repo_dir or not repo_url or not branch_name:
+        return False
+    current_head_sha = _current_git_head_sha(repo_dir=repo_dir)
+    if current_head_sha != start_point_sha:
+        return False
+    record_pushed_execution_artifact(
+        session,
+        run=run,
+        repo_url=repo_url,
+        branch=branch_name,
+        commit_sha=start_point_sha,
+        diff_stat={
+            "source": "published_start_point",
+            "start_point_ref": str(context.get("start_point_ref") or "").strip() or None,
+        },
+    )
+    return True
 
 
 def _workflow_for_run(session: Session, *, run: Run) -> WorkflowExecution | None:
@@ -358,16 +413,20 @@ def finalize_workflow_result(
         stage_updates=stage_updates,
     )
     run.plan = snapshot.dump()
-    run.pr_url = workflow_result.pr_url
+    run.pr_url = workflow_result.pr_url or run.pr_url
     run.finished_at = datetime.now(timezone.utc)
     transitions.release_claim(run)
     disposition = resolve_run_disposition(workflow_result=workflow_result)
     run.status = disposition.status
     run.last_error = disposition.last_error
 
+    workflow = _workflow_for_run(session, run=run)
+    if workflow is not None:
+        workflow.pr_url = run.pr_url
     apply_execution_for_run_terminal(
         session=session,
         run=run,
+        workflow=workflow,
         now=run.finished_at or datetime.now(timezone.utc),
     )
     session.commit()
@@ -521,14 +580,25 @@ def persist_stage_checkpoint(
     snapshot.apply_stage_checkpoint(checkpoint)
     snapshot.apply_execution_context(execution_context)
     requires_durable_artifact = snapshot_requires_durable_execution_artifact(snapshot.dump())
-    missing_durable_artifact = (
-        requires_durable_artifact
-        and latest_pushed_execution_artifact_for_run(
+    durable_artifact = (
+        latest_pushed_execution_artifact_for_run(
             session=session,
             run_id=run.run_id,
         )
-        is None
+        if requires_durable_artifact
+        else None
     )
+    if durable_artifact is None and requires_durable_artifact:
+        if _bootstrap_published_execution_artifact(
+            session,
+            run=run,
+            execution_context=execution_context,
+        ):
+            durable_artifact = latest_pushed_execution_artifact_for_run(
+                session=session,
+                run_id=run.run_id,
+            )
+    missing_durable_artifact = requires_durable_artifact and durable_artifact is None
     if missing_durable_artifact:
         snapshot.context.execution_context["execution_checkpoint_reusable"] = False
         snapshot.context.execution_context["execution_checkpoint_reusable_reason"] = (
@@ -542,6 +612,9 @@ def persist_stage_checkpoint(
         run.pr_url = checkpoint.dev_result.pr_url
     elif checkpoint.stage == "review" and checkpoint.review_result is not None:
         run.pr_url = checkpoint.review_result.pr_url or run.pr_url
+    workflow = _workflow_for_run(session, run=run)
+    if workflow is not None and str(run.pr_url or "").strip():
+        workflow.pr_url = run.pr_url
     checkpoint_kind = checkpoint_kind_for_stage(checkpoint.stage)
     if checkpoint_kind is not None and not missing_durable_artifact:
         upsert_workflow_checkpoint(

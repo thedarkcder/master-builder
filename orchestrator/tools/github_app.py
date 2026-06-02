@@ -398,6 +398,36 @@ class GitHubAppClient:
 
         return PullRequestResult(number=number, html_url=html_url)
 
+    def update_pull_request(
+        self,
+        *,
+        repo_full_name: str,
+        github_repository: str,
+        pr_number: int,
+        title: str,
+        base_branch: str,
+        body: str,
+    ) -> PullRequestResult:
+        enforce_repo_match(f"https://github.com/{repo_full_name}", github_repository)
+        installation_token = self.get_installation_token()
+        response = self._request_json(
+            method="PATCH",
+            path=f"/repos/{repo_full_name}/pulls/{pr_number}",
+            bearer_token=installation_token,
+            payload={
+                "title": title,
+                "base": base_branch,
+                "body": body,
+            },
+        )
+        number = response.get("number")
+        html_url = response.get("html_url")
+        if not isinstance(number, int):
+            raise GitHubApiError("GitHub PR update response did not include numeric PR number")
+        if not isinstance(html_url, str) or not html_url:
+            raise GitHubApiError("GitHub PR update response did not include html_url")
+        return PullRequestResult(number=number, html_url=html_url)
+
     def get_pull_request_details(self, *, repo_full_name: str, pr_number: int) -> PullRequestDetails:
         installation_token = self.get_installation_token()
         response = self._request_json(

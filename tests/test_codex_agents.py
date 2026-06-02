@@ -2,12 +2,15 @@ import os
 from tempfile import TemporaryDirectory
 import unittest
 from datetime import datetime, timezone
+from dataclasses import replace
+from pathlib import Path
 from unittest.mock import patch
 import json
 import pytest
 
 from orchestrator.core.runtime.agents import (
     CodexWorkflowAgents,
+    _native_selector_catalog,
     answer_board_question_with_runtime,
     answer_voice_room_persona_with_runtime,
     route_voice_entry_with_runtime,
@@ -17,8 +20,10 @@ from orchestrator.core.runtime.runtime import CodexRuntime, CodexRuntimeError
 from orchestrator.core.config import get_settings
 from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 from orchestrator.core.workflow.runner import (
+    DemoRequirement,
     DevResult,
     PmPlan,
+    QaResult,
     ReviewResult,
     TestResult,
     WorkflowRequest,
@@ -46,6 +51,17 @@ class _RuntimeQueue:
 
 
 class CodexWorkflowAgentsTests(unittest.TestCase):
+    _CAPTURE_TARGET_CONSTRAINTS_JSON = (
+        '[{"capture_target":"browser","provider_available":true,"required_worker_platform":null,'
+        '"availability_reason":"Browser capture uses the built-in Playwright recorder and requires a preview website URL at QA time."},'
+        '{"capture_target":"ios","provider_available":true,"required_worker_platform":"macos",'
+        '"availability_reason":"iOS capture requires the built-in or configured native recorder on a macOS worker."},'
+        '{"capture_target":"android","provider_available":true,"required_worker_platform":"linux",'
+        '"availability_reason":"Android capture requires the built-in or configured native recorder on a Linux Android worker."},'
+        '{"capture_target":"desktop","provider_available":false,"required_worker_platform":null,'
+        '"availability_reason":"Desktop capture provider is unavailable because no desktop recorder command is configured."}]'
+    )
+
     def setUp(self) -> None:
         self._original_database_url = os.environ.get("ORCHESTRATOR_DATABASE_URL")
         self.temp_dir = TemporaryDirectory()
@@ -105,10 +121,17 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             command="override",
             _request=_RuntimeQueue(
                 [
-                    '{"outcome":"continue","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":["risk1"],"next_stage":"dev","execution_worker_capability":"linux"}',
+                    '{"outcome":"continue","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":["risk1"],"demo_requirements":[{"title":"Demo step1","acceptance_criterion":"ac1"}],"next_stage":"dev","execution_worker_capability":"linux"}',
                     '{"outcome":"continue","change_summary":["implemented"],"pr_url":"https://example/pull/1","blocker_message":null}',
-                    '{"outcome":"continue","guidance":["run tests"],"feedback":null,"blocker_message":null}',
+                    '{"outcome":"continue","guidance":["run tests"],"validation_scope":"targeted_only","feedback":null,"blocker_message":null}',
                     '{"outcome":"continue","summary":["looks good"],"feedback":null,"pr_url":"https://example/pull/1","blocker_message":null}',
+                    (
+                        '{"outcome":"continue","summary":["Recorded demos"],"feedback":null,"blocker_message":null,'
+                        '"scenarios":[{"name":"Happy path","objective":"Show feature","start_path":"/",'
+                        '"expected_outcomes":["Feature visible"],'
+                        '"steps":[{"action":"goto","value":"/"},{"action":"assert_visible","selector":"text=Feature"}]}],'
+                        '"recordings":[]}'
+                    ),
                 ]
             ),
         )
@@ -116,15 +139,28 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
         request = self._request()
 
         with patch("orchestrator.core.runtime.agents.render_prompt", side_effect=lambda template_name, **_: template_name):
-            plan = agents.pm(request, 1, None, [], None, None, None)
+            plan = agents.pm(request, 1, None, [], None, None, None, self._CAPTURE_TARGET_CONSTRAINTS_JSON)
             dev = agents.dev(request, plan, 1, None)
             test_result = agents.test(request, plan, dev, 1)
             review = agents.review(request, plan, dev, test_result, 1)
+            qa = agents.qa(
+                request,
+                plan,
+                dev,
+                test_result,
+                review,
+                "https://preview.example",
+                '[{"capture_target":"browser","capture_reference":"https://preview.example"}]',
+                1,
+            )
 
         self.assertEqual(plan.plan_steps, ["step1"])
+        self.assertEqual(plan.demo_requirements[0].title, "Demo step1")
         self.assertEqual(dev.pr_url, "https://example/pull/1")
         self.assertEqual(test_result.outcome, "continue")
         self.assertEqual(review.outcome, "continue")
+        self.assertIsInstance(qa, QaResult)
+        self.assertEqual(qa.scenarios[0].name, "Happy path")
 
     def test_pm_maps_compact_evidence_ledger_fields(self) -> None:
         runtime = CodexRuntime(
@@ -135,6 +171,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
                 [
                     (
                         '{"outcome":"blocked","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":["risk1"],'
+                        '"demo_requirements":[{"title":"Demo step1","acceptance_criterion":"ac1"}],'
                         '"next_stage":"dev","execution_worker_capability":"linux","blocker_message":"Apple developer access still pending",'
                         '"resolved_prerequisites":["Supabase redirect URI approved"],'
                         '"unresolved_prerequisites":["Provision staging Service ID"]}'
@@ -145,12 +182,88 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
         agents = CodexWorkflowAgents(runtime=runtime)
 
         with patch("orchestrator.core.runtime.agents.render_prompt", side_effect=lambda template_name, **_: template_name):
-            plan = agents.pm(self._request(), 1, None, [], None, None, None)
+            plan = agents.pm(
+                self._request(),
+                1,
+                None,
+                [],
+                None,
+                None,
+                None,
+                self._CAPTURE_TARGET_CONSTRAINTS_JSON,
+            )
 
         self.assertEqual(plan.outcome, "blocked")
         self.assertEqual(plan.blocker_message, "Apple developer access still pending")
         self.assertEqual(plan.resolved_prerequisites, ["Supabase redirect URI approved"])
         self.assertEqual(plan.unresolved_prerequisites, ["Provision staging Service ID"])
+
+    def test_pm_rejects_mobile_demo_requirements_on_linux_workers(self) -> None:
+        runtime = CodexRuntime(
+            model="gpt-5-codex",
+            max_output_tokens=1200,
+            command="override",
+            _request=_RuntimeQueue(
+                [
+                    (
+                        '{"outcome":"continue","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":[],"demo_requirements":'
+                        '[{"title":"Native demo","acceptance_criterion":"ac1","capture_target":"ios"}],'
+                        '"next_stage":"dev","execution_worker_capability":"linux"}'
+                    ),
+                ]
+            ),
+        )
+        agents = CodexWorkflowAgents(runtime=runtime)
+
+        with patch("orchestrator.core.runtime.agents.render_prompt", side_effect=lambda template_name, **_: template_name):
+            with self.assertRaises(CodexRuntimeError):
+                agents.pm(self._request(), 1, None, [], None, None, None, self._CAPTURE_TARGET_CONSTRAINTS_JSON)
+
+    def test_pm_rejects_unavailable_desktop_demo_requirements(self) -> None:
+        runtime = CodexRuntime(
+            model="gpt-5-codex",
+            max_output_tokens=1200,
+            command="override",
+            _request=_RuntimeQueue(
+                [
+                    (
+                        '{"outcome":"continue","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":[],"demo_requirements":'
+                        '[{"title":"Desktop demo","acceptance_criterion":"ac1","capture_target":"desktop"}],'
+                        '"next_stage":"dev","execution_worker_capability":"linux"}'
+                    ),
+                ]
+            ),
+        )
+        agents = CodexWorkflowAgents(runtime=runtime)
+
+        with patch("orchestrator.core.runtime.agents.render_prompt", side_effect=lambda template_name, **_: template_name):
+            with self.assertRaisesRegex(CodexRuntimeError, "selected unavailable capture target 'desktop'"):
+                agents.pm(self._request(), 1, None, [], None, None, None, self._CAPTURE_TARGET_CONSTRAINTS_JSON)
+
+    def test_pm_rejects_desktop_demo_requirements_when_worker_platform_mismatches(self) -> None:
+        constraints = (
+            '[{"capture_target":"desktop","provider_available":true,"required_worker_platform":"macos",'
+            '"availability_reason":"Desktop capture uses the configured desktop recorder command."}]'
+        )
+        runtime = CodexRuntime(
+            model="gpt-5-codex",
+            max_output_tokens=1200,
+            command="override",
+            _request=_RuntimeQueue(
+                [
+                    (
+                        '{"outcome":"continue","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":[],"demo_requirements":'
+                        '[{"title":"Desktop demo","acceptance_criterion":"ac1","capture_target":"desktop"}],'
+                        '"next_stage":"dev","execution_worker_capability":"linux"}'
+                    ),
+                ]
+            ),
+        )
+        agents = CodexWorkflowAgents(runtime=runtime)
+
+        with patch("orchestrator.core.runtime.agents.render_prompt", side_effect=lambda template_name, **_: template_name):
+            with self.assertRaisesRegex(CodexRuntimeError, "must choose macos execution_worker_capability when desktop demos are required"):
+                agents.pm(self._request(), 1, None, [], None, None, None, constraints)
 
     def test_pm_prompt_includes_project_metadata_in_context(self) -> None:
         runtime = CodexRuntime(
@@ -159,7 +272,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             command="codex",
             _request=_RuntimeQueue(
                 [
-                    '{"outcome":"continue","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":[],"next_stage":"dev","execution_worker_capability":"linux"}',
+                    '{"outcome":"continue","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":[],"demo_requirements":[{"title":"Demo step1","acceptance_criterion":"ac1"}],"next_stage":"dev","execution_worker_capability":"linux"}',
                 ]
             ),
         )
@@ -190,7 +303,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             return template_name
 
         with patch("orchestrator.core.runtime.agents.render_prompt", side_effect=_render_prompt):
-            agents.pm(request, 1, None, [], None, None, None)
+            agents.pm(request, 1, None, [], None, None, None, self._CAPTURE_TARGET_CONSTRAINTS_JSON)
 
         self.assertEqual(captured["project_id"], "project-1")
         self.assertEqual(captured["project_name"], "Route25 App")
@@ -200,6 +313,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
         self.assertEqual(captured["execution_branch"], "run/MAB-54/run-1")
         self.assertEqual(captured["integration_branch"], "feature/MAB-54")
         self.assertEqual(captured["allow_pr_creation"], "false")
+        self.assertEqual(captured["qa_capture_target_constraints_json"], self._CAPTURE_TARGET_CONSTRAINTS_JSON)
         governed_tools = json.loads(str(captured["governed_tools_json"]))
         native_tools = json.loads(str(captured["native_tools_json"]))
         decision_tool = next(item for item in governed_tools if item["tool_name"] == "decision.read_state")
@@ -209,6 +323,110 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
         self.assertEqual({item["tool_name"] for item in native_tools}, {"web.search", "web.fetch", "browser.open", "browser.snapshot"})
         self.assertNotIn("agent_tool_command", captured)
 
+    def test_pm_requires_demo_requirements(self) -> None:
+        runtime = CodexRuntime(
+            model="gpt-5-codex",
+            max_output_tokens=1200,
+            command="override",
+            _request=_RuntimeQueue(
+                [
+                    '{"outcome":"continue","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":[],"next_stage":"dev","execution_worker_capability":"linux"}',
+                ]
+            ),
+        )
+        agents = CodexWorkflowAgents(runtime=runtime)
+
+        with patch("orchestrator.core.runtime.agents.render_prompt", side_effect=lambda template_name, **_: template_name):
+            with self.assertRaisesRegex(CodexRuntimeError, "demo_requirements"):
+                agents.pm(self._request(), 1, None, [], None, None, None, self._CAPTURE_TARGET_CONSTRAINTS_JSON)
+
+    def test_native_selector_catalog_extracts_ids_and_text_anchors(self) -> None:
+        repo_dir = Path(self.temp_dir.name) / "repo"
+        (repo_dir / "App").mkdir(parents=True, exist_ok=True)
+        (repo_dir / "App" / "View.swift").write_text(
+            'Text("Next")\n.accessibilityIdentifier("onboarding_tabview")\n.accessibilityIdentifier("start_demo_button")\n',
+            encoding="utf-8",
+        )
+        (repo_dir / "GirlPowerUITests").mkdir(parents=True, exist_ok=True)
+        (repo_dir / "GirlPowerUITests" / "GirlPowerUITests.swift").write_text(
+            'assertVisible(selector: "text=Start Free Demo")\nassertVisible(selector: "id=onboarding_tabview")\nlet nextButton = app.buttons["Next"]\nlet continueButton = app.buttons["Continue"]\n',
+            encoding="utf-8",
+        )
+
+        catalog = _native_selector_catalog(str(repo_dir))
+
+        self.assertIn("onboarding_tabview", catalog["accessibility_ids"])
+        self.assertIn("start_demo_button", catalog["accessibility_ids"])
+        self.assertIn("Next", catalog["text_anchors"])
+        self.assertIn("Continue", catalog["text_anchors"])
+        self.assertIn("Start Free Demo", catalog["text_anchors"])
+
+    def test_qa_prompt_includes_native_selector_catalog_and_rejects_invented_mobile_selector(self) -> None:
+        runtime = CodexRuntime(
+            model="gpt-5-codex",
+            max_output_tokens=1200,
+            command="override",
+            _request=_RuntimeQueue(
+                [
+                    (
+                        '{"outcome":"continue","summary":["Recorded demos"],"feedback":null,"blocker_message":null,'
+                        '"scenarios":[{"name":"Happy path","objective":"Show feature","capture_target":"ios","start_path":"/",'
+                        '"expected_outcomes":["Feature visible"],'
+                        '"steps":[{"action":"assert_visible","selector":"id=onboarding.carousel"}]}],'
+                        '"recordings":[]}'
+                    ),
+                ]
+            ),
+        )
+        agents = CodexWorkflowAgents(runtime=runtime)
+        repo_dir = Path(self.temp_dir.name) / "repo-qa"
+        (repo_dir / "Features").mkdir(parents=True, exist_ok=True)
+        (repo_dir / "Features" / "Onboarding.swift").write_text(
+            '.accessibilityIdentifier("onboarding_tabview")\nText("Next")\n',
+            encoding="utf-8",
+        )
+        request = replace(self._request(), execution_repo_dir=str(repo_dir))
+        captured: dict[str, object] = {}
+
+        def _render_prompt(template_name: str, **kwargs) -> str:
+            if template_name == "workflow/qa_user.j2":
+                captured.update(kwargs)
+            return template_name
+
+        with patch("orchestrator.core.runtime.agents.render_prompt", side_effect=_render_prompt):
+            with self.assertRaisesRegex(CodexRuntimeError, "invented native accessibility identifier"):
+                agents.qa(
+                    request,
+                    PmPlan(
+                        plan_steps=["step1"],
+                        acceptance_criteria=["ac1"],
+                        risks=[],
+                        demo_requirements=[
+                            DemoRequirement(
+                                title="Demo",
+                                acceptance_criterion="ac1",
+                                capture_target="ios",
+                                variants=[],
+                            )
+                        ],
+                    ),
+                    DevResult(change_summary=["implemented"], pr_url="https://example/pull/1"),
+                    TestResult(outcome="continue", guidance=["run tests"], feedback=None, blocker_message=None),
+                    ReviewResult(
+                        summary=["looks good"],
+                        outcome="continue",
+                        feedback=None,
+                        pr_url="https://example/pull/1",
+                        blocker_message=None,
+                    ),
+                    "",
+                    '[{"capture_target":"ios","capture_reference":"ios-simulator://configured"}]',
+                    1,
+                )
+
+        catalog = json.loads(str(captured["native_selector_catalog_json"]))
+        self.assertIn("onboarding_tabview", catalog["accessibility_ids"])
+
     def test_test_prompt_receives_structured_tool_catalog_with_descriptions(self) -> None:
         runtime = CodexRuntime(
             model="gpt-5-codex",
@@ -216,9 +434,9 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             command="codex",
             _request=_RuntimeQueue(
                 [
-                    '{"outcome":"continue","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":[],"next_stage":"dev","execution_worker_capability":"linux"}',
+                    '{"outcome":"continue","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":[],"demo_requirements":[{"title":"Demo step1","acceptance_criterion":"ac1"}],"next_stage":"dev","execution_worker_capability":"linux"}',
                     '{"outcome":"continue","change_summary":["implemented"],"pr_url":null,"blocker_message":null}',
-                    '{"outcome":"continue","guidance":["run tests"],"feedback":null,"blocker_message":null}',
+                    '{"outcome":"continue","guidance":["run tests"],"validation_scope":"targeted_only","feedback":null,"blocker_message":null}',
                 ]
             ),
         )
@@ -244,6 +462,149 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
         self.assertIn("never returns the underlying values", runtime_tool["description"])
         self.assertEqual({item["tool_name"] for item in native_tools}, {"web.search", "web.fetch", "browser.open", "browser.snapshot"})
 
+    def test_test_prompt_receives_current_head_acceptance_context(self) -> None:
+        runtime = CodexRuntime(
+            model="gpt-5-codex",
+            max_output_tokens=1200,
+            command="codex",
+            _request=_RuntimeQueue(
+                [
+                    '{"outcome":"continue","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":[],"demo_requirements":[{"title":"Mobile walkthrough","acceptance_criterion":"ac1","capture_target":"ios"}],"next_stage":"dev","execution_worker_capability":"macos"}',
+                    '{"outcome":"continue","change_summary":["implemented"],"pr_url":"https://example/pull/1","blocker_message":null}',
+                    '{"outcome":"continue","guidance":["reran UI proof"],"validation_scope":"current_head_acceptance","feedback":null,"blocker_message":null}',
+                ]
+            ),
+        )
+        agents = CodexWorkflowAgents(runtime=runtime)
+        request = replace(self._request(), base_branch="main", execution_repo_dir="/tmp/test-repo")
+        captured: dict[str, object] = {}
+
+        def _render_prompt(template_name: str, **kwargs) -> str:
+            if template_name == "workflow/test_user.j2":
+                captured.update(kwargs)
+            return template_name
+
+        with (
+            patch("orchestrator.core.runtime.agents.render_prompt", side_effect=_render_prompt),
+            patch(
+                "orchestrator.core.runtime.agents._current_head_diff_paths",
+                return_value=["GirlPower/App/OnboardingSlide.swift", "GirlPowerUITests/GirlPowerUITests.swift"],
+            ),
+        ):
+            plan = agents.pm(request, 1, None, [], None, None, None, self._CAPTURE_TARGET_CONSTRAINTS_JSON)
+            dev = agents.dev(request, plan, 1, None)
+            test_result = agents.test(request, plan, dev, 1)
+
+        self.assertEqual(test_result.validation_scope, "current_head_acceptance")
+        self.assertEqual(json.loads(str(captured["acceptance_criteria_json"])), ["ac1"])
+        self.assertEqual(json.loads(str(captured["demo_requirements_json"]))[0]["capture_target"], "ios")
+        self.assertEqual(
+            json.loads(str(captured["current_head_diff_paths_json"])),
+            ["GirlPower/App/OnboardingSlide.swift", "GirlPowerUITests/GirlPowerUITests.swift"],
+        )
+        self.assertEqual(captured["requires_current_head_acceptance_evidence"], "true")
+
+    def test_dev_prompt_receives_current_pr_head_context_for_resumed_remediation(self) -> None:
+        runtime = CodexRuntime(
+            model="gpt-5-codex",
+            max_output_tokens=1200,
+            command="codex",
+            _request=_RuntimeQueue(
+                [
+                    '{"outcome":"continue","change_summary":["kept current head intact"],"pr_url":"https://example/pull/9","blocker_message":null}',
+                ]
+            ),
+        )
+        agents = CodexWorkflowAgents(runtime=runtime)
+        resume_snapshot = ExecutionSnapshot.empty()
+        resume_snapshot.apply_stage_checkpoint(
+            WorkflowStageCheckpoint(
+                stage="review",
+                attempt=1,
+                status="completed",
+                summary="Review found one acceptance bug",
+                review_result=ReviewResult(
+                    summary=["Fix the demo exit path"],
+                    feedback="Keep the existing keychain persistence coverage while remediating the UI issue",
+                    pr_url="https://example/pull/9",
+                ),
+            )
+        )
+        request = replace(
+            self._request(),
+            entry_mode="resume",
+            entry_stage="dev",
+            checkpoint_kind="execution",
+            checkpoint_session_id="dev-session-123",
+            checkpoint_payload=resume_snapshot.dump(),
+            execution_repo_dir="/tmp/test-repo",
+            base_branch="main",
+        )
+        captured: dict[str, object] = {}
+
+        def _render_prompt(template_name: str, **kwargs) -> str:
+            if template_name == "workflow/dev_user.j2":
+                captured.update(kwargs)
+            return template_name
+
+        with (
+            patch("orchestrator.core.runtime.agents.render_prompt", side_effect=_render_prompt),
+            patch(
+                "orchestrator.core.runtime.agents._current_head_diff_paths",
+                return_value=[
+                    "GirlPower/DemoQuota/KeychainDeviceIdentityStorage.swift",
+                    "GirlPowerUITests/GirlPowerUITests.swift",
+                ],
+            ),
+        ):
+            dev = agents.dev(
+                request,
+                PmPlan(plan_steps=["step"], acceptance_criteria=["ac"], risks=[]),
+                2,
+                "Review failed on demo exit",
+            )
+
+        self.assertEqual(dev.pr_url, "https://example/pull/9")
+        self.assertEqual(captured["current_pr_url"], "https://example/pull/9")
+        self.assertEqual(
+            json.loads(str(captured["current_head_diff_paths_json"])),
+            [
+                "GirlPower/DemoQuota/KeychainDeviceIdentityStorage.swift",
+                "GirlPowerUITests/GirlPowerUITests.swift",
+            ],
+        )
+
+    def test_test_rejects_targeted_only_scope_when_current_head_acceptance_is_required(self) -> None:
+        runtime = CodexRuntime(
+            model="gpt-5-codex",
+            max_output_tokens=1200,
+            command="codex",
+            _request=_RuntimeQueue(
+                [
+                    '{"outcome":"continue","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":[],"demo_requirements":[{"title":"Mobile walkthrough","acceptance_criterion":"ac1","capture_target":"ios"}],"next_stage":"dev","execution_worker_capability":"macos"}',
+                    '{"outcome":"continue","change_summary":["implemented"],"pr_url":"https://example/pull/1","blocker_message":null}',
+                    '{"outcome":"continue","guidance":["unit tests passed"],"validation_scope":"targeted_only","feedback":null,"blocker_message":null}',
+                ]
+            ),
+        )
+        agents = CodexWorkflowAgents(runtime=runtime)
+        request = replace(self._request(), base_branch="main", execution_repo_dir="/tmp/test-repo")
+
+        with (
+            patch("orchestrator.core.runtime.agents.render_prompt", side_effect=lambda template_name, **_: template_name),
+            patch(
+                "orchestrator.core.runtime.agents._current_head_diff_paths",
+                return_value=["GirlPower/App/OnboardingSlide.swift"],
+            ),
+        ):
+            plan = agents.pm(request, 1, None, [], None, None, None, self._CAPTURE_TARGET_CONSTRAINTS_JSON)
+            dev = agents.dev(request, plan, 1, None)
+            with self.assertRaisesRegex(
+                CodexRuntimeError,
+                "cannot use targeted_only validation_scope when current-head acceptance evidence is required",
+            ):
+                agents.test(request, plan, dev, 1)
+
     def test_stage_prompts_include_answered_human_inputs(self) -> None:
         runtime = CodexRuntime(
             model="gpt-5-codex",
@@ -251,7 +612,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             command="override",
             _request=_RuntimeQueue(
                 [
-                    '{"outcome":"continue","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":[],"next_stage":"dev","execution_worker_capability":"linux"}',
+                    '{"outcome":"continue","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":[],"demo_requirements":[{"title":"Demo step1","acceptance_criterion":"ac1"}],"next_stage":"dev","execution_worker_capability":"linux"}',
                     '{"outcome":"continue","change_summary":["implemented"],"pr_url":null,"blocker_message":null}',
                 ]
             ),
@@ -307,9 +668,9 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             command="override",
             _request=_RuntimeQueue(
                 [
-                    '{"outcome":"continue","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":["risk1"],"next_stage":"dev","execution_worker_capability":"linux"}',
+                    '{"outcome":"continue","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":["risk1"],"demo_requirements":[{"title":"Demo step1","acceptance_criterion":"ac1"}],"next_stage":"dev","execution_worker_capability":"linux"}',
                     '{"outcome":"continue","change_summary":["implemented"],"pr_url":"https://example/pull/1","blocker_message":null}',
-                    '{"outcome":"continue","guidance":["run tests"],"feedback":null,"blocker_message":null}',
+                    '{"outcome":"continue","guidance":["run tests"],"validation_scope":"targeted_only","feedback":null,"blocker_message":null}',
                     '{"outcome":"continue","summary":["looks good"],"feedback":null,"pr_url":"https://example/pull/1","blocker_message":null}',
                 ]
             ),
@@ -348,6 +709,8 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             agents.review(request, plan, dev, test_result, 1)
 
         self.assertEqual(captured["allow_pr_creation"], "true")
+        self.assertEqual(captured["test_validation_scope"], "targeted_only")
+        self.assertEqual(captured["current_head_diff_paths_json"], "[]")
         self.assertNotIn("agent_tool_command", captured)
 
     def test_resume_session_id_is_applied_to_selected_stage(self) -> None:
@@ -387,6 +750,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
                     "plan_steps": ["step1"],
                     "acceptance_criteria": ["ac1"],
                     "risks": [],
+                    "demo_requirements": [{"title": "Demo step1", "acceptance_criterion": "ac1"}],
                     "next_stage": "dev",
                     "execution_worker_capability": "linux",
                 }
@@ -431,6 +795,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
                 review_result=ReviewResult(
                     summary=["Needs nonce verification"],
                     feedback="Verify the nonce flow with the QA account",
+                    pr_url="https://example/pull/9",
                 ),
             )
         )
@@ -474,6 +839,66 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
 
         self.assertEqual(captured["previous_review_summary_json"], "[\"Needs nonce verification\"]")
         self.assertEqual(captured["previous_review_feedback"], "Verify the nonce flow with the QA account")
+        self.assertEqual(captured["pr_url"], "https://example/pull/9")
+
+    def test_review_resume_reuses_previous_review_pr_url_when_response_omits_it(self) -> None:
+        runtime = CodexRuntime(
+            model="gpt-5-codex",
+            max_output_tokens=1200,
+            command="override",
+            _request=_RuntimeQueue([]),
+        )
+        agents = CodexWorkflowAgents(runtime=runtime)
+        resume_snapshot = ExecutionSnapshot.empty()
+        resume_snapshot.apply_stage_checkpoint(
+            WorkflowStageCheckpoint(
+                stage="review",
+                attempt=1,
+                status="completed",
+                summary="Review already opened PR",
+                review_result=ReviewResult(
+                    summary=["PR already open"],
+                    feedback="Keep existing PR context",
+                    pr_url="https://example/pull/9",
+                ),
+            )
+        )
+        request = WorkflowRequest(
+            tenant_id="tenant-1",
+            run_id="run-1",
+            issue_key="MAB-54",
+            issue_summary="Integrate Codex runtime",
+            issue_description="Objective and acceptance criteria",
+            max_dev_test_review_loops=1,
+            suggested_test_commands=["python -m unittest"],
+            execution_repo_dir="/tmp/test-repo",
+            execution_branch="run/MAB-54/run-1",
+            base_branch="main",
+            integration_branch="feature/MAB-54",
+            pr_target_branch="main",
+            entry_mode="resume",
+            entry_stage="review",
+            checkpoint_kind="execution",
+            checkpoint_session_id="dev-session-123",
+            checkpoint_payload=resume_snapshot.dump(),
+        )
+
+        with (
+            patch("orchestrator.core.runtime.agents.render_prompt", side_effect=lambda template_name, **_: template_name),
+            patch(
+                "orchestrator.core.runtime.stage_session.invoke_runtime_json_with_tools",
+                return_value={"outcome": "continue", "summary": ["ok"], "feedback": None, "pr_url": None},
+            ),
+        ):
+            review = agents.review(
+                request,
+                PmPlan(plan_steps=["step"], acceptance_criteria=["ac"], risks=[]),
+                DevResult(change_summary=["implemented"], pr_url=None),
+                TestResult(guidance=["python -m unittest"]),
+                1,
+            )
+
+        self.assertEqual(review.pr_url, "https://example/pull/9")
 
     def test_dev_test_and_review_map_structured_blockers(self) -> None:
         runtime = CodexRuntime(
@@ -482,9 +907,9 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             command="override",
             _request=_RuntimeQueue(
                 [
-                    '{"outcome":"continue","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":["risk1"],"next_stage":"dev","execution_worker_capability":"linux"}',
+                    '{"outcome":"continue","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":["risk1"],"demo_requirements":[{"title":"Demo step1","acceptance_criterion":"ac1"}],"next_stage":"dev","execution_worker_capability":"linux"}',
                     '{"outcome":"blocked","change_summary":["implemented"],"pr_url":null,"blocker_message":"APPLE_TEST_PASSWORD missing"}',
-                    '{"outcome":"failed","guidance":["retry targeted UI test"],"feedback":"UI test failed","blocker_message":"xcodebuild missing"}',
+                    '{"outcome":"failed","guidance":["retry targeted UI test"],"validation_scope":"current_head_acceptance","feedback":"UI test failed","blocker_message":"xcodebuild missing"}',
                     '{"outcome":"blocked","summary":["Awaiting approval"],"feedback":"Need PM approval","blocker_message":"Decision owner approval missing"}',
                 ]
             ),
@@ -512,9 +937,9 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             command="override",
             _request=_RuntimeQueue(
                 [
-                    '{"outcome":"continue","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":["risk1"],"next_stage":"dev","execution_worker_capability":"linux"}',
+                    '{"outcome":"continue","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":["risk1"],"demo_requirements":[{"title":"Demo step1","acceptance_criterion":"ac1"}],"next_stage":"dev","execution_worker_capability":"linux"}',
                     '{"outcome":"continue","change_summary":["implemented"],"pr_url":"https://example/pull/1"}',
-                    '{"outcome":"continue","guidance":["run tests"],"feedback":null}',
+                    '{"outcome":"continue","guidance":["run tests"],"validation_scope":"targeted_only","feedback":null}',
                     "approved, do not merge automatically",
                 ]
             ),
@@ -536,9 +961,9 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             command="override",
             _request=_RuntimeQueue(
                 [
-                    '{"outcome":"continue","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":["risk1"],"next_stage":"dev","execution_worker_capability":"linux"}',
+                    '{"outcome":"continue","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":["risk1"],"demo_requirements":[{"title":"Demo step1","acceptance_criterion":"ac1"}],"next_stage":"dev","execution_worker_capability":"linux"}',
                     '{"outcome":"continue","change_summary":["implemented"],"pr_url":"https://example/pull/1"}',
-                    '{"outcome":"continue","guidance":["run tests"],"feedback":null}',
+                    '{"outcome":"continue","guidance":["run tests"],"validation_scope":"targeted_only","feedback":null}',
                     '{"outcome":"blocked","summary":["Governed runtime unavailable"],"feedback":"Governed runtime unavailable","blocker_message":"Governed runtime unavailable"}',
                 ]
             ),
@@ -720,7 +1145,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             if _on_log_line is not None:
                 _on_log_line("stdout", "line-1")
                 _on_log_line("stderr", "line-2")
-            return '{"outcome":"continue","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":[],"next_stage":"dev","execution_worker_capability":"linux"}'
+            return '{"outcome":"continue","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":[],"demo_requirements":[{"title":"Demo step1","acceptance_criterion":"ac1"}],"next_stage":"dev","execution_worker_capability":"linux"}'
 
         runtime = CodexRuntime(
             model="gpt-5-codex",
@@ -746,7 +1171,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
         def _request(_system: str, _user: str, _working_dir: str | None = None, _on_log_line=None) -> str:
             if _on_log_line is not None:
                 _on_log_line("stdout", "line-1")
-            return '{"outcome":"continue","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":[],"next_stage":"dev","execution_worker_capability":"linux"}'
+            return '{"outcome":"continue","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":[],"demo_requirements":[{"title":"Demo step1","acceptance_criterion":"ac1"}],"next_stage":"dev","execution_worker_capability":"linux"}'
 
         runtime = CodexRuntime(
             model="gpt-5-codex",

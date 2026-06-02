@@ -186,6 +186,91 @@ def test_build_knowledge_prompt_context_returns_project_scoped_match() -> None:
         assert context.citations[0]["layer"] == "knowledge_fact"
 
 
+def test_build_knowledge_prompt_context_filters_jira_knowledge_to_active_issue() -> None:
+    with TemporaryDirectory() as temp_dir:
+        database_url = f"sqlite:///{temp_dir}/knowledge_issue_scope_test.db"
+        reset_db_engine_cache()
+        run_migrations(database_url=database_url)
+        session_factory = create_session_factory(database_url)
+        with session_factory() as session:
+            session.add(
+                Tenant(
+                    tenant_id="tenant-1",
+                    name="Tenant",
+                    is_enabled=True,
+                    jira_config={},
+                    github_config={},
+                    repos_config={},
+                    policy_config={},
+                    discord_config={},
+                    created_at=datetime.now(timezone.utc),
+                    updated_at=datetime.now(timezone.utc),
+                )
+            )
+            session.add(
+                Project(
+                    project_id="project-1",
+                    tenant_id="tenant-1",
+                    name="Project",
+                    github_repository="example/repo",
+                    jira_project_key="GP",
+                    policy_overrides={},
+                    environment={},
+                    secret_refs={},
+                    discord_config={},
+                    is_archived=False,
+                    created_at=datetime.now(timezone.utc),
+                    updated_at=datetime.now(timezone.utc),
+                )
+            )
+            session.commit()
+            create_knowledge_asset(
+                session=session,
+                tenant_id="tenant-1",
+                project_id="project-1",
+                source_type="jira_comment",
+                title="GP-113 comment",
+                mime_type="text/plain",
+                source_ref="comment:GP-113:1",
+                text_content="Production Bundle ID: com.route25.girlpower",
+            )
+            create_knowledge_asset(
+                session=session,
+                tenant_id="tenant-1",
+                project_id="project-1",
+                source_type="jira_comment",
+                title="GP-125 comment",
+                mime_type="text/plain",
+                source_ref="comment:GP-125:1",
+                text_content="Production Bundle ID: com.route25.otherapp",
+            )
+            create_knowledge_asset(
+                session=session,
+                tenant_id="tenant-1",
+                project_id="project-1",
+                source_type="web_page",
+                title="Apple Sign In guide",
+                mime_type="text/plain",
+                source_ref="https://docs.example.test/apple-sign-in",
+                text_content="Shared bundle ID guidance for Apple Sign In and simulator validation.",
+            )
+
+            context = build_knowledge_prompt_context(
+                session=session,
+                tenant_id="tenant-1",
+                project_id="project-1",
+                issue_key="GP-113",
+                query="What is the production bundle id for Apple Sign In?",
+                max_items=3,
+            )
+
+        assert "com.route25.girlpower" in context.text
+        assert "com.route25.otherapp" not in context.text
+        assert any(citation["source_ref"] == "comment:GP-113:1" for citation in context.citations)
+        assert all(citation["source_ref"] != "comment:GP-125:1" for citation in context.citations)
+        assert any(citation["source_type"] == "web_page" for citation in context.citations)
+
+
 def test_create_knowledge_asset_extracts_source_agnostic_facts() -> None:
     with TemporaryDirectory() as temp_dir:
         database_url = f"sqlite:///{temp_dir}/knowledge_fact_test.db"

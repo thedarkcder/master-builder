@@ -1,0 +1,800 @@
+from __future__ import annotations
+
+import json
+import os
+import re
+import shlex
+import subprocess
+import sys
+from dataclasses import dataclass, replace
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+from orchestrator.core.runtime.agent_runtime_resolver import build_runtime_for_selector
+from orchestrator.core.runtime.agents import CodexWorkflowAgents
+from orchestrator.core.runtime.runtime import build_codex_runtime
+from orchestrator.core.runtime.tools import execute_agent_tool
+from orchestrator.core.worker.capability_normalization import parse_worker_capability
+from orchestrator.core.workflow.runner import (
+    DevResult,
+    PmPlan,
+    QaRecording,
+    QaResult,
+    QaScenario,
+    QaStep,
+    ReviewResult,
+    TestResult,
+    WorkflowRequest,
+)
+from orchestrator.tools.github_app import github_client_from_tenant_config
+from orchestrator.tools.repo_allowlist import normalize_repo_identifier
+from orchestrator.core.platform.secret_service import resolve_platform_secret_ref
+from orchestrator.core.platform.tenant_secret_service import resolve_scoped_secret_ref
+
+DEMO_EVIDENCE_HEADING = "## Demo Evidence"
+_TRANSIENT_NATIVE_SELECTORS = frozenset({"id=splash_screen", "splash_screen"})
+_NATIVE_CAPTURE_TARGETS = frozenset({"ios", "android", "desktop"})
+
+
+@dataclass(frozen=True)
+class DemoArtifactStorageConfig:
+    endpoint: str
+    access_key: str
+    secret_key: str
+    bucket: str
+    public_base_url: str
+    secure: bool
+
+
+@dataclass(frozen=True)
+class LocalQaRecording:
+    name: str
+    path: str
+    capture_target: str
+    capture_reference: str
+    content_type: str
+
+
+@dataclass(frozen=True)
+class DemoCaptureTarget:
+    capture_target: str
+    capture_reference: str
+    recorder_command: tuple[str, ...] | None = None
+    required_worker_platform: str | None = None
+
+
+@dataclass(frozen=True)
+class PlannedCaptureTargetConstraint:
+    capture_target: str
+    provider_available: bool
+    required_worker_platform: str | None = None
+    availability_reason: str | None = None
+
+
+def qa_demo_recording_enabled(effective_policy: dict[str, object] | None) -> bool:
+    return bool((effective_policy or {}).get("qa_demo_recording_enabled"))
+
+
+def qa_demo_max_attempts(settings) -> int:  # noqa: ANN001
+    try:
+        raw_value = getattr(settings, "qa_demo_max_attempts", 3)
+        configured = 3 if raw_value is None else int(raw_value)
+    except (TypeError, ValueError):
+        configured = 3
+    return max(1, configured)
+
+
+def storage_config_from_settings(settings) -> DemoArtifactStorageConfig:  # noqa: ANN001
+    endpoint = str(getattr(settings, "qa_demo_artifact_endpoint", "") or "").strip()
+    access_key = str(getattr(settings, "qa_demo_artifact_access_key", "") or "").strip()
+    secret_key = str(getattr(settings, "qa_demo_artifact_secret_key", "") or "").strip()
+    bucket = str(getattr(settings, "qa_demo_artifact_bucket", "") or "").strip()
+    public_base_url = str(getattr(settings, "qa_demo_artifact_public_base_url", "") or "").strip().rstrip("/")
+    secure = bool(getattr(settings, "qa_demo_artifact_secure", True))
+    if not endpoint or not access_key or not secret_key or not bucket or not public_base_url:
+        raise RuntimeError("QA demo artifact storage is not fully configured")
+    return DemoArtifactStorageConfig(
+        endpoint=endpoint,
+        access_key=access_key,
+        secret_key=secret_key,
+        bucket=bucket,
+        public_base_url=public_base_url,
+        secure=secure,
+    )
+
+
+def resolve_preview_demo_url(release) -> str:  # noqa: ANN001
+    urls = list(getattr(release, "service_urls", []) or [])
+    for service_url in urls:
+        if str(getattr(service_url, "service_kind", "") or "").strip() == "website" and str(
+            getattr(service_url, "status", "") or ""
+        ).strip() == "active":
+            url = str(getattr(service_url, "url", "") or "").strip()
+            if url:
+                return url
+    for service_url in urls:
+        if str(getattr(service_url, "service_kind", "") or "").strip() == "website":
+            url = str(getattr(service_url, "url", "") or "").strip()
+            if url:
+                return url
+    raise RuntimeError("QA demo recording requires an active preview website URL")
+
+
+def _release_service_kinds(release) -> tuple[str, ...]:  # noqa: ANN001
+    urls = list(getattr(release, "service_urls", []) or []) if release is not None else []
+    ordered: list[str] = []
+    for service_url in urls:
+        kind = str(getattr(service_url, "service_kind", "") or "").strip()
+        if kind and kind not in ordered:
+            ordered.append(kind)
+    return tuple(ordered)
+
+
+def _parse_recorder_command(raw_value: object, *, provider_name: str) -> tuple[str, ...]:
+    raw = str(raw_value or "").strip()
+    if not raw:
+        raise RuntimeError(f"QA demo {provider_name} recorder command is not configured")
+    parts = tuple(shlex.split(raw))
+    if not parts:
+        raise RuntimeError(f"QA demo {provider_name} recorder command is invalid")
+    return parts
+
+
+def ensure_release_ready_for_qa(release, *, required_service_kinds: tuple[str, ...]) -> None:  # noqa: ANN001
+    required = tuple(dict.fromkeys(str(kind or "").strip() for kind in required_service_kinds if str(kind or "").strip()))
+    if not required:
+        return
+    urls = list(getattr(release, "service_urls", []) or []) if release is not None else []
+    failures: list[str] = []
+    for required_kind in required:
+        matching_urls = [
+            service_url
+            for service_url in urls
+            if str(getattr(service_url, "service_kind", "") or "").strip() == required_kind
+        ]
+        active_urls = [
+            str(getattr(service_url, "url", "") or "").strip()
+            for service_url in matching_urls
+            if str(getattr(service_url, "status", "") or "").strip() == "active"
+            and str(getattr(service_url, "url", "") or "").strip()
+        ]
+        if not active_urls:
+            failures.append(required_kind)
+    if failures:
+        raise RuntimeError(
+            "QA demo recording requires active release service URL(s); not active: "
+            + ", ".join(sorted(failures))
+        )
+
+
+def _default_ios_recorder_command() -> tuple[str, ...] | None:
+    script_path = Path(__file__).resolve().parents[3] / "scripts" / "qa_demo_mobile_recorder.py"
+    if not script_path.exists():
+        return None
+    return (sys.executable, str(script_path))
+
+
+def _default_android_recorder_command() -> tuple[str, ...] | None:
+    script_path = Path(__file__).resolve().parents[3] / "scripts" / "qa_demo_android_recorder.py"
+    if not script_path.exists():
+        return None
+    return (sys.executable, str(script_path))
+
+
+def _configured_worker_platform(*, raw_value: object, provider_name: str) -> str | None:
+    normalized = str(raw_value or "").strip()
+    if not normalized:
+        return None
+    parsed = parse_worker_capability(normalized)
+    if parsed is None:
+        raise RuntimeError(
+            f"QA demo {provider_name} worker platform is invalid: {normalized}. Allowed values: linux, macos"
+        )
+    return parsed.value
+
+
+def resolve_available_capture_targets(*, settings, preview_release) -> dict[str, DemoCaptureTarget]:  # noqa: ANN001
+    targets: dict[str, DemoCaptureTarget] = {}
+    try:
+        preview_url = resolve_preview_demo_url(preview_release)
+    except RuntimeError:
+        preview_url = ""
+    if preview_url:
+        targets["browser"] = DemoCaptureTarget(
+            capture_target="browser",
+            capture_reference=preview_url,
+        )
+
+    configured_ios_command = str(getattr(settings, "qa_demo_ios_recorder_command", "") or "").strip()
+    ios_recorder_command = (
+        _parse_recorder_command(configured_ios_command, provider_name="ios")
+        if configured_ios_command
+        else _default_ios_recorder_command()
+    )
+    if ios_recorder_command is not None:
+        targets["ios"] = DemoCaptureTarget(
+            capture_target="ios",
+            capture_reference=(
+                str(getattr(settings, "qa_demo_ios_capture_reference", "") or "").strip() or "ios-simulator://configured"
+            ),
+            recorder_command=ios_recorder_command,
+            required_worker_platform="macos",
+        )
+
+    configured_android_command = str(getattr(settings, "qa_demo_android_recorder_command", "") or "").strip()
+    android_recorder_command = (
+        _parse_recorder_command(configured_android_command, provider_name="android")
+        if configured_android_command
+        else _default_android_recorder_command()
+    )
+    if android_recorder_command is not None:
+        targets["android"] = DemoCaptureTarget(
+            capture_target="android",
+            capture_reference=(
+                str(getattr(settings, "qa_demo_android_capture_reference", "") or "").strip()
+                or "android-emulator://configured"
+            ),
+            recorder_command=android_recorder_command,
+            required_worker_platform="linux",
+        )
+
+    desktop_command = str(getattr(settings, "qa_demo_desktop_recorder_command", "") or "").strip()
+    if desktop_command:
+        targets["desktop"] = DemoCaptureTarget(
+            capture_target="desktop",
+            capture_reference=(
+                str(getattr(settings, "qa_demo_desktop_capture_reference", "") or "").strip() or "desktop://configured"
+            ),
+            recorder_command=_parse_recorder_command(desktop_command, provider_name="desktop"),
+            required_worker_platform=_configured_worker_platform(
+                raw_value=getattr(settings, "qa_demo_desktop_worker_platform", ""),
+                provider_name="desktop",
+            ),
+        )
+    return targets
+
+
+def planned_capture_target_constraints(*, settings) -> dict[str, PlannedCaptureTargetConstraint]:  # noqa: ANN001
+    constraints: dict[str, PlannedCaptureTargetConstraint] = {
+        "browser": PlannedCaptureTargetConstraint(
+            capture_target="browser",
+            provider_available=True,
+            required_worker_platform=None,
+            availability_reason="Browser capture uses the built-in Playwright recorder and requires a preview website URL at QA time.",
+        )
+    }
+    configured_ios_command = str(getattr(settings, "qa_demo_ios_recorder_command", "") or "").strip()
+    ios_recorder_command = (
+        _parse_recorder_command(configured_ios_command, provider_name="ios")
+        if configured_ios_command
+        else _default_ios_recorder_command()
+    )
+    constraints["ios"] = PlannedCaptureTargetConstraint(
+        capture_target="ios",
+        provider_available=ios_recorder_command is not None,
+        required_worker_platform="macos" if ios_recorder_command is not None else None,
+        availability_reason=(
+            "iOS capture requires the built-in or configured native recorder on a macOS worker."
+            if ios_recorder_command is not None
+            else "iOS capture provider is unavailable because no native iOS recorder command exists."
+        ),
+    )
+
+    configured_android_command = str(getattr(settings, "qa_demo_android_recorder_command", "") or "").strip()
+    android_recorder_command = (
+        _parse_recorder_command(configured_android_command, provider_name="android")
+        if configured_android_command
+        else _default_android_recorder_command()
+    )
+    constraints["android"] = PlannedCaptureTargetConstraint(
+        capture_target="android",
+        provider_available=android_recorder_command is not None,
+        required_worker_platform="linux" if android_recorder_command is not None else None,
+        availability_reason=(
+            "Android capture requires the built-in or configured native recorder on a Linux Android worker."
+            if android_recorder_command is not None
+            else "Android capture provider is unavailable because no native Android recorder command exists."
+        ),
+    )
+
+    desktop_command = str(getattr(settings, "qa_demo_desktop_recorder_command", "") or "").strip()
+    desktop_available = bool(desktop_command)
+    constraints["desktop"] = PlannedCaptureTargetConstraint(
+        capture_target="desktop",
+        provider_available=desktop_available,
+        required_worker_platform=(
+            _configured_worker_platform(
+                raw_value=getattr(settings, "qa_demo_desktop_worker_platform", ""),
+                provider_name="desktop",
+            )
+            if desktop_available
+            else None
+        ),
+        availability_reason=(
+            "Desktop capture uses the configured desktop recorder command."
+            if desktop_available
+            else "Desktop capture provider is unavailable because no desktop recorder command is configured."
+        ),
+    )
+    return constraints
+
+
+def planned_capture_target_constraints_payload(*, settings) -> list[dict[str, str | bool | None]]:  # noqa: ANN001
+    payload: list[dict[str, str | bool | None]] = []
+    for constraint in planned_capture_target_constraints(settings=settings).values():
+        payload.append(
+            {
+                "capture_target": constraint.capture_target,
+                "provider_available": constraint.provider_available,
+                "required_worker_platform": constraint.required_worker_platform,
+                "availability_reason": constraint.availability_reason,
+            }
+        )
+    return payload
+
+
+def _available_capture_targets_payload(targets: dict[str, DemoCaptureTarget]) -> list[dict[str, str]]:
+    payload: list[dict[str, str]] = []
+    for target in targets.values():
+        payload.append(
+            {
+                "capture_target": target.capture_target,
+                "capture_reference": target.capture_reference,
+            }
+        )
+    return payload
+
+
+def required_capture_targets(plan: PmPlan) -> tuple[str, ...]:
+    ordered: list[str] = []
+    for requirement in plan.demo_requirements:
+        if requirement.capture_target not in ordered:
+            ordered.append(requirement.capture_target)
+    return tuple(ordered)
+
+
+def browser_capture_required(plan: PmPlan) -> bool:
+    return "browser" in required_capture_targets(plan)
+
+
+def build_demo_evidence_section(recordings: list[QaRecording]) -> str:
+    lines = [DEMO_EVIDENCE_HEADING]
+    for recording in recordings:
+        lines.append(f"- {recording.name}: {recording.artifact_url}")
+    return "\n".join(lines).strip()
+
+
+def upsert_demo_evidence_section(*, body: str | None, recordings: list[QaRecording]) -> str:
+    evidence = build_demo_evidence_section(recordings)
+    normalized_body = str(body or "").strip()
+    if not normalized_body:
+        return evidence
+    pattern = re.compile(r"^## Demo Evidence\s*$.*?(?=^## |\Z)", re.MULTILINE | re.DOTALL)
+    if pattern.search(normalized_body):
+        return pattern.sub(evidence + "\n\n", normalized_body).strip()
+    return f"{normalized_body}\n\n{evidence}".strip()
+
+
+def _content_type_for_recording(path: Path) -> str:
+    suffix = path.suffix.lower()
+    if suffix == ".webm":
+        return "video/webm"
+    if suffix == ".mp4":
+        return "video/mp4"
+    if suffix == ".mov":
+        return "video/quicktime"
+    raise RuntimeError(f"Unsupported QA demo recording file type: {suffix or '<none>'}")
+
+
+def _parse_recorder_output(
+    *,
+    output_path: Path,
+    capture_target: DemoCaptureTarget,
+) -> list[LocalQaRecording]:
+    result = json.loads(output_path.read_text(encoding="utf-8"))
+    recordings: list[LocalQaRecording] = []
+    for item in list(result.get("recordings") or []):
+        if not isinstance(item, dict):
+            raise RuntimeError("QA demo recorder returned invalid recordings payload")
+        name = str(item.get("name") or "").strip()
+        path = str(item.get("path") or "").strip()
+        if not name or not path:
+            raise RuntimeError("QA demo recorder returned incomplete recording metadata")
+        source = Path(path)
+        recordings.append(
+            LocalQaRecording(
+                name=name,
+                path=str(source),
+                capture_target=capture_target.capture_target,
+                capture_reference=capture_target.capture_reference,
+                content_type=_content_type_for_recording(source),
+            )
+        )
+    if not recordings:
+        raise RuntimeError("QA demo recorder produced no recordings")
+    return recordings
+
+
+def _invoke_json_recorder(
+    *,
+    command: list[str],
+    payload: dict[str, object],
+    env: dict[str, str] | None,
+    capture_target: DemoCaptureTarget,
+) -> list[LocalQaRecording]:
+    with TemporaryDirectory(prefix=f"qa-demo-{capture_target.capture_target}-") as tmp_dir:
+        input_path = Path(tmp_dir) / "input.json"
+        output_path = Path(tmp_dir) / "output.json"
+        payload["output_dir"] = str(Path(tmp_dir) / "videos")
+        input_path.write_text(json.dumps(payload), encoding="utf-8")
+        try:
+            subprocess.run(
+                [*command, str(input_path), str(output_path)],
+                check=True,
+                text=True,
+                capture_output=True,
+                env=env,
+            )
+        except subprocess.CalledProcessError as exc:
+            stderr = str(exc.stderr or "").strip()
+            stdout = str(exc.stdout or "").strip()
+            details = stderr or stdout
+            if details:
+                raise RuntimeError(
+                    f"QA demo recorder command failed ({exc.returncode}): {' '.join(command)}\n{details}"
+                ) from exc
+            raise RuntimeError(
+                f"QA demo recorder command failed ({exc.returncode}): {' '.join(command)}"
+            ) from exc
+        recordings = _parse_recorder_output(output_path=output_path, capture_target=capture_target)
+        return _copy_recordings(recordings)
+
+
+def _canonical_native_selector(selector: str | None) -> str | None:
+    raw = str(selector or "").strip()
+    if not raw:
+        return None
+    if raw.startswith("id=") or raw.startswith("text="):
+        return raw
+    if re.fullmatch(r"[a-z0-9_]+", raw):
+        return f"id={raw}"
+    return f"text={raw}"
+
+
+def _normalize_native_step(step: QaStep) -> QaStep:
+    selector = _canonical_native_selector(step.selector)
+    if step.action == "wait_for_text" and not str(step.value or "").strip() and selector:
+        if selector.startswith("text="):
+            return replace(step, selector=None, value=selector.removeprefix("text="))
+        return replace(step, selector=None, value=selector)
+    return replace(step, selector=selector)
+
+
+def _normalize_native_scenario(scenario: QaScenario) -> QaScenario:
+    return replace(
+        scenario,
+        steps=[_normalize_native_step(step) for step in scenario.steps],
+    )
+
+
+def _validate_native_scenarios(qa_result: QaResult) -> QaResult:
+    normalized_scenarios: list[QaScenario] = []
+    for scenario in qa_result.scenarios:
+        if scenario.capture_target not in _NATIVE_CAPTURE_TARGETS:
+            normalized_scenarios.append(scenario)
+            continue
+        normalized = _normalize_native_scenario(scenario)
+        for step in normalized.steps:
+            if step.selector in _TRANSIENT_NATIVE_SELECTORS and step.action in {"assert_visible", "assert_text", "click"}:
+                raise RuntimeError(
+                    "QA demo native scenarios must not use splash_screen as a required assertion or click target"
+                )
+        normalized_scenarios.append(normalized)
+    return replace(qa_result, scenarios=normalized_scenarios)
+
+
+def _copy_recordings(recordings: list[LocalQaRecording]) -> list[LocalQaRecording]:
+    persisted_dir = Path.cwd() / "tmp" / "qa-demos"
+    persisted_dir.mkdir(parents=True, exist_ok=True)
+    copied: list[LocalQaRecording] = []
+    for index, recording in enumerate(recordings, start=1):
+        source = Path(recording.path)
+        target = persisted_dir / f"{recording.capture_target}-{index}{source.suffix.lower()}"
+        target.write_bytes(source.read_bytes())
+        copied.append(
+            LocalQaRecording(
+                name=recording.name,
+                path=str(target),
+                capture_target=recording.capture_target,
+                capture_reference=recording.capture_reference,
+                content_type=recording.content_type,
+            )
+        )
+    return copied
+
+
+def record_demo_scenarios(
+    *,
+    settings,  # noqa: ANN001
+    request: WorkflowRequest,
+    available_capture_targets: dict[str, DemoCaptureTarget],
+    qa_result: QaResult,
+) -> list[LocalQaRecording]:
+    if not qa_result.scenarios:
+        raise RuntimeError("QA demo recording requires at least one scenario")
+
+    scenarios_by_target: dict[str, list] = {}
+    for scenario in qa_result.scenarios:
+        target = available_capture_targets.get(scenario.capture_target)
+        if target is None:
+            raise RuntimeError(f"QA demo capture target is unavailable for this run: {scenario.capture_target}")
+        if target.required_worker_platform is not None and request.current_worker_capability.value != target.required_worker_platform:
+            raise RuntimeError(
+                f"QA demo capture target '{scenario.capture_target}' requires worker platform {target.required_worker_platform}, "
+                f"but run is on {request.current_worker_capability.value}"
+            )
+        scenarios_by_target.setdefault(scenario.capture_target, []).append(scenario)
+
+    all_recordings: list[LocalQaRecording] = []
+    for capture_target_name, scenarios in scenarios_by_target.items():
+        capture_target = available_capture_targets[capture_target_name]
+        payload = {
+            "capture_target": capture_target.capture_target,
+            "capture_reference": capture_target.capture_reference,
+            "tenant_id": request.tenant_id,
+            "project_id": request.project_id or "",
+            "run_id": request.run_id,
+            "issue_key": request.issue_key,
+            "execution_repo_dir": request.execution_repo_dir or "",
+            "scenarios": [
+                {
+                    "name": scenario.name,
+                    "objective": scenario.objective,
+                    "capture_target": scenario.capture_target,
+                    "start_path": scenario.start_path,
+                    "expected_outcomes": list(scenario.expected_outcomes or []),
+                    "steps": [
+                        {
+                            "action": step.action,
+                            "selector": step.selector,
+                            "value": step.value,
+                        }
+                        for step in scenario.steps
+                    ],
+                }
+                for scenario in scenarios
+            ],
+        }
+        if capture_target.capture_target == "browser":
+            script_path = Path(__file__).resolve().parents[3] / "scripts" / "qa_demo_recorder.mjs"
+            if not script_path.exists():
+                raise RuntimeError(f"QA demo recorder script is missing: {script_path}")
+            playwright_module_dir = str(getattr(settings, "qa_demo_playwright_module_dir", "") or "").strip()
+            if not playwright_module_dir:
+                playwright_module_dir = subprocess.run(
+                    ["npm", "root", "-g"],
+                    capture_output=True,
+                    check=True,
+                    text=True,
+                ).stdout.strip()
+            env = dict(os.environ)
+            env["NODE_PATH"] = playwright_module_dir
+            env["QA_DEMO_PLAYWRIGHT_MODULE_DIR"] = playwright_module_dir
+            payload["preview_url"] = capture_target.capture_reference
+            recordings = _invoke_json_recorder(
+                command=["node", str(script_path)],
+                payload=payload,
+                env=env,
+                capture_target=capture_target,
+            )
+        else:
+            recordings = _invoke_json_recorder(
+                command=list(capture_target.recorder_command or ()),
+                payload=payload,
+                env=dict(os.environ),
+                capture_target=capture_target,
+            )
+        all_recordings.extend(recordings)
+    return all_recordings
+
+
+def upload_recording(
+    *,
+    storage: DemoArtifactStorageConfig,
+    local_path: str,
+    object_key: str,
+    content_type: str,
+) -> str:
+    from minio import Minio
+
+    client = Minio(
+        storage.endpoint,
+        access_key=storage.access_key,
+        secret_key=storage.secret_key,
+        secure=storage.secure,
+    )
+    if not client.bucket_exists(storage.bucket):
+        raise RuntimeError(f"QA demo artifact bucket does not exist: {storage.bucket}")
+    client.fput_object(
+        storage.bucket,
+        object_key,
+        local_path,
+        content_type=content_type,
+    )
+    return f"{storage.public_base_url}/{object_key}"
+
+
+def execute_qa_demo_stage(
+    *,
+    session,
+    settings,
+    tenant,
+    project,
+    run,
+    request: WorkflowRequest,
+    plan,
+    dev_result: DevResult,
+    test_result: TestResult,
+    review_result: ReviewResult,
+    preview_release,
+) -> QaResult:
+    required_targets = required_capture_targets(plan)
+    if not required_targets:
+        raise RuntimeError("QA demo recording requires PM demo requirements with explicit capture targets")
+    ensure_release_ready_for_qa(
+        preview_release,
+        required_service_kinds=_release_service_kinds(preview_release),
+    )
+    available_capture_targets = resolve_available_capture_targets(settings=settings, preview_release=preview_release)
+    if not available_capture_targets:
+        raise RuntimeError("QA demo recording requires at least one configured capture target")
+    missing_targets = [target for target in required_targets if target not in available_capture_targets]
+    if missing_targets:
+        raise RuntimeError(
+            "QA demo recording requires unavailable capture target(s): " + ", ".join(sorted(missing_targets))
+        )
+    incompatible_targets = [
+        target.capture_target
+        for target in available_capture_targets.values()
+        if target.capture_target in required_targets
+        and target.required_worker_platform is not None
+        and request.current_worker_capability.value != target.required_worker_platform
+    ]
+    if incompatible_targets:
+        raise RuntimeError(
+            "QA demo recording requires worker platform "
+            f"{available_capture_targets[incompatible_targets[0]].required_worker_platform} "
+            f"for capture target(s): {', '.join(sorted(incompatible_targets))}"
+        )
+    required_available_capture_targets = {
+        target_name: available_capture_targets[target_name]
+        for target_name in required_targets
+    }
+    browser_capture_reference = (
+        required_available_capture_targets.get("browser").capture_reference
+        if "browser" in required_available_capture_targets
+        else ""
+    )
+    runtime = build_codex_runtime(session=session, settings=settings)
+    agents = CodexWorkflowAgents(
+        runtime=runtime,
+        runtime_resolver=lambda stage, qa_request: build_runtime_for_selector(
+            session=session,
+            settings=settings,
+            tenant_id=qa_request.tenant_id,
+            project_id=qa_request.project_id,
+            selector=f"workflow.{stage}",
+            agent_role="test" if stage == "qa" else None,
+            agent_name="workflow_qa_default" if stage == "qa" else None,
+        ),
+        execute_tool=lambda context, tool_name, tool_args: execute_agent_tool(
+            session=session,
+            settings=settings,
+            tenant_id=context.tenant_id or "",
+            project_id=context.project_id,
+            run_id=context.run_id,
+            issue_key=context.issue_key or "",
+            stage=context.stage,
+            tool_name=tool_name,
+            tool_args=tool_args,
+            worker_platform=context.worker_platform,
+        ),
+    )
+    qa_result = agents.qa(
+        request=request,
+        plan=plan,
+        dev_result=dev_result,
+        test_result=test_result,
+        review_result=review_result,
+        browser_capture_reference=browser_capture_reference,
+        available_capture_targets_json=json.dumps(_available_capture_targets_payload(required_available_capture_targets)),
+        attempt=request.attempt_number,
+    )
+    if qa_result.outcome != "continue":
+        return qa_result
+    qa_result = _validate_native_scenarios(qa_result)
+    storage = storage_config_from_settings(settings)
+
+    max_attempts = qa_demo_max_attempts(settings)
+    last_error: Exception | None = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            local_recordings = record_demo_scenarios(
+                settings=settings,
+                request=request,
+                available_capture_targets=available_capture_targets,
+                qa_result=qa_result,
+            )
+            uploaded: list[QaRecording] = []
+            for index, recording in enumerate(local_recordings, start=1):
+                suffix = Path(recording.path).suffix.lower()
+                object_key = f"{tenant.tenant_id}/{project.project_id}/{run.run_id}/qa-demo-{index}{suffix}"
+                artifact_url = upload_recording(
+                    storage=storage,
+                    local_path=recording.path,
+                    object_key=object_key,
+                    content_type=recording.content_type,
+                )
+                uploaded.append(
+                    QaRecording(
+                        name=recording.name,
+                        artifact_url=artifact_url,
+                        object_key=object_key,
+                        capture_target=recording.capture_target,
+                        capture_reference=recording.capture_reference,
+                    )
+                )
+            return replace(qa_result, recordings=uploaded)
+        except Exception as exc:  # noqa: BLE001
+            last_error = exc
+            if attempt >= max_attempts:
+                break
+    if last_error is None:  # pragma: no cover
+        raise RuntimeError("QA demo recording failed without an exception")
+    raise RuntimeError(
+        f"QA demo recording failed after {max_attempts} attempts: {type(last_error).__name__}: {last_error}"
+    ) from last_error
+
+
+def update_pull_request_with_demo_evidence(
+    *,
+    session,
+    settings,
+    tenant,
+    project,
+    workflow_result,
+    qa_result: QaResult,
+) -> str:
+    pr_url = str(getattr(workflow_result, "pr_url", "") or "").strip()
+    match = re.search(r"/pull/(\d+)(?:/|$)", pr_url)
+    if not pr_url or match is None:
+        raise RuntimeError("QA demo recording requires a PR URL")
+    pr_number = int(match.group(1))
+    github_client = github_client_from_tenant_config(
+        tenant.github_config,
+        tenant_secret_lookup=lambda secret_ref: resolve_scoped_secret_ref(
+            session,
+            secret_ref=secret_ref,
+            encryption_key=settings.secrets_encryption_key,
+            tenant_id=tenant.tenant_id,
+            project_id=project.project_id,
+        ),
+        platform_secret_lookup=lambda secret_ref: resolve_platform_secret_ref(
+            session,
+            secret_ref=secret_ref,
+            encryption_key=settings.secrets_encryption_key,
+        ),
+    )
+    normalized_repo = normalize_repo_identifier(project.github_repository)
+    repo_full_name = normalized_repo.split("/", 1)[1] if normalized_repo.startswith("github.com/") else "/".join(normalized_repo.split("/")[-2:])
+    pr_details = github_client.get_pull_request_details(repo_full_name=repo_full_name, pr_number=pr_number)
+    body = upsert_demo_evidence_section(body=pr_details.body, recordings=qa_result.recordings)
+    github_client.update_pull_request(
+        repo_full_name=repo_full_name,
+        github_repository=project.github_repository,
+        pr_number=pr_number,
+        title=pr_details.title,
+        base_branch=pr_details.base_ref or "main",
+        body=body,
+    )
+    return body

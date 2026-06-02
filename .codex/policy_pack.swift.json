@@ -7,8 +7,8 @@
     "Avoid flakiness in UI tests by using expectations/conditions not sleeps"
   ],
   "test_commands": [
-    "xcodebuild test -scheme <SCHEME> -destination 'platform=iOS Simulator,name=iPhone 15'",
-    "xcodebuild test -workspace <WORKSPACE>.xcworkspace -scheme <SCHEME> -destination 'platform=iOS Simulator,name=iPhone 15'",
+    "xcodebuild -showdestinations -scheme <SCHEME> && xcodebuild test -scheme <SCHEME> -destination 'id=<SIMULATOR_UDID>' CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY=",
+    "xcodebuild -showdestinations -workspace <WORKSPACE>.xcworkspace -scheme <SCHEME> && xcodebuild test -workspace <WORKSPACE>.xcworkspace -scheme <SCHEME> -destination 'id=<SIMULATOR_UDID>' CODE_SIGNING_ALLOWED=NO CODE_SIGNING_REQUIRED=NO CODE_SIGN_IDENTITY=",
     "swift test"
   ],
   "lint_commands": [

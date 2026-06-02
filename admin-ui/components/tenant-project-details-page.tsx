@@ -68,6 +68,7 @@ import { buildRunDetailPath, resolveProjectSection, type ProjectSection } from "
 type Tab = Exclude<ProjectSection, "knowledge">;
 type SettingsSection = "general" | "ai" | "automation" | "knowledge" | "governance";
 type OverrideToggleValue = "inherit" | "enabled" | "disabled";
+type WorkerCapabilityOverrideValue = "inherit" | "linux" | "macos";
 type RequireAgentsValue = "inherit" | "required";
 type KnowledgeModeValue = "inherit" | "safe" | "balanced" | "aggressive";
 type AllowedCommandsMode = "inherit" | "custom";
@@ -81,6 +82,8 @@ type ProjectFormState = {
   architecture_parent_page_id: string;
   codex_model: string | null;
   codex_reasoning_effort: "low" | "medium" | "high" | null;
+  default_worker_capability: WorkerCapabilityOverrideValue;
+  qa_demo_recording_enabled: OverrideToggleValue;
   allow_jira_transitions: OverrideToggleValue;
   allow_pr_creation: OverrideToggleValue;
   allow_code_reviews: OverrideToggleValue;
@@ -122,6 +125,12 @@ const BOOLEAN_OVERRIDE_OPTIONS: { value: OverrideToggleValue; label: string }[] 
   { value: "disabled", label: "Off" },
 ];
 
+const WORKER_CAPABILITY_OVERRIDE_OPTIONS: { value: WorkerCapabilityOverrideValue; label: string }[] = [
+  { value: "inherit", label: "Inherit" },
+  { value: "linux", label: "Linux" },
+  { value: "macos", label: "macOS" },
+];
+
 function booleanOverrideToState(value: unknown): OverrideToggleValue {
   if (value === true) {
     return "enabled";
@@ -138,6 +147,20 @@ function booleanStateToOverride(value: OverrideToggleValue): boolean | undefined
   }
   if (value === "disabled") {
     return false;
+  }
+  return undefined;
+}
+
+function workerCapabilityOverrideToState(value: unknown): WorkerCapabilityOverrideValue {
+  if (value === "linux" || value === "macos") {
+    return value;
+  }
+  return "inherit";
+}
+
+function workerCapabilityStateToOverride(value: WorkerCapabilityOverrideValue): "linux" | "macos" | undefined {
+  if (value === "linux" || value === "macos") {
+    return value;
   }
   return undefined;
 }
@@ -184,6 +207,8 @@ function buildProjectFormState(payload: ProjectRecord | null): ProjectFormState 
       overrides.codex_reasoning_effort === "high"
         ? overrides.codex_reasoning_effort
         : null,
+    default_worker_capability: workerCapabilityOverrideToState(overrides.default_worker_capability),
+    qa_demo_recording_enabled: booleanOverrideToState(overrides.qa_demo_recording_enabled),
     allow_jira_transitions: booleanOverrideToState(overrides.allow_jira_transitions),
     allow_pr_creation: booleanOverrideToState(overrides.allow_pr_creation),
     allow_code_reviews: booleanOverrideToState(overrides.allow_code_reviews),
@@ -646,7 +671,9 @@ export function TenantProjectDetailsPage() {
     } else {
       delete nextPolicyOverrides.codex_reasoning_effort;
     }
+    const defaultWorkerCapability = workerCapabilityStateToOverride(form.default_worker_capability);
     const allowJiraTransitions = booleanStateToOverride(form.allow_jira_transitions);
+    const qaDemoRecordingEnabled = booleanStateToOverride(form.qa_demo_recording_enabled);
     const allowPrCreation = booleanStateToOverride(form.allow_pr_creation);
     const allowCodeReviews = booleanStateToOverride(form.allow_code_reviews);
     const allowPrRemediation = booleanStateToOverride(form.allow_pr_remediation);
@@ -658,6 +685,16 @@ export function TenantProjectDetailsPage() {
     const maxDevTestReviewLoops = parsePositiveOverride(form.max_dev_test_review_loops);
     const maxPrAutoRemediationLoops = parsePositiveOverride(form.max_pr_auto_remediation_loops);
     const maxConcurrentRuns = parsePositiveOverride(form.max_concurrent_runs);
+    if (defaultWorkerCapability === undefined) {
+      delete nextPolicyOverrides.default_worker_capability;
+    } else {
+      nextPolicyOverrides.default_worker_capability = defaultWorkerCapability;
+    }
+    if (qaDemoRecordingEnabled === undefined) {
+      delete nextPolicyOverrides.qa_demo_recording_enabled;
+    } else {
+      nextPolicyOverrides.qa_demo_recording_enabled = qaDemoRecordingEnabled;
+    }
     if (allowJiraTransitions === undefined) {
       delete nextPolicyOverrides.allow_jira_transitions;
     } else {
@@ -1243,6 +1280,40 @@ export function TenantProjectDetailsPage() {
                     <h2 className="text-base font-semibold">Automation</h2>
                   </div>
                   <div className="p-6 pt-0 grid gap-4 md:grid-cols-2">
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                        Execution worker
+                      </label>
+                      <OverrideSegmentedControl
+                        value={form.default_worker_capability}
+                        options={WORKER_CAPABILITY_OVERRIDE_OPTIONS}
+                        onChange={(next) =>
+                          setForm((prev) => ({
+                            ...prev,
+                            default_worker_capability: next as WorkerCapabilityOverrideValue,
+                          }))
+                        }
+                        disabled={busy}
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        Effective: {project.effective_policy.default_worker_capability ?? "No default"}.
+                        Use `macOS` for native Apple apps so the first run lands on the correct worker.
+                      </p>
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                        QA demo recording
+                      </label>
+                      <OverrideSegmentedControl
+                        value={form.qa_demo_recording_enabled}
+                        options={BOOLEAN_OVERRIDE_OPTIONS}
+                        onChange={(next) => setForm((prev) => ({ ...prev, qa_demo_recording_enabled: next }))}
+                        disabled={busy}
+                      />
+                      <p className="text-xs text-muted-foreground">
+                        Effective: {formatBoolean(project.effective_policy.qa_demo_recording_enabled)}
+                      </p>
+                    </div>
                     <div className="space-y-1.5">
                       <label className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
                         Jira transitions

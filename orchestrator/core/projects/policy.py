@@ -9,8 +9,11 @@ from orchestrator.core.runtime.agent_execution_profiles import (
     normalize_execution_profiles,
 )
 from orchestrator.core.runtime.models import normalize_codex_model, normalize_codex_reasoning_effort
+from orchestrator.core.worker.capability_normalization import parse_worker_capability
 
 POLICY_OVERRIDE_FIELDS = {
+    "default_worker_capability",
+    "qa_demo_recording_enabled",
     "allow_jira_transitions",
     "allow_pr_creation",
     "allow_code_reviews",
@@ -45,6 +48,7 @@ _BOOLEAN_CAP_FIELDS = {
 }
 
 _BOOLEAN_DEFAULTS = {
+    "qa_demo_recording_enabled": False,
     "allow_jira_transitions": False,
     "allow_pr_creation": False,
     "allow_code_reviews": True,
@@ -53,6 +57,10 @@ _BOOLEAN_DEFAULTS = {
     "allow_label_mutations": False,
     "allow_auto_merge": False,
     "knowledge_base_enabled": True,
+}
+
+_BOOLEAN_OVERRIDE_FIELDS = {
+    "qa_demo_recording_enabled",
 }
 
 _KNOWLEDGE_AUTO_ANSWER_MODES = {"safe", "balanced", "aggressive"}
@@ -72,6 +80,11 @@ def _coerce_positive_int(value: Any) -> int | None:
     return max(1, parsed)
 
 
+def _normalize_worker_capability(value: Any) -> str | None:
+    parsed = parse_worker_capability(str(value or "").strip())
+    return parsed.value if parsed is not None else None
+
+
 def normalize_project_policy_overrides(raw: Mapping[str, Any] | None) -> dict[str, Any]:
     if raw is None:
         return {}
@@ -80,7 +93,7 @@ def normalize_project_policy_overrides(raw: Mapping[str, Any] | None) -> dict[st
         if key not in raw:
             continue
         value = raw[key]
-        if key in _BOOLEAN_CAP_FIELDS or key == "require_agents_md":
+        if key in _BOOLEAN_CAP_FIELDS or key in _BOOLEAN_OVERRIDE_FIELDS or key == "require_agents_md":
             if isinstance(value, bool):
                 normalized[key] = value
             continue
@@ -91,6 +104,11 @@ def normalize_project_policy_overrides(raw: Mapping[str, Any] | None) -> dict[st
         if key == "staging_branch":
             normalized_value = str(value or "").strip()
             if normalized_value:
+                normalized[key] = normalized_value
+            continue
+        if key == "default_worker_capability":
+            normalized_value = _normalize_worker_capability(value)
+            if normalized_value is not None:
                 normalized[key] = normalized_value
             continue
         if key == "knowledge_auto_answer_mode":
@@ -164,6 +182,20 @@ def resolve_effective_policy(
             effective[field] = tenant_value and override_value
         else:
             effective[field] = tenant_value
+
+    for field in _BOOLEAN_OVERRIDE_FIELDS:
+        if field in overrides and isinstance(overrides[field], bool):
+            effective[field] = bool(overrides[field])
+        elif field not in effective:
+            effective[field] = _BOOLEAN_DEFAULTS.get(field, False)
+
+    tenant_default_worker_capability = _normalize_worker_capability(effective.get("default_worker_capability"))
+    if tenant_default_worker_capability is not None:
+        effective["default_worker_capability"] = tenant_default_worker_capability
+    else:
+        effective.pop("default_worker_capability", None)
+    if "default_worker_capability" in overrides:
+        effective["default_worker_capability"] = overrides["default_worker_capability"]
 
     if "staging_branch" in overrides:
         effective["staging_branch"] = overrides["staging_branch"]

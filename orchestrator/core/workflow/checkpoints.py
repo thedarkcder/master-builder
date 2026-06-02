@@ -16,6 +16,7 @@ _CHECKPOINT_KIND_BY_STAGE = {
     "dev": "execution",
     "test": "execution",
     "review": "execution",
+    "qa": "execution",
 }
 
 

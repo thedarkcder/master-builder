@@ -481,6 +481,7 @@ def _augment_prompt_with_knowledge_context(
                 session=session,
                 tenant_id=tenant_id,
                 project_id=project_id,
+                issue_key=context.issue_key,
                 query=query_text,
                 max_items=max(1, int(getattr(settings, "knowledge_context_top_k", 5))),
                 max_chars=max(500, int(getattr(settings, "knowledge_context_max_chars", 3200))),
@@ -827,6 +828,7 @@ def invoke_runtime_json_with_tools(
     tool_hops_used = 0
     final_response_requested = False
     native_tool_policy_repair_requested = False
+    governed_tool_availability_repair_requested = False
 
     for _tool_hop in range(max(0, int(max_tool_hops)) + 2):
         try:
@@ -879,6 +881,21 @@ def invoke_runtime_json_with_tools(
         if response_type == _FINAL_RESPONSE_TYPE:
             result = payload.get("result")
             if isinstance(result, dict):
+                if (
+                    not governed_tool_availability_repair_requested
+                    and tool_hops_used == 0
+                    and _requires_governed_tool_availability_repair(
+                        result=result,
+                        allowed_tools=normalized_allowed_tools,
+                    )
+                ):
+                    governed_tool_availability_repair_requested = True
+                    current_user_prompt = _build_governed_tool_availability_repair_prompt(
+                        original_user_prompt=original_user_prompt,
+                        blocker_result=result,
+                        allowed_tools=normalized_allowed_tools,
+                    )
+                    continue
                 return result
             raise ToolBridgeProtocolError("Runtime tool bridge final_response must contain an object result")
         if response_type != _TOOL_REQUEST_TYPE:
@@ -1260,6 +1277,75 @@ def _build_native_tool_policy_repair_prompt(
     )
 
 
+def _requires_governed_tool_availability_repair(
+    *,
+    result: dict[str, object],
+    allowed_tools: set[str],
+) -> bool:
+    outcome = str(result.get("outcome") or "").strip().lower()
+    if outcome != "blocked" or not allowed_tools:
+        return False
+    blocker_message = str(result.get("blocker_message") or "").strip()
+    if not blocker_message:
+        return False
+    normalized_message = blocker_message.lower()
+    if "tool_search returned 0 matching tools" in normalized_message:
+        return True
+    if "governed github/jira publication bridge" in normalized_message:
+        return True
+    if "does not expose a callable governed" in normalized_message:
+        return True
+    if (
+        {"github.push_branch", "github.open_pr"} & {tool.lower() for tool in allowed_tools}
+        and "governed pr publication" in normalized_message
+        and (
+            "could not be executed" in normalized_message
+            or "not invokable" in normalized_message
+            or "native codex tool path" in normalized_message
+            or "native codex developer tools" in normalized_message
+        )
+    ):
+        return True
+    if "governed" not in normalized_message:
+        return False
+    availability_markers = (
+        "not expose",
+        "unavailable",
+        "not available",
+        "no matching tools",
+        "0 matching tools",
+        "cannot publish",
+        "not invokable",
+        "could not be executed",
+        "native codex tool path",
+        "native codex developer tools",
+    )
+    if not any(marker in normalized_message for marker in availability_markers):
+        return False
+    return any(tool_name.lower() in normalized_message for tool_name in allowed_tools)
+
+
+def _build_governed_tool_availability_repair_prompt(
+    *,
+    original_user_prompt: str,
+    blocker_result: dict[str, object],
+    allowed_tools: set[str],
+) -> str:
+    return (
+        "Your previous final_response incorrectly treated allowed governed tools as unavailable before issuing any "
+        "`tool_request`.\n"
+        f"Previous final_response.result: {json.dumps(blocker_result, sort_keys=True)}\n"
+        f"Allowed governed tools for this invocation: {json.dumps(sorted(allowed_tools))}\n\n"
+        "Retry from the original prompt. The allowed governed tool list is authoritative for this bridge. "
+        "Do not use native `tool_search`, plugin discovery, or deferred tool lookup to decide whether an allowed "
+        "governed tool exists. If you need one of the allowed governed tools, issue the corresponding `tool_request` "
+        "directly. Only return `outcome=\"blocked\"` for tool unavailability after an actual `tool_request` fails. "
+        "Return JSON only.\n\n"
+        "Original prompt:\n"
+        f"{original_user_prompt}"
+    )
+
+
 def _emit_runtime_request_event(
     *,
     context: AgentInvocationContext,
@@ -1373,17 +1459,32 @@ def _resolve_allowed_native_tools(
 
 
 def _native_tool_names_from_log_payload(payload: object) -> set[str]:
+    return _native_tool_names_from_log_payload_with_depth(payload, depth=0)
+
+
+def _native_tool_names_from_log_payload_with_depth(payload: object, *, depth: int) -> set[str]:
     observed: set[str] = set()
+    if depth > 4:
+        return observed
+    if isinstance(payload, str):
+        normalized = payload.strip()
+        if normalized.startswith("{") or normalized.startswith("["):
+            try:
+                parsed_payload = json.loads(normalized)
+            except json.JSONDecodeError:
+                return observed
+            return _native_tool_names_from_log_payload_with_depth(parsed_payload, depth=depth + 1)
+        return observed
     if isinstance(payload, dict):
         for key in ("tool_name", "tool", "name", "type"):
             native_tool_name = _normalize_native_tool_name(payload.get(key))
             if native_tool_name is not None:
                 observed.add(native_tool_name)
         for value in payload.values():
-            observed.update(_native_tool_names_from_log_payload(value))
+            observed.update(_native_tool_names_from_log_payload_with_depth(value, depth=depth + 1))
     elif isinstance(payload, list):
         for item in payload:
-            observed.update(_native_tool_names_from_log_payload(item))
+            observed.update(_native_tool_names_from_log_payload_with_depth(item, depth=depth + 1))
     return observed
 
 

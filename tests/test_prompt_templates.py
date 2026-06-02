@@ -55,6 +55,48 @@ class PromptTemplateTests(unittest.TestCase):
         self.assertIn("xcodebuild", prompt_text)
         self.assertIn("XCUITest", prompt_text)
         self.assertIn('Never output "linux" when mandatory macos signals exist', prompt_text)
+        self.assertIn("QA capture target constraints", prompt_text)
+        self.assertIn("provider_available=false", prompt_text)
+        self.assertIn("required_worker_platform", prompt_text)
+
+    def test_qa_user_prompt_is_capture_target_oriented_not_browser_only(self) -> None:
+        prompt_path = (
+            Path(__file__).resolve().parents[1]
+            / "orchestrator"
+            / "prompts"
+            / "workflow"
+            / "qa_user.j2"
+        )
+        prompt_text = prompt_path.read_text(encoding="utf-8")
+        self.assertIn("Browser capture reference", prompt_text)
+        self.assertIn('For `capture_target="browser"`', prompt_text)
+        self.assertIn('For `capture_target="ios"`, `capture_target="android"`, or `capture_target="desktop"`', prompt_text)
+        self.assertIn("use `id=<accessibility_identifier>`", prompt_text)
+        self.assertIn("use `text=<visible text>`", prompt_text)
+        self.assertIn("never emit an unprefixed native selector", prompt_text)
+        self.assertIn("prefer interaction patterns and accessibility identifiers already present in the local repository", prompt_text)
+        self.assertIn("Native selector catalog", prompt_text)
+        self.assertIn("authoritative", prompt_text)
+        self.assertIn("do not use `fill` on buttons, labels, or static text", prompt_text)
+        self.assertIn("Do not make required assertions against intentionally transient native surfaces", prompt_text)
+        self.assertIn("never use `id=splash_screen` as a required assertion or click target", prompt_text)
+        self.assertNotIn("Preview URL:", prompt_text)
+        self.assertIn("does not have native `web.search`, `web.fetch`, `browser.open`, or `browser.snapshot` available", prompt_text)
+        self.assertIn("Never issue an empty search/fetch request", prompt_text)
+
+    def test_qa_system_prompt_keeps_scenario_planning_local_first(self) -> None:
+        prompt_path = (
+            Path(__file__).resolve().parents[1]
+            / "orchestrator"
+            / "prompts"
+            / "workflow"
+            / "qa_system.j2"
+        )
+        prompt_text = prompt_path.read_text(encoding="utf-8")
+        self.assertIn("Plan from the supplied run context", prompt_text)
+        self.assertIn("does not have native web search or browser inspection available", prompt_text)
+        self.assertIn("Only use the governed tools that are actually listed", prompt_text)
+        self.assertIn("never issue an empty search or fetch request", prompt_text)
 
     def test_pm_user_prompt_defines_decision_state_evidence_contract(self) -> None:
         prompt_path = (
@@ -103,6 +145,42 @@ class PromptTemplateTests(unittest.TestCase):
         self.assertIn("secrets_or_bindings_needed", pm_user)
         self.assertIn("Do not ask the PM for API field names", pm_user)
 
+    def test_pm_prompts_treat_repo_governance_as_preloaded_context(self) -> None:
+        prompts_dir = Path(__file__).resolve().parents[1] / "orchestrator" / "prompts" / "workflow"
+        pm_system = (prompts_dir / "pm_system.j2").read_text(encoding="utf-8")
+        pm_user = (prompts_dir / "pm_user.j2").read_text(encoding="utf-8")
+
+        self.assertIn("already available enforcement context", pm_system)
+        self.assertIn("do not spend tool hops rereading `.codex/**`, `AGENTS.md`, or skill files", pm_system)
+        self.assertIn("Preloaded repository governance context", pm_user)
+        self.assertIn("runtime already loaded and enforced the repository policy/standards/operating context", pm_user)
+        self.assertIn("Do not spend tool hops rereading `.codex/**`, `AGENTS.md`, or workflow skill files", pm_user)
+        self.assertIn("ticket-relevant product files, tests, and build metadata", pm_user)
+
+    def test_dev_prompts_treat_repo_governance_as_preloaded_context(self) -> None:
+        prompts_dir = Path(__file__).resolve().parents[1] / "orchestrator" / "prompts" / "workflow"
+        dev_system = (prompts_dir / "dev_system.j2").read_text(encoding="utf-8")
+        dev_user = (prompts_dir / "dev_user.j2").read_text(encoding="utf-8")
+
+        self.assertIn("already available enforcement context", dev_system)
+        self.assertIn("do not spend shell commands or tool hops rereading `.codex/**`, `AGENTS.md`, or skill files", dev_system)
+        self.assertIn("Preloaded repository governance context", dev_user)
+        self.assertIn("runtime already loaded and enforced repository policy, engineering standards, operating rules, and required workflow skills", dev_user)
+        self.assertIn("Do not spend shell commands or tool hops rereading `.codex/**`, `AGENTS.md`, or workflow skill files", dev_user)
+        self.assertIn("ticket-relevant source files, tests, build targets, simulator/runtime evidence, and the current published diff", dev_user)
+
+    def test_test_prompts_treat_repo_governance_as_preloaded_context(self) -> None:
+        prompts_dir = Path(__file__).resolve().parents[1] / "orchestrator" / "prompts" / "workflow"
+        test_system = (prompts_dir / "test_system.j2").read_text(encoding="utf-8")
+        test_user = (prompts_dir / "test_user.j2").read_text(encoding="utf-8")
+
+        self.assertIn("already available enforcement context", test_system)
+        self.assertIn("do not spend shell commands or tool hops rereading `.codex/**`, `AGENTS.md`, `tasks/lessons.md`, or skill files", test_system)
+        self.assertIn("Preloaded repository governance context", test_user)
+        self.assertIn("runtime already loaded and enforced repository policy, engineering standards, operating rules, and required workflow skills", test_user)
+        self.assertIn("Do not spend shell commands or tool hops rereading `.codex/**`, `AGENTS.md`, `tasks/lessons.md`, or workflow skill files", test_user)
+        self.assertIn("current-head diff evidence, simulator/runtime discovery, targeted acceptance checks", test_user)
+
     def test_test_user_prompt_requires_changed_scope_before_full_suite(self) -> None:
         prompt_path = (
             Path(__file__).resolve().parents[1]
@@ -114,25 +192,77 @@ class PromptTemplateTests(unittest.TestCase):
         prompt_text = prompt_path.read_text(encoding="utf-8")
         self.assertIn("execute targeted tests/checks only for the code you changed first", prompt_text)
         self.assertIn("Do not default to broad `xcodebuild test`", prompt_text)
+        self.assertIn("Current published diff paths", prompt_text)
+        self.assertIn("Requires current-head acceptance evidence", prompt_text)
+        self.assertIn("Scope Step A to the currently published PR head", prompt_text)
+        self.assertIn("Prior evidence from earlier attempts is supporting context only", prompt_text)
+        self.assertIn("Never run multiple Apple-native validation commands concurrently", prompt_text)
+        self.assertIn("validation_scope", prompt_text)
+        self.assertIn("Never use `targeted_only`", prompt_text)
         self.assertIn("If you cannot identify a targeted test", prompt_text)
         self.assertIn("inspect the allowed tool list", prompt_text)
         self.assertIn("before concluding the run is blocked", prompt_text)
+        self.assertIn("xcrun simctl list runtimes", prompt_text)
+        self.assertIn("Do not hardcode an iPhone model name", prompt_text)
+        self.assertIn("CODE_SIGNING_ALLOWED=NO", prompt_text)
+        self.assertIn('If you return outcome="blocked" or outcome="waiting_for_input", `blocker_message` is required', prompt_text)
+
+    def test_test_system_prompt_requires_blocker_message_for_blocked_or_waiting(self) -> None:
+        prompt_path = (
+            Path(__file__).resolve().parents[1]
+            / "orchestrator"
+            / "prompts"
+            / "workflow"
+            / "test_system.j2"
+        )
+        prompt_text = prompt_path.read_text(encoding="utf-8")
+        self.assertIn('If you return outcome="blocked" or outcome="waiting_for_input", `blocker_message` is required', prompt_text)
 
     def test_dev_and_review_prompts_require_pr_head_to_use_integration_branch(self) -> None:
         prompts_dir = Path(__file__).resolve().parents[1] / "orchestrator" / "prompts" / "workflow"
         dev_prompt_text = (prompts_dir / "dev_user.j2").read_text(encoding="utf-8")
         review_prompt_text = (prompts_dir / "review_user.j2").read_text(encoding="utf-8")
 
+        self.assertIn("Current published PR URL", dev_prompt_text)
+        self.assertIn("Current published diff paths", dev_prompt_text)
+        self.assertIn("current published PR head as the remediation baseline", dev_prompt_text)
+        self.assertIn("Do not revert already-published PR-head changes", dev_prompt_text)
+        self.assertIn("Keep repo housekeeping and self-improvement files out of product publication candidates", dev_prompt_text)
+        self.assertIn("Do not edit `tasks/lessons.md`", dev_prompt_text)
+        self.assertIn("Validate in changed scope first", dev_prompt_text)
+        self.assertIn("Prefer file-scoped or target-scoped lint/test commands", dev_prompt_text)
+        self.assertIn("Do not let unrelated pre-existing repo-wide validation failures", dev_prompt_text)
+        self.assertIn("background repo debt", dev_prompt_text)
+        self.assertIn("Never run multiple Apple-native validation commands concurrently", dev_prompt_text)
         self.assertIn("Integration branch as the only valid PR head branch", dev_prompt_text)
         self.assertIn("Never open or update a PR from the Execution branch", dev_prompt_text)
         self.assertIn("github.push_branch", dev_prompt_text)
         self.assertIn("Do not use raw `git push`", dev_prompt_text)
+        self.assertIn("Do not use raw `gh` CLI commands", dev_prompt_text)
+        self.assertIn("treat it as executable through this tool bridge", dev_prompt_text)
+        self.assertIn("Do not use native `tool_search`", dev_prompt_text)
+        self.assertIn("The allowed governed list is authoritative for this bridge", dev_prompt_text)
+        self.assertIn("An empty or irrelevant `tool_search` result is not evidence", dev_prompt_text)
+        self.assertIn("unless you issued the corresponding `tool_request` and it failed", dev_prompt_text)
         self.assertIn("inspect the allowed tool list", dev_prompt_text)
         self.assertIn("Integration branch as the canonical PR head branch", review_prompt_text)
         self.assertIn("Execution branch (`run/...`)", review_prompt_text)
         self.assertIn("github.push_branch", review_prompt_text)
         self.assertIn("Do not use raw `git push`", review_prompt_text)
+        self.assertIn("Do not use raw `gh` CLI commands", review_prompt_text)
+        self.assertIn("treat it as executable through this tool bridge", review_prompt_text)
+        self.assertIn("Do not use native `tool_search`", review_prompt_text)
+        self.assertIn("The allowed governed list is authoritative for this bridge", review_prompt_text)
+        self.assertIn("An empty or irrelevant `tool_search` result is not evidence", review_prompt_text)
+        self.assertIn("unless you issued the corresponding `tool_request` and it failed", review_prompt_text)
         self.assertIn("inspect the allowed tool list", review_prompt_text)
+        self.assertIn("Treat repo housekeeping and self-improvement files as out of scope for product acceptance", review_prompt_text)
+        self.assertIn("If the published diff includes `tasks/lessons.md`", review_prompt_text)
+        self.assertIn("Test validation scope", review_prompt_text)
+        self.assertIn("Current published diff paths", review_prompt_text)
+        self.assertIn("Treat the Test stage as the primary validation authority", review_prompt_text)
+        self.assertIn("current_head_acceptance", review_prompt_text)
+        self.assertIn("background repo risk", review_prompt_text)
 
     def test_dev_and_review_system_prompts_make_remote_publication_tool_owned(self) -> None:
         prompts_dir = Path(__file__).resolve().parents[1] / "orchestrator" / "prompts" / "workflow"

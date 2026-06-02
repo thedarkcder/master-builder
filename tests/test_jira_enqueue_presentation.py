@@ -27,6 +27,20 @@ def test_format_jira_enqueue_skipped_message_includes_reason_and_guidance() -> N
     assert "cycle_id=abc" in message
 
 
+def test_format_jira_enqueue_skipped_message_links_jira_issue_when_url_is_available() -> None:
+    message = format_jira_enqueue_skipped_message(
+        issue_key="AP-322",
+        issue_url="https://bsktpay.atlassian.net/browse/AP-322",
+        issue_status="To Do",
+        admission=build_execution_admission_block(
+            reason=ExecutionAdmissionReason.GTD_REQUIRED,
+        ),
+    )
+
+    assert "for [AP-322](https://bsktpay.atlassian.net/browse/AP-322)." in message
+    assert "for `AP-322`." not in message
+
+
 def test_format_backlog_pre_run_check_message_lists_decision_gate_reason() -> None:
     message = format_backlog_pre_run_check_message(
         issue_key="GP-1",

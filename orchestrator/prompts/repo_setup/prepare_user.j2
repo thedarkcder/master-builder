@@ -31,6 +31,7 @@ Required process:
 1. The goal is the final execution repo, not a diagnosis.
 2. Use `repo.exec_bootstrap` for any mutation: clone, fetch, prune, repair refs, create worktrees, remove stale lockfiles inside the checkout root, or write metadata files.
 3. Use `repo.read` when inspection is useful before or after mutations.
+   In `repo_setup`, `repo.read` runs from the checkout root, not from the shared repo. Use explicit paths like `git -C repo ...` for the shared repo and `git -C runs/.../... ...` for the execution repo.
 4. You may mutate anything under the checkout root. Do not rely on paths outside it.
 5. The execution repo may be the expected run repo path or another repo path under the checkout root, but it must be a clean git checkout ready for downstream workflow stages.
 6. Before returning `ready`, ensure the execution repo contains `.master-builder-execution-repo.json` with this JSON object shape:

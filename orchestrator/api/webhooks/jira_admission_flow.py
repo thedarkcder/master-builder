@@ -32,6 +32,7 @@ from orchestrator.core.precheck.question_lock import (
     remove_precheck_questions_block,
     upsert_precheck_questions_block,
 )
+from orchestrator.core.integrations.atlassian.links import tenant_jira_issue_url
 from orchestrator.core.development.start_work import StartWorkUseCase
 from orchestrator.core.integrations.atlassian.parent_child_sync_shared import JiraParentChildSyncContext
 from orchestrator.core.integrations.workflow.provider import JiraWorkflowConnectionProvider, WorkflowIntegrationAdapterProvider
@@ -90,11 +91,13 @@ def resolve_jira_issue_board_location(
 def build_jira_enqueue_skipped_notification_action(
     *,
     context,
+    session: Session,
     admission,
     extra_detail: str | None = None,
 ) -> DiscordTenantNotificationAction:
     message = format_jira_enqueue_skipped_message(
         issue_key=context.issue_key,
+        issue_url=tenant_jira_issue_url(session=session, tenant=context.tenant, issue_key=context.issue_key),
         issue_status=context.issue_status,
         admission=admission,
         extra_detail=extra_detail,
@@ -451,6 +454,7 @@ def plan_jira_run_flow(
             actions=(
                 build_jira_enqueue_skipped_notification_action(
                     context=context,
+                    session=session,
                     admission=content_admission,
                 ),
             ),
@@ -489,6 +493,7 @@ def plan_jira_run_flow(
             actions=(
                 build_jira_enqueue_skipped_notification_action(
                     context=context,
+                    session=session,
                     admission=content_admission,
                     extra_detail=precheck_decision.policy_error,
                 ),
@@ -514,6 +519,7 @@ def plan_jira_run_flow(
             actions=(
                 build_jira_enqueue_skipped_notification_action(
                     context=context,
+                    session=session,
                     admission=admission,
                     extra_detail=admission_presentation.notification_detail,
                 ),
@@ -551,6 +557,7 @@ def plan_jira_run_flow(
             actions=(
                 build_jira_enqueue_skipped_notification_action(
                     context=context,
+                    session=session,
                     admission=enqueue_admission,
                     extra_detail=f"run_id={enqueue_result.run.run_id}",
                 ),

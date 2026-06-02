@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
+import subprocess
 from typing import Any
 from typing import Protocol
 
@@ -34,6 +36,7 @@ class StageAgents(Protocol):
         last_dev_result: DevResult | None,
         last_test_result: TestResult | None,
         last_review_result: ReviewResult | None,
+        capture_target_constraints_json: str = "[]",
     ) -> PmPlan:
         ...
 
@@ -81,6 +84,7 @@ class OrchestratedRunWorkflowExecutor:
         self,
         *,
         runtime: CodexRuntime,
+        pm_capture_target_constraints_json: str = "[]",
         runtime_resolver: Callable[[str, WorkflowRequest], CodexRuntime] | None = None,
         log_sink: Callable[[dict], None] | None = None,
         stage_agents: StageAgents | None = None,
@@ -90,6 +94,7 @@ class OrchestratedRunWorkflowExecutor:
         ] | None = None,
     ):
         self._runtime = runtime
+        self._pm_capture_target_constraints_json = pm_capture_target_constraints_json
         self._runtime_resolver = runtime_resolver
         self._log_sink = log_sink
         self._stage_agents = stage_agents
@@ -151,6 +156,7 @@ class OrchestratedRunWorkflowExecutor:
                             last_dev_result,
                             last_test_result,
                             last_review_result,
+                            self._pm_capture_target_constraints_json,
                         )
                     except Exception as exc:  # noqa: BLE001
                         return self._failure_result(
@@ -239,6 +245,7 @@ class OrchestratedRunWorkflowExecutor:
                     last_dev_result,
                     last_test_result,
                     last_review_result,
+                    self._pm_capture_target_constraints_json,
                 )
             except Exception as exc:  # noqa: BLE001
                 return self._failure_result(
@@ -516,6 +523,30 @@ class OrchestratedRunWorkflowExecutor:
             if attempt == 1 and resumed_dev_result_for_test is not None:
                 dev_result = resumed_dev_result_for_test
                 last_dev_result = dev_result
+            elif attempt == 1 and plan.next_stage == "test":
+                dev_result = _build_direct_test_dev_result(request)
+                last_dev_result = dev_result
+                dev_summary = _summarize_direct_test_dev_result(request)
+                stage_trace.append(
+                    _stage_trace_entry(
+                        stage="dev",
+                        status="completed",
+                        attempt=attempt,
+                        summary=dev_summary,
+                    )
+                )
+                checkpoint_failure = _persist_stage_checkpoint(
+                    WorkflowStageCheckpoint(
+                        stage="dev",
+                        attempt=attempt,
+                        status="completed",
+                        summary=dev_summary,
+                        dev_result=dev_result,
+                    )
+                )
+                if checkpoint_failure is not None:
+                    return checkpoint_failure
+                state.dev_rationale[:] = list(dev_result.change_summary)
             else:
                 try:
                     dev_result = agents.dev(request, plan, attempt, next_feedback)
@@ -579,6 +610,77 @@ class OrchestratedRunWorkflowExecutor:
                 )
                 if checkpoint_failure is not None:
                     return checkpoint_failure
+                tracked_worktree_changes = _tracked_worktree_change_paths(request.execution_repo_dir)
+                if tracked_worktree_changes:
+                    feedback = _summarize_unpublished_dev_changes(tracked_worktree_changes)
+                    history.append({"stage": "dev", "attempt": str(attempt), "event": feedback})
+                    checkpoint_failure = _persist_stage_checkpoint(
+                        WorkflowStageCheckpoint(
+                            stage="dev",
+                            attempt=attempt,
+                            status="failed",
+                            summary=feedback,
+                            dev_result=dev_result,
+                        )
+                    )
+                    if checkpoint_failure is not None:
+                        return checkpoint_failure
+                    stage_trace.append(
+                        _stage_trace_entry(
+                            stage="dev",
+                            status="failed",
+                            attempt=attempt,
+                            summary=feedback,
+                        )
+                    )
+                    if attempt >= max_loops:
+                        return self._failure_result(
+                            request=request,
+                            state=state,
+                            stage="dev",
+                            attempts=attempt,
+                            message=f"Max workflow attempts reached after dev publication failures. Last feedback: {feedback}",
+                            outcome="failed",
+                        )
+                    next_feedback = feedback
+                    continue
+                mixed_housekeeping_paths = _mixed_housekeeping_source_paths(
+                    request.execution_repo_dir,
+                    request.base_branch,
+                )
+                if mixed_housekeeping_paths:
+                    feedback = _summarize_mixed_housekeeping_source_paths(mixed_housekeeping_paths)
+                    history.append({"stage": "dev", "attempt": str(attempt), "event": feedback})
+                    checkpoint_failure = _persist_stage_checkpoint(
+                        WorkflowStageCheckpoint(
+                            stage="dev",
+                            attempt=attempt,
+                            status="failed",
+                            summary=feedback,
+                            dev_result=dev_result,
+                        )
+                    )
+                    if checkpoint_failure is not None:
+                        return checkpoint_failure
+                    stage_trace.append(
+                        _stage_trace_entry(
+                            stage="dev",
+                            status="failed",
+                            attempt=attempt,
+                            summary=feedback,
+                        )
+                    )
+                    if attempt >= max_loops:
+                        return self._failure_result(
+                            request=request,
+                            state=state,
+                            stage="dev",
+                            attempts=attempt,
+                            message=f"Max workflow attempts reached after dev scope violations. Last feedback: {feedback}",
+                            outcome="failed",
+                        )
+                    next_feedback = feedback
+                    continue
 
             try:
                 test_result = agents.test(request, plan, dev_result, attempt)
@@ -947,6 +1049,135 @@ def _capability_mismatch_message(*, request: WorkflowRequest, plan: PmPlan) -> s
 
 def _required_worker_capability(plan: PmPlan) -> WorkerCapability | None:
     return parse_worker_capability(plan.execution_worker_capability)
+
+
+def _tracked_worktree_change_paths(repo_dir: str | None) -> tuple[str, ...]:
+    repo_path = Path(str(repo_dir or "").strip())
+    if not repo_path.exists() or not (repo_path / ".git").exists():
+        return ()
+    paths: set[str] = set()
+    for args in (
+        ["git", "diff", "--name-only"],
+        ["git", "diff", "--cached", "--name-only"],
+    ):
+        completed = subprocess.run(
+            args,
+            cwd=repo_path,
+            capture_output=True,
+            text=True,
+            check=False,
+        )
+        if completed.returncode != 0:
+            return ()
+        for raw_line in completed.stdout.splitlines():
+            line = raw_line.strip()
+            if line:
+                paths.add(line)
+    return tuple(sorted(paths))
+
+
+def _build_direct_test_dev_result(request: WorkflowRequest) -> DevResult:
+    return DevResult(
+        change_summary=_direct_test_dev_summary(request),
+        pr_url=_trigger_context_pr_url(request),
+        outcome="continue",
+    )
+
+
+def _summarize_direct_test_dev_result(request: WorkflowRequest) -> str:
+    return _direct_test_dev_summary(request)[0]
+
+
+def _direct_test_dev_summary(request: WorkflowRequest) -> list[str]:
+    diff_paths = _current_head_diff_paths(request.execution_repo_dir, request.base_branch)
+    if diff_paths:
+        listed_paths = ", ".join(diff_paths[:8])
+        if len(diff_paths) > 8:
+            listed_paths = f"{listed_paths}, +{len(diff_paths) - 8} more"
+        return [
+            "PM directed the workflow to start at test using the current published head.",
+            f"Current published diff paths selected for validation: {listed_paths}.",
+        ]
+    return [
+        "PM directed the workflow to start at test without a fresh dev attempt.",
+    ]
+
+
+def _current_head_diff_paths(repo_dir: str | None, base_branch: str | None) -> list[str]:
+    repo_path = Path(str(repo_dir or "").strip())
+    resolved_base_branch = str(base_branch or "").strip()
+    if not resolved_base_branch or not repo_path.exists() or not (repo_path / ".git").exists():
+        return []
+    try:
+        completed = subprocess.run(
+            ["git", "diff", "--name-only", f"{resolved_base_branch}...HEAD"],
+            cwd=repo_path,
+            check=True,
+            capture_output=True,
+            text=True,
+        )
+    except (OSError, subprocess.CalledProcessError):
+        return []
+    return [line.strip() for line in completed.stdout.splitlines() if line.strip()]
+
+
+def _trigger_context_pr_url(request: WorkflowRequest) -> str | None:
+    if not isinstance(request.trigger_context, dict):
+        return None
+    raw_pr_url = request.trigger_context.get("pr_url")
+    normalized_pr_url = str(raw_pr_url or "").strip()
+    return normalized_pr_url or None
+
+
+def _mixed_housekeeping_source_paths(repo_dir: str | None, base_branch: str | None) -> tuple[str, ...]:
+    repo_path = Path(str(repo_dir or "").strip())
+    normalized_base_branch = str(base_branch or "").strip()
+    if not normalized_base_branch or not repo_path.exists() or not (repo_path / ".git").exists():
+        return ()
+    completed = subprocess.run(
+        ["git", "diff", "--name-only", f"{normalized_base_branch}...HEAD"],
+        cwd=repo_path,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if completed.returncode != 0:
+        return ()
+    paths = tuple(line.strip() for line in completed.stdout.splitlines() if line.strip())
+    if "tasks/lessons.md" not in paths:
+        return ()
+    if not any(_is_source_path(path) for path in paths):
+        return ()
+    return ("tasks/lessons.md",)
+
+
+def _is_source_path(path: str) -> bool:
+    normalized = path.strip().lower()
+    if not normalized or normalized == "tasks/lessons.md":
+        return False
+    if normalized.endswith((".md", ".txt", ".json", ".yaml", ".yml", ".lock")):
+        return False
+    if normalized.startswith("tests/") or "/tests/" in normalized or normalized.endswith("_test.py"):
+        return False
+    return normalized.endswith((".py", ".ts", ".tsx", ".js", ".jsx", ".java", ".kt", ".swift", ".go", ".rb", ".rs", ".cs"))
+
+
+def _summarize_unpublished_dev_changes(paths: tuple[str, ...]) -> str:
+    listed = ", ".join(paths[:4])
+    if len(paths) > 4:
+        listed += f", +{len(paths) - 4} more"
+    return (
+        "Dev stage returned continue with tracked changes still unpublished from the local worktree. "
+        f"Commit and publish the validated delta before handoff to test/review. Tracked paths: {listed}."
+    )
+
+
+def _summarize_mixed_housekeeping_source_paths(paths: tuple[str, ...]) -> str:
+    listed = ", ".join(paths)
+    return (
+        "Dev stage mixed repo housekeeping files into the product diff. "
+        f"Remove those files from the publication candidate before handoff to test/review. Tracked paths: {listed}."
+    )
 
 
 def _summarize_pm_plan(plan: PmPlan) -> str:

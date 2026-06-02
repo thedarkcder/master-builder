@@ -710,23 +710,39 @@ class BuildCodexRuntimeTests(unittest.TestCase):
         os.environ["HOME"] = "/Users/example-user"
         os.environ["XDG_CONFIG_HOME"] = "/Users/example-user/.config"
         try:
+            def fake_which(command: str) -> str | None:
+                mapping = {
+                    "codex": "/usr/bin/codex",
+                    "xcodebuild": "/usr/bin/xcodebuild",
+                    "xcrun": "/usr/bin/xcrun",
+                }
+                return mapping.get(command)
+
             with (
-                patch("orchestrator.core.runtime.runtime.shutil.which", return_value="/usr/bin/codex"),
+                patch("orchestrator.core.runtime.runtime.shutil.which", side_effect=fake_which),
                 patch("orchestrator.core.runtime.runtime.subprocess.Popen", side_effect=fake_popen) as popen_mock,
             ):
                 runtime = build_codex_runtime(settings=settings)
                 self.assertEqual(runtime.run_text(system_prompt="s", user_prompt="u"), "json-output")
 
-            self.assertNotIn("UNRELATED_PARENT_SECRET", popen_mock.call_args.kwargs["env"])
+            child_env = popen_mock.call_args.kwargs["env"]
+            self.assertNotIn("UNRELATED_PARENT_SECRET", child_env)
             self.assertEqual(
-                popen_mock.call_args.kwargs["env"]["ORCHESTRATOR_DATABASE_URL"],
+                child_env["ORCHESTRATOR_DATABASE_URL"],
                 settings.database_url,
             )
-            self.assertNotEqual(popen_mock.call_args.kwargs["env"]["HOME"], "/Users/example-user")
-            self.assertNotEqual(
-                popen_mock.call_args.kwargs["env"]["XDG_CONFIG_HOME"],
-                "/Users/example-user/.config",
+            self.assertEqual(child_env["HOME"], "/Users/example-user")
+            self.assertEqual(
+                child_env["XDG_CONFIG_HOME"],
+                f"{settings.runtime_home}/.config",
             )
+            self.assertEqual(child_env["CODEX_HOME"], f"{settings.runtime_home}/.codex")
+            self.assertEqual(child_env["ORCHESTRATOR_REAL_XCODEBUILD"], "/usr/bin/xcodebuild")
+            self.assertEqual(child_env["ORCHESTRATOR_REAL_XCRUN"], "/usr/bin/xcrun")
+            shim_dir = Path(child_env["PATH"].split(":", 1)[0])
+            self.assertEqual(shim_dir, Path(settings.runtime_home) / ".tool-shims")
+            self.assertTrue((shim_dir / "xcodebuild").exists())
+            self.assertTrue((shim_dir / "xcrun").exists())
         finally:
             if original_secret is None:
                 os.environ.pop("UNRELATED_PARENT_SECRET", None)
@@ -781,8 +797,16 @@ class BuildCodexRuntimeTests(unittest.TestCase):
             Path(working_dir).mkdir(parents=True, exist_ok=True)
             runtime_home_root = Path(temp_dir) / "home"
             with patch.dict(os.environ, {"HOME": str(runtime_home_root)}, clear=False):
+                def fake_which(command: str) -> str | None:
+                    mapping = {
+                        "codex": "/usr/bin/codex",
+                        "xcodebuild": "/usr/bin/xcodebuild",
+                        "xcrun": "/usr/bin/xcrun",
+                    }
+                    return mapping.get(command)
+
                 with (
-                    patch("orchestrator.core.runtime.runtime.shutil.which", return_value="/usr/bin/codex"),
+                    patch("orchestrator.core.runtime.runtime.shutil.which", side_effect=fake_which),
                     patch("orchestrator.core.runtime.runtime.subprocess.Popen", side_effect=fake_popen) as popen_mock,
                 ):
                     runtime = build_codex_runtime(settings=settings)
@@ -793,8 +817,69 @@ class BuildCodexRuntimeTests(unittest.TestCase):
 
             child_env = popen_mock.call_args.kwargs["env"]
             expected_runtime_home = str(runtime_home_root / ".master-builder" / "runtime" / "worker-macos-local")
-            self.assertEqual(child_env["HOME"], expected_runtime_home)
+            self.assertEqual(child_env["HOME"], str(runtime_home_root))
             self.assertEqual(child_env["XDG_CONFIG_HOME"], str(Path(expected_runtime_home) / ".config"))
+            self.assertEqual(child_env["CODEX_HOME"], str(Path(expected_runtime_home) / ".codex"))
+            self.assertEqual(child_env["ORCHESTRATOR_EXECUTION_REPO_DIR"], working_dir)
+            self.assertEqual(
+                Path(child_env["PATH"].split(":", 1)[0]),
+                Path(expected_runtime_home) / ".tool-shims",
+            )
+
+    def test_cli_request_falls_back_to_runtime_home_when_parent_home_missing(self) -> None:
+        settings = self._settings()
+        settings.runtime_home = ""
+
+        class _FakePipe:
+            def readline(self) -> str:
+                return ""
+
+            def close(self) -> None:
+                return None
+
+        class _FakeStdin:
+            def write(self, _content: str) -> None:
+                return None
+
+            def close(self) -> None:
+                return None
+
+        class _FakePopen:
+            def __init__(self, output_path: str) -> None:
+                self.stdin = _FakeStdin()
+                self.stdout = _FakePipe()
+                self.stderr = _FakePipe()
+                Path(output_path).write_text("json-output", encoding="utf-8")
+
+            def wait(self, timeout: float | None = None) -> int:  # noqa: ARG002
+                return 0
+
+            def kill(self) -> None:
+                return None
+
+        def fake_popen(args: list[str], **_kwargs: object):
+            output_idx = args.index("--output-last-message") + 1
+            return _FakePopen(args[output_idx])
+
+        with TemporaryDirectory() as temp_dir:
+            working_dir = str(Path(temp_dir) / "checkout")
+            Path(working_dir).mkdir(parents=True, exist_ok=True)
+            with patch.dict(os.environ, {}, clear=True):
+                with (
+                    patch("orchestrator.core.runtime.runtime.shutil.which", return_value="/usr/bin/codex"),
+                    patch("orchestrator.core.runtime.runtime.subprocess.Popen", side_effect=fake_popen) as popen_mock,
+                ):
+                    runtime = build_codex_runtime(settings=settings)
+                    self.assertEqual(
+                        runtime.run_text(system_prompt="s", user_prompt="u", working_dir=working_dir),
+                        "json-output",
+                    )
+
+        child_env = popen_mock.call_args.kwargs["env"]
+        expected_runtime_home = str(Path.home() / ".master-builder" / "runtime" / "worker-macos-local")
+        self.assertEqual(child_env["HOME"], expected_runtime_home)
+        self.assertEqual(child_env["XDG_CONFIG_HOME"], str(Path(expected_runtime_home) / ".config"))
+        self.assertEqual(child_env["CODEX_HOME"], str(Path(expected_runtime_home) / ".codex"))
 
     def test_cli_request_preserves_non_postgres_tool_database_url(self) -> None:
         settings = self._settings()
@@ -906,7 +991,7 @@ class BuildCodexRuntimeTests(unittest.TestCase):
         self.assertEqual(call_args[sandbox_idx], "workspace-write")
         config_values = [call_args[index + 1] for index, item in enumerate(call_args) if item == "-c"]
         self.assertIn('reasoning.effort="medium"', config_values)
-        self.assertNotIn('web_search="disabled"', config_values)
+        self.assertIn('web_search="disabled"', config_values)
 
         def fake_popen_stdout(args: list[str], **_kwargs: object):
             output_idx = args.index("--output-last-message") + 1
@@ -1397,7 +1482,7 @@ class BuildCodexRuntimeTests(unittest.TestCase):
             self.assertNotIn("--sandbox", call_args)
             self.assertIn("--full-auto", call_args)
             config_values = [call_args[index + 1] for index, item in enumerate(call_args) if item == "-c"]
-            self.assertNotIn('web_search="disabled"', config_values)
+            self.assertIn('web_search="disabled"', config_values)
             self.assertIn("--json", call_args)
             self.assertNotIn("--output-last-message", call_args)
             self.assertEqual(captured_session_ids, ["11111111-2222-3333-4444-555555555555"])

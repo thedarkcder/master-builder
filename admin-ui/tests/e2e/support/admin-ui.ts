@@ -66,7 +66,7 @@ type SnapshotStageSeed = {
 };
 
 type SnapshotPlanSeed = {
-  stages?: Partial<Record<"pm" | "dev" | "test" | "review", SnapshotStageSeed>>;
+  stages?: Partial<Record<"pm" | "dev" | "test" | "review" | "qa", SnapshotStageSeed>>;
   execution_context?: Record<string, unknown>;
   stage_updates?: Array<Record<string, unknown>>;
   live_stage_updates?: Array<Record<string, unknown>>;
@@ -77,7 +77,7 @@ type SnapshotPlanSeed = {
 
 export function makeExecutionSnapshotPlan(seed: SnapshotPlanSeed = {}): Record<string, unknown> {
   const stagePayload: Record<string, unknown> = {};
-  for (const stage of ["pm", "dev", "test", "review"] as const) {
+  for (const stage of ["pm", "dev", "test", "review", "qa"] as const) {
     const value = seed.stages?.[stage];
     if (!value) {
       continue;
@@ -274,6 +274,7 @@ export function makeTenant(overrides: Partial<TenantRecord> = {}): TenantRecord 
       github_repository: "thedarkcder/girl-power",
     },
     policy: {
+      qa_demo_recording_enabled: false,
       allow_jira_transitions: true,
       allow_pr_creation: true,
       allow_code_reviews: true,
@@ -778,7 +779,7 @@ export function makeDeliverySummary(
 
 export function makeStageInvocationLogs(options: {
   runId?: string;
-  stage: "pm" | "dev" | "test" | "review";
+  stage: "pm" | "dev" | "test" | "review" | "qa";
   invocationId: string;
   command: string;
   startedAt: string;
@@ -836,7 +837,7 @@ export function makeStageInvocationLogs(options: {
 
 export function makeRuntimeStageLogs(options: {
   runId?: string;
-  stage: "pm" | "dev" | "test" | "review";
+  stage: "pm" | "dev" | "test" | "review" | "qa";
   invocationId: string;
   command?: string;
   recordedAt: string;
@@ -939,6 +940,19 @@ export async function mockRunDetailApis(
   let runResponseIndex = 0;
   let workflowResponseIndex = 0;
   await installBffApiMocks(page, [
+    {
+      method: "GET",
+      pathname: "/api/auth/session",
+      handler: (route) =>
+        fulfillJson(route, {
+          user: {
+            name: "admin",
+            email: null,
+            principal: makePlatformAdminPrincipal(),
+          },
+          expires: "2099-01-01T00:00:00.000Z",
+        }),
+    },
     {
       method: "GET",
       pathname: "/api/bff/api/app/auth/me",

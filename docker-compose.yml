@@ -46,6 +46,43 @@ services:
       timeout: 5s
       retries: 12
 
+  minio:
+    image: minio/minio:RELEASE.2025-01-20T14-49-07Z
+    container_name: master-builder-minio
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-masterbuilder}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-masterbuildersecret}
+    command: server /data --console-address ":9001"
+    ports:
+      - "${MASTER_BUILDER_MINIO_API_PORT:-60015}:9000"
+      - "${MASTER_BUILDER_MINIO_CONSOLE_PORT:-60016}:9001"
+    healthcheck:
+      test: ["CMD-SHELL", "curl --fail --silent http://127.0.0.1:9000/minio/health/live >/dev/null || exit 1"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    volumes:
+      - minio-data:/data
+
+  minio-init:
+    image: minio/mc:RELEASE.2025-04-16T18-13-26Z
+    container_name: master-builder-minio-init
+    restart: "no"
+    depends_on:
+      minio:
+        condition: service_healthy
+    environment:
+      MINIO_ROOT_USER: ${MINIO_ROOT_USER:-masterbuilder}
+      MINIO_ROOT_PASSWORD: ${MINIO_ROOT_PASSWORD:-masterbuildersecret}
+      ORCHESTRATOR_QA_DEMO_ARTIFACT_BUCKET: ${ORCHESTRATOR_QA_DEMO_ARTIFACT_BUCKET:-qa-demos}
+    entrypoint:
+      - /bin/sh
+      - -ceu
+      - |
+        mc alias set local http://minio:9000 "$${MINIO_ROOT_USER}" "$${MINIO_ROOT_PASSWORD}"
+        mc mb --ignore-existing "local/$${ORCHESTRATOR_QA_DEMO_ARTIFACT_BUCKET}"
+        mc anonymous set download "local/$${ORCHESTRATOR_QA_DEMO_ARTIFACT_BUCKET}"
+
   clickhouse:
     image: clickhouse/clickhouse-server:24.12
     container_name: master-builder-clickhouse
@@ -260,6 +297,8 @@ services:
         condition: service_completed_successfully
       api:
         condition: service_started
+      minio-init:
+        condition: service_completed_successfully
       postgres:
         condition: service_healthy
       clickhouse:
@@ -287,6 +326,16 @@ services:
       ORCHESTRATOR_TEMPORAL_TARGET_HOST: ${ORCHESTRATOR_TEMPORAL_TARGET_HOST:-temporal:7233}
       ORCHESTRATOR_TEMPORAL_NAMESPACE: ${ORCHESTRATOR_TEMPORAL_NAMESPACE:-default}
       ORCHESTRATOR_TEMPORAL_TASK_QUEUE: ${ORCHESTRATOR_TEMPORAL_TASK_QUEUE:-master-builder}
+      ORCHESTRATOR_QA_DEMO_ARTIFACT_ENDPOINT: ${ORCHESTRATOR_QA_DEMO_ARTIFACT_ENDPOINT_INTERNAL:-minio:9000}
+      ORCHESTRATOR_QA_DEMO_ARTIFACT_ACCESS_KEY: ${ORCHESTRATOR_QA_DEMO_ARTIFACT_ACCESS_KEY:-masterbuilder}
+      ORCHESTRATOR_QA_DEMO_ARTIFACT_SECRET_KEY: ${ORCHESTRATOR_QA_DEMO_ARTIFACT_SECRET_KEY:-masterbuildersecret}
+      ORCHESTRATOR_QA_DEMO_ARTIFACT_BUCKET: ${ORCHESTRATOR_QA_DEMO_ARTIFACT_BUCKET:-qa-demos}
+      ORCHESTRATOR_QA_DEMO_ARTIFACT_PUBLIC_BASE_URL: ${ORCHESTRATOR_QA_DEMO_ARTIFACT_PUBLIC_BASE_URL:-http://127.0.0.1:60015/qa-demos}
+      ORCHESTRATOR_QA_DEMO_ARTIFACT_SECURE: ${ORCHESTRATOR_QA_DEMO_ARTIFACT_SECURE:-false}
+      ORCHESTRATOR_QA_DEMO_IOS_RECORDER_COMMAND: ${ORCHESTRATOR_QA_DEMO_IOS_RECORDER_COMMAND:-}
+      ORCHESTRATOR_QA_DEMO_IOS_CAPTURE_REFERENCE: ${ORCHESTRATOR_QA_DEMO_IOS_CAPTURE_REFERENCE:-}
+      ORCHESTRATOR_QA_DEMO_ANDROID_RECORDER_COMMAND: ${ORCHESTRATOR_QA_DEMO_ANDROID_RECORDER_COMMAND:-}
+      ORCHESTRATOR_QA_DEMO_ANDROID_CAPTURE_REFERENCE: ${ORCHESTRATOR_QA_DEMO_ANDROID_CAPTURE_REFERENCE:-}
       HF_HOME: /root/.cache/huggingface
       HF_HUB_OFFLINE: ${HF_HUB_OFFLINE:-1}
     command:
@@ -727,3 +776,4 @@ volumes:
   clickhouse-data:
   prometheus-data:
   tempo-data:
+  minio-data:

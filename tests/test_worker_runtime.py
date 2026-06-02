@@ -205,6 +205,10 @@ class RuntimeFactoryTests(unittest.TestCase):
         session = MagicMock()
         settings = MagicMock()
         settings.database_url = "sqlite:///test.db"
+        settings.qa_demo_ios_recorder_command = ""
+        settings.qa_demo_android_recorder_command = ""
+        settings.qa_demo_desktop_recorder_command = ""
+        settings.qa_demo_desktop_worker_platform = ""
         with (
             patch("orchestrator.core.worker.runtime_factory.get_settings", return_value=settings) as settings_mock,
             patch("orchestrator.core.worker.runtime_factory.build_codex_runtime", return_value=MagicMock()) as runtime_mock,
@@ -219,7 +223,32 @@ class RuntimeFactoryTests(unittest.TestCase):
         runtime_mock.assert_called_once()
         agents_mock.assert_called_once()
         runner_mock.assert_called_once()
+        self.assertIn("pm_capture_target_constraints_json", agents_mock.call_args.kwargs)
         self.assertIsNotNone(runner)
+
+    def test_build_workflow_runner_for_session_upgrades_macos_sandbox_mode(self) -> None:
+        from orchestrator.core.config import Settings
+        from orchestrator.core.worker.runtime_factory import build_workflow_runner_for_session
+
+        session = MagicMock()
+        settings = Settings(
+            database_url="sqlite:///test.db",
+            codex_sandbox_mode="workspace-write",
+            worker_capabilities="macos",
+        )
+        with (
+            patch("orchestrator.core.worker.runtime_factory.get_settings", return_value=settings),
+            patch("orchestrator.core.worker.runtime_factory.build_codex_runtime", return_value=MagicMock()) as runtime_mock,
+            patch(
+                "orchestrator.core.worker.runtime_factory.OrchestratedRunWorkflowExecutor",
+                return_value=MagicMock(),
+            ),
+            patch("orchestrator.core.worker.runtime_factory.WorkflowRunner", return_value=MagicMock()),
+        ):
+            build_workflow_runner_for_session(session=session)
+
+        effective_settings = runtime_mock.call_args.kwargs["settings"]
+        self.assertEqual(effective_settings.codex_sandbox_mode, "danger-full-access")
 
 
 class WorkerTests(unittest.TestCase):

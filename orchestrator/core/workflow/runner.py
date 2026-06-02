@@ -9,6 +9,8 @@ from orchestrator.core.worker.capability_normalization import WorkerCapability
 
 StageOutcome = Literal["continue", "requeue", "waiting_for_input", "blocked", "failed"]
 WorkflowOutcome = Literal["success", "requeue", "waiting_for_input", "blocked", "failed"]
+QaCaptureTarget = Literal["browser", "ios", "android", "desktop"]
+TestValidationScope = Literal["targeted_only", "current_head_acceptance", "full_suite"]
 
 
 @dataclass(frozen=True)
@@ -49,10 +51,19 @@ class WorkflowRequest:
 
 
 @dataclass(frozen=True)
+class DemoRequirement:
+    title: str
+    acceptance_criterion: str
+    capture_target: QaCaptureTarget = "browser"
+    variants: list[str] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
 class PmPlan:
     plan_steps: list[str]
     acceptance_criteria: list[str]
     risks: list[str]
+    demo_requirements: list[DemoRequirement] = field(default_factory=list)
     outcome: StageOutcome = "continue"
     next_stage: Literal["dev", "test"] = "dev"
     execution_worker_capability: Literal["linux", "macos"] = "linux"
@@ -74,6 +85,7 @@ class DevResult:
 @dataclass(frozen=True)
 class TestResult:
     guidance: list[str]
+    validation_scope: TestValidationScope = "targeted_only"
     outcome: StageOutcome = "continue"
     feedback: str | None = None
     blocker_message: str | None = None
@@ -89,6 +101,53 @@ class ReviewResult:
     outcome: StageOutcome = "continue"
     feedback: str | None = None
     pr_url: str | None = None
+    blocker_message: str | None = None
+
+
+@dataclass(frozen=True)
+class QaStep:
+    action: Literal[
+        "goto",
+        "relaunch_app",
+        "click",
+        "fill",
+        "press",
+        "select_option",
+        "wait_for_text",
+        "wait_for_url",
+        "assert_text",
+        "assert_visible",
+    ]
+    selector: str | None = None
+    value: str | None = None
+
+
+@dataclass(frozen=True)
+class QaScenario:
+    name: str
+    objective: str
+    capture_target: QaCaptureTarget = "browser"
+    start_path: str = "/"
+    expected_outcomes: list[str] = field(default_factory=list)
+    steps: list[QaStep] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class QaRecording:
+    name: str
+    artifact_url: str
+    object_key: str
+    capture_reference: str
+    capture_target: QaCaptureTarget = "browser"
+
+
+@dataclass(frozen=True)
+class QaResult:
+    summary: list[str]
+    scenarios: list[QaScenario]
+    recordings: list[QaRecording] = field(default_factory=list)
+    outcome: StageOutcome = "continue"
+    feedback: str | None = None
     blocker_message: str | None = None
 
 
@@ -110,6 +169,7 @@ class WorkflowStageCheckpoint:
     dev_result: DevResult | None = None
     test_result: TestResult | None = None
     review_result: ReviewResult | None = None
+    qa_result: QaResult | None = None
 
 
 @dataclass(frozen=True)

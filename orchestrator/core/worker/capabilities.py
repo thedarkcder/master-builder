@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Iterable
 from dataclasses import dataclass
+import re
 
 from orchestrator.core.worker.capability_normalization import DEFAULT_WORKER_CAPABILITY
 from orchestrator.core.worker.capability_normalization import WorkerCapability
@@ -10,6 +11,24 @@ from orchestrator.core.worker.capability_normalization import parse_worker_capab
 from orchestrator.core.worker.capability_normalization import parse_worker_capabilities_or_raise
 from orchestrator.core.worker.capability_normalization import parse_worker_capabilities_with_diagnostics
 WORKER_CAPABILITY_LABEL_PREFIX = "worker:"
+_APPLE_NATIVE_KEYWORD_PATTERNS = (
+    r"\bios\b",
+    r"\biphone\b",
+    r"\bipad\b",
+    r"\bipados\b",
+    r"\bxcode\b",
+    r"\bxcodebuild\b",
+    r"\bxctest\b",
+    r"\bxcuitest\b",
+    r"\bsimctl\b",
+    r"\bsimulator\b",
+    r"\bswiftui\b",
+    r"\bappkit\b",
+    r"\buikit\b",
+    r"\bvisionos\b",
+    r"\bwatchos\b",
+    r"\bmac catalyst\b",
+)
 
 
 @dataclass(frozen=True)
@@ -95,11 +114,24 @@ def parse_worker_capability_labels(
     )
 
 
+def _project_default_worker_capability(raw_value: object | None) -> str:
+    parsed = parse_worker_capability(raw_value)
+    return parsed.value if parsed is not None else ""
+
+
+def _text_implies_macos(*parts: str | None) -> bool:
+    text = " ".join(str(part or "").strip().lower() for part in parts if str(part or "").strip())
+    if not text:
+        return False
+    return any(re.search(pattern, text) for pattern in _APPLE_NATIVE_KEYWORD_PATTERNS)
+
+
 def infer_required_worker_capability(
     *,
     issue_summary: str | None,
     issue_description: str | None,
     issue_labels: list[str] | None,
+    project_default_worker_capability: str | None = None,
     tenant_id: str | None = None,
     project_id: str | None = None,
     issue_key: str | None = None,
@@ -115,6 +147,11 @@ def infer_required_worker_capability(
     label_parse = parse_worker_capability_labels(normalized_labels)
     if label_parse.selected_capability is not None:
         return label_parse.selected_capability.value
+    project_default = _project_default_worker_capability(project_default_worker_capability)
+    if project_default:
+        return project_default
+    if _text_implies_macos(issue_summary, issue_description):
+        return WorkerCapability.MACOS.value
     return ""
 
 

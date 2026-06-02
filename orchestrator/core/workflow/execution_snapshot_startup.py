@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from datetime import datetime, timezone
+from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy import select
@@ -22,6 +24,8 @@ class ExecutionSnapshotStartupReport:
     invalid_runs: int
     scanned_checkpoints: int
     invalid_checkpoints: int
+    repaired_runs: int
+    repaired_checkpoints: int
     invalid_run_ids: tuple[str, ...]
     invalid_checkpoint_ids: tuple[str, ...]
 
@@ -45,6 +49,7 @@ def run_execution_snapshot_startup_bootstrap(
             {"lock_key": _EXECUTION_SNAPSHOT_MIGRATION_LOCK_KEY},
         )
         try:
+            repaired_runs, repaired_checkpoints = _repair_execution_snapshots(session=session)
             report = _validate_execution_snapshots(session=session)
         finally:
             session.execute(
@@ -52,6 +57,17 @@ def run_execution_snapshot_startup_bootstrap(
                 {"lock_key": _EXECUTION_SNAPSHOT_MIGRATION_LOCK_KEY},
             )
             session.commit()
+
+    report = ExecutionSnapshotStartupReport(
+        scanned_runs=report.scanned_runs,
+        invalid_runs=report.invalid_runs,
+        scanned_checkpoints=report.scanned_checkpoints,
+        invalid_checkpoints=report.invalid_checkpoints,
+        repaired_runs=repaired_runs,
+        repaired_checkpoints=repaired_checkpoints,
+        invalid_run_ids=report.invalid_run_ids,
+        invalid_checkpoint_ids=report.invalid_checkpoint_ids,
+    )
 
     if report.invalid_runs or report.invalid_checkpoints:
         logger.error(
@@ -65,12 +81,15 @@ def run_execution_snapshot_startup_bootstrap(
         )
         return report
 
-    logger.info(
-        "execution_snapshot_startup_bootstrap_valid actor=%s scanned_runs=%s scanned_checkpoints=%s",
-        actor,
-        report.scanned_runs,
-        report.scanned_checkpoints,
-    )
+        logger.info(
+            "execution_snapshot_startup_bootstrap_valid actor=%s scanned_runs=%s scanned_checkpoints=%s "
+            "repaired_runs=%s repaired_checkpoints=%s",
+            actor,
+            report.scanned_runs,
+            report.scanned_checkpoints,
+            report.repaired_runs,
+            report.repaired_checkpoints,
+        )
     return report
 
 
@@ -131,6 +150,138 @@ def _validate_execution_snapshots(*, session: Session) -> ExecutionSnapshotStart
         invalid_runs=invalid_runs,
         scanned_checkpoints=scanned_checkpoints,
         invalid_checkpoints=invalid_checkpoints,
+        repaired_runs=0,
+        repaired_checkpoints=0,
         invalid_run_ids=tuple(invalid_run_ids),
         invalid_checkpoint_ids=tuple(invalid_checkpoint_ids),
     )
+
+
+def _repair_execution_snapshots(*, session: Session) -> tuple[int, int]:
+    run_updates: list[dict[str, object]] = []
+    run_statement = select(Run.run_id, Run.plan).order_by(Run.created_at.asc(), Run.run_id.asc())
+    for run_id, payload in session.execute(run_statement):
+        repaired = _repair_execution_snapshot_payload(payload)
+        if repaired is None:
+            continue
+        run_updates.append({"run_id": run_id, "plan": repaired})
+    for update in run_updates:
+        session.execute(
+            Run.__table__.update().where(Run.run_id == update["run_id"]).values(plan=update["plan"]),
+        )
+
+    checkpoint_updates: list[dict[str, object]] = []
+    checkpoint_statement = select(
+        WorkflowCheckpoint.checkpoint_id,
+        WorkflowCheckpoint.payload_json,
+    ).order_by(WorkflowCheckpoint.created_at.asc(), WorkflowCheckpoint.checkpoint_id.asc())
+    for checkpoint_id, payload in session.execute(checkpoint_statement):
+        repaired = _repair_execution_snapshot_payload(payload)
+        if repaired is None:
+            continue
+        checkpoint_updates.append(
+            {
+                "checkpoint_id": checkpoint_id,
+                "payload_json": repaired,
+                "updated_at": datetime.now(timezone.utc),
+            }
+        )
+    for update in checkpoint_updates:
+        session.execute(
+            WorkflowCheckpoint.__table__.update()
+            .where(WorkflowCheckpoint.checkpoint_id == update["checkpoint_id"])
+            .values(payload_json=update["payload_json"], updated_at=update["updated_at"]),
+        )
+    return len(run_updates), len(checkpoint_updates)
+
+
+def _repair_execution_snapshot_payload(payload: object) -> dict[str, Any] | None:
+    if not isinstance(payload, dict) or payload.get("version") != 1:
+        return None
+    stages = payload.get("stages")
+    if not isinstance(stages, dict):
+        return None
+
+    repaired_stages: dict[str, Any] | None = None
+    for stage_name, stage_record in stages.items():
+        repaired_stage_record = _repair_execution_stage_record(stage_name=stage_name, stage_record=stage_record)
+        if repaired_stage_record is None:
+            continue
+        if repaired_stages is None:
+            repaired_stages = dict(stages)
+        repaired_stages[stage_name] = repaired_stage_record
+
+    if repaired_stages is None:
+        return None
+
+    repaired_payload = dict(payload)
+    repaired_payload["stages"] = repaired_stages
+    return repaired_payload
+
+
+def _repair_execution_stage_record(*, stage_name: object, stage_record: object) -> dict[str, Any] | None:
+    if not isinstance(stage_record, dict):
+        return None
+    artifact = stage_record.get("artifact")
+    repaired_artifact = _repair_legacy_test_artifact(artifact) if stage_name == "test" else None
+    capture_target_repaired_artifact = _repair_legacy_mobile_capture_targets(artifact)
+    if capture_target_repaired_artifact is not None:
+        repaired_artifact = capture_target_repaired_artifact if repaired_artifact is None else _merge_artifact_repairs(
+            repaired_artifact,
+            capture_target_repaired_artifact,
+        )
+    if repaired_artifact is None:
+        return None
+    repaired_stage_record = dict(stage_record)
+    repaired_stage_record["artifact"] = repaired_artifact
+    return repaired_stage_record
+
+
+def _repair_legacy_test_artifact(artifact: object) -> dict[str, Any] | None:
+    if not isinstance(artifact, dict):
+        return None
+    if artifact.get("validation_scope") is not None:
+        return None
+    guidance = artifact.get("guidance")
+    outcome = artifact.get("outcome")
+    if not isinstance(guidance, list) or not guidance or not all(isinstance(item, str) and item.strip() for item in guidance):
+        return None
+    if not isinstance(outcome, str) or not outcome.strip():
+        return None
+    repaired_artifact = dict(artifact)
+    repaired_artifact["validation_scope"] = "targeted_only"
+    return repaired_artifact
+
+
+def _merge_artifact_repairs(primary: dict[str, Any], secondary: dict[str, Any]) -> dict[str, Any]:
+    merged = dict(primary)
+    for key, value in secondary.items():
+        merged[key] = value
+    return merged
+
+
+def _repair_legacy_mobile_capture_targets(artifact: object) -> dict[str, Any] | None:
+    if not isinstance(artifact, dict):
+        return None
+    repaired = _repair_capture_targets_in_value(artifact)
+    if repaired == artifact:
+        return None
+    if not isinstance(repaired, dict):  # pragma: no cover
+        return None
+    return repaired
+
+
+def _repair_capture_targets_in_value(value: Any) -> Any:
+    if isinstance(value, list):
+        return [_repair_capture_targets_in_value(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+    repaired: dict[str, Any] = {}
+    for key, item in value.items():
+        if key == "capture_target" and item == "mobile":
+            repaired[key] = "ios"
+        elif key == "capture_reference" and item == "mobile://configured":
+            repaired[key] = "ios-simulator://configured"
+        else:
+            repaired[key] = _repair_capture_targets_in_value(item)
+    return repaired

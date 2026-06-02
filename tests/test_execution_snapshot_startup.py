@@ -6,6 +6,8 @@ from unittest.mock import patch
 
 from orchestrator.core.workflow.execution_snapshot_startup import (
     ExecutionSnapshotStartupReport,
+    _repair_execution_snapshot_payload,
+    _repair_legacy_test_artifact,
     ensure_execution_snapshot_startup_bootstrap,
     run_execution_snapshot_startup_bootstrap,
 )
@@ -48,6 +50,8 @@ def _ok_report() -> ExecutionSnapshotStartupReport:
         invalid_runs=0,
         scanned_checkpoints=1,
         invalid_checkpoints=0,
+        repaired_runs=0,
+        repaired_checkpoints=0,
         invalid_run_ids=(),
         invalid_checkpoint_ids=(),
     )
@@ -100,6 +104,8 @@ class ExecutionSnapshotStartupBootstrapTests(unittest.TestCase):
             invalid_runs=1,
             scanned_checkpoints=1,
             invalid_checkpoints=0,
+            repaired_runs=0,
+            repaired_checkpoints=0,
             invalid_run_ids=("run-1",),
             invalid_checkpoint_ids=(),
         )
@@ -150,6 +156,8 @@ class ExecutionSnapshotStartupBootstrapTests(unittest.TestCase):
             invalid_runs=1,
             scanned_checkpoints=1,
             invalid_checkpoints=1,
+            repaired_runs=0,
+            repaired_checkpoints=0,
             invalid_run_ids=("run-1",),
             invalid_checkpoint_ids=("cp-1",),
         )
@@ -163,6 +171,150 @@ class ExecutionSnapshotStartupBootstrapTests(unittest.TestCase):
                     database_url="postgresql://user:pass@localhost/db",
                     actor="worker",
                 )
+
+    def test_repair_legacy_test_artifact_backfills_validation_scope(self) -> None:
+        repaired = _repair_legacy_test_artifact(
+            {
+                "guidance": ["pytest -q"],
+                "outcome": "continue",
+                "feedback": None,
+            }
+        )
+
+        self.assertEqual(
+            repaired,
+            {
+                "guidance": ["pytest -q"],
+                "outcome": "continue",
+                "feedback": None,
+                "validation_scope": "targeted_only",
+            },
+        )
+
+    def test_repair_execution_snapshot_payload_repairs_legacy_test_stage(self) -> None:
+        payload = {
+            "version": 1,
+            "context": {"trigger_context": {}, "execution_context": {}},
+            "workflow": {"outcome": None, "attempts": 0, "summary": [], "blocker_message": None, "requeue_target": None, "requeue_reason": None},
+            "events": {"stage_updates": [], "live_stage_updates": [], "stage_trace": [], "workstream_trace": []},
+            "stages": {
+                "test": {
+                    "attempt": 1,
+                    "status": "completed",
+                    "summary": "tests passed",
+                    "completed_at": "2026-06-02T00:00:00+00:00",
+                    "artifact": {
+                        "guidance": ["pytest -q"],
+                        "outcome": "continue",
+                        "feedback": None,
+                    },
+                }
+            },
+        }
+
+        repaired = _repair_execution_snapshot_payload(payload)
+
+        assert repaired is not None
+        self.assertEqual(
+            repaired["stages"]["test"]["artifact"]["validation_scope"],
+            "targeted_only",
+        )
+
+    def test_repair_execution_snapshot_payload_migrates_legacy_mobile_capture_targets_to_ios(self) -> None:
+        payload = {
+            "version": 1,
+            "context": {"trigger_context": {}, "execution_context": {}},
+            "workflow": {"outcome": None, "attempts": 0, "summary": [], "blocker_message": None, "requeue_target": None, "requeue_reason": None},
+            "events": {"stage_updates": [], "live_stage_updates": [], "stage_trace": [], "workstream_trace": []},
+            "stages": {
+                "pm": {
+                    "attempt": 1,
+                    "status": "completed",
+                    "summary": "planned",
+                    "completed_at": "2026-06-02T00:00:00+00:00",
+                    "artifact": {
+                        "plan_steps": ["step"],
+                        "acceptance_criteria": ["native app works"],
+                        "risks": [],
+                        "demo_requirements": [
+                            {
+                                "title": "Native walkthrough",
+                                "acceptance_criterion": "native app works",
+                                "capture_target": "mobile",
+                                "variants": [],
+                            }
+                        ],
+                        "outcome": "continue",
+                        "next_stage": "dev",
+                        "execution_worker_capability": "macos",
+                    },
+                },
+                "qa": {
+                    "attempt": 1,
+                    "status": "completed",
+                    "summary": "recorded",
+                    "completed_at": "2026-06-02T00:00:00+00:00",
+                    "artifact": {
+                        "summary": ["recorded"],
+                        "scenarios": [
+                            {
+                                "name": "Native walkthrough",
+                                "objective": "show app",
+                                "capture_target": "mobile",
+                                "start_path": "/",
+                                "expected_outcomes": [],
+                                "steps": [{"action": "assert_visible", "selector": "text=Ready", "value": None}],
+                            }
+                        ],
+                        "recordings": [
+                            {
+                                "name": "Native walkthrough",
+                                "artifact_url": "https://cdn.example/demo.mp4",
+                                "object_key": "tenant/project/run/demo.mp4",
+                                "capture_reference": "mobile://configured",
+                                "capture_target": "mobile",
+                            }
+                        ],
+                        "outcome": "continue",
+                    },
+                },
+            },
+        }
+
+        repaired = _repair_execution_snapshot_payload(payload)
+
+        assert repaired is not None
+        pm_requirement = repaired["stages"]["pm"]["artifact"]["demo_requirements"][0]
+        qa_scenario = repaired["stages"]["qa"]["artifact"]["scenarios"][0]
+        qa_recording = repaired["stages"]["qa"]["artifact"]["recordings"][0]
+        self.assertEqual(pm_requirement["capture_target"], "ios")
+        self.assertEqual(qa_scenario["capture_target"], "ios")
+        self.assertEqual(qa_recording["capture_target"], "ios")
+        self.assertEqual(qa_recording["capture_reference"], "ios-simulator://configured")
+
+    def test_repair_execution_snapshot_payload_ignores_non_test_stage_artifacts(self) -> None:
+        payload = {
+            "version": 1,
+            "context": {"trigger_context": {}, "execution_context": {}},
+            "workflow": {"outcome": None, "attempts": 0, "summary": [], "blocker_message": None, "requeue_target": None, "requeue_reason": None},
+            "events": {"stage_updates": [], "live_stage_updates": [], "stage_trace": [], "workstream_trace": []},
+            "stages": {
+                "dev": {
+                    "attempt": 1,
+                    "status": "completed",
+                    "summary": "implemented",
+                    "completed_at": "2026-06-02T00:00:00+00:00",
+                    "artifact": {
+                        "change_summary": ["done"],
+                        "outcome": "continue",
+                    },
+                }
+            },
+        }
+
+        repaired = _repair_execution_snapshot_payload(payload)
+
+        self.assertIsNone(repaired)
 
 if __name__ == "__main__":
     unittest.main()

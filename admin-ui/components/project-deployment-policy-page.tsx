@@ -53,6 +53,13 @@ const setupSteps = [
 ] as const;
 
 type SetupStepIndex = 0 | 1 | 2 | 3 | 4;
+type PolicySettingsTab = "automation" | "variables" | "secrets";
+
+const policySettingsTabs: Array<{ id: PolicySettingsTab; label: string }> = [
+  { id: "automation", label: "Automation" },
+  { id: "variables", label: "Variables" },
+  { id: "secrets", label: "Secret refs" },
+];
 
 function emptyPolicyForm(): PolicyFormState {
   return {
@@ -223,6 +230,7 @@ export function ProjectDeploymentPolicyPage({ tenantId, projectId }: ProjectDepl
   const { showToast } = useToast();
   const [form, setForm] = useState<PolicyFormState>(() => emptyPolicyForm());
   const [activeStep, setActiveStep] = useState<SetupStepIndex>(0);
+  const [activePolicyTab, setActivePolicyTab] = useState<PolicySettingsTab>("automation");
   const [branches, setBranches] = useState<ProjectGitHubBranchRecord[]>([]);
   const [environmentBranch, setEnvironmentBranch] = useState("");
   const [policyConfigured, setPolicyConfigured] = useState(false);
@@ -396,8 +404,29 @@ export function ProjectDeploymentPolicyPage({ tenantId, projectId }: ProjectDepl
           </p>
         ) : null}
 
-        <div className="space-y-6">
-          <section className="rounded-2xl border bg-background p-6">
+        <div className="mb-6 border-b" role="tablist" aria-label="Deployment policy sections">
+          <div className="flex flex-wrap gap-1">
+            {policySettingsTabs.map((tab) => (
+              <button
+                key={tab.id}
+                type="button"
+                role="tab"
+                aria-selected={activePolicyTab === tab.id}
+                className={`border-b-2 px-4 py-3 text-sm ${
+                  activePolicyTab === tab.id
+                    ? "border-primary text-foreground"
+                    : "border-transparent text-muted-foreground hover:text-foreground"
+                }`}
+                onClick={() => setActivePolicyTab(tab.id)}
+              >
+                {tab.label}
+              </button>
+            ))}
+          </div>
+        </div>
+
+        {activePolicyTab === "automation" ? (
+          <section className="rounded-2xl border bg-background p-6" role="tabpanel">
             <div className="grid gap-5 md:grid-cols-2">
               <fieldset className="space-y-3">
                 <legend className="text-sm font-semibold">Release automation</legend>
@@ -481,11 +510,13 @@ export function ProjectDeploymentPolicyPage({ tenantId, projectId }: ProjectDepl
               </div>
             </div>
           </section>
+        ) : null}
 
-          <section className="rounded-2xl border bg-background p-6">
+        {activePolicyTab === "variables" ? (
+          <section className="rounded-2xl border bg-background p-6" role="tabpanel">
             <div className="flex flex-wrap items-start justify-between gap-3">
               <div>
-                <h2 className="text-lg font-semibold">Environment</h2>
+                <h2 className="text-lg font-semibold">Variables</h2>
                 <p className="mt-1 text-sm text-muted-foreground">
                   Releases use the values configured for their Git branch.
                 </p>
@@ -510,101 +541,134 @@ export function ProjectDeploymentPolicyPage({ tenantId, projectId }: ProjectDepl
 
             {!activeBranch ? (
               <p className="mt-6 rounded-xl border px-4 py-3 text-sm text-muted-foreground">
-                Choose a production branch before adding environment settings.
+                Choose a branch before adding variables.
               </p>
             ) : (
-              <div className="mt-6 grid gap-8 lg:grid-cols-2">
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between gap-4">
-                    <h3 className="text-sm font-semibold">Variables</h3>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={() =>
-                        setForm((current) =>
-                          setBranchEnvironmentValue(current, activeBranch, `ENV_${environmentRows.length + 1}`, ""),
-                        )
-                      }
-                      disabled={saving}
-                    >
-                      Add variable
-                    </Button>
-                  </div>
-                  {environmentRows.length === 0 ? (
-                    <p className="rounded-xl border border-dashed px-4 py-4 text-sm text-muted-foreground">
-                      No environment variables configured.
-                    </p>
-                  ) : (
-                    environmentRows.map(([key, value]) => (
-                      <div key={key} className="grid gap-2 md:grid-cols-[minmax(0,0.45fr)_minmax(0,1fr)]">
-                        <Input
-                          value={key}
-                          onChange={(event) => setForm((current) => renameEnvironmentKey(current, activeBranch, key, event.target.value))}
-                          onPaste={(event) => handleEnvironmentVariablePaste(event, activeBranch, key)}
-                          aria-label={`Environment variable ${key} name`}
-                          placeholder="APP_MODE"
-                          disabled={saving}
-                        />
-                        <Input
-                          value={value}
-                          onChange={(event) => setForm((current) => setBranchEnvironmentValue(current, activeBranch, key, event.target.value))}
-                          onPaste={(event) => handleEnvironmentVariablePaste(event, activeBranch, key)}
-                          aria-label={`Environment variable ${key} value`}
-                          placeholder="production"
-                          disabled={saving}
-                        />
-                      </div>
-                    ))
-                  )}
+              <div className="mt-6 space-y-3">
+                <div className="flex items-center justify-between gap-4">
+                  <h3 className="text-sm font-semibold">Variables</h3>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() =>
+                      setForm((current) =>
+                        setBranchEnvironmentValue(current, activeBranch, `ENV_${environmentRows.length + 1}`, ""),
+                      )
+                    }
+                    disabled={saving}
+                  >
+                    Add variable
+                  </Button>
                 </div>
-
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between gap-4">
-                    <h3 className="text-sm font-semibold">Secret refs</h3>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      size="sm"
-                      onClick={() =>
-                        setForm((current) =>
-                          setBranchSecretRefValue(current, activeBranch, `SECRET_${secretRefRows.length + 1}`, ""),
-                        )
-                      }
-                      disabled={saving}
-                    >
-                      Add secret ref
-                    </Button>
-                  </div>
-                  {secretRefRows.length === 0 ? (
-                    <p className="rounded-xl border border-dashed px-4 py-4 text-sm text-muted-foreground">
-                      No secret refs configured.
-                    </p>
-                  ) : (
-                    secretRefRows.map(([key, value]) => (
-                      <div key={key} className="grid gap-2 md:grid-cols-[minmax(0,0.45fr)_minmax(0,1fr)]">
-                        <Input
-                          value={key}
-                          onChange={(event) => setForm((current) => renameSecretRefKey(current, activeBranch, key, event.target.value))}
-                          aria-label={`Secret ref ${key} name`}
-                          placeholder="DATABASE_URL"
-                          disabled={saving}
-                        />
-                        <Input
-                          value={value}
-                          onChange={(event) => setForm((current) => setBranchSecretRefValue(current, activeBranch, key, event.target.value))}
-                          aria-label={`Secret ref ${key} value`}
-                          placeholder={`project/${projectId}/SECRET_NAME`}
-                          disabled={saving}
-                        />
-                      </div>
-                    ))
-                  )}
-                </div>
+                {environmentRows.length === 0 ? (
+                  <p className="rounded-xl border border-dashed px-4 py-4 text-sm text-muted-foreground">
+                    No environment variables configured.
+                  </p>
+                ) : (
+                  environmentRows.map(([key, value]) => (
+                    <div key={key} className="grid gap-2 md:grid-cols-[minmax(0,0.45fr)_minmax(0,1fr)]">
+                      <Input
+                        value={key}
+                        onChange={(event) => setForm((current) => renameEnvironmentKey(current, activeBranch, key, event.target.value))}
+                        onPaste={(event) => handleEnvironmentVariablePaste(event, activeBranch, key)}
+                        aria-label={`Environment variable ${key} name`}
+                        placeholder="APP_MODE"
+                        disabled={saving}
+                      />
+                      <Input
+                        value={value}
+                        onChange={(event) => setForm((current) => setBranchEnvironmentValue(current, activeBranch, key, event.target.value))}
+                        onPaste={(event) => handleEnvironmentVariablePaste(event, activeBranch, key)}
+                        aria-label={`Environment variable ${key} value`}
+                        placeholder="production"
+                        disabled={saving}
+                      />
+                    </div>
+                  ))
+                )}
               </div>
             )}
           </section>
-        </div>
+        ) : null}
+
+        {activePolicyTab === "secrets" ? (
+          <section className="rounded-2xl border bg-background p-6" role="tabpanel">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div>
+                <h2 className="text-lg font-semibold">Secret refs</h2>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  Releases use secret references configured for their Git branch.
+                </p>
+              </div>
+              <label className="min-w-[220px] space-y-1.5">
+                <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Branch scope</span>
+                <select
+                  aria-label="Secret refs branch scope"
+                  className="h-10 w-full rounded-md border border-input bg-background px-3 text-sm"
+                  value={activeBranch}
+                  onChange={(event) => setEnvironmentBranch(event.target.value)}
+                  disabled={saving || branchScopeOptions.length === 0}
+                >
+                  {branchScopeOptions.map((branch) => (
+                    <option key={branch} value={branch}>
+                      {branch}
+                    </option>
+                  ))}
+                </select>
+              </label>
+            </div>
+
+            {!activeBranch ? (
+              <p className="mt-6 rounded-xl border px-4 py-3 text-sm text-muted-foreground">
+                Choose a branch before adding secret refs.
+              </p>
+            ) : (
+              <div className="mt-6 space-y-3">
+                <div className="flex items-center justify-between gap-4">
+                  <h3 className="text-sm font-semibold">Secret refs</h3>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() =>
+                      setForm((current) =>
+                        setBranchSecretRefValue(current, activeBranch, `SECRET_${secretRefRows.length + 1}`, ""),
+                      )
+                    }
+                    disabled={saving}
+                  >
+                    Add secret ref
+                  </Button>
+                </div>
+                {secretRefRows.length === 0 ? (
+                  <p className="rounded-xl border border-dashed px-4 py-4 text-sm text-muted-foreground">
+                    No secret refs configured.
+                  </p>
+                ) : (
+                  secretRefRows.map(([key, value]) => (
+                    <div key={key} className="grid gap-2 md:grid-cols-[minmax(0,0.45fr)_minmax(0,1fr)]">
+                      <Input
+                        value={key}
+                        onChange={(event) => setForm((current) => renameSecretRefKey(current, activeBranch, key, event.target.value))}
+                        aria-label={`Secret ref ${key} name`}
+                        placeholder="DATABASE_URL"
+                        disabled={saving}
+                      />
+                      <Input
+                        value={value}
+                        onChange={(event) => setForm((current) => setBranchSecretRefValue(current, activeBranch, key, event.target.value))}
+                        aria-label={`Secret ref ${key} value`}
+                        placeholder={`project/${projectId}/SECRET_NAME`}
+                        disabled={saving}
+                      />
+                    </div>
+                  ))
+                )}
+              </div>
+            )}
+          </section>
+        ) : null}
       </main>
     );
   }

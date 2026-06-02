@@ -1085,6 +1085,63 @@ class CodexInvocationTests(unittest.TestCase):
         self.assertIn("web.search", runtime.user_prompts[1])
         self.assertIn("Do not rely on evidence gathered from the disallowed tool use", runtime.user_prompts[1])
 
+    def test_invoke_runtime_json_retries_after_telemetry_wrapped_disallowed_native_tool_observation(self) -> None:
+        class _Runtime:
+            command = "codex"
+
+            def __init__(self) -> None:
+                self.user_prompts: list[str] = []
+
+            def run_json(self, **kwargs):  # noqa: ANN003
+                self.user_prompts.append(str(kwargs.get("user_prompt") or ""))
+                on_log_line = kwargs.get("on_log_line")
+                if len(self.user_prompts) == 1 and callable(on_log_line):
+                    import json as _json
+
+                    on_log_line(
+                        "stdout",
+                        _json.dumps(
+                            {
+                                "event_type": "runtime_log",
+                                "message": _json.dumps(
+                                    {
+                                        "type": "item.started",
+                                        "item": {
+                                            "id": "item_33",
+                                            "type": "web_search",
+                                            "query": "",
+                                        },
+                                    }
+                                ),
+                            }
+                        ),
+                    )
+                return {"ok": True, "attempt": len(self.user_prompts)}
+
+        context = AgentInvocationContext(
+            channel="worker",
+            tenant_id="tenant-1",
+            project_id="proj-1",
+            command="workflow",
+            stage="qa",
+            working_dir=".",
+            run_id="run-1",
+        )
+        runtime = _Runtime()
+
+        with patch("orchestrator.core.runtime.invocation._get_log_writer", return_value=self._Writer()):
+            payload = invoke_runtime_json(
+                runtime=runtime,  # type: ignore[arg-type]
+                context=context,
+                system_prompt="system",
+                user_prompt="user",
+                allowed_native_tools=set(),
+            )
+
+        self.assertEqual(payload, {"ok": True, "attempt": 2})
+        self.assertEqual(len(runtime.user_prompts), 2)
+        self.assertIn("web.search", runtime.user_prompts[1])
+
     def test_invoke_runtime_json_fails_when_native_tool_policy_repair_also_violates_policy(self) -> None:
         class _Runtime:
             command = "codex"
@@ -1489,6 +1546,126 @@ class CodexInvocationTests(unittest.TestCase):
         self.assertEqual(len(runtime.user_prompts), 2)
         self.assertIn('"failure_policy": "recoverable_tool_failure"', runtime.user_prompts[1])
         self.assertIn("tool database unavailable", runtime.user_prompts[1])
+
+    def test_invoke_runtime_json_with_tools_repairs_false_governed_tool_unavailable_block(self) -> None:
+        test_case = self
+
+        class _Runtime:
+            def __init__(self) -> None:
+                self.user_prompts: list[str] = []
+
+            def run_json(self, **kwargs):  # noqa: ANN003
+                self.user_prompts.append(str(kwargs.get("user_prompt") or ""))
+                if len(self.user_prompts) == 1:
+                    return {
+                        "type": "final_response",
+                        "result": {
+                            "outcome": "blocked",
+                            "blocker_message": (
+                                "Local implementation and validation are complete, but this runtime does not "
+                                "expose a callable governed GitHub/Jira publication bridge for the mandatory PR handoff. "
+                                "`tool_search` returned 0 matching tools for `github.push_branch` and `github.open_pr`."
+                            ),
+                        },
+                    }
+                if len(self.user_prompts) == 2:
+                    test_case.assertIn(
+                        "incorrectly treated allowed governed tools as unavailable",
+                        kwargs["user_prompt"],
+                    )
+                    test_case.assertIn("github.push_branch", kwargs["user_prompt"])
+                    test_case.assertIn("Original prompt:\noriginal task context", kwargs["user_prompt"])
+                    return {
+                        "type": "tool_request",
+                        "tool_name": "github.push_branch",
+                        "tool_args": {"branch_name": "feature/GP-113"},
+                    }
+                test_case.assertIn('"tool_name": "github.push_branch"', kwargs["user_prompt"])
+                return {
+                    "type": "final_response",
+                    "result": {"outcome": "continue", "change_summary": ["published branch"]},
+                }
+
+        context = AgentInvocationContext(
+            channel="system",
+            tenant_id="tenant-1",
+            project_id=None,
+            command="workflow",
+            stage="dev",
+            working_dir=".",
+        )
+        runtime = _Runtime()
+
+        with patch("orchestrator.core.runtime.invocation._get_log_writer", return_value=self._Writer()):
+            result = invoke_runtime_json_with_tools(
+                runtime=runtime,  # type: ignore[arg-type]
+                context=context,
+                system_prompt="system",
+                user_prompt="original task context",
+                allowed_tools={"github.push_branch", "github.open_pr"},
+                execute_tool=lambda _name, _args: {"ok": True},
+            )
+
+        self.assertEqual(result, {"outcome": "continue", "change_summary": ["published branch"]})
+        self.assertEqual(len(runtime.user_prompts), 3)
+
+    def test_invoke_runtime_json_with_tools_repairs_native_codex_publication_false_block(self) -> None:
+        test_case = self
+
+        class _Runtime:
+            def __init__(self) -> None:
+                self.user_prompts: list[str] = []
+
+            def run_json(self, **kwargs):  # noqa: ANN003
+                self.user_prompts.append(str(kwargs.get("user_prompt") or ""))
+                if len(self.user_prompts) == 1:
+                    return {
+                        "type": "final_response",
+                        "result": {
+                            "outcome": "blocked",
+                            "blocker_message": (
+                                "Validated code is green locally, but the required governed PR publication step "
+                                "could not be executed from this native Codex tool path, so `pr_url` is still missing."
+                            ),
+                        },
+                    }
+                if len(self.user_prompts) == 2:
+                    test_case.assertIn(
+                        "incorrectly treated allowed governed tools as unavailable",
+                        kwargs["user_prompt"],
+                    )
+                    return {
+                        "type": "tool_request",
+                        "tool_name": "github.push_branch",
+                        "tool_args": {"branch_name": "feature/GP-113"},
+                    }
+                return {
+                    "type": "final_response",
+                    "result": {"outcome": "continue", "change_summary": ["published branch"]},
+                }
+
+        context = AgentInvocationContext(
+            channel="system",
+            tenant_id="tenant-1",
+            project_id=None,
+            command="workflow",
+            stage="dev",
+            working_dir=".",
+        )
+        runtime = _Runtime()
+
+        with patch("orchestrator.core.runtime.invocation._get_log_writer", return_value=self._Writer()):
+            result = invoke_runtime_json_with_tools(
+                runtime=runtime,  # type: ignore[arg-type]
+                context=context,
+                system_prompt="system",
+                user_prompt="original task context",
+                allowed_tools={"github.push_branch", "github.open_pr"},
+                execute_tool=lambda _name, _args: {"ok": True},
+            )
+
+        self.assertEqual(result, {"outcome": "continue", "change_summary": ["published branch"]})
+        self.assertEqual(len(runtime.user_prompts), 3)
 
     def test_invoke_runtime_json_with_tools_native_policy_repair_keeps_original_prompt(self) -> None:
         class _Runtime:
