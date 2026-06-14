@@ -863,6 +863,24 @@ def _copy_recordings(recordings: list[LocalQaRecording]) -> list[LocalQaRecordin
     return copied
 
 
+def _validate_recordings_cover_scenarios(
+    *,
+    capture_target_name: str,
+    scenarios: list[QaScenario],
+    recordings: list[LocalQaRecording],
+) -> None:
+    unmatched_scenario_names = [str(scenario.name or "").strip() for scenario in scenarios]
+    for recording in recordings:
+        recording_name = str(recording.name or "").strip()
+        if recording_name in unmatched_scenario_names:
+            unmatched_scenario_names.remove(recording_name)
+    if unmatched_scenario_names:
+        raise RuntimeError(
+            f"QA demo recorder did not produce recording(s) for {capture_target_name} scenario(s): "
+            + ", ".join(unmatched_scenario_names)
+        )
+
+
 def record_demo_scenarios(
     *,
     settings,  # noqa: ANN001
@@ -944,6 +962,11 @@ def record_demo_scenarios(
                 env=dict(os.environ),
                 capture_target=capture_target,
             )
+        _validate_recordings_cover_scenarios(
+            capture_target_name=capture_target_name,
+            scenarios=scenarios,
+            recordings=recordings,
+        )
         all_recordings.extend(recordings)
     return all_recordings
 
