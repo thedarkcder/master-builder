@@ -12,10 +12,15 @@ from orchestrator.tools.github_app import GitHubAppClient
 logger = logging.getLogger(__name__)
 _DEMO_EVIDENCE_SECTION_PATTERN = re.compile(r"^## Demo Evidence\s*$.*?(?=^## |\Z)", re.MULTILINE | re.DOTALL)
 _DEMO_EVIDENCE_MARKER = "<!-- master-builder:qa-demo-evidence v1 -->"
-_STRUCTURED_DEMO_EVIDENCE_LINE_PATTERN = re.compile(
-    r"^- .+ \[target=(browser|ios|android|desktop); reference=[^\]]+; object_key=[^\]]+\]: https?://\S+\s*$",
+_DEMO_EVIDENCE_REQUIRED_TARGETS_PATTERN = re.compile(
+    r"<!--\s*master-builder:qa-demo-required-targets\s+([^>]*)-->",
     re.MULTILINE,
 )
+_STRUCTURED_DEMO_EVIDENCE_LINE_PATTERN = re.compile(
+    r"^- .+ \[target=(?P<target>browser|ios|android|desktop); reference=[^\]]+; object_key=[^\]]+\]: https?://\S+\s*$",
+    re.MULTILINE,
+)
+_SUPPORTED_DEMO_CAPTURE_TARGETS = frozenset({"browser", "ios", "android", "desktop"})
 
 
 @dataclass(frozen=True)
@@ -35,12 +40,14 @@ class ReviewAgentGate:
         *,
         required_workflows: tuple[str, ...] = ("CI", "Security"),
         require_demo_evidence: bool = False,
+        required_demo_capture_targets: tuple[str, ...] | list[str] | None = None,
         tenant_id: str | None = None,
         project_id: str | None = None,
     ):
         self._github_client = github_client
         self._required_workflows = required_workflows
         self._require_demo_evidence = require_demo_evidence
+        self._required_demo_capture_targets = _normalize_required_demo_targets(required_demo_capture_targets)
         self._tenant_id = tenant_id
         self._project_id = project_id
 
@@ -122,7 +129,10 @@ class ReviewAgentGate:
                 policy_pack=selected_policy_pack_key,
             )
 
-        if self._require_demo_evidence and not _demo_evidence_present(pr.body):
+        if self._require_demo_evidence and not _demo_evidence_present(
+            pr.body,
+            required_demo_capture_targets=self._required_demo_capture_targets,
+        ):
             return ReviewerSignal(
                 ready=False,
                 state="missing_demo_evidence",
@@ -313,7 +323,34 @@ def _is_test_path(filename: str) -> bool:
     return False
 
 
-def _demo_evidence_present(body: str | None) -> bool:
+def _normalize_required_demo_targets(required_demo_capture_targets: tuple[str, ...] | list[str] | None) -> tuple[str, ...]:
+    ordered: list[str] = []
+    for target in required_demo_capture_targets or ():
+        normalized = str(target or "").strip()
+        if not normalized:
+            continue
+        if normalized not in _SUPPORTED_DEMO_CAPTURE_TARGETS:
+            raise ValueError(f"Unsupported QA demo capture target requirement: {normalized}")
+        if normalized not in ordered:
+            ordered.append(normalized)
+    return tuple(ordered)
+
+
+def _required_demo_targets_from_section(section: str) -> tuple[str, ...] | None:
+    match = _DEMO_EVIDENCE_REQUIRED_TARGETS_PATTERN.search(section)
+    if match is None:
+        return None
+    try:
+        return _normalize_required_demo_targets(re.split(r"[,\s]+", match.group(1).strip()))
+    except ValueError:
+        return ()
+
+
+def _demo_evidence_present(
+    body: str | None,
+    *,
+    required_demo_capture_targets: tuple[str, ...] | list[str] | None = None,
+) -> bool:
     normalized_body = str(body or "").strip()
     if not normalized_body:
         return False
@@ -321,4 +358,16 @@ def _demo_evidence_present(body: str | None) -> bool:
     if match is None:
         return False
     section = match.group(0)
-    return _DEMO_EVIDENCE_MARKER in section and _STRUCTURED_DEMO_EVIDENCE_LINE_PATTERN.search(section) is not None
+    if _DEMO_EVIDENCE_MARKER not in section:
+        return False
+    structured_matches = list(_STRUCTURED_DEMO_EVIDENCE_LINE_PATTERN.finditer(section))
+    if not structured_matches:
+        return False
+    required_targets = _normalize_required_demo_targets(required_demo_capture_targets)
+    embedded_required_targets = _required_demo_targets_from_section(section)
+    if embedded_required_targets is not None:
+        if not embedded_required_targets:
+            return False
+        required_targets = tuple(dict.fromkeys((*required_targets, *embedded_required_targets)))
+    recorded_targets = {structured_match.group("target") for structured_match in structured_matches}
+    return all(target in recorded_targets for target in required_targets)

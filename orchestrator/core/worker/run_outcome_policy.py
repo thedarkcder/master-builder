@@ -8,6 +8,7 @@ from orchestrator.core.qa.demo_service import (
     next_required_qa_demo_worker_capability,
     qa_demo_recording_enabled,
     remaining_capture_targets,
+    required_capture_targets,
     update_pull_request_with_demo_evidence,
 )
 from orchestrator.core.runs.service import RUN_STATUS_WAITING_FOR_INPUT
@@ -380,6 +381,7 @@ class RunOutcomePolicy:
                 project=prepared.project,
                 workflow_result=workflow_result,
                 qa_result=qa_result,
+                required_capture_targets=required_capture_targets(plan),
             )
         except Exception as exc:  # noqa: BLE001
             message = f"QA demo evidence PR update failed: {type(exc).__name__}: {exc}"

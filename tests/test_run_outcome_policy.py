@@ -553,6 +553,7 @@ def test_complete_attaches_pr_evidence_after_accumulated_qa_demo_recordings_fini
         "android",
         "ios",
     ]
+    assert update_pr_mock.call_args.kwargs["required_capture_targets"] == ("browser", "ios", "android")
     deps.execution.requeue_workflow_result_for_capability_fn.assert_not_called()
     assert finalizer_calls["workflow_result"].orchestration_stage_trace[-1]["status"] == "completed"
 
