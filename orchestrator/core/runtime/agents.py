@@ -901,9 +901,9 @@ def _demo_requirements(value: object) -> list[DemoRequirement]:
             return []
         title = _optional_string(item.get("title"))
         acceptance_criterion = _optional_string(item.get("acceptance_criterion"))
-        capture_target = _optional_string(item.get("capture_target")) or "browser"
+        capture_target = _optional_string(item.get("capture_target"))
         variants = _string_list(item.get("variants"))
-        if title is None or acceptance_criterion is None:
+        if title is None or acceptance_criterion is None or capture_target is None:
             return []
         if capture_target not in _QA_CAPTURE_TARGETS:
             return []
@@ -965,11 +965,11 @@ def _required_qa_scenarios(value: object) -> list[QaScenario]:
             raise CodexRuntimeError("Codex qa response contained invalid scenario")
         name = _optional_string(item.get("name"))
         objective = _optional_string(item.get("objective"))
-        capture_target = _optional_string(item.get("capture_target")) or "browser"
+        capture_target = _optional_string(item.get("capture_target"))
         start_path = _optional_string(item.get("start_path")) or "/"
         expected_outcomes = _string_list(item.get("expected_outcomes"))
         steps = _qa_steps(item.get("steps"))
-        if name is None or objective is None or not steps:
+        if name is None or objective is None or capture_target is None or not steps:
             raise CodexRuntimeError("Codex qa response missing required scenario fields")
         if capture_target not in _QA_CAPTURE_TARGETS:
             raise CodexRuntimeError("Codex qa response contains invalid capture_target")
@@ -998,9 +998,9 @@ def _qa_recordings(value: object) -> list[QaRecording]:
         name = _optional_string(item.get("name"))
         artifact_url = _optional_string(item.get("artifact_url"))
         object_key = _optional_string(item.get("object_key"))
-        capture_target = _optional_string(item.get("capture_target")) or "browser"
+        capture_target = _optional_string(item.get("capture_target"))
         capture_reference = _optional_string(item.get("capture_reference"))
-        if name is None or artifact_url is None or object_key is None or capture_reference is None:
+        if name is None or artifact_url is None or object_key is None or capture_target is None or capture_reference is None:
             return []
         if capture_target not in _QA_CAPTURE_TARGETS:
             return []
