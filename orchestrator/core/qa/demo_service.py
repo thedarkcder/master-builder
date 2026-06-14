@@ -38,6 +38,7 @@ from orchestrator.core.platform.tenant_secret_service import resolve_scoped_secr
 
 DEMO_EVIDENCE_HEADING = "## Demo Evidence"
 DEMO_EVIDENCE_MARKER = "<!-- master-builder:qa-demo-evidence v1 -->"
+DEMO_EVIDENCE_REQUIRED_TARGETS_MARKER = "<!-- master-builder:qa-demo-required-targets"
 _TRANSIENT_NATIVE_SELECTORS = frozenset({"id=splash_screen", "splash_screen"})
 _NATIVE_CAPTURE_TARGETS = frozenset({"ios", "android", "desktop"})
 _RELEASE_SERVICE_READY_STATUSES = frozenset({401, 403, 405})
@@ -610,6 +611,15 @@ def recorded_capture_targets(recordings: list[QaRecording] | tuple[QaRecording, 
     return tuple(ordered)
 
 
+def _normalize_required_capture_targets(required_capture_targets: list[str] | tuple[str, ...] | None) -> tuple[str, ...]:
+    ordered: list[str] = []
+    for target in required_capture_targets or ():
+        normalized = str(target or "").strip()
+        if normalized and normalized not in ordered:
+            ordered.append(normalized)
+    return tuple(ordered)
+
+
 def remaining_capture_targets(plan: PmPlan, recordings: list[QaRecording] | tuple[QaRecording, ...]) -> tuple[str, ...]:
     recorded_counts: dict[str, int] = {}
     for recording in recordings:
@@ -646,8 +656,15 @@ def _capture_target_runs_on_worker(*, capture_target: DemoCaptureTarget, request
     return request.current_worker_capability.value == required_platform
 
 
-def build_demo_evidence_section(recordings: list[QaRecording]) -> str:
+def build_demo_evidence_section(
+    recordings: list[QaRecording],
+    *,
+    required_capture_targets: list[str] | tuple[str, ...] | None = None,
+) -> str:
     lines = [DEMO_EVIDENCE_HEADING, DEMO_EVIDENCE_MARKER]
+    required_targets = _normalize_required_capture_targets(required_capture_targets)
+    if required_targets:
+        lines.append(f"{DEMO_EVIDENCE_REQUIRED_TARGETS_MARKER} {','.join(required_targets)} -->")
     for recording in recordings:
         lines.append(
             f"- {recording.name} "
@@ -657,8 +674,13 @@ def build_demo_evidence_section(recordings: list[QaRecording]) -> str:
     return "\n".join(lines).strip()
 
 
-def upsert_demo_evidence_section(*, body: str | None, recordings: list[QaRecording]) -> str:
-    evidence = build_demo_evidence_section(recordings)
+def upsert_demo_evidence_section(
+    *,
+    body: str | None,
+    recordings: list[QaRecording],
+    required_capture_targets: list[str] | tuple[str, ...] | None = None,
+) -> str:
+    evidence = build_demo_evidence_section(recordings, required_capture_targets=required_capture_targets)
     normalized_body = str(body or "").strip()
     if not normalized_body:
         return evidence
@@ -872,6 +894,22 @@ def _validate_recorded_scenario_proof(qa_result: QaResult) -> QaResult:
     ]
     _validate_executable_qa_scenarios(replace(normalized_result, scenarios=recorded_scenarios))
     return normalized_result
+
+
+def _validate_recordings_cover_required_targets(
+    *,
+    recordings: list[QaRecording],
+    required_capture_targets: list[str] | tuple[str, ...] | None,
+) -> None:
+    required_targets = _normalize_required_capture_targets(required_capture_targets)
+    if not required_targets:
+        return
+    recorded_targets = set(recorded_capture_targets(recordings))
+    missing_targets = [target for target in required_targets if target not in recorded_targets]
+    if missing_targets:
+        raise RuntimeError(
+            "QA demo evidence is missing required capture target(s): " + ", ".join(missing_targets)
+        )
 
 
 def _validate_qa_scenario_coverage(
@@ -1296,10 +1334,15 @@ def update_pull_request_with_demo_evidence(
     project,
     workflow_result,
     qa_result: QaResult,
+    required_capture_targets: list[str] | tuple[str, ...] | None = None,
 ) -> str:
     if not qa_result.recordings:
         raise RuntimeError("QA demo evidence PR update requires at least one recording")
     qa_result = _validate_recorded_scenario_proof(qa_result)
+    _validate_recordings_cover_required_targets(
+        recordings=qa_result.recordings,
+        required_capture_targets=required_capture_targets,
+    )
     for recording in qa_result.recordings:
         ensure_artifact_url_reachable(
             recording.artifact_url,
@@ -1328,7 +1371,11 @@ def update_pull_request_with_demo_evidence(
     normalized_repo = normalize_repo_identifier(project.github_repository)
     repo_full_name = normalized_repo.split("/", 1)[1] if normalized_repo.startswith("github.com/") else "/".join(normalized_repo.split("/")[-2:])
     pr_details = github_client.get_pull_request_details(repo_full_name=repo_full_name, pr_number=pr_number)
-    body = upsert_demo_evidence_section(body=pr_details.body, recordings=qa_result.recordings)
+    body = upsert_demo_evidence_section(
+        body=pr_details.body,
+        recordings=qa_result.recordings,
+        required_capture_targets=required_capture_targets,
+    )
     github_client.update_pull_request(
         repo_full_name=repo_full_name,
         github_repository=project.github_repository,

@@ -63,10 +63,16 @@ class ReviewerGateTests(unittest.TestCase):
             project_id="example-default",
         )
 
-    def _gate_with_demo_requirement(self, client: _FakeGitHubClient) -> ReviewAgentGate:
+    def _gate_with_demo_requirement(
+        self,
+        client: _FakeGitHubClient,
+        *,
+        required_targets: tuple[str, ...] = (),
+    ) -> ReviewAgentGate:
         return ReviewAgentGate(
             client,
             require_demo_evidence=True,
+            required_demo_capture_targets=required_targets,
             tenant_id="example",
             project_id="example-default",
         )
@@ -296,6 +302,115 @@ class ReviewerGateTests(unittest.TestCase):
 
         self.assertTrue(signal.ready)
         self.assertEqual(signal.state, "ready")
+
+    def test_reviewer_blocks_structured_demo_evidence_missing_required_target_marker(self) -> None:
+        gate = self._gate_with_demo_requirement(
+            _FakeGitHubClient(
+                checks=[
+                    WorkflowCheckSuite(name="CI", status="completed", conclusion="success"),
+                    WorkflowCheckSuite(name="Security", status="completed", conclusion="success"),
+                ],
+                files=[
+                    PullRequestFileChange(filename="orchestrator/core/reviewer.py", patch="+ change"),
+                    PullRequestFileChange(filename="tests/test_reviewer_gate.py", patch="+ test"),
+                ],
+                review_body=(
+                    "Good:\n- implemented\n\n"
+                    "Risks:\n- low\n\n"
+                    "Must-fix:\n- none\n\n"
+                    "Tests:\n- pytest -q\n\n"
+                    "Questions:\n- none\n\n"
+                    "Follow-ups:\n- none\n\n"
+                    "## Demo Evidence\n"
+                    "<!-- master-builder:qa-demo-evidence v1 -->\n"
+                    "<!-- master-builder:qa-demo-required-targets browser,ios,android -->\n"
+                    "- Browser walkthrough [target=browser; reference=https://preview.example; "
+                    "object_key=tenant-1/project-1/run-1/qa-demo-1.webm]: https://cdn.example/qa/browser.webm\n"
+                ),
+            )
+        )
+
+        signal = gate.evaluate_pr(
+            repo_full_name="example/repo",
+            pr_number=18,
+        )
+
+        self.assertFalse(signal.ready)
+        self.assertEqual(signal.state, "missing_demo_evidence")
+
+    def test_reviewer_accepts_structured_demo_evidence_covering_required_target_marker(self) -> None:
+        gate = self._gate_with_demo_requirement(
+            _FakeGitHubClient(
+                checks=[
+                    WorkflowCheckSuite(name="CI", status="completed", conclusion="success"),
+                    WorkflowCheckSuite(name="Security", status="completed", conclusion="success"),
+                ],
+                files=[
+                    PullRequestFileChange(filename="orchestrator/core/reviewer.py", patch="+ change"),
+                    PullRequestFileChange(filename="tests/test_reviewer_gate.py", patch="+ test"),
+                ],
+                review_body=(
+                    "Good:\n- implemented\n\n"
+                    "Risks:\n- low\n\n"
+                    "Must-fix:\n- none\n\n"
+                    "Tests:\n- pytest -q\n\n"
+                    "Questions:\n- none\n\n"
+                    "Follow-ups:\n- none\n\n"
+                    "## Demo Evidence\n"
+                    "<!-- master-builder:qa-demo-evidence v1 -->\n"
+                    "<!-- master-builder:qa-demo-required-targets browser,ios,android -->\n"
+                    "- Browser walkthrough [target=browser; reference=https://preview.example; "
+                    "object_key=tenant-1/project-1/run-1/qa-demo-1.webm]: https://cdn.example/qa/browser.webm\n"
+                    "- iOS walkthrough [target=ios; reference=ios-simulator://configured; "
+                    "object_key=tenant-1/project-1/run-1/qa-demo-2.mp4]: https://cdn.example/qa/ios.mp4\n"
+                    "- Android walkthrough [target=android; reference=android-emulator://configured; "
+                    "object_key=tenant-1/project-1/run-1/qa-demo-3.mp4]: https://cdn.example/qa/android.mp4\n"
+                ),
+            )
+        )
+
+        signal = gate.evaluate_pr(
+            repo_full_name="example/repo",
+            pr_number=19,
+        )
+
+        self.assertTrue(signal.ready)
+        self.assertEqual(signal.state, "ready")
+
+    def test_reviewer_blocks_when_constructor_required_target_is_missing(self) -> None:
+        gate = self._gate_with_demo_requirement(
+            _FakeGitHubClient(
+                checks=[
+                    WorkflowCheckSuite(name="CI", status="completed", conclusion="success"),
+                    WorkflowCheckSuite(name="Security", status="completed", conclusion="success"),
+                ],
+                files=[
+                    PullRequestFileChange(filename="orchestrator/core/reviewer.py", patch="+ change"),
+                    PullRequestFileChange(filename="tests/test_reviewer_gate.py", patch="+ test"),
+                ],
+                review_body=(
+                    "Good:\n- implemented\n\n"
+                    "Risks:\n- low\n\n"
+                    "Must-fix:\n- none\n\n"
+                    "Tests:\n- pytest -q\n\n"
+                    "Questions:\n- none\n\n"
+                    "Follow-ups:\n- none\n\n"
+                    "## Demo Evidence\n"
+                    "<!-- master-builder:qa-demo-evidence v1 -->\n"
+                    "- Browser walkthrough [target=browser; reference=https://preview.example; "
+                    "object_key=tenant-1/project-1/run-1/qa-demo-1.webm]: https://cdn.example/qa/browser.webm\n"
+                ),
+            ),
+            required_targets=("browser", "ios"),
+        )
+
+        signal = gate.evaluate_pr(
+            repo_full_name="example/repo",
+            pr_number=20,
+        )
+
+        self.assertFalse(signal.ready)
+        self.assertEqual(signal.state, "missing_demo_evidence")
 
     def test_reviewer_accepts_jest_test_js_coverage(self) -> None:
         gate = self._gate(
