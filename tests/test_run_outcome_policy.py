@@ -506,6 +506,121 @@ def test_complete_attaches_pr_evidence_after_accumulated_qa_demo_recordings_fini
     assert finalizer_calls["workflow_result"].orchestration_stage_trace[-1]["status"] == "completed"
 
 
+def test_complete_blocks_when_qa_continue_result_is_missing_required_capture_target_proof() -> None:
+    session = SimpleNamespace(refresh=lambda _run: None)
+    deps = _deps()
+    plan = PmPlan(
+        plan_steps=["Implement feature"],
+        acceptance_criteria=["Feature works everywhere"],
+        risks=["Low risk"],
+        demo_requirements=[
+            DemoRequirement(title="Browser walkthrough", acceptance_criterion="Feature works everywhere", capture_target="browser"),
+            DemoRequirement(title="iOS walkthrough", acceptance_criterion="Feature works everywhere", capture_target="ios"),
+            DemoRequirement(title="Android walkthrough", acceptance_criterion="Feature works everywhere", capture_target="android"),
+        ],
+    )
+    snapshot = ExecutionSnapshot.empty()
+    snapshot.apply_stage_checkpoint(
+        WorkflowStageCheckpoint(stage="pm", attempt=1, status="completed", summary="PM ready.", plan=plan)
+    )
+    snapshot.apply_stage_checkpoint(
+        WorkflowStageCheckpoint(
+            stage="dev",
+            attempt=1,
+            status="completed",
+            summary="Dev ready.",
+            dev_result=DevResult(change_summary=["Implemented feature"], pr_url="https://github.com/acme/repo/pull/8"),
+        )
+    )
+    snapshot.apply_stage_checkpoint(
+        WorkflowStageCheckpoint(
+            stage="test",
+            attempt=1,
+            status="completed",
+            summary="Tests ready.",
+            test_result=TestResult(guidance=["pytest -q"]),
+        )
+    )
+    snapshot.apply_stage_checkpoint(
+        WorkflowStageCheckpoint(
+            stage="review",
+            attempt=1,
+            status="completed",
+            summary="Review ready.",
+            review_result=ReviewResult(summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"),
+        )
+    )
+    qa_result = QaResult(
+        summary=["Recorded demos"],
+        scenarios=[],
+        recordings=[
+            QaRecording(
+                name="Browser walkthrough",
+                artifact_url="https://cdn.example/qa-demo-1.webm",
+                object_key="tenant-1/project-1/run-1/qa-demo-1.webm",
+                capture_target="browser",
+                capture_reference="https://preview.example",
+            ),
+            QaRecording(
+                name="Android walkthrough",
+                artifact_url="https://cdn.example/qa-demo-2.mp4",
+                object_key="tenant-1/project-1/run-1/qa-demo-2.mp4",
+                capture_target="android",
+                capture_reference="android-emulator://configured",
+            ),
+        ],
+        outcome="continue",
+    )
+    prepared = _prepared(snapshot.dump(), effective_policy={"qa_demo_recording_enabled": True})
+    workflow_result = replace(_workflow_result(), plan=plan)
+    finalizer_calls: dict[str, object] = {}
+
+    class _Finalizer:
+        def __init__(self, **_kwargs):
+            pass
+
+        def finalize(self, **kwargs):
+            finalizer_calls.update(kwargs)
+            return SimpleNamespace(
+                run=prepared.run,
+                workflow_result=kwargs["workflow_result"],
+                persisted_status="blocked",
+                last_error=kwargs["workflow_result"].blocker_message,
+                persisted_plan=prepared.run.plan,
+                event_types=(),
+                tail_steps=(),
+            )
+
+    with (
+        patch(
+            "orchestrator.core.worker.run_outcome_policy.create_run_preview_deployment",
+            return_value=SimpleNamespace(created=False, reason="existing", release=SimpleNamespace(service_urls=[])),
+        ),
+        patch("orchestrator.core.worker.run_outcome_policy.execute_qa_demo_stage", return_value=qa_result),
+        patch("orchestrator.core.worker.run_outcome_policy.update_pull_request_with_demo_evidence") as update_pr_mock,
+        patch("orchestrator.core.worker.run_outcome_policy.WorkflowFinalizer", _Finalizer),
+        patch("orchestrator.core.worker.run_outcome_policy.CompletionTailExecutor") as tail_executor_cls,
+    ):
+        tail_executor_cls.return_value.execute.return_value = None
+        RunOutcomePolicy(
+            session=session,
+            settings=SimpleNamespace(project_repo_checkout_base_dir="/tmp/workdirs"),
+            deps=deps,
+            cleanup_run_workspaces_safe_fn=MagicMock(),
+        ).complete(
+            prepared=prepared,
+            workflow_result=workflow_result,
+            execution_context={"execution_branch": "run/MAB-400/run-1"},
+        )
+
+    checkpoint = deps.execution.persist_stage_checkpoint_fn.call_args.kwargs["checkpoint"]
+    assert checkpoint.stage == "qa"
+    assert checkpoint.status == "blocked"
+    assert "without proof for required capture target(s): ios" in str(checkpoint.qa_result.blocker_message)
+    update_pr_mock.assert_not_called()
+    assert finalizer_calls["workflow_result"].outcome == "blocked"
+
+
 def test_complete_creates_preview_release_for_ios_only_demo_requirements() -> None:
     session = SimpleNamespace(refresh=lambda _run: None)
     deps = _deps()
