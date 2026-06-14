@@ -8,6 +8,7 @@ import subprocess
 import sys
 import urllib.error
 import urllib.request
+from collections import Counter
 from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -819,6 +820,60 @@ def _validate_executable_qa_scenarios(qa_result: QaResult) -> None:
             )
 
 
+def _recording_scenario_key(*, name: str, capture_target: str) -> tuple[str, str]:
+    return (str(capture_target or "").strip(), str(name or "").strip())
+
+
+def _validate_recorded_scenario_proof(qa_result: QaResult) -> QaResult:
+    if not qa_result.recordings:
+        return qa_result
+    normalized_result = _validate_native_scenarios(qa_result)
+    scenario_counts = Counter(
+        _recording_scenario_key(name=scenario.name, capture_target=scenario.capture_target)
+        for scenario in normalized_result.scenarios
+    )
+    duplicate_scenarios = [
+        f"{capture_target}: {name}" for (capture_target, name), count in scenario_counts.items() if count > 1
+    ]
+    if duplicate_scenarios:
+        raise RuntimeError(
+            "QA demo scenario proof keys must be unique before PR evidence: " + ", ".join(duplicate_scenarios)
+        )
+    recording_counts = Counter(
+        _recording_scenario_key(name=recording.name, capture_target=recording.capture_target)
+        for recording in normalized_result.recordings
+    )
+    duplicate_recordings = [
+        f"{capture_target}: {name}" for (capture_target, name), count in recording_counts.items() if count > 1
+    ]
+    if duplicate_recordings:
+        raise RuntimeError(
+            "QA demo recording proof keys must be unique before PR evidence: " + ", ".join(duplicate_recordings)
+        )
+    scenarios_by_key = {
+        _recording_scenario_key(name=scenario.name, capture_target=scenario.capture_target): scenario
+        for scenario in normalized_result.scenarios
+    }
+    recording_keys = set(recording_counts)
+    missing = [
+        f"{recording.capture_target}: {recording.name}"
+        for recording in normalized_result.recordings
+        if _recording_scenario_key(name=recording.name, capture_target=recording.capture_target) not in scenarios_by_key
+    ]
+    if missing:
+        raise RuntimeError(
+            "QA demo recording proof is missing matching executable scenario(s): " + ", ".join(missing)
+        )
+    recorded_scenarios = [
+        scenario
+        for scenario in normalized_result.scenarios
+        if _recording_scenario_key(name=scenario.name, capture_target=scenario.capture_target)
+        in recording_keys
+    ]
+    _validate_executable_qa_scenarios(replace(normalized_result, scenarios=recorded_scenarios))
+    return normalized_result
+
+
 def _validate_qa_scenario_coverage(
     *,
     plan: PmPlan,
@@ -1062,6 +1117,8 @@ def execute_qa_demo_stage(
     required_targets = required_capture_targets(plan)
     if not required_targets:
         raise RuntimeError("QA demo recording requires PM demo requirements with explicit capture targets")
+    if previous_qa_result is not None:
+        previous_qa_result = _validate_recorded_scenario_proof(previous_qa_result)
     previous_recordings = list(previous_qa_result.recordings if previous_qa_result is not None else [])
     previous_scenarios = list(previous_qa_result.scenarios if previous_qa_result is not None else [])
     remaining_targets = remaining_capture_targets(plan, previous_recordings)
@@ -1195,6 +1252,9 @@ def execute_qa_demo_stage(
                 )
             combined_recordings = [*previous_recordings, *uploaded]
             combined_scenarios = [*previous_scenarios, *qa_result.scenarios]
+            combined_result = _validate_recorded_scenario_proof(
+                replace(qa_result, scenarios=combined_scenarios, recordings=combined_recordings)
+            )
             still_remaining = remaining_capture_targets(plan, combined_recordings)
             if still_remaining:
                 missing_current_worker_targets = [
@@ -1210,15 +1270,13 @@ def execute_qa_demo_stage(
                     + ", ".join(still_remaining)
                 )
                 return replace(
-                    qa_result,
-                    summary=[*list(qa_result.summary or []), message],
-                    scenarios=combined_scenarios,
-                    recordings=combined_recordings,
+                    combined_result,
+                    summary=[*list(combined_result.summary or []), message],
                     outcome="requeue",
                     feedback=message,
                     blocker_message=None,
                 )
-            return replace(qa_result, scenarios=combined_scenarios, recordings=combined_recordings)
+            return combined_result
         except Exception as exc:  # noqa: BLE001
             last_error = exc
             if attempt >= max_attempts:
@@ -1241,6 +1299,7 @@ def update_pull_request_with_demo_evidence(
 ) -> str:
     if not qa_result.recordings:
         raise RuntimeError("QA demo evidence PR update requires at least one recording")
+    qa_result = _validate_recorded_scenario_proof(qa_result)
     for recording in qa_result.recordings:
         ensure_artifact_url_reachable(
             recording.artifact_url,
