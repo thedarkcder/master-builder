@@ -332,19 +332,11 @@ class RunOutcomePolicy:
                     blocker_message=message,
                     summary=[*list(qa_result.summary or []), message],
                 )
-        self._deps.execution.persist_stage_checkpoint_fn(
-            self._session,
-            run=prepared.run,
-            checkpoint=WorkflowStageCheckpoint(
-                stage="qa",
-                attempt=attempt,
-                status=_checkpoint_status_for_stage_outcome(qa_result.outcome),
-                summary=_summarize_qa_result(qa_result),
-                qa_result=qa_result,
-            ),
+        self._persist_qa_stage_checkpoint(
+            prepared=prepared,
+            qa_result=qa_result,
+            attempt=attempt,
             execution_context=execution_context,
-            expected_worker_service_instance_id=prepared.worker_service_instance_id,
-            expected_claim_id=prepared.claim_id,
         )
         if qa_result.outcome == "requeue":
             requeue_target = next_required_qa_demo_worker_capability(
@@ -390,10 +382,23 @@ class RunOutcomePolicy:
                 qa_result=qa_result,
             )
         except Exception as exc:  # noqa: BLE001
+            message = f"QA demo evidence PR update failed: {type(exc).__name__}: {exc}"
+            blocked_qa_result = replace(
+                qa_result,
+                outcome="blocked",
+                blocker_message=message,
+                summary=[*list(qa_result.summary or []), message],
+            )
+            self._persist_qa_stage_checkpoint(
+                prepared=prepared,
+                qa_result=blocked_qa_result,
+                attempt=attempt,
+                execution_context=execution_context,
+            )
             return _workflow_result_with_qa_blocker(
                 workflow_result=workflow_result,
                 attempt=attempt,
-                message=f"QA demo evidence PR update failed: {type(exc).__name__}: {exc}",
+                message=message,
             )
         return replace(
             workflow_result,
@@ -406,6 +411,29 @@ class RunOutcomePolicy:
                     summary=_summarize_qa_result(qa_result),
                 ),
             ],
+        )
+
+    def _persist_qa_stage_checkpoint(
+        self,
+        *,
+        prepared,
+        qa_result: QaResult,
+        attempt: int,
+        execution_context,
+    ) -> None:
+        self._deps.execution.persist_stage_checkpoint_fn(
+            self._session,
+            run=prepared.run,
+            checkpoint=WorkflowStageCheckpoint(
+                stage="qa",
+                attempt=attempt,
+                status=_checkpoint_status_for_stage_outcome(qa_result.outcome),
+                summary=_summarize_qa_result(qa_result),
+                qa_result=qa_result,
+            ),
+            execution_context=execution_context,
+            expected_worker_service_instance_id=prepared.worker_service_instance_id,
+            expected_claim_id=prepared.claim_id,
         )
 
     def _handle_stale_snapshot(self, *, prepared, workflow_result, execution_context):

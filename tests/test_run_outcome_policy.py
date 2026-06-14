@@ -557,6 +557,79 @@ def test_complete_attaches_pr_evidence_after_accumulated_qa_demo_recordings_fini
     assert finalizer_calls["workflow_result"].orchestration_stage_trace[-1]["status"] == "completed"
 
 
+def test_complete_persists_blocked_qa_checkpoint_when_pr_evidence_update_fails() -> None:
+    session = SimpleNamespace(refresh=lambda _run: None)
+    deps = _deps()
+    prepared = _prepared(_build_snapshot(), effective_policy={"qa_demo_recording_enabled": True})
+    workflow_result = _workflow_result()
+    qa_result = QaResult(
+        summary=["Recorded demos"],
+        scenarios=[],
+        recordings=[
+            QaRecording(
+                name="Happy path",
+                artifact_url="https://cdn.example/qa/happy.webm",
+                object_key="tenant-1/project-1/run-1/qa-demo-1.webm",
+                capture_reference="https://preview.example",
+            )
+        ],
+    )
+    finalizer_calls: dict[str, object] = {}
+
+    class _Finalizer:
+        def __init__(self, **_kwargs):
+            pass
+
+        def finalize(self, **kwargs):
+            finalizer_calls.update(kwargs)
+            return SimpleNamespace(
+                run=prepared.run,
+                workflow_result=kwargs["workflow_result"],
+                persisted_status="blocked",
+                last_error=kwargs["workflow_result"].blocker_message,
+                persisted_plan=prepared.run.plan,
+                event_types=(),
+                tail_steps=(),
+            )
+
+    with (
+        patch(
+            "orchestrator.core.worker.run_outcome_policy.create_run_preview_deployment",
+            return_value=SimpleNamespace(created=False, reason="existing", release=SimpleNamespace(service_urls=[])),
+        ),
+        patch("orchestrator.core.worker.run_outcome_policy.execute_qa_demo_stage", return_value=qa_result),
+        patch(
+            "orchestrator.core.worker.run_outcome_policy.update_pull_request_with_demo_evidence",
+            side_effect=RuntimeError("GitHub rejected PR update"),
+        ),
+        patch("orchestrator.core.worker.run_outcome_policy.WorkflowFinalizer", _Finalizer),
+        patch("orchestrator.core.worker.run_outcome_policy.CompletionTailExecutor") as tail_executor_cls,
+    ):
+        tail_executor_cls.return_value.execute.return_value = None
+        RunOutcomePolicy(
+            session=session,
+            settings=SimpleNamespace(project_repo_checkout_base_dir="/tmp/workdirs"),
+            deps=deps,
+            cleanup_run_workspaces_safe_fn=MagicMock(),
+        ).complete(
+            prepared=prepared,
+            workflow_result=workflow_result,
+            execution_context={"execution_branch": "run/MAB-400/run-1"},
+        )
+
+    assert deps.execution.persist_stage_checkpoint_fn.call_count == 2
+    first_checkpoint = deps.execution.persist_stage_checkpoint_fn.call_args_list[0].kwargs["checkpoint"]
+    final_checkpoint = deps.execution.persist_stage_checkpoint_fn.call_args.kwargs["checkpoint"]
+    assert first_checkpoint.status == "completed"
+    assert final_checkpoint.stage == "qa"
+    assert final_checkpoint.status == "blocked"
+    assert "QA demo evidence PR update failed: RuntimeError: GitHub rejected PR update" in str(
+        final_checkpoint.qa_result.blocker_message
+    )
+    assert finalizer_calls["workflow_result"].outcome == "blocked"
+    assert "GitHub rejected PR update" in str(finalizer_calls["workflow_result"].blocker_message)
+
+
 def test_complete_blocks_when_qa_continue_result_is_missing_required_capture_target_proof() -> None:
     session = SimpleNamespace(refresh=lambda _run: None)
     deps = _deps()
