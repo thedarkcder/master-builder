@@ -6,6 +6,9 @@ import re
 import shlex
 import subprocess
 import sys
+import urllib.error
+import urllib.request
+from collections.abc import Callable
 from dataclasses import dataclass, replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -140,12 +143,43 @@ def _parse_recorder_command(raw_value: object, *, provider_name: str) -> tuple[s
     return parts
 
 
-def ensure_release_ready_for_qa(release, *, required_service_kinds: tuple[str, ...]) -> None:  # noqa: ANN001
+def qa_demo_release_health_timeout_seconds(settings) -> float:  # noqa: ANN001
+    try:
+        raw_value = getattr(settings, "qa_demo_release_health_timeout_seconds", 10.0)
+        configured = 10.0 if raw_value is None else float(raw_value)
+    except (TypeError, ValueError):
+        configured = 10.0
+    return max(1.0, configured)
+
+
+def _default_service_url_probe(url: str, *, timeout_seconds: float) -> int:
+    request = urllib.request.Request(
+        url,
+        headers={"User-Agent": "MasterBuilder-QA-Demo/1.0"},
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:  # noqa: S310
+            return int(getattr(response, "status", 200))
+    except urllib.error.HTTPError as exc:
+        return int(exc.code)
+    except (OSError, TimeoutError, urllib.error.URLError) as exc:
+        raise RuntimeError(str(exc)) from exc
+
+
+def ensure_release_ready_for_qa(
+    release,  # noqa: ANN001
+    *,
+    required_service_kinds: tuple[str, ...],
+    service_url_probe: Callable[[str], int] | Callable[..., int] | None = None,
+    timeout_seconds: float = 10.0,
+) -> None:
     required = tuple(dict.fromkeys(str(kind or "").strip() for kind in required_service_kinds if str(kind or "").strip()))
     if not required:
         return
     urls = list(getattr(release, "service_urls", []) or []) if release is not None else []
-    failures: list[str] = []
+    inactive_failures: list[str] = []
+    probe_failures: list[str] = []
     for required_kind in required:
         matching_urls = [
             service_url
@@ -159,12 +193,70 @@ def ensure_release_ready_for_qa(release, *, required_service_kinds: tuple[str, .
             and str(getattr(service_url, "url", "") or "").strip()
         ]
         if not active_urls:
-            failures.append(required_kind)
-    if failures:
+            inactive_failures.append(required_kind)
+            continue
+        if service_url_probe is None:
+            continue
+        for active_url in active_urls:
+            try:
+                status_code = int(service_url_probe(active_url, timeout_seconds=timeout_seconds))
+            except Exception as exc:  # noqa: BLE001
+                probe_failures.append(f"{required_kind} ({active_url}): {exc}")
+                continue
+            if status_code >= 500:
+                probe_failures.append(f"{required_kind} ({active_url}): HTTP {status_code}")
+    if inactive_failures:
         raise RuntimeError(
             "QA demo recording requires active release service URL(s); not active: "
-            + ", ".join(sorted(failures))
+            + ", ".join(sorted(inactive_failures))
         )
+    if probe_failures:
+        raise RuntimeError(
+            "QA demo recording requires reachable release service URL(s); not reachable: "
+            + "; ".join(sorted(probe_failures))
+        )
+
+
+def _is_builtin_android_recorder_command(command: tuple[str, ...] | None) -> bool:
+    return any(str(part).endswith("qa_demo_android_recorder.py") for part in (command or ()))
+
+
+def _ready_adb_devices(adb_devices_output: str) -> tuple[str, ...]:
+    devices: list[str] = []
+    for raw_line in adb_devices_output.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("List of devices"):
+            continue
+        parts = line.split()
+        if len(parts) >= 2 and parts[1] == "device":
+            devices.append(parts[0])
+    return tuple(devices)
+
+
+def ensure_capture_target_runtime_ready(capture_target: DemoCaptureTarget) -> None:
+    if capture_target.capture_target != "android" or not _is_builtin_android_recorder_command(
+        capture_target.recorder_command
+    ):
+        return
+    try:
+        result = subprocess.run(
+            ["adb", "devices"],
+            capture_output=True,
+            check=True,
+            text=True,
+            timeout=10,
+        )
+    except FileNotFoundError as exc:
+        raise RuntimeError("Android QA demo recording requires adb on the worker PATH") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError("Android QA demo recording timed out while checking adb devices") from exc
+    except subprocess.CalledProcessError as exc:
+        stderr = str(exc.stderr or "").strip()
+        stdout = str(exc.stdout or "").strip()
+        details = stderr or stdout or f"exit code {exc.returncode}"
+        raise RuntimeError(f"Android QA demo recording could not list adb devices: {details}") from exc
+    if not _ready_adb_devices(result.stdout):
+        raise RuntimeError("No available Android emulator/device found via adb devices")
 
 
 def _default_ios_recorder_command() -> tuple[str, ...] | None:
@@ -644,6 +736,8 @@ def execute_qa_demo_stage(
     ensure_release_ready_for_qa(
         preview_release,
         required_service_kinds=_release_service_kinds(preview_release),
+        service_url_probe=_default_service_url_probe,
+        timeout_seconds=qa_demo_release_health_timeout_seconds(settings),
     )
     available_capture_targets = resolve_available_capture_targets(settings=settings, preview_release=preview_release)
     if not available_capture_targets:
@@ -670,6 +764,8 @@ def execute_qa_demo_stage(
         target_name: available_capture_targets[target_name]
         for target_name in required_targets
     }
+    for capture_target in required_available_capture_targets.values():
+        ensure_capture_target_runtime_ready(capture_target)
     browser_capture_reference = (
         required_available_capture_targets.get("browser").capture_reference
         if "browser" in required_available_capture_targets

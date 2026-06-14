@@ -13,6 +13,7 @@ from orchestrator.core.qa.demo_service import (
     DEMO_EVIDENCE_HEADING,
     DemoCaptureTarget,
     ensure_release_ready_for_qa,
+    ensure_capture_target_runtime_ready,
     execute_qa_demo_stage,
     planned_capture_target_constraints_payload,
     qa_demo_max_attempts,
@@ -211,6 +212,78 @@ def test_ensure_release_ready_for_qa_requires_active_urls_for_required_services(
         raise AssertionError("expected release readiness failure")
 
 
+def test_ensure_release_ready_for_qa_rejects_unreachable_active_service_url() -> None:
+    release = SimpleNamespace(
+        service_urls=[
+            SimpleNamespace(service_kind="website", status="active", url="https://preview.example"),
+            SimpleNamespace(service_kind="api", status="active", url="https://api.example"),
+        ]
+    )
+
+    def _probe(url: str, *, timeout_seconds: float) -> int:
+        assert timeout_seconds == 7.0
+        if url == "https://api.example":
+            raise RuntimeError("connection refused")
+        return 200
+
+    try:
+        ensure_release_ready_for_qa(
+            release,
+            required_service_kinds=("website", "api"),
+            service_url_probe=_probe,
+            timeout_seconds=7.0,
+        )
+    except RuntimeError as exc:
+        assert "api" in str(exc)
+        assert "connection refused" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("expected live release readiness failure")
+
+
+def test_ensure_release_ready_for_qa_rejects_server_error_service_response() -> None:
+    release = SimpleNamespace(
+        service_urls=[SimpleNamespace(service_kind="website", status="active", url="https://preview.example")]
+    )
+
+    try:
+        ensure_release_ready_for_qa(
+            release,
+            required_service_kinds=("website",),
+            service_url_probe=lambda _url, *, timeout_seconds: 503,
+        )
+    except RuntimeError as exc:
+        assert "website" in str(exc)
+        assert "HTTP 503" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("expected server error readiness failure")
+
+
+def test_android_builtin_capture_runtime_requires_ready_adb_device(monkeypatch) -> None:
+    target = DemoCaptureTarget(
+        capture_target="android",
+        capture_reference="android-emulator://configured",
+        recorder_command=(sys.executable, "scripts/qa_demo_android_recorder.py"),
+        required_worker_platform="linux",
+    )
+
+    def _fake_run(args, **_kwargs):  # noqa: ANN001
+        assert args == ["adb", "devices"]
+
+        class _Result:
+            stdout = "List of devices attached\nemulator-5554\toffline\n"
+
+        return _Result()
+
+    monkeypatch.setattr("orchestrator.core.qa.demo_service.subprocess.run", _fake_run)
+
+    try:
+        ensure_capture_target_runtime_ready(target)
+    except RuntimeError as exc:
+        assert "No available Android emulator/device" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("expected Android capture runtime readiness failure")
+
+
 def test_upsert_demo_evidence_section_replaces_existing_section() -> None:
     body = "## Summary\n- change\n\n## Demo Evidence\n- old\n\n## How To Test\n- pytest -q"
     updated = upsert_demo_evidence_section(
@@ -370,6 +443,7 @@ def test_execute_qa_demo_stage_records_and_uploads() -> None:
             "orchestrator.core.qa.demo_service.upload_recording",
             return_value="https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-demo-1.webm",
         ) as upload_mock,
+        patch("orchestrator.core.qa.demo_service._default_service_url_probe", return_value=200),
     ):
         result = execute_qa_demo_stage(
             session=SimpleNamespace(),
@@ -625,7 +699,10 @@ def test_execute_qa_demo_stage_fails_when_ios_capture_requires_macos_worker() ->
         demo_requirements=[DemoRequirement(title="Native walkthrough", acceptance_criterion="Feature works on iOS", capture_target="ios")],
     )
 
-    with patch("orchestrator.core.qa.demo_service.build_codex_runtime"):
+    with (
+        patch("orchestrator.core.qa.demo_service.build_codex_runtime"),
+        patch("orchestrator.core.qa.demo_service._default_service_url_probe", return_value=200),
+    ):
         try:
             execute_qa_demo_stage(
                 session=SimpleNamespace(),
@@ -710,6 +787,7 @@ def test_execute_qa_demo_stage_uses_builtin_ios_capture_on_macos() -> None:
             "orchestrator.core.qa.demo_service.upload_recording",
             return_value="https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-demo-1.mp4",
         ),
+        patch("orchestrator.core.qa.demo_service.ensure_capture_target_runtime_ready"),
     ):
         result = execute_qa_demo_stage(
             session=SimpleNamespace(),
@@ -794,6 +872,7 @@ def test_execute_qa_demo_stage_uses_builtin_android_capture_on_linux() -> None:
             "orchestrator.core.qa.demo_service.upload_recording",
             return_value="https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-demo-1.mp4",
         ),
+        patch("orchestrator.core.qa.demo_service.ensure_capture_target_runtime_ready"),
     ):
         result = execute_qa_demo_stage(
             session=SimpleNamespace(),
@@ -949,6 +1028,7 @@ def test_execute_qa_demo_stage_retries_recording_failures() -> None:
             ),
         ),
         patch("orchestrator.core.qa.demo_service.upload_recording", side_effect=_upload),
+        patch("orchestrator.core.qa.demo_service._default_service_url_probe", return_value=200),
     ):
         result = execute_qa_demo_stage(
             session=SimpleNamespace(),
