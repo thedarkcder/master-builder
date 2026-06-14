@@ -903,7 +903,7 @@ def _demo_requirements(value: object) -> list[DemoRequirement]:
         acceptance_criterion = _optional_string(item.get("acceptance_criterion"))
         capture_target = _optional_string(item.get("capture_target"))
         variants = _string_list(item.get("variants"))
-        if title is None or acceptance_criterion is None or capture_target is None:
+        if title is None or acceptance_criterion is None or capture_target is None or not variants:
             return []
         if capture_target not in _QA_CAPTURE_TARGETS:
             return []
@@ -919,9 +919,24 @@ def _demo_requirements(value: object) -> list[DemoRequirement]:
 
 
 def _required_demo_requirements(value: object, *, stage: str) -> list[DemoRequirement]:
+    if not isinstance(value, list) or not value:
+        raise CodexRuntimeError(f"Codex {stage} response missing required non-empty demo_requirements")
     parsed = _demo_requirements(value)
     if parsed:
         return parsed
+    has_missing_required_fields = any(
+        not isinstance(item, dict)
+        or _optional_string(item.get("title")) is None
+        or _optional_string(item.get("acceptance_criterion")) is None
+        or _optional_string(item.get("capture_target")) is None
+        for item in value
+    )
+    if has_missing_required_fields:
+        raise CodexRuntimeError(f"Codex {stage} response missing required non-empty demo_requirements")
+    if any(isinstance(item, dict) and not _string_list(item.get("variants")) for item in value):
+        raise CodexRuntimeError(
+            f"Codex {stage} response demo_requirements must include non-empty variants for QA walkthrough coverage"
+        )
     raise CodexRuntimeError(f"Codex {stage} response missing required non-empty demo_requirements")
 
 

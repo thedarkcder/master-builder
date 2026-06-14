@@ -53,7 +53,7 @@ Required actions:
    - Each demo requirement must map back to an acceptance criterion.
    - Set `capture_target` to `browser`, `ios`, `android`, or `desktop` for each requirement.
    - Use `ios` for native iOS app flows, `android` for native Android app flows, `desktop` for installed desktop application flows, and `browser` only for web-delivered UI.
-   - Include meaningful `variants` when QA should exercise alternate inputs, edge cases, or attempts to break the feature.
+   - Include non-empty, meaningful `variants` for every demo requirement so QA records several walkthroughs, including at least one alternate input, edge case, repeat-action, or attempt to break the feature.
    - Do not leave `demo_requirements` empty when acceptance criteria exist.
    - Treat `QA capture target constraints` as authoritative for which capture targets are currently supported by the run infrastructure and which worker platform they require.
    - If the ticket requires a capture target whose constraint says `provider_available=false`, do not continue planning as executable work; return `blocked` or `waiting_for_input` with a concrete `blocker_message`.
