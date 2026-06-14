@@ -21,7 +21,9 @@ from orchestrator.core.qa.demo_service import (
     qa_demo_max_attempts,
     qa_demo_recording_enabled,
     record_demo_scenarios,
+    remaining_capture_targets,
     required_capture_targets,
+    required_recording_counts_by_target,
     required_release_service_kinds,
     resolve_available_capture_targets,
     resolve_preview_demo_url,
@@ -136,6 +138,80 @@ def test_required_capture_targets_preserves_pm_order() -> None:
     )
 
     assert required_capture_targets(plan) == ("browser", "ios", "android", "desktop")
+
+
+def test_remaining_capture_targets_requires_recording_per_requirement_and_variant() -> None:
+    plan = PmPlan(
+        plan_steps=["Implement"],
+        acceptance_criteria=["Feature works"],
+        risks=[],
+        demo_requirements=[
+            DemoRequirement(
+                title="Browser walkthrough",
+                acceptance_criterion="Feature works",
+                capture_target="browser",
+                variants=["Bad input shows validation", "Repeat action remains safe"],
+            ),
+            DemoRequirement(title="iOS walkthrough", acceptance_criterion="Feature works on iOS", capture_target="ios"),
+        ],
+    )
+
+    assert required_recording_counts_by_target(plan) == {"browser": 3, "ios": 1}
+    assert remaining_capture_targets(
+        plan,
+        [
+            QaRecording(
+                name="Browser happy path",
+                artifact_url="https://cdn.example/browser-1.webm",
+                object_key="tenant/project/run/browser-1.webm",
+                capture_target="browser",
+                capture_reference="https://preview.example",
+            ),
+            QaRecording(
+                name="iOS walkthrough",
+                artifact_url="https://cdn.example/ios-1.mp4",
+                object_key="tenant/project/run/ios-1.mp4",
+                capture_target="ios",
+                capture_reference="ios-simulator://configured",
+            ),
+        ],
+    ) == ("browser",)
+    assert (
+        remaining_capture_targets(
+            plan,
+            [
+                QaRecording(
+                    name="Browser happy path",
+                    artifact_url="https://cdn.example/browser-1.webm",
+                    object_key="tenant/project/run/browser-1.webm",
+                    capture_target="browser",
+                    capture_reference="https://preview.example",
+                ),
+                QaRecording(
+                    name="Browser invalid input",
+                    artifact_url="https://cdn.example/browser-2.webm",
+                    object_key="tenant/project/run/browser-2.webm",
+                    capture_target="browser",
+                    capture_reference="https://preview.example",
+                ),
+                QaRecording(
+                    name="Browser repeat action",
+                    artifact_url="https://cdn.example/browser-3.webm",
+                    object_key="tenant/project/run/browser-3.webm",
+                    capture_target="browser",
+                    capture_reference="https://preview.example",
+                ),
+                QaRecording(
+                    name="iOS walkthrough",
+                    artifact_url="https://cdn.example/ios-1.mp4",
+                    object_key="tenant/project/run/ios-1.mp4",
+                    capture_target="ios",
+                    capture_reference="ios-simulator://configured",
+                ),
+            ],
+        )
+        == ()
+    )
 
 
 def test_resolve_available_capture_targets_includes_configured_native_recorders() -> None:
