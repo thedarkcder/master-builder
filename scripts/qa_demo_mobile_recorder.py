@@ -23,6 +23,8 @@ from orchestrator.core.qa.mobile_xcuitest_recorder import (  # noqa: E402
 )
 from orchestrator.core.workflow.checkpoint_codec import decode_qa_result_payload  # noqa: E402
 
+DEFAULT_IOS_COMMAND_TIMEOUT_SECONDS = 600
+
 
 def main(argv: list[str]) -> int:
     if len(argv) != 3:
@@ -150,12 +152,12 @@ def resolve_bundle_identifier(*, project_path: Path, scheme: str) -> str:
 
 
 def _ensure_simulator_booted(simulator_udid: str) -> None:
-    subprocess.run(["xcrun", "simctl", "boot", simulator_udid], check=False, capture_output=True, text=True)
+    _run_unchecked(["xcrun", "simctl", "boot", simulator_udid])
     _run(["xcrun", "simctl", "bootstatus", simulator_udid, "-b"], capture_output=True)
 
 
 def _reboot_simulator(simulator_udid: str) -> None:
-    subprocess.run(["xcrun", "simctl", "shutdown", simulator_udid], check=False, capture_output=True, text=True)
+    _run_unchecked(["xcrun", "simctl", "shutdown", simulator_udid])
     _ensure_simulator_booted(simulator_udid)
 
 
@@ -187,8 +189,8 @@ def _discover_xctestrun_path(derived_data_dir: Path) -> Path:
 
 
 def _reset_app_state(*, simulator_udid: str, bundle_id: str) -> None:
-    subprocess.run(["xcrun", "simctl", "terminate", simulator_udid, bundle_id], check=False, capture_output=True, text=True)
-    subprocess.run(["xcrun", "simctl", "uninstall", simulator_udid, bundle_id], check=False, capture_output=True, text=True)
+    _run_unchecked(["xcrun", "simctl", "terminate", simulator_udid, bundle_id])
+    _run_unchecked(["xcrun", "simctl", "uninstall", simulator_udid, bundle_id])
 
 
 def _stop_video_recording(process: subprocess.Popen[str]) -> None:
@@ -222,17 +224,53 @@ def _run(
     cwd: Path | None = None,
     capture_output: bool,
 ) -> subprocess.CompletedProcess[str]:
-    completed = subprocess.run(
-        args,
-        cwd=str(cwd) if cwd is not None else None,
-        check=False,
-        text=True,
-        capture_output=capture_output,
-    )
+    timeout_seconds = _ios_command_timeout_seconds()
+    try:
+        completed = subprocess.run(
+            args,
+            cwd=str(cwd) if cwd is not None else None,
+            check=False,
+            text=True,
+            capture_output=capture_output,
+            timeout=timeout_seconds,
+        )
+    except (subprocess.TimeoutExpired, TimeoutError) as exc:
+        raise _timeout_error(args=args, timeout_seconds=timeout_seconds) from exc
     if completed.returncode != 0:
         message = (completed.stderr or completed.stdout or "").strip()
         raise RuntimeError(f"Command failed ({completed.returncode}): {' '.join(args)}\n{message}")
     return completed
+
+
+def _run_unchecked(args: list[str]) -> None:
+    timeout_seconds = _ios_command_timeout_seconds()
+    try:
+        subprocess.run(
+            args,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+        )
+    except (subprocess.TimeoutExpired, TimeoutError) as exc:
+        raise _timeout_error(args=args, timeout_seconds=timeout_seconds) from exc
+
+
+def _timeout_error(*, args: list[str], timeout_seconds: int) -> RuntimeError:
+    return RuntimeError(f"iOS QA recorder command timed out after {timeout_seconds} seconds: {' '.join(args)}")
+
+
+def _ios_command_timeout_seconds() -> int:
+    raw_value = str(os.environ.get("QA_DEMO_IOS_COMMAND_TIMEOUT_SECONDS") or "").strip()
+    if not raw_value:
+        return DEFAULT_IOS_COMMAND_TIMEOUT_SECONDS
+    try:
+        configured = int(raw_value)
+    except ValueError as exc:
+        raise RuntimeError("QA_DEMO_IOS_COMMAND_TIMEOUT_SECONDS must be an integer") from exc
+    if configured < 1:
+        raise RuntimeError("QA_DEMO_IOS_COMMAND_TIMEOUT_SECONDS must be greater than zero")
+    return configured
 
 
 if __name__ == "__main__":
