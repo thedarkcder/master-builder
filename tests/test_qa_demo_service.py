@@ -13,6 +13,7 @@ from orchestrator.core.qa.demo_service import (
     DEMO_EVIDENCE_HEADING,
     DEMO_EVIDENCE_MARKER,
     DemoCaptureTarget,
+    ensure_artifact_url_reachable,
     ensure_release_ready_for_qa,
     ensure_capture_target_runtime_ready,
     execute_qa_demo_stage,
@@ -1789,3 +1790,17 @@ def test_update_pull_request_with_demo_evidence_rejects_unreachable_accumulated_
             assert "QA demo artifact URL is not reachable" in str(exc)
         else:  # pragma: no cover
             raise AssertionError("expected unreachable accumulated recording to block PR evidence update")
+
+
+def test_artifact_url_validation_rejects_no_content_response_as_demo_proof() -> None:
+    try:
+        ensure_artifact_url_reachable(
+            "https://demo.example/empty.webm",
+            artifact_url_probe=lambda _url, **_kwargs: 204,
+            timeout_seconds=1,
+        )
+    except RuntimeError as exc:
+        assert "did not return playable video evidence" in str(exc)
+        assert "HTTP 204" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("expected no-content artifact URL to be rejected")
