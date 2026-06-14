@@ -1062,6 +1062,89 @@ def test_execute_qa_demo_stage_records_current_worker_targets_then_requeues_for_
     assert [item["capture_target"] for item in available_targets] == ["browser", "android"]
 
 
+def test_execute_qa_demo_stage_blocks_when_current_worker_target_proof_is_missing() -> None:
+    tenant = SimpleNamespace(tenant_id="tenant-1", github_config={})
+    project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo")
+    run = SimpleNamespace(run_id="run-1")
+    release = SimpleNamespace(
+        service_urls=[SimpleNamespace(service_kind="website", status="active", url="https://preview.example")]
+    )
+    plan = PmPlan(
+        plan_steps=["Implement"],
+        acceptance_criteria=["Feature works on browser and Android"],
+        risks=[],
+        demo_requirements=[
+            DemoRequirement(title="Browser walkthrough", acceptance_criterion="Feature works on browser", capture_target="browser"),
+            DemoRequirement(title="Android walkthrough", acceptance_criterion="Feature works on Android", capture_target="android"),
+        ],
+    )
+    fake_agents = SimpleNamespace(
+        qa=MagicMock(
+            return_value=QaResult(
+                summary=["Recorded browser only"],
+                scenarios=[
+                    QaScenario(name="Browser walkthrough", objective="Show browser", capture_target="browser"),
+                ],
+            )
+        )
+    )
+
+    with (
+        patch("orchestrator.core.qa.demo_service.build_codex_runtime"),
+        patch("orchestrator.core.qa.demo_service.CodexWorkflowAgents", return_value=fake_agents),
+        patch(
+            "orchestrator.core.qa.demo_service.record_demo_scenarios",
+            return_value=[
+                SimpleNamespace(
+                    name="Browser walkthrough",
+                    path="/tmp/browser.webm",
+                    capture_target="browser",
+                    capture_reference="https://preview.example",
+                    content_type="video/webm",
+                )
+            ],
+        ) as record_mock,
+        patch(
+            "orchestrator.core.qa.demo_service.storage_config_from_settings",
+            return_value=SimpleNamespace(
+                endpoint="minio:9000",
+                access_key="key",
+                secret_key="secret",
+                bucket="qa-demos",
+                public_base_url="https://cdn.example/qa-demos",
+                secure=False,
+            ),
+        ),
+        patch(
+            "orchestrator.core.qa.demo_service.upload_recording",
+            return_value="https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-demo-1.webm",
+        ),
+        patch("orchestrator.core.qa.demo_service.ensure_capture_target_runtime_ready"),
+        patch("orchestrator.core.qa.demo_service._default_service_url_probe", return_value=200),
+        patch("orchestrator.core.qa.demo_service._default_artifact_url_probe", return_value=200),
+    ):
+        try:
+            execute_qa_demo_stage(
+                session=SimpleNamespace(),
+                settings=SimpleNamespace(qa_demo_playwright_module_dir="", qa_demo_max_attempts=2),
+                tenant=tenant,
+                project=project,
+                run=run,
+                request=_request(),
+                plan=plan,
+                dev_result=DevResult(change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8"),
+                test_result=TestResult(guidance=["pytest -q"]),
+                review_result=ReviewResult(summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"),
+                preview_release=release,
+            )
+        except RuntimeError as exc:
+            assert "did not produce proof for current worker capture target(s): android" in str(exc)
+        else:  # pragma: no cover
+            raise AssertionError("expected current-worker missing target proof to block")
+
+    assert record_mock.call_count == 2
+
+
 def test_execute_qa_demo_stage_completes_remaining_target_with_previous_recordings() -> None:
     tenant = SimpleNamespace(tenant_id="tenant-1", github_config={})
     project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo")

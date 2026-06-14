@@ -1052,6 +1052,14 @@ def execute_qa_demo_stage(
             combined_scenarios = [*previous_scenarios, *qa_result.scenarios]
             still_remaining = remaining_capture_targets(plan, combined_recordings)
             if still_remaining:
+                missing_current_worker_targets = [
+                    target for target in still_remaining if target in current_worker_capture_targets
+                ]
+                if missing_current_worker_targets:
+                    raise RuntimeError(
+                        "QA demo recording did not produce proof for current worker capture target(s): "
+                        + ", ".join(missing_current_worker_targets)
+                    )
                 message = (
                     "QA demo recording produced proof for current worker target(s) but still requires capture target(s): "
                     + ", ".join(still_remaining)
