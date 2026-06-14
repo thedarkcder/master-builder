@@ -537,18 +537,6 @@ class CodexWorkflowAgents:
                     f"Codex pm response selected unavailable capture target '{requirement.capture_target}'"
                     + (f": {reason}" if reason else "")
                 )
-            required_platform = _optional_string(constraint.get("required_worker_platform"))
-            if required_platform is not None and execution_worker_capability.value != required_platform:
-                raise CodexRuntimeError(
-                    "Codex pm response must choose "
-                    f"{required_platform} execution_worker_capability when {requirement.capture_target} demos are required"
-                )
-        if not target_constraints and execution_worker_capability.value != "macos" and any(
-            requirement.capture_target == "ios" for requirement in demo_requirements
-        ):
-            raise CodexRuntimeError(
-                "Codex pm response must choose macos execution_worker_capability when iOS demos are required"
-            )
         return PmPlan(
             plan_steps=_required_string_list(payload.get("plan_steps"), stage="pm", field="plan_steps"),
             acceptance_criteria=_required_string_list(
