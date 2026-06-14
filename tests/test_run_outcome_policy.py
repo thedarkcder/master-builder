@@ -19,13 +19,45 @@ from orchestrator.core.workflow.runner import (
 from orchestrator.core.worker.run_outcome_policy import RunOutcomePolicy
 
 
+def _demo_requirement(
+    *,
+    title: str = "Feature walkthrough",
+    acceptance_criterion: str = "Feature works",
+    capture_target: str = "browser",
+    variants: list[str] | None = None,
+) -> DemoRequirement:
+    return DemoRequirement(
+        title=title,
+        acceptance_criterion=acceptance_criterion,
+        capture_target=capture_target,  # type: ignore[arg-type]
+        variants=variants or ["Repeat action remains safe"],
+    )
+
+
+def _qa_recording(
+    *,
+    name: str,
+    index: int,
+    capture_target: str = "browser",
+    capture_reference: str = "https://preview.example",
+    suffix: str = "webm",
+) -> QaRecording:
+    return QaRecording(
+        name=name,
+        artifact_url=f"https://cdn.example/qa-demo-{index}.{suffix}",
+        object_key=f"tenant-1/project-1/run-1/qa-demo-{index}.{suffix}",
+        capture_target=capture_target,  # type: ignore[arg-type]
+        capture_reference=capture_reference,
+    )
+
+
 def _build_snapshot() -> dict[str, object]:
     snapshot = ExecutionSnapshot.empty()
     plan = PmPlan(
         plan_steps=["Implement feature"],
         acceptance_criteria=["Feature works"],
         risks=["Low risk"],
-        demo_requirements=[DemoRequirement(title="Feature walkthrough", acceptance_criterion="Feature works")],
+        demo_requirements=[_demo_requirement()],
     )
     snapshot.apply_stage_checkpoint(
         WorkflowStageCheckpoint(stage="pm", attempt=1, status="completed", summary="PM ready.", plan=plan)
@@ -132,7 +164,7 @@ def _workflow_result() -> WorkflowResult:
             plan_steps=["Implement feature"],
             acceptance_criteria=["Feature works"],
             risks=["Low risk"],
-            demo_requirements=[DemoRequirement(title="Feature walkthrough", acceptance_criterion="Feature works")],
+            demo_requirements=[_demo_requirement()],
         ),
         pr_url="https://github.com/acme/repo/pull/8",
         summary=["Implemented feature"],
@@ -156,12 +188,8 @@ def test_complete_runs_qa_demo_stage_before_finalization() -> None:
         summary=["Recorded demos"],
         scenarios=[],
         recordings=[
-            QaRecording(
-                name="Happy path",
-                artifact_url="https://cdn.example/qa/happy.webm",
-                object_key="tenant-1/project-1/run-1/qa-demo-1.webm",
-                capture_reference="https://preview.example",
-            )
+            _qa_recording(name="Happy path", index=1),
+            _qa_recording(name="Repeat action remains safe", index=2),
         ],
     )
     finalizer_calls: dict[str, object] = {}
@@ -332,8 +360,16 @@ def test_complete_requeues_when_qa_demo_stage_needs_remaining_worker_platform() 
         acceptance_criteria=["Feature works everywhere"],
         risks=["Low risk"],
         demo_requirements=[
-            DemoRequirement(title="Browser walkthrough", acceptance_criterion="Feature works everywhere", capture_target="browser"),
-            DemoRequirement(title="iOS walkthrough", acceptance_criterion="Feature works everywhere", capture_target="ios"),
+            _demo_requirement(
+                title="Browser walkthrough",
+                acceptance_criterion="Feature works everywhere",
+                capture_target="browser",
+            ),
+            _demo_requirement(
+                title="iOS walkthrough",
+                acceptance_criterion="Feature works everywhere",
+                capture_target="ios",
+            ),
         ],
     )
     snapshot = ExecutionSnapshot.empty()
@@ -425,9 +461,21 @@ def test_complete_attaches_pr_evidence_after_accumulated_qa_demo_recordings_fini
         acceptance_criteria=["Feature works everywhere"],
         risks=["Low risk"],
         demo_requirements=[
-            DemoRequirement(title="Browser walkthrough", acceptance_criterion="Feature works everywhere", capture_target="browser"),
-            DemoRequirement(title="iOS walkthrough", acceptance_criterion="Feature works everywhere", capture_target="ios"),
-            DemoRequirement(title="Android walkthrough", acceptance_criterion="Feature works everywhere", capture_target="android"),
+            _demo_requirement(
+                title="Browser walkthrough",
+                acceptance_criterion="Feature works everywhere",
+                capture_target="browser",
+            ),
+            _demo_requirement(
+                title="iOS walkthrough",
+                acceptance_criterion="Feature works everywhere",
+                capture_target="ios",
+            ),
+            _demo_requirement(
+                title="Android walkthrough",
+                acceptance_criterion="Feature works everywhere",
+                capture_target="android",
+            ),
         ],
     )
     snapshot = ExecutionSnapshot.empty()
@@ -465,19 +513,21 @@ def test_complete_attaches_pr_evidence_after_accumulated_qa_demo_recordings_fini
         summary=["Recorded Linux demos"],
         scenarios=[],
         recordings=[
-            QaRecording(
-                name="Browser walkthrough",
-                artifact_url="https://cdn.example/qa-demo-1.webm",
-                object_key="tenant-1/project-1/run-1/qa-demo-1.webm",
-                capture_target="browser",
-                capture_reference="https://preview.example",
-            ),
-            QaRecording(
+            _qa_recording(name="Browser walkthrough", index=1),
+            _qa_recording(name="Browser repeat action", index=2),
+            _qa_recording(
                 name="Android walkthrough",
-                artifact_url="https://cdn.example/qa-demo-2.mp4",
-                object_key="tenant-1/project-1/run-1/qa-demo-2.mp4",
+                index=3,
                 capture_target="android",
                 capture_reference="android-emulator://configured",
+                suffix="mp4",
+            ),
+            _qa_recording(
+                name="Android repeat action",
+                index=4,
+                capture_target="android",
+                capture_reference="android-emulator://configured",
+                suffix="mp4",
             ),
         ],
         outcome="requeue",
@@ -491,12 +541,19 @@ def test_complete_attaches_pr_evidence_after_accumulated_qa_demo_recordings_fini
         summary=["Recorded all demos"],
         recordings=[
             *previous_qa.recordings,
-            QaRecording(
+            _qa_recording(
                 name="iOS walkthrough",
-                artifact_url="https://cdn.example/qa-demo-3.mp4",
-                object_key="tenant-1/project-1/run-1/qa-demo-3.mp4",
+                index=5,
                 capture_target="ios",
                 capture_reference="ios-simulator://configured",
+                suffix="mp4",
+            ),
+            _qa_recording(
+                name="iOS repeat action",
+                index=6,
+                capture_target="ios",
+                capture_reference="ios-simulator://configured",
+                suffix="mp4",
             ),
         ],
         outcome="continue",
@@ -550,7 +607,10 @@ def test_complete_attaches_pr_evidence_after_accumulated_qa_demo_recordings_fini
     assert qa_mock.call_args.kwargs["previous_qa_result"] == previous_qa
     assert [recording.capture_target for recording in update_pr_mock.call_args.kwargs["qa_result"].recordings] == [
         "browser",
+        "browser",
         "android",
+        "android",
+        "ios",
         "ios",
     ]
     assert update_pr_mock.call_args.kwargs["required_capture_targets"] == ("browser", "ios", "android")
@@ -567,12 +627,8 @@ def test_complete_persists_blocked_qa_checkpoint_when_pr_evidence_update_fails()
         summary=["Recorded demos"],
         scenarios=[],
         recordings=[
-            QaRecording(
-                name="Happy path",
-                artifact_url="https://cdn.example/qa/happy.webm",
-                object_key="tenant-1/project-1/run-1/qa-demo-1.webm",
-                capture_reference="https://preview.example",
-            )
+            _qa_recording(name="Happy path", index=1),
+            _qa_recording(name="Repeat action remains safe", index=2),
         ],
     )
     finalizer_calls: dict[str, object] = {}
@@ -639,9 +695,21 @@ def test_complete_blocks_when_qa_continue_result_is_missing_required_capture_tar
         acceptance_criteria=["Feature works everywhere"],
         risks=["Low risk"],
         demo_requirements=[
-            DemoRequirement(title="Browser walkthrough", acceptance_criterion="Feature works everywhere", capture_target="browser"),
-            DemoRequirement(title="iOS walkthrough", acceptance_criterion="Feature works everywhere", capture_target="ios"),
-            DemoRequirement(title="Android walkthrough", acceptance_criterion="Feature works everywhere", capture_target="android"),
+            _demo_requirement(
+                title="Browser walkthrough",
+                acceptance_criterion="Feature works everywhere",
+                capture_target="browser",
+            ),
+            _demo_requirement(
+                title="iOS walkthrough",
+                acceptance_criterion="Feature works everywhere",
+                capture_target="ios",
+            ),
+            _demo_requirement(
+                title="Android walkthrough",
+                acceptance_criterion="Feature works everywhere",
+                capture_target="android",
+            ),
         ],
     )
     snapshot = ExecutionSnapshot.empty()
@@ -679,19 +747,21 @@ def test_complete_blocks_when_qa_continue_result_is_missing_required_capture_tar
         summary=["Recorded demos"],
         scenarios=[],
         recordings=[
-            QaRecording(
-                name="Browser walkthrough",
-                artifact_url="https://cdn.example/qa-demo-1.webm",
-                object_key="tenant-1/project-1/run-1/qa-demo-1.webm",
-                capture_target="browser",
-                capture_reference="https://preview.example",
-            ),
-            QaRecording(
+            _qa_recording(name="Browser walkthrough", index=1),
+            _qa_recording(name="Browser repeat action", index=2),
+            _qa_recording(
                 name="Android walkthrough",
-                artifact_url="https://cdn.example/qa-demo-2.mp4",
-                object_key="tenant-1/project-1/run-1/qa-demo-2.mp4",
+                index=3,
                 capture_target="android",
                 capture_reference="android-emulator://configured",
+                suffix="mp4",
+            ),
+            _qa_recording(
+                name="Android repeat action",
+                index=4,
+                capture_target="android",
+                capture_reference="android-emulator://configured",
+                suffix="mp4",
             ),
         ],
         outcome="continue",
@@ -868,7 +938,7 @@ def test_complete_creates_preview_release_for_ios_only_demo_requirements() -> No
             acceptance_criteria=["Feature works on iOS"],
             risks=["Low risk"],
             demo_requirements=[
-                DemoRequirement(
+                _demo_requirement(
                     title="Native walkthrough",
                     acceptance_criterion="Feature works on iOS",
                     capture_target="ios",

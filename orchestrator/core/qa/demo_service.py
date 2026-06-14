@@ -609,6 +609,21 @@ def required_capture_targets(plan: PmPlan) -> tuple[str, ...]:
     return tuple(ordered)
 
 
+def ensure_pm_demo_requirements_are_recordable(plan: PmPlan) -> None:
+    if not plan.demo_requirements:
+        raise RuntimeError("QA demo recording requires PM demo requirements with explicit capture targets")
+    missing_variants = [
+        f"{requirement.capture_target}: {requirement.title}"
+        for requirement in plan.demo_requirements
+        if not list(requirement.variants or [])
+    ]
+    if missing_variants:
+        raise RuntimeError(
+            "QA demo recording requires PM demo requirement variants for QA walkthrough coverage: "
+            + "; ".join(missing_variants)
+        )
+
+
 def required_recording_counts_by_target(plan: PmPlan) -> dict[str, int]:
     required_counts: dict[str, int] = {}
     for requirement in plan.demo_requirements:
@@ -1172,9 +1187,8 @@ def execute_qa_demo_stage(
     preview_release,
     previous_qa_result: QaResult | None = None,
 ) -> QaResult:
+    ensure_pm_demo_requirements_are_recordable(plan)
     required_targets = required_capture_targets(plan)
-    if not required_targets:
-        raise RuntimeError("QA demo recording requires PM demo requirements with explicit capture targets")
     if previous_qa_result is not None:
         previous_qa_result = _validate_recorded_scenario_proof(previous_qa_result)
     previous_recordings = list(previous_qa_result.recordings if previous_qa_result is not None else [])

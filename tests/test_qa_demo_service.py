@@ -71,8 +71,45 @@ def _qa_result() -> QaResult:
                 name="Happy path",
                 objective="Show feature works",
                 steps=[QaStep(action="goto", value="/"), QaStep(action="assert_visible", selector="text=Feature")],
+            ),
+            QaScenario(
+                name="Repeat action remains safe",
+                objective="Show repeat action remains safe",
+                steps=[QaStep(action="goto", value="/"), QaStep(action="assert_visible", selector="text=Feature")],
             )
         ],
+    )
+
+
+def _demo_requirement(
+    *,
+    title: str = "Feature walkthrough",
+    acceptance_criterion: str = "Feature works",
+    capture_target: str = "browser",
+    variants: list[str] | None = None,
+) -> DemoRequirement:
+    return DemoRequirement(
+        title=title,
+        acceptance_criterion=acceptance_criterion,
+        capture_target=capture_target,  # type: ignore[arg-type]
+        variants=variants or ["Repeat action remains safe"],
+    )
+
+
+def _local_recording(
+    *,
+    name: str,
+    path: str = "/tmp/happy.webm",
+    capture_target: str = "browser",
+    capture_reference: str = "https://preview.example",
+    content_type: str = "video/webm",
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        name=name,
+        path=path,
+        capture_target=capture_target,
+        capture_reference=capture_reference,
+        content_type=content_type,
     )
 
 
@@ -814,7 +851,7 @@ def test_execute_qa_demo_stage_records_and_uploads() -> None:
         plan_steps=["Implement"],
         acceptance_criteria=["Feature works"],
         risks=[],
-        demo_requirements=[DemoRequirement(title="Feature walkthrough", acceptance_criterion="Feature works")],
+        demo_requirements=[_demo_requirement()],
     )
     dev_result = DevResult(change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8")
     test_result = TestResult(guidance=["pytest -q"])
@@ -828,13 +865,8 @@ def test_execute_qa_demo_stage_records_and_uploads() -> None:
         patch(
             "orchestrator.core.qa.demo_service.record_demo_scenarios",
             return_value=[
-                SimpleNamespace(
-                    name="Happy path",
-                    path="/tmp/happy.webm",
-                    capture_target="browser",
-                    capture_reference="https://preview.example",
-                    content_type="video/webm",
-                )
+                _local_recording(name="Happy path"),
+                _local_recording(name="Repeat action remains safe", path="/tmp/repeat.webm"),
             ],
         ),
         patch(
@@ -875,6 +907,49 @@ def test_execute_qa_demo_stage_records_and_uploads() -> None:
     available_targets = json.loads(fake_agents.qa.call_args.kwargs["available_capture_targets_json"])
     assert {"capture_target": "browser", "capture_reference": "https://preview.example"} in available_targets
     assert upload_mock.call_args.kwargs["content_type"] == "video/webm"
+
+
+def test_execute_qa_demo_stage_requires_pm_demo_variants_before_qa_agent() -> None:
+    tenant = SimpleNamespace(tenant_id="tenant-1", github_config={})
+    project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo")
+    run = SimpleNamespace(run_id="run-1")
+    release = SimpleNamespace(
+        service_urls=[SimpleNamespace(service_kind="website", status="active", url="https://preview.example")]
+    )
+    plan = PmPlan(
+        plan_steps=["Implement"],
+        acceptance_criteria=["Feature works"],
+        risks=[],
+        demo_requirements=[
+            DemoRequirement(title="Feature walkthrough", acceptance_criterion="Feature works", capture_target="browser")
+        ],
+    )
+    fake_agents = SimpleNamespace(qa=MagicMock())
+
+    with (
+        patch("orchestrator.core.qa.demo_service.build_codex_runtime"),
+        patch("orchestrator.core.qa.demo_service.CodexWorkflowAgents", return_value=fake_agents),
+    ):
+        try:
+            execute_qa_demo_stage(
+                session=SimpleNamespace(),
+                settings=SimpleNamespace(qa_demo_playwright_module_dir=""),
+                tenant=tenant,
+                project=project,
+                run=run,
+                request=_request(),
+                plan=plan,
+                dev_result=DevResult(change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8"),
+                test_result=TestResult(guidance=["pytest -q"]),
+                review_result=ReviewResult(summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"),
+                preview_release=release,
+            )
+        except RuntimeError as exc:
+            assert "requires PM demo requirement variants" in str(exc)
+        else:  # pragma: no cover
+            raise AssertionError("expected QA demo PM variant contract failure")
+
+    fake_agents.qa.assert_not_called()
 
 
 def test_execute_qa_demo_stage_blocks_when_qa_scenarios_do_not_cover_pm_variants() -> None:
@@ -923,7 +998,8 @@ def test_execute_qa_demo_stage_blocks_when_qa_scenarios_do_not_cover_pm_variants
                 preview_release=release,
             )
         except RuntimeError as exc:
-            assert "browser: expected at least 3, got 1" in str(exc)
+            assert "browser: expected at least 3, got 2" in str(exc)
+            assert "browser: Bad input shows validation" in str(exc)
         else:  # pragma: no cover
             raise AssertionError("expected QA scenario variant coverage failure")
 
@@ -1036,7 +1112,7 @@ def test_execute_qa_demo_stage_blocks_when_project_api_service_is_missing_from_r
         plan_steps=["Implement"],
         acceptance_criteria=["Feature works"],
         risks=[],
-        demo_requirements=[DemoRequirement(title="Feature walkthrough", acceptance_criterion="Feature works")],
+        demo_requirements=[_demo_requirement()],
     )
     dev_result = DevResult(change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8")
     test_result = TestResult(guidance=["pytest -q"])
@@ -1085,7 +1161,7 @@ def test_execute_qa_demo_stage_retries_when_uploaded_artifact_url_is_unreachable
         plan_steps=["Implement"],
         acceptance_criteria=["Feature works"],
         risks=[],
-        demo_requirements=[DemoRequirement(title="Feature walkthrough", acceptance_criterion="Feature works")],
+        demo_requirements=[_demo_requirement()],
     )
     fake_agents = SimpleNamespace(qa=lambda **_: _qa_result())
     probe_attempts = {"count": 0}
@@ -1102,13 +1178,8 @@ def test_execute_qa_demo_stage_retries_when_uploaded_artifact_url_is_unreachable
         patch(
             "orchestrator.core.qa.demo_service.record_demo_scenarios",
             return_value=[
-                SimpleNamespace(
-                    name="Happy path",
-                    path="/tmp/happy.webm",
-                    capture_target="browser",
-                    capture_reference="https://preview.example",
-                    content_type="video/webm",
-                )
+                _local_recording(name="Happy path"),
+                _local_recording(name="Repeat action remains safe", path="/tmp/repeat.webm"),
             ],
         ),
         patch(
@@ -1143,7 +1214,7 @@ def test_execute_qa_demo_stage_retries_when_uploaded_artifact_url_is_unreachable
             preview_release=release,
         )
 
-    assert probe_attempts["count"] == 2
+    assert probe_attempts["count"] == 3
     assert result.recordings[0].artifact_url.endswith("qa-demo-1.webm")
 
 
@@ -1156,7 +1227,11 @@ def test_execute_qa_demo_stage_normalizes_native_selectors_before_recording() ->
         acceptance_criteria=["Feature works"],
         risks=[],
         demo_requirements=[
-            DemoRequirement(title="Native walkthrough", acceptance_criterion="Feature works", capture_target="ios")
+            _demo_requirement(
+                title="Native walkthrough",
+                acceptance_criterion="Feature works",
+                capture_target="ios",
+            )
         ],
     )
     dev_result = DevResult(change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8")
@@ -1175,6 +1250,12 @@ def test_execute_qa_demo_stage_normalizes_native_selectors_before_recording() ->
                             QaStep(action="assert_visible", selector="Start Free Demo"),
                             QaStep(action="click", selector="onboarding_primary_button"),
                         ],
+                    ),
+                    QaScenario(
+                        name="Repeat action remains safe",
+                        objective="Repeat action remains safe",
+                        capture_target="ios",
+                        steps=[QaStep(action="assert_visible", selector="Start Free Demo")],
                     )
                 ],
             )
@@ -1198,13 +1279,20 @@ def test_execute_qa_demo_stage_normalizes_native_selectors_before_recording() ->
         patch(
             "orchestrator.core.qa.demo_service.record_demo_scenarios",
             return_value=[
-                SimpleNamespace(
+                _local_recording(
                     name="Mobile flow",
                     path="/tmp/mobile.mp4",
                     capture_target="ios",
                     capture_reference="ios-simulator://configured",
                     content_type="video/mp4",
-                )
+                ),
+                _local_recording(
+                    name="Repeat action remains safe",
+                    path="/tmp/mobile-repeat.mp4",
+                    capture_target="ios",
+                    capture_reference="ios-simulator://configured",
+                    content_type="video/mp4",
+                ),
             ],
         ) as record_mock,
         patch(
@@ -1243,7 +1331,11 @@ def test_execute_qa_demo_stage_normalizes_native_wait_for_text_selector_into_val
         acceptance_criteria=["Feature works"],
         risks=[],
         demo_requirements=[
-            DemoRequirement(title="Native walkthrough", acceptance_criterion="Feature works", capture_target="ios")
+            _demo_requirement(
+                title="Native walkthrough",
+                acceptance_criterion="Feature works",
+                capture_target="ios",
+            )
         ],
     )
     fake_agents = SimpleNamespace(
@@ -1256,6 +1348,12 @@ def test_execute_qa_demo_stage_normalizes_native_wait_for_text_selector_into_val
                         objective="Show feature works",
                         capture_target="ios",
                         steps=[QaStep(action="wait_for_text", selector="text=Next")],
+                    ),
+                    QaScenario(
+                        name="Repeat action remains safe",
+                        objective="Repeat action remains safe",
+                        capture_target="ios",
+                        steps=[QaStep(action="assert_visible", selector="text=Next")],
                     )
                 ],
             )
@@ -1279,13 +1377,20 @@ def test_execute_qa_demo_stage_normalizes_native_wait_for_text_selector_into_val
         patch(
             "orchestrator.core.qa.demo_service.record_demo_scenarios",
             return_value=[
-                SimpleNamespace(
+                _local_recording(
                     name="Mobile flow",
                     path="/tmp/mobile.mp4",
                     capture_target="ios",
                     capture_reference="ios-simulator://configured",
                     content_type="video/mp4",
-                )
+                ),
+                _local_recording(
+                    name="Repeat action remains safe",
+                    path="/tmp/mobile-repeat.mp4",
+                    capture_target="ios",
+                    capture_reference="ios-simulator://configured",
+                    content_type="video/mp4",
+                ),
             ],
         ) as record_mock,
         patch(
@@ -1323,7 +1428,11 @@ def test_execute_qa_demo_stage_rejects_transient_native_splash_assertions() -> N
         acceptance_criteria=["Feature works"],
         risks=[],
         demo_requirements=[
-            DemoRequirement(title="Native walkthrough", acceptance_criterion="Feature works", capture_target="ios")
+            _demo_requirement(
+                title="Native walkthrough",
+                acceptance_criterion="Feature works",
+                capture_target="ios",
+            )
         ],
     )
     dev_result = DevResult(change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8")
@@ -1381,7 +1490,13 @@ def test_execute_qa_demo_stage_requeues_when_remaining_target_requires_another_w
         plan_steps=["Implement"],
         acceptance_criteria=["Feature works on iOS"],
         risks=[],
-        demo_requirements=[DemoRequirement(title="Native walkthrough", acceptance_criterion="Feature works on iOS", capture_target="ios")],
+        demo_requirements=[
+            _demo_requirement(
+                title="Native walkthrough",
+                acceptance_criterion="Feature works on iOS",
+                capture_target="ios",
+            )
+        ],
     )
 
     with patch("orchestrator.core.qa.demo_service._default_service_url_probe", return_value=200):
@@ -1416,9 +1531,21 @@ def test_execute_qa_demo_stage_records_current_worker_targets_then_requeues_for_
         acceptance_criteria=["Feature works everywhere"],
         risks=[],
         demo_requirements=[
-            DemoRequirement(title="Browser walkthrough", acceptance_criterion="Feature works everywhere", capture_target="browser"),
-            DemoRequirement(title="iOS walkthrough", acceptance_criterion="Feature works everywhere", capture_target="ios"),
-            DemoRequirement(title="Android walkthrough", acceptance_criterion="Feature works everywhere", capture_target="android"),
+            _demo_requirement(
+                title="Browser walkthrough",
+                acceptance_criterion="Feature works everywhere",
+                capture_target="browser",
+            ),
+            _demo_requirement(
+                title="iOS walkthrough",
+                acceptance_criterion="Feature works everywhere",
+                capture_target="ios",
+            ),
+            _demo_requirement(
+                title="Android walkthrough",
+                acceptance_criterion="Feature works everywhere",
+                capture_target="android",
+            ),
         ],
     )
     fake_agents = SimpleNamespace(
@@ -1433,8 +1560,20 @@ def test_execute_qa_demo_stage_records_current_worker_targets_then_requeues_for_
                         steps=_proof_steps("text=Feature"),
                     ),
                     QaScenario(
+                        name="Browser repeat action",
+                        objective="Repeat action remains safe in browser",
+                        capture_target="browser",
+                        steps=_proof_steps("text=Feature"),
+                    ),
+                    QaScenario(
                         name="Android walkthrough",
                         objective="Show Android",
+                        capture_target="android",
+                        steps=_proof_steps("text=Ready"),
+                    ),
+                    QaScenario(
+                        name="Android repeat action",
+                        objective="Repeat action remains safe on Android",
                         capture_target="android",
                         steps=_proof_steps("text=Ready"),
                     ),
@@ -1449,16 +1588,30 @@ def test_execute_qa_demo_stage_records_current_worker_targets_then_requeues_for_
         patch(
             "orchestrator.core.qa.demo_service.record_demo_scenarios",
             return_value=[
-                SimpleNamespace(
+                _local_recording(
                     name="Browser walkthrough",
                     path="/tmp/browser.webm",
                     capture_target="browser",
                     capture_reference="https://preview.example",
                     content_type="video/webm",
                 ),
-                SimpleNamespace(
+                _local_recording(
+                    name="Browser repeat action",
+                    path="/tmp/browser-repeat.webm",
+                    capture_target="browser",
+                    capture_reference="https://preview.example",
+                    content_type="video/webm",
+                ),
+                _local_recording(
                     name="Android walkthrough",
                     path="/tmp/android.mp4",
+                    capture_target="android",
+                    capture_reference="android-emulator://configured",
+                    content_type="video/mp4",
+                ),
+                _local_recording(
+                    name="Android repeat action",
+                    path="/tmp/android-repeat.mp4",
                     capture_target="android",
                     capture_reference="android-emulator://configured",
                     content_type="video/mp4",
@@ -1480,7 +1633,9 @@ def test_execute_qa_demo_stage_records_current_worker_targets_then_requeues_for_
             "orchestrator.core.qa.demo_service.upload_recording",
             side_effect=[
                 "https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-demo-1.webm",
-                "https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-demo-2.mp4",
+                "https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-demo-2.webm",
+                "https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-demo-3.mp4",
+                "https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-demo-4.mp4",
             ],
         ),
         patch("orchestrator.core.qa.demo_service.ensure_capture_target_runtime_ready"),
@@ -1502,7 +1657,12 @@ def test_execute_qa_demo_stage_records_current_worker_targets_then_requeues_for_
         )
 
     assert result.outcome == "requeue"
-    assert [recording.capture_target for recording in result.recordings] == ["browser", "android"]
+    assert [recording.capture_target for recording in result.recordings] == [
+        "browser",
+        "browser",
+        "android",
+        "android",
+    ]
     assert "still requires capture target(s): ios" in str(result.feedback)
     available_targets = json.loads(fake_agents.qa.call_args.kwargs["available_capture_targets_json"])
     assert [item["capture_target"] for item in available_targets] == ["browser", "android"]
@@ -1520,8 +1680,16 @@ def test_execute_qa_demo_stage_blocks_when_current_worker_target_proof_is_missin
         acceptance_criteria=["Feature works on browser and Android"],
         risks=[],
         demo_requirements=[
-            DemoRequirement(title="Browser walkthrough", acceptance_criterion="Feature works on browser", capture_target="browser"),
-            DemoRequirement(title="Android walkthrough", acceptance_criterion="Feature works on Android", capture_target="android"),
+            _demo_requirement(
+                title="Browser walkthrough",
+                acceptance_criterion="Feature works on browser",
+                capture_target="browser",
+            ),
+            _demo_requirement(
+                title="Android walkthrough",
+                acceptance_criterion="Feature works on Android",
+                capture_target="android",
+            ),
         ],
     )
     fake_agents = SimpleNamespace(
@@ -1589,7 +1757,9 @@ def test_execute_qa_demo_stage_blocks_when_current_worker_target_proof_is_missin
                 preview_release=release,
             )
         except RuntimeError as exc:
-            assert "insufficient scenario count: android: expected at least 1, got 0" in str(exc)
+            assert "insufficient scenario count:" in str(exc)
+            assert "browser: expected at least 2, got 1" in str(exc)
+            assert "android: expected at least 2, got 0" in str(exc)
         else:  # pragma: no cover
             raise AssertionError("expected current-worker missing target proof to block")
 
@@ -1605,9 +1775,21 @@ def test_execute_qa_demo_stage_completes_remaining_target_with_previous_recordin
         acceptance_criteria=["Feature works everywhere"],
         risks=[],
         demo_requirements=[
-            DemoRequirement(title="Browser walkthrough", acceptance_criterion="Feature works everywhere", capture_target="browser"),
-            DemoRequirement(title="iOS walkthrough", acceptance_criterion="Feature works everywhere", capture_target="ios"),
-            DemoRequirement(title="Android walkthrough", acceptance_criterion="Feature works everywhere", capture_target="android"),
+            _demo_requirement(
+                title="Browser walkthrough",
+                acceptance_criterion="Feature works everywhere",
+                capture_target="browser",
+            ),
+            _demo_requirement(
+                title="iOS walkthrough",
+                acceptance_criterion="Feature works everywhere",
+                capture_target="ios",
+            ),
+            _demo_requirement(
+                title="Android walkthrough",
+                acceptance_criterion="Feature works everywhere",
+                capture_target="android",
+            ),
         ],
     )
     previous_qa = QaResult(
@@ -1620,8 +1802,20 @@ def test_execute_qa_demo_stage_completes_remaining_target_with_previous_recordin
                 steps=_proof_steps("text=Feature"),
             ),
             QaScenario(
+                name="Browser repeat action",
+                objective="Repeat action remains safe in browser",
+                capture_target="browser",
+                steps=_proof_steps("text=Feature"),
+            ),
+            QaScenario(
                 name="Android walkthrough",
                 objective="Show Android",
+                capture_target="android",
+                steps=_proof_steps("text=Ready"),
+            ),
+            QaScenario(
+                name="Android repeat action",
+                objective="Repeat action remains safe on Android",
                 capture_target="android",
                 steps=_proof_steps("text=Ready"),
             ),
@@ -1635,9 +1829,23 @@ def test_execute_qa_demo_stage_completes_remaining_target_with_previous_recordin
                 capture_reference="https://preview.example",
             ),
             QaRecording(
-                name="Android walkthrough",
+                name="Browser repeat action",
                 artifact_url="https://cdn.example/qa-demo-2.mp4",
-                object_key="tenant-1/project-1/run-1/qa-demo-2.mp4",
+                object_key="tenant-1/project-1/run-1/qa-demo-2.webm",
+                capture_target="browser",
+                capture_reference="https://preview.example",
+            ),
+            QaRecording(
+                name="Android walkthrough",
+                artifact_url="https://cdn.example/qa-demo-3.mp4",
+                object_key="tenant-1/project-1/run-1/qa-demo-3.mp4",
+                capture_target="android",
+                capture_reference="android-emulator://configured",
+            ),
+            QaRecording(
+                name="Android repeat action",
+                artifact_url="https://cdn.example/qa-demo-4.mp4",
+                object_key="tenant-1/project-1/run-1/qa-demo-4.mp4",
                 capture_target="android",
                 capture_reference="android-emulator://configured",
             ),
@@ -1654,6 +1862,12 @@ def test_execute_qa_demo_stage_completes_remaining_target_with_previous_recordin
                         objective="Show iOS",
                         capture_target="ios",
                         steps=_proof_steps("text=Ready"),
+                    ),
+                    QaScenario(
+                        name="iOS repeat action",
+                        objective="Repeat action remains safe on iOS",
+                        capture_target="ios",
+                        steps=_proof_steps("text=Ready"),
                     )
                 ],
             )
@@ -1667,13 +1881,20 @@ def test_execute_qa_demo_stage_completes_remaining_target_with_previous_recordin
         patch(
             "orchestrator.core.qa.demo_service.record_demo_scenarios",
             return_value=[
-                SimpleNamespace(
+                _local_recording(
                     name="iOS walkthrough",
                     path="/tmp/ios.mp4",
                     capture_target="ios",
                     capture_reference="ios-simulator://configured",
                     content_type="video/mp4",
-                )
+                ),
+                _local_recording(
+                    name="iOS repeat action",
+                    path="/tmp/ios-repeat.mp4",
+                    capture_target="ios",
+                    capture_reference="ios-simulator://configured",
+                    content_type="video/mp4",
+                ),
             ],
         ),
         patch(
@@ -1710,8 +1931,15 @@ def test_execute_qa_demo_stage_completes_remaining_target_with_previous_recordin
         )
 
     assert result.outcome == "continue"
-    assert [recording.capture_target for recording in result.recordings] == ["browser", "android", "ios"]
-    assert upload_mock.call_args.kwargs["object_key"].endswith("qa-demo-3.mp4")
+    assert [recording.capture_target for recording in result.recordings] == [
+        "browser",
+        "browser",
+        "android",
+        "android",
+        "ios",
+        "ios",
+    ]
+    assert upload_mock.call_args.kwargs["object_key"].endswith("qa-demo-6.mp4")
     available_targets = json.loads(fake_agents.qa.call_args.kwargs["available_capture_targets_json"])
     assert available_targets == [{"capture_target": "ios", "capture_reference": "ios-simulator://configured"}]
 
@@ -1725,7 +1953,11 @@ def test_execute_qa_demo_stage_rejects_previous_recording_without_matching_scena
         acceptance_criteria=["Feature works on browser"],
         risks=[],
         demo_requirements=[
-            DemoRequirement(title="Browser walkthrough", acceptance_criterion="Feature works on browser", capture_target="browser"),
+            _demo_requirement(
+                title="Browser walkthrough",
+                acceptance_criterion="Feature works on browser",
+                capture_target="browser",
+            ),
         ],
     )
     previous_qa = QaResult(
@@ -1775,7 +2007,13 @@ def test_execute_qa_demo_stage_uses_builtin_ios_capture_on_macos() -> None:
         plan_steps=["Implement"],
         acceptance_criteria=["Feature works on iOS"],
         risks=[],
-        demo_requirements=[DemoRequirement(title="Native walkthrough", acceptance_criterion="Feature works on iOS", capture_target="ios")],
+        demo_requirements=[
+            _demo_requirement(
+                title="Native walkthrough",
+                acceptance_criterion="Feature works on iOS",
+                capture_target="ios",
+            )
+        ],
     )
     dev_result = DevResult(change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8")
     test_result = TestResult(guidance=["xcodebuild test"])
@@ -1795,6 +2033,12 @@ def test_execute_qa_demo_stage_uses_builtin_ios_capture_on_macos() -> None:
                         objective="Show iOS feature works",
                         capture_target="ios",
                         steps=[QaStep(action="assert_visible", selector="text=Ready")],
+                    ),
+                    QaScenario(
+                        name="Native repeat action",
+                        objective="Repeat action remains safe on iOS",
+                        capture_target="ios",
+                        steps=[QaStep(action="assert_visible", selector="text=Ready")],
                     )
                 ],
             )
@@ -1807,13 +2051,20 @@ def test_execute_qa_demo_stage_uses_builtin_ios_capture_on_macos() -> None:
         patch(
             "orchestrator.core.qa.demo_service.record_demo_scenarios",
             return_value=[
-                SimpleNamespace(
+                _local_recording(
                     name="Native walkthrough",
                     path="/tmp/native.mp4",
                     capture_target="ios",
                     capture_reference="ios-simulator://configured",
                     content_type="video/mp4",
-                )
+                ),
+                _local_recording(
+                    name="Native repeat action",
+                    path="/tmp/native-repeat.mp4",
+                    capture_target="ios",
+                    capture_reference="ios-simulator://configured",
+                    content_type="video/mp4",
+                ),
             ],
         ),
         patch(
@@ -1864,7 +2115,7 @@ def test_execute_qa_demo_stage_uses_builtin_android_capture_on_linux() -> None:
         acceptance_criteria=["Feature works on Android"],
         risks=[],
         demo_requirements=[
-            DemoRequirement(
+            _demo_requirement(
                 title="Android walkthrough",
                 acceptance_criterion="Feature works on Android",
                 capture_target="android",
@@ -1881,6 +2132,12 @@ def test_execute_qa_demo_stage_uses_builtin_android_capture_on_linux() -> None:
                         objective="Show Android feature works",
                         capture_target="android",
                         steps=[QaStep(action="assert_visible", selector="text=Ready")],
+                    ),
+                    QaScenario(
+                        name="Android repeat action",
+                        objective="Repeat action remains safe on Android",
+                        capture_target="android",
+                        steps=[QaStep(action="assert_visible", selector="text=Ready")],
                     )
                 ],
             )
@@ -1893,13 +2150,20 @@ def test_execute_qa_demo_stage_uses_builtin_android_capture_on_linux() -> None:
         patch(
             "orchestrator.core.qa.demo_service.record_demo_scenarios",
             return_value=[
-                SimpleNamespace(
+                _local_recording(
                     name="Android walkthrough",
                     path="/tmp/android.mp4",
                     capture_target="android",
                     capture_reference="android-emulator://configured",
                     content_type="video/mp4",
-                )
+                ),
+                _local_recording(
+                    name="Android repeat action",
+                    path="/tmp/android-repeat.mp4",
+                    capture_target="android",
+                    capture_reference="android-emulator://configured",
+                    content_type="video/mp4",
+                ),
             ],
         ),
         patch(
@@ -1949,7 +2213,7 @@ def test_execute_qa_demo_stage_requeues_when_desktop_capture_requires_macos_work
         acceptance_criteria=["Desktop feature works"],
         risks=[],
         demo_requirements=[
-            DemoRequirement(
+            _demo_requirement(
                 title="Desktop walkthrough",
                 acceptance_criterion="Desktop feature works",
                 capture_target="desktop",
@@ -2030,7 +2294,7 @@ def test_execute_qa_demo_stage_retries_recording_failures() -> None:
         plan_steps=["Implement"],
         acceptance_criteria=["Feature works"],
         risks=[],
-        demo_requirements=[DemoRequirement(title="Feature walkthrough", acceptance_criterion="Feature works")],
+        demo_requirements=[_demo_requirement()],
     )
     dev_result = DevResult(change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8")
     test_result = TestResult(guidance=["pytest -q"])
@@ -2051,13 +2315,8 @@ def test_execute_qa_demo_stage_retries_recording_failures() -> None:
         patch(
             "orchestrator.core.qa.demo_service.record_demo_scenarios",
             return_value=[
-                SimpleNamespace(
-                    name="Happy path",
-                    path="/tmp/happy.webm",
-                    capture_target="browser",
-                    capture_reference="https://preview.example",
-                    content_type="video/webm",
-                )
+                _local_recording(name="Happy path"),
+                _local_recording(name="Repeat action remains safe", path="/tmp/repeat.webm"),
             ],
         ),
         patch(
@@ -2089,7 +2348,7 @@ def test_execute_qa_demo_stage_retries_recording_failures() -> None:
             preview_release=release,
         )
 
-    assert upload_attempts["count"] == 2
+    assert upload_attempts["count"] == 3
     assert result.recordings[0].artifact_url.endswith("qa-demo-1.webm")
 
 
