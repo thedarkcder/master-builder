@@ -586,6 +586,15 @@ def required_capture_targets(plan: PmPlan) -> tuple[str, ...]:
     return tuple(ordered)
 
 
+def required_recording_counts_by_target(plan: PmPlan) -> dict[str, int]:
+    required_counts: dict[str, int] = {}
+    for requirement in plan.demo_requirements:
+        required_counts[requirement.capture_target] = (
+            required_counts.get(requirement.capture_target, 0) + 1 + len(requirement.variants or [])
+        )
+    return required_counts
+
+
 def browser_capture_required(plan: PmPlan) -> bool:
     return "browser" in required_capture_targets(plan)
 
@@ -600,8 +609,17 @@ def recorded_capture_targets(recordings: list[QaRecording] | tuple[QaRecording, 
 
 
 def remaining_capture_targets(plan: PmPlan, recordings: list[QaRecording] | tuple[QaRecording, ...]) -> tuple[str, ...]:
-    recorded = set(recorded_capture_targets(recordings))
-    return tuple(target for target in required_capture_targets(plan) if target not in recorded)
+    recorded_counts: dict[str, int] = {}
+    for recording in recordings:
+        capture_target = str(recording.capture_target or "").strip()
+        if capture_target:
+            recorded_counts[capture_target] = recorded_counts.get(capture_target, 0) + 1
+    required_counts = required_recording_counts_by_target(plan)
+    return tuple(
+        target
+        for target in required_capture_targets(plan)
+        if recorded_counts.get(target, 0) < required_counts.get(target, 0)
+    )
 
 
 def next_required_qa_demo_worker_capability(
@@ -793,15 +811,13 @@ def _validate_qa_scenario_coverage(
     capture_targets: dict[str, DemoCaptureTarget],
 ) -> None:
     target_names = set(capture_targets)
-    required_counts: dict[str, int] = {}
+    required_counts = {
+        target: count
+        for target, count in required_recording_counts_by_target(plan).items()
+        if target in target_names
+    }
     scenarios_by_target: dict[str, list[QaScenario]] = {}
     missing_variants: list[str] = []
-    for requirement in plan.demo_requirements:
-        if requirement.capture_target not in target_names:
-            continue
-        required_counts[requirement.capture_target] = (
-            required_counts.get(requirement.capture_target, 0) + 1 + len(requirement.variants or [])
-        )
     for scenario in qa_result.scenarios:
         if scenario.capture_target in target_names:
             scenarios_by_target.setdefault(scenario.capture_target, []).append(scenario)
