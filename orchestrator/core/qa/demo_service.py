@@ -36,6 +36,7 @@ from orchestrator.core.platform.secret_service import resolve_platform_secret_re
 from orchestrator.core.platform.tenant_secret_service import resolve_scoped_secret_ref
 
 DEMO_EVIDENCE_HEADING = "## Demo Evidence"
+DEMO_EVIDENCE_MARKER = "<!-- master-builder:qa-demo-evidence v1 -->"
 _TRANSIENT_NATIVE_SELECTORS = frozenset({"id=splash_screen", "splash_screen"})
 _NATIVE_CAPTURE_TARGETS = frozenset({"ios", "android", "desktop"})
 
@@ -619,9 +620,13 @@ def _capture_target_runs_on_worker(*, capture_target: DemoCaptureTarget, request
 
 
 def build_demo_evidence_section(recordings: list[QaRecording]) -> str:
-    lines = [DEMO_EVIDENCE_HEADING]
+    lines = [DEMO_EVIDENCE_HEADING, DEMO_EVIDENCE_MARKER]
     for recording in recordings:
-        lines.append(f"- {recording.name}: {recording.artifact_url}")
+        lines.append(
+            f"- {recording.name} "
+            f"[target={recording.capture_target}; reference={recording.capture_reference}; object_key={recording.object_key}]: "
+            f"{recording.artifact_url}"
+        )
     return "\n".join(lines).strip()
 
 
