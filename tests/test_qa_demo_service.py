@@ -583,6 +583,37 @@ def test_record_demo_scenarios_rejects_missing_recording_for_planned_scenario() 
             raise AssertionError("expected missing scenario recording to block")
 
 
+def test_record_demo_scenarios_rejects_duplicate_scenario_names_before_recording() -> None:
+    with patch("orchestrator.core.qa.demo_service.subprocess.run") as run_mock:
+        try:
+            record_demo_scenarios(
+                settings=SimpleNamespace(qa_demo_playwright_module_dir="/tmp/playwright-modules"),
+                request=_request(),
+                available_capture_targets=_browser_capture_targets(),
+                qa_result=QaResult(
+                    summary=["Recorded demos"],
+                    scenarios=[
+                        QaScenario(
+                            name="Happy path",
+                            objective="Show feature works",
+                            steps=[QaStep(action="assert_visible", selector="#feature")],
+                        ),
+                        QaScenario(
+                            name="Happy path",
+                            objective="Show repeat behavior",
+                            steps=[QaStep(action="assert_visible", selector="#repeat")],
+                        ),
+                    ],
+                ),
+            )
+        except RuntimeError as exc:
+            assert "QA demo scenarios for browser must have unique names: Happy path" in str(exc)
+        else:  # pragma: no cover
+            raise AssertionError("expected duplicate scenario names to block")
+
+    run_mock.assert_not_called()
+
+
 def test_execute_qa_demo_stage_records_and_uploads() -> None:
     tenant = SimpleNamespace(tenant_id="tenant-1", github_config={})
     project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo")

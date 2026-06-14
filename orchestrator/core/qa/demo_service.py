@@ -881,6 +881,20 @@ def _validate_recordings_cover_scenarios(
         )
 
 
+def _validate_unique_scenario_names(*, capture_target_name: str, scenarios: list[QaScenario]) -> None:
+    seen: set[str] = set()
+    duplicates: list[str] = []
+    for scenario in scenarios:
+        name = str(scenario.name or "").strip()
+        if name in seen and name not in duplicates:
+            duplicates.append(name)
+        seen.add(name)
+    if duplicates:
+        raise RuntimeError(
+            f"QA demo scenarios for {capture_target_name} must have unique names: " + ", ".join(duplicates)
+        )
+
+
 def record_demo_scenarios(
     *,
     settings,  # noqa: ANN001
@@ -905,6 +919,7 @@ def record_demo_scenarios(
 
     all_recordings: list[LocalQaRecording] = []
     for capture_target_name, scenarios in scenarios_by_target.items():
+        _validate_unique_scenario_names(capture_target_name=capture_target_name, scenarios=scenarios)
         capture_target = available_capture_targets[capture_target_name]
         payload = {
             "capture_target": capture_target.capture_target,
