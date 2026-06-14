@@ -5,6 +5,7 @@ from dataclasses import replace
 from orchestrator.core.deployment_previews import create_run_preview_deployment
 from orchestrator.core.qa.demo_service import (
     execute_qa_demo_stage,
+    next_required_qa_demo_worker_capability,
     qa_demo_recording_enabled,
     update_pull_request_with_demo_evidence,
 )
@@ -269,6 +270,7 @@ class RunOutcomePolicy:
         dev_result = snapshot.dev_result()
         test_result = snapshot.test_result()
         review_result = snapshot.review_result()
+        previous_qa_result = snapshot.qa_result()
         if plan is None or dev_result is None or test_result is None or review_result is None:
             return _workflow_result_with_qa_blocker(
                 workflow_result=workflow_result,
@@ -297,6 +299,7 @@ class RunOutcomePolicy:
                 test_result=test_result,
                 review_result=review_result,
                 preview_release=preview_release,
+                previous_qa_result=previous_qa_result,
             )
         except Exception as exc:  # noqa: BLE001
             message = f"QA demo recording failed: {type(exc).__name__}: {exc}"
@@ -320,6 +323,34 @@ class RunOutcomePolicy:
             expected_worker_service_instance_id=prepared.worker_service_instance_id,
             expected_claim_id=prepared.claim_id,
         )
+        if qa_result.outcome == "requeue":
+            requeue_target = next_required_qa_demo_worker_capability(
+                settings=self._settings,
+                plan=plan,
+                recordings=qa_result.recordings,
+            )
+            message = qa_result.feedback or qa_result.blocker_message or _summarize_qa_result(qa_result)
+            if requeue_target is None:
+                return _workflow_result_with_qa_blocker(
+                    workflow_result=workflow_result,
+                    attempt=attempt,
+                    message=f"QA demo recording requested requeue but no remaining worker capability was resolvable. {message}",
+                )
+            return replace(
+                workflow_result,
+                outcome="requeue",
+                requeue_target=requeue_target,
+                requeue_reason=message,
+                orchestration_stage_trace=[
+                    *list(workflow_result.orchestration_stage_trace or []),
+                    _stage_trace_entry(
+                        stage="qa",
+                        attempt=attempt,
+                        status="requeue",
+                        summary=message,
+                    ),
+                ],
+            )
         if qa_result.outcome != "continue":
             return _workflow_result_with_qa_blocker(
                 workflow_result=workflow_result,

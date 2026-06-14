@@ -835,7 +835,7 @@ def test_execute_qa_demo_stage_rejects_transient_native_splash_assertions() -> N
             raise AssertionError("expected transient native splash assertion failure")
 
 
-def test_execute_qa_demo_stage_fails_when_ios_capture_requires_macos_worker() -> None:
+def test_execute_qa_demo_stage_requeues_when_remaining_target_requires_another_worker() -> None:
     tenant = SimpleNamespace(tenant_id="tenant-1", github_config={})
     project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo")
     run = SimpleNamespace(run_id="run-1")
@@ -849,28 +849,221 @@ def test_execute_qa_demo_stage_fails_when_ios_capture_requires_macos_worker() ->
         demo_requirements=[DemoRequirement(title="Native walkthrough", acceptance_criterion="Feature works on iOS", capture_target="ios")],
     )
 
+    with patch("orchestrator.core.qa.demo_service._default_service_url_probe", return_value=200):
+        result = execute_qa_demo_stage(
+            session=SimpleNamespace(),
+            settings=SimpleNamespace(qa_demo_playwright_module_dir=""),
+            tenant=tenant,
+            project=project,
+            run=run,
+            request=_request(),
+            plan=plan,
+            dev_result=DevResult(change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8"),
+            test_result=TestResult(guidance=["pytest -q"]),
+            review_result=ReviewResult(summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"),
+            preview_release=release,
+        )
+
+    assert result.outcome == "requeue"
+    assert "remaining capture target(s): ios" in str(result.feedback)
+    assert result.recordings == []
+
+
+def test_execute_qa_demo_stage_records_current_worker_targets_then_requeues_for_remaining_target() -> None:
+    tenant = SimpleNamespace(tenant_id="tenant-1", github_config={})
+    project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo")
+    run = SimpleNamespace(run_id="run-1")
+    release = SimpleNamespace(
+        service_urls=[SimpleNamespace(service_kind="website", status="active", url="https://preview.example")]
+    )
+    plan = PmPlan(
+        plan_steps=["Implement"],
+        acceptance_criteria=["Feature works everywhere"],
+        risks=[],
+        demo_requirements=[
+            DemoRequirement(title="Browser walkthrough", acceptance_criterion="Feature works everywhere", capture_target="browser"),
+            DemoRequirement(title="iOS walkthrough", acceptance_criterion="Feature works everywhere", capture_target="ios"),
+            DemoRequirement(title="Android walkthrough", acceptance_criterion="Feature works everywhere", capture_target="android"),
+        ],
+    )
+    fake_agents = SimpleNamespace(
+        qa=MagicMock(
+            return_value=QaResult(
+                summary=["Recorded current worker demos"],
+                scenarios=[
+                    QaScenario(name="Browser walkthrough", objective="Show browser", capture_target="browser"),
+                    QaScenario(name="Android walkthrough", objective="Show Android", capture_target="android"),
+                ],
+            )
+        )
+    )
+
     with (
         patch("orchestrator.core.qa.demo_service.build_codex_runtime"),
+        patch("orchestrator.core.qa.demo_service.CodexWorkflowAgents", return_value=fake_agents),
+        patch(
+            "orchestrator.core.qa.demo_service.record_demo_scenarios",
+            return_value=[
+                SimpleNamespace(
+                    name="Browser walkthrough",
+                    path="/tmp/browser.webm",
+                    capture_target="browser",
+                    capture_reference="https://preview.example",
+                    content_type="video/webm",
+                ),
+                SimpleNamespace(
+                    name="Android walkthrough",
+                    path="/tmp/android.mp4",
+                    capture_target="android",
+                    capture_reference="android-emulator://configured",
+                    content_type="video/mp4",
+                ),
+            ],
+        ),
+        patch(
+            "orchestrator.core.qa.demo_service.storage_config_from_settings",
+            return_value=SimpleNamespace(
+                endpoint="minio:9000",
+                access_key="key",
+                secret_key="secret",
+                bucket="qa-demos",
+                public_base_url="https://cdn.example/qa-demos",
+                secure=False,
+            ),
+        ),
+        patch(
+            "orchestrator.core.qa.demo_service.upload_recording",
+            side_effect=[
+                "https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-demo-1.webm",
+                "https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-demo-2.mp4",
+            ],
+        ),
+        patch("orchestrator.core.qa.demo_service.ensure_capture_target_runtime_ready"),
         patch("orchestrator.core.qa.demo_service._default_service_url_probe", return_value=200),
+        patch("orchestrator.core.qa.demo_service._default_artifact_url_probe", return_value=200),
     ):
-        try:
-            execute_qa_demo_stage(
-                session=SimpleNamespace(),
-                settings=SimpleNamespace(qa_demo_playwright_module_dir=""),
-                tenant=tenant,
-                project=project,
-                run=run,
-                request=_request(),
-                plan=plan,
-                dev_result=DevResult(change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8"),
-                test_result=TestResult(guidance=["pytest -q"]),
-                review_result=ReviewResult(summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"),
-                preview_release=release,
+        result = execute_qa_demo_stage(
+            session=SimpleNamespace(),
+            settings=SimpleNamespace(qa_demo_playwright_module_dir=""),
+            tenant=tenant,
+            project=project,
+            run=run,
+            request=_request(),
+            plan=plan,
+            dev_result=DevResult(change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8"),
+            test_result=TestResult(guidance=["pytest -q"]),
+            review_result=ReviewResult(summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"),
+            preview_release=release,
+        )
+
+    assert result.outcome == "requeue"
+    assert [recording.capture_target for recording in result.recordings] == ["browser", "android"]
+    assert "still requires capture target(s): ios" in str(result.feedback)
+    available_targets = json.loads(fake_agents.qa.call_args.kwargs["available_capture_targets_json"])
+    assert [item["capture_target"] for item in available_targets] == ["browser", "android"]
+
+
+def test_execute_qa_demo_stage_completes_remaining_target_with_previous_recordings() -> None:
+    tenant = SimpleNamespace(tenant_id="tenant-1", github_config={})
+    project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo")
+    run = SimpleNamespace(run_id="run-1")
+    plan = PmPlan(
+        plan_steps=["Implement"],
+        acceptance_criteria=["Feature works everywhere"],
+        risks=[],
+        demo_requirements=[
+            DemoRequirement(title="Browser walkthrough", acceptance_criterion="Feature works everywhere", capture_target="browser"),
+            DemoRequirement(title="iOS walkthrough", acceptance_criterion="Feature works everywhere", capture_target="ios"),
+            DemoRequirement(title="Android walkthrough", acceptance_criterion="Feature works everywhere", capture_target="android"),
+        ],
+    )
+    previous_qa = QaResult(
+        summary=["Recorded Linux demos"],
+        scenarios=[
+            QaScenario(name="Browser walkthrough", objective="Show browser", capture_target="browser"),
+            QaScenario(name="Android walkthrough", objective="Show Android", capture_target="android"),
+        ],
+        recordings=[
+            QaRecording(
+                name="Browser walkthrough",
+                artifact_url="https://cdn.example/qa-demo-1.webm",
+                object_key="tenant-1/project-1/run-1/qa-demo-1.webm",
+                capture_target="browser",
+                capture_reference="https://preview.example",
+            ),
+            QaRecording(
+                name="Android walkthrough",
+                artifact_url="https://cdn.example/qa-demo-2.mp4",
+                object_key="tenant-1/project-1/run-1/qa-demo-2.mp4",
+                capture_target="android",
+                capture_reference="android-emulator://configured",
+            ),
+        ],
+        outcome="requeue",
+    )
+    fake_agents = SimpleNamespace(
+        qa=MagicMock(
+            return_value=QaResult(
+                summary=["Recorded iOS demo"],
+                scenarios=[QaScenario(name="iOS walkthrough", objective="Show iOS", capture_target="ios")],
             )
-        except RuntimeError as exc:
-            assert "requires worker platform macos" in str(exc)
-        else:  # pragma: no cover
-            raise AssertionError("expected worker platform validation failure")
+        )
+    )
+    request = replace(_request(), current_worker_capability=WorkerCapability.MACOS)
+
+    with (
+        patch("orchestrator.core.qa.demo_service.build_codex_runtime"),
+        patch("orchestrator.core.qa.demo_service.CodexWorkflowAgents", return_value=fake_agents),
+        patch(
+            "orchestrator.core.qa.demo_service.record_demo_scenarios",
+            return_value=[
+                SimpleNamespace(
+                    name="iOS walkthrough",
+                    path="/tmp/ios.mp4",
+                    capture_target="ios",
+                    capture_reference="ios-simulator://configured",
+                    content_type="video/mp4",
+                )
+            ],
+        ),
+        patch(
+            "orchestrator.core.qa.demo_service.storage_config_from_settings",
+            return_value=SimpleNamespace(
+                endpoint="minio:9000",
+                access_key="key",
+                secret_key="secret",
+                bucket="qa-demos",
+                public_base_url="https://cdn.example/qa-demos",
+                secure=False,
+            ),
+        ),
+        patch(
+            "orchestrator.core.qa.demo_service.upload_recording",
+            return_value="https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-demo-3.mp4",
+        ) as upload_mock,
+        patch("orchestrator.core.qa.demo_service.ensure_capture_target_runtime_ready"),
+        patch("orchestrator.core.qa.demo_service._default_artifact_url_probe", return_value=200),
+    ):
+        result = execute_qa_demo_stage(
+            session=SimpleNamespace(),
+            settings=SimpleNamespace(qa_demo_playwright_module_dir=""),
+            tenant=tenant,
+            project=project,
+            run=run,
+            request=request,
+            plan=plan,
+            dev_result=DevResult(change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8"),
+            test_result=TestResult(guidance=["pytest -q"]),
+            review_result=ReviewResult(summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"),
+            preview_release=SimpleNamespace(service_urls=[]),
+            previous_qa_result=previous_qa,
+        )
+
+    assert result.outcome == "continue"
+    assert [recording.capture_target for recording in result.recordings] == ["browser", "android", "ios"]
+    assert upload_mock.call_args.kwargs["object_key"].endswith("qa-demo-3.mp4")
+    available_targets = json.loads(fake_agents.qa.call_args.kwargs["available_capture_targets_json"])
+    assert available_targets == [{"capture_target": "ios", "capture_reference": "ios-simulator://configured"}]
 
 
 def test_execute_qa_demo_stage_uses_builtin_ios_capture_on_macos() -> None:
@@ -1046,7 +1239,7 @@ def test_execute_qa_demo_stage_uses_builtin_android_capture_on_linux() -> None:
     )
 
 
-def test_execute_qa_demo_stage_fails_when_desktop_capture_requires_macos_worker() -> None:
+def test_execute_qa_demo_stage_requeues_when_desktop_capture_requires_macos_worker() -> None:
     tenant = SimpleNamespace(tenant_id="tenant-1", github_config={})
     project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo")
     run = SimpleNamespace(run_id="run-1")
@@ -1063,29 +1256,27 @@ def test_execute_qa_demo_stage_fails_when_desktop_capture_requires_macos_worker(
         ],
     )
 
-    with patch("orchestrator.core.qa.demo_service.build_codex_runtime"):
-        try:
-            execute_qa_demo_stage(
-                session=SimpleNamespace(),
-                settings=SimpleNamespace(
-                    qa_demo_playwright_module_dir="",
-                    qa_demo_desktop_recorder_command="python /tmp/desktop_recorder.py",
-                    qa_demo_desktop_worker_platform="macos",
-                ),
-                tenant=tenant,
-                project=project,
-                run=run,
-                request=_request(),
-                plan=plan,
-                dev_result=DevResult(change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8"),
-                test_result=TestResult(guidance=["pytest -q"]),
-                review_result=ReviewResult(summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"),
-                preview_release=SimpleNamespace(service_urls=[]),
-            )
-        except RuntimeError as exc:
-            assert "requires worker platform macos" in str(exc)
-        else:  # pragma: no cover
-            raise AssertionError("expected desktop worker platform validation failure")
+    result = execute_qa_demo_stage(
+        session=SimpleNamespace(),
+        settings=SimpleNamespace(
+            qa_demo_playwright_module_dir="",
+            qa_demo_desktop_recorder_command="python /tmp/desktop_recorder.py",
+            qa_demo_desktop_worker_platform="macos",
+        ),
+        tenant=tenant,
+        project=project,
+        run=run,
+        request=_request(),
+        plan=plan,
+        dev_result=DevResult(change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8"),
+        test_result=TestResult(guidance=["pytest -q"]),
+        review_result=ReviewResult(summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"),
+        preview_release=SimpleNamespace(service_urls=[]),
+    )
+
+    assert result.outcome == "requeue"
+    assert "remaining capture target(s): desktop" in str(result.feedback)
+    assert result.recordings == []
 
 
 def test_record_demo_scenarios_surfaces_recorder_stderr() -> None:
