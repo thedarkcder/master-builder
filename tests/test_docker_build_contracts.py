@@ -46,7 +46,7 @@ class DockerBuildContractTests(unittest.TestCase):
         dockerfile = (ROOT / "orchestrator" / "Dockerfile").read_text(encoding="utf-8")
 
         deps_copy = 'COPY pyproject.toml ./'
-        deps_install = '"${VIRTUAL_ENV}/bin/pip" install -r /tmp/requirements-base.txt'
+        deps_install = '"${VIRTUAL_ENV}/bin/pip" install --retries 10 --timeout 120 -r /tmp/requirements-base.txt'
         app_source_copy = "COPY orchestrator ./orchestrator"
         bootstrap_script_copy = "COPY scripts/bootstrap_deployment_host_agent.py ./scripts/bootstrap_deployment_host_agent.py"
         source_compile = '"${VIRTUAL_ENV}/bin/python" -m compileall -q -j 0 /app/orchestrator'
@@ -94,7 +94,9 @@ class DockerBuildContractTests(unittest.TestCase):
         dockerfile = (ROOT / "orchestrator" / "Dockerfile").read_text(encoding="utf-8")
 
         voice_target = dockerfile.split("FROM python-common-base AS voice-runtime", 1)[1]
-        voice_deps_install = '"${VIRTUAL_ENV}/bin/pip" install -r /tmp/requirements-voice.txt'
+        voice_deps_install = (
+            '"${VIRTUAL_ENV}/bin/pip" install --retries 10 --timeout 120 -r /tmp/requirements-voice.txt'
+        )
         app_source_copy = "COPY orchestrator ./orchestrator"
         local_console_shim = 'exec python -m orchestrator "$@"'
 
@@ -166,6 +168,16 @@ class DockerBuildContractTests(unittest.TestCase):
         self.assertNotIn("playwright install --with-deps chromium", common_base)
         self.assertNotIn("ttf-unifont", common_base)
         self.assertNotIn("ttf-ubuntu-font-family", common_base)
+
+    def test_common_base_extends_network_timeouts_for_browser_and_python_dependency_downloads(self) -> None:
+        dockerfile = (ROOT / "orchestrator" / "Dockerfile").read_text(encoding="utf-8")
+        common_base = dockerfile.split("FROM python:3.11-slim-trixie AS python-common-base", 1)[1].split(
+            "FROM python-common-base AS app-runtime-base",
+            1,
+        )[0]
+
+        self.assertIn("PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT=120000", common_base)
+        self.assertIn('"${VIRTUAL_ENV}/bin/pip" install --retries 10 --timeout 120', common_base)
 
     def test_dockerignore_excludes_local_workdirs_from_build_context(self) -> None:
         dockerignore = (ROOT / ".dockerignore").read_text(encoding="utf-8").splitlines()
