@@ -39,6 +39,7 @@ DEMO_EVIDENCE_HEADING = "## Demo Evidence"
 DEMO_EVIDENCE_MARKER = "<!-- master-builder:qa-demo-evidence v1 -->"
 _TRANSIENT_NATIVE_SELECTORS = frozenset({"id=splash_screen", "splash_screen"})
 _NATIVE_CAPTURE_TARGETS = frozenset({"ios", "android", "desktop"})
+_RELEASE_SERVICE_READY_STATUSES = frozenset({401, 403, 405})
 
 
 @dataclass(frozen=True)
@@ -288,7 +289,7 @@ def ensure_release_ready_for_qa(
             except Exception as exc:  # noqa: BLE001
                 probe_failures.append(f"{required_kind} ({active_url}): {exc}")
                 continue
-            if status_code >= 500:
+            if not _release_service_status_is_ready(status_code):
                 probe_failures.append(f"{required_kind} ({active_url}): HTTP {status_code}")
     if inactive_failures:
         raise RuntimeError(
@@ -300,6 +301,10 @@ def ensure_release_ready_for_qa(
             "QA demo recording requires reachable release service URL(s); not reachable: "
             + "; ".join(sorted(probe_failures))
         )
+
+
+def _release_service_status_is_ready(status_code: int) -> bool:
+    return 200 <= status_code < 400 or status_code in _RELEASE_SERVICE_READY_STATUSES
 
 
 def _is_builtin_android_recorder_command(command: tuple[str, ...] | None) -> bool:

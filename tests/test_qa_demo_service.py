@@ -295,6 +295,37 @@ def test_ensure_release_ready_for_qa_rejects_server_error_service_response() -> 
         raise AssertionError("expected server error readiness failure")
 
 
+def test_ensure_release_ready_for_qa_rejects_not_found_service_response() -> None:
+    release = SimpleNamespace(
+        service_urls=[SimpleNamespace(service_kind="api", status="active", url="https://api.example")]
+    )
+
+    try:
+        ensure_release_ready_for_qa(
+            release,
+            required_service_kinds=("api",),
+            service_url_probe=lambda _url, *, timeout_seconds: 404,
+        )
+    except RuntimeError as exc:
+        assert "api" in str(exc)
+        assert "HTTP 404" in str(exc)
+        assert "not reachable" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("expected not-found readiness failure")
+
+
+def test_ensure_release_ready_for_qa_allows_protected_running_service_response() -> None:
+    release = SimpleNamespace(
+        service_urls=[SimpleNamespace(service_kind="api", status="active", url="https://api.example")]
+    )
+
+    ensure_release_ready_for_qa(
+        release,
+        required_service_kinds=("api",),
+        service_url_probe=lambda _url, *, timeout_seconds: 401,
+    )
+
+
 def test_required_release_service_kinds_prefers_release_deployment_snapshot() -> None:
     project = SimpleNamespace(
         deployment_config={
