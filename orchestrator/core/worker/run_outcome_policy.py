@@ -7,6 +7,7 @@ from orchestrator.core.qa.demo_service import (
     execute_qa_demo_stage,
     next_required_qa_demo_worker_capability,
     qa_demo_recording_enabled,
+    remaining_capture_targets,
     update_pull_request_with_demo_evidence,
 )
 from orchestrator.core.runs.service import RUN_STATUS_WAITING_FOR_INPUT
@@ -309,6 +310,19 @@ class RunOutcomePolicy:
                 outcome="blocked",
                 blocker_message=message,
             )
+        if qa_result.outcome == "continue":
+            missing_targets = remaining_capture_targets(plan, qa_result.recordings)
+            if missing_targets:
+                message = (
+                    "QA demo recording completed without proof for required capture target(s): "
+                    + ", ".join(missing_targets)
+                )
+                qa_result = replace(
+                    qa_result,
+                    outcome="blocked",
+                    blocker_message=message,
+                    summary=[*list(qa_result.summary or []), message],
+                )
         self._deps.execution.persist_stage_checkpoint_fn(
             self._session,
             run=prepared.run,
