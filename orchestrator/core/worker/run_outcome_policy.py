@@ -134,6 +134,15 @@ class RunOutcomePolicy:
                         pr_url=workflow_result.pr_url,
                     )
                     preview_release = preview_result.release
+                    if demo_recording_required and preview_release is None:
+                        workflow_result = _workflow_result_with_qa_blocker(
+                            workflow_result=workflow_result,
+                            attempt=max(1, int(workflow_result.attempts or 1)),
+                            message=(
+                                "QA demo recording requires a run preview deployment/release before recording; "
+                                f"preview deployment was not created: {preview_result.reason}."
+                            ),
+                        )
                     if preview_result.created and preview_result.release is not None:
                         self._deps.identity.logger.info(
                             "worker_run_preview_deployment_created tenant_id=%s project_id=%s run_id=%s release_id=%s",
@@ -158,7 +167,7 @@ class RunOutcomePolicy:
                     )
                 )
             else:
-                if demo_recording_required:
+                if demo_recording_required and workflow_result.outcome == "success":
                     workflow_result = self._complete_required_qa_demo_stage(
                         prepared=prepared,
                         workflow_result=workflow_result,
