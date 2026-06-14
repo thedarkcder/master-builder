@@ -30,6 +30,7 @@ class CheckpointCodecTests(unittest.TestCase):
                 {
                     "title": "Show login",
                     "acceptance_criterion": "User can sign in",
+                    "capture_target": "browser",
                     "variants": ["Wrong password shows validation"],
                 }
             ],
@@ -83,6 +84,24 @@ class CheckpointCodecTests(unittest.TestCase):
             "outcome": "continue",
             "next_stage": "dev",
             "execution_worker_capability": "unknown-capability",
+        }
+
+        self.assertIsNone(decode_pm_plan_payload(payload))
+
+    def test_decode_pm_plan_payload_rejects_demo_requirements_without_capture_target(self) -> None:
+        payload = {
+            "plan_steps": ["step-1"],
+            "acceptance_criteria": ["ac-1"],
+            "risks": [],
+            "demo_requirements": [
+                {
+                    "title": "Show login",
+                    "acceptance_criterion": "User can sign in",
+                }
+            ],
+            "outcome": "continue",
+            "next_stage": "dev",
+            "execution_worker_capability": "linux",
         }
 
         self.assertIsNone(decode_pm_plan_payload(payload))
@@ -244,7 +263,9 @@ class CheckpointCodecTests(unittest.TestCase):
                     plan_steps=["s1"],
                     acceptance_criteria=["ac1"],
                     risks=[],
-                    demo_requirements=[DemoRequirement(title="Demo", acceptance_criterion="Show feature")],
+                    demo_requirements=[
+                        DemoRequirement(title="Demo", acceptance_criterion="Show feature", capture_target="browser")
+                    ],
                 ),
             )
         )
@@ -287,6 +308,7 @@ class CheckpointCodecTests(unittest.TestCase):
                         QaScenario(
                             name="Happy path",
                             objective="Show feature works",
+                            capture_target="browser",
                             expected_outcomes=["Feature is visible"],
                             steps=[
                                 QaStep(action="goto", value="/"),
@@ -300,6 +322,7 @@ class CheckpointCodecTests(unittest.TestCase):
                             artifact_url="https://demo.example/happy.webm",
                             object_key="demo/happy.webm",
                             capture_reference="https://preview.example",
+                            capture_target="browser",
                         )
                     ],
                 ),

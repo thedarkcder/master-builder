@@ -121,13 +121,13 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             command="override",
             _request=_RuntimeQueue(
                 [
-                    '{"outcome":"continue","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":["risk1"],"demo_requirements":[{"title":"Demo step1","acceptance_criterion":"ac1"}],"next_stage":"dev","execution_worker_capability":"linux"}',
+                    '{"outcome":"continue","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":["risk1"],"demo_requirements":[{"title":"Demo step1","acceptance_criterion":"ac1","capture_target":"browser"}],"next_stage":"dev","execution_worker_capability":"linux"}',
                     '{"outcome":"continue","change_summary":["implemented"],"pr_url":"https://example/pull/1","blocker_message":null}',
                     '{"outcome":"continue","guidance":["run tests"],"validation_scope":"targeted_only","feedback":null,"blocker_message":null}',
                     '{"outcome":"continue","summary":["looks good"],"feedback":null,"pr_url":"https://example/pull/1","blocker_message":null}',
                     (
                         '{"outcome":"continue","summary":["Recorded demos"],"feedback":null,"blocker_message":null,'
-                        '"scenarios":[{"name":"Happy path","objective":"Show feature","start_path":"/",'
+                        '"scenarios":[{"name":"Happy path","objective":"Show feature","capture_target":"browser","start_path":"/",'
                         '"expected_outcomes":["Feature visible"],'
                         '"steps":[{"action":"goto","value":"/"},{"action":"assert_visible","selector":"text=Feature"}]}],'
                         '"recordings":[]}'
@@ -171,7 +171,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
                 [
                     (
                         '{"outcome":"blocked","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":["risk1"],'
-                        '"demo_requirements":[{"title":"Demo step1","acceptance_criterion":"ac1"}],'
+                        '"demo_requirements":[{"title":"Demo step1","acceptance_criterion":"ac1","capture_target":"browser"}],'
                         '"next_stage":"dev","execution_worker_capability":"linux","blocker_message":"Apple developer access still pending",'
                         '"resolved_prerequisites":["Supabase redirect URI approved"],'
                         '"unresolved_prerequisites":["Provision staging Service ID"]}'
@@ -281,7 +281,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             command="codex",
             _request=_RuntimeQueue(
                 [
-                    '{"outcome":"continue","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":[],"demo_requirements":[{"title":"Demo step1","acceptance_criterion":"ac1"}],"next_stage":"dev","execution_worker_capability":"linux"}',
+                    '{"outcome":"continue","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":[],"demo_requirements":[{"title":"Demo step1","acceptance_criterion":"ac1","capture_target":"browser"}],"next_stage":"dev","execution_worker_capability":"linux"}',
                 ]
             ),
         )
@@ -340,6 +340,23 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             _request=_RuntimeQueue(
                 [
                     '{"outcome":"continue","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":[],"next_stage":"dev","execution_worker_capability":"linux"}',
+                ]
+            ),
+        )
+        agents = CodexWorkflowAgents(runtime=runtime)
+
+        with patch("orchestrator.core.runtime.agents.render_prompt", side_effect=lambda template_name, **_: template_name):
+            with self.assertRaisesRegex(CodexRuntimeError, "demo_requirements"):
+                agents.pm(self._request(), 1, None, [], None, None, None, self._CAPTURE_TARGET_CONSTRAINTS_JSON)
+
+    def test_pm_requires_explicit_demo_capture_target(self) -> None:
+        runtime = CodexRuntime(
+            model="gpt-5-codex",
+            max_output_tokens=1200,
+            command="override",
+            _request=_RuntimeQueue(
+                [
+                    '{"outcome":"continue","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":[],"demo_requirements":[{"title":"Demo step1","acceptance_criterion":"ac1"}],"next_stage":"dev","execution_worker_capability":"linux"}',
                 ]
             ),
         )
@@ -436,6 +453,56 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
         catalog = json.loads(str(captured["native_selector_catalog_json"]))
         self.assertIn("onboarding_tabview", catalog["accessibility_ids"])
 
+    def test_qa_requires_explicit_scenario_capture_target(self) -> None:
+        runtime = CodexRuntime(
+            model="gpt-5-codex",
+            max_output_tokens=1200,
+            command="override",
+            _request=_RuntimeQueue(
+                [
+                    (
+                        '{"outcome":"continue","summary":["Recorded demos"],"feedback":null,"blocker_message":null,'
+                        '"scenarios":[{"name":"Happy path","objective":"Show feature","start_path":"/",'
+                        '"expected_outcomes":["Feature visible"],'
+                        '"steps":[{"action":"goto","value":"/"},{"action":"assert_visible","selector":"text=Feature"}]}],'
+                        '"recordings":[]}'
+                    ),
+                ]
+            ),
+        )
+        agents = CodexWorkflowAgents(runtime=runtime)
+
+        with patch("orchestrator.core.runtime.agents.render_prompt", side_effect=lambda template_name, **_: template_name):
+            with self.assertRaisesRegex(CodexRuntimeError, "required scenario fields"):
+                agents.qa(
+                    self._request(),
+                    PmPlan(
+                        plan_steps=["step1"],
+                        acceptance_criteria=["ac1"],
+                        risks=[],
+                        demo_requirements=[
+                            DemoRequirement(
+                                title="Demo",
+                                acceptance_criterion="ac1",
+                                capture_target="browser",
+                                variants=[],
+                            )
+                        ],
+                    ),
+                    DevResult(change_summary=["implemented"], pr_url="https://example/pull/1"),
+                    TestResult(outcome="continue", guidance=["run tests"], feedback=None, blocker_message=None),
+                    ReviewResult(
+                        summary=["looks good"],
+                        outcome="continue",
+                        feedback=None,
+                        pr_url="https://example/pull/1",
+                        blocker_message=None,
+                    ),
+                    "https://preview.example",
+                    '[{"capture_target":"browser","capture_reference":"https://preview.example"}]',
+                    1,
+                )
+
     def test_test_prompt_receives_structured_tool_catalog_with_descriptions(self) -> None:
         runtime = CodexRuntime(
             model="gpt-5-codex",
@@ -443,7 +510,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             command="codex",
             _request=_RuntimeQueue(
                 [
-                    '{"outcome":"continue","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":[],"demo_requirements":[{"title":"Demo step1","acceptance_criterion":"ac1"}],"next_stage":"dev","execution_worker_capability":"linux"}',
+                    '{"outcome":"continue","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":[],"demo_requirements":[{"title":"Demo step1","acceptance_criterion":"ac1","capture_target":"browser"}],"next_stage":"dev","execution_worker_capability":"linux"}',
                     '{"outcome":"continue","change_summary":["implemented"],"pr_url":null,"blocker_message":null}',
                     '{"outcome":"continue","guidance":["run tests"],"validation_scope":"targeted_only","feedback":null,"blocker_message":null}',
                 ]
@@ -621,7 +688,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             command="override",
             _request=_RuntimeQueue(
                 [
-                    '{"outcome":"continue","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":[],"demo_requirements":[{"title":"Demo step1","acceptance_criterion":"ac1"}],"next_stage":"dev","execution_worker_capability":"linux"}',
+                    '{"outcome":"continue","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":[],"demo_requirements":[{"title":"Demo step1","acceptance_criterion":"ac1","capture_target":"browser"}],"next_stage":"dev","execution_worker_capability":"linux"}',
                     '{"outcome":"continue","change_summary":["implemented"],"pr_url":null,"blocker_message":null}',
                 ]
             ),
@@ -677,7 +744,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             command="override",
             _request=_RuntimeQueue(
                 [
-                    '{"outcome":"continue","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":["risk1"],"demo_requirements":[{"title":"Demo step1","acceptance_criterion":"ac1"}],"next_stage":"dev","execution_worker_capability":"linux"}',
+                    '{"outcome":"continue","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":["risk1"],"demo_requirements":[{"title":"Demo step1","acceptance_criterion":"ac1","capture_target":"browser"}],"next_stage":"dev","execution_worker_capability":"linux"}',
                     '{"outcome":"continue","change_summary":["implemented"],"pr_url":"https://example/pull/1","blocker_message":null}',
                     '{"outcome":"continue","guidance":["run tests"],"validation_scope":"targeted_only","feedback":null,"blocker_message":null}',
                     '{"outcome":"continue","summary":["looks good"],"feedback":null,"pr_url":"https://example/pull/1","blocker_message":null}',
@@ -759,7 +826,9 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
                     "plan_steps": ["step1"],
                     "acceptance_criteria": ["ac1"],
                     "risks": [],
-                    "demo_requirements": [{"title": "Demo step1", "acceptance_criterion": "ac1"}],
+                    "demo_requirements": [
+                        {"title": "Demo step1", "acceptance_criterion": "ac1", "capture_target": "browser"}
+                    ],
                     "next_stage": "dev",
                     "execution_worker_capability": "linux",
                 }
@@ -916,7 +985,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             command="override",
             _request=_RuntimeQueue(
                 [
-                    '{"outcome":"continue","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":["risk1"],"demo_requirements":[{"title":"Demo step1","acceptance_criterion":"ac1"}],"next_stage":"dev","execution_worker_capability":"linux"}',
+                    '{"outcome":"continue","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":["risk1"],"demo_requirements":[{"title":"Demo step1","acceptance_criterion":"ac1","capture_target":"browser"}],"next_stage":"dev","execution_worker_capability":"linux"}',
                     '{"outcome":"blocked","change_summary":["implemented"],"pr_url":null,"blocker_message":"APPLE_TEST_PASSWORD missing"}',
                     '{"outcome":"failed","guidance":["retry targeted UI test"],"validation_scope":"current_head_acceptance","feedback":"UI test failed","blocker_message":"xcodebuild missing"}',
                     '{"outcome":"blocked","summary":["Awaiting approval"],"feedback":"Need PM approval","blocker_message":"Decision owner approval missing"}',
@@ -946,7 +1015,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             command="override",
             _request=_RuntimeQueue(
                 [
-                    '{"outcome":"continue","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":["risk1"],"demo_requirements":[{"title":"Demo step1","acceptance_criterion":"ac1"}],"next_stage":"dev","execution_worker_capability":"linux"}',
+                    '{"outcome":"continue","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":["risk1"],"demo_requirements":[{"title":"Demo step1","acceptance_criterion":"ac1","capture_target":"browser"}],"next_stage":"dev","execution_worker_capability":"linux"}',
                     '{"outcome":"continue","change_summary":["implemented"],"pr_url":"https://example/pull/1"}',
                     '{"outcome":"continue","guidance":["run tests"],"validation_scope":"targeted_only","feedback":null}',
                     "approved, do not merge automatically",
@@ -970,7 +1039,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             command="override",
             _request=_RuntimeQueue(
                 [
-                    '{"outcome":"continue","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":["risk1"],"demo_requirements":[{"title":"Demo step1","acceptance_criterion":"ac1"}],"next_stage":"dev","execution_worker_capability":"linux"}',
+                    '{"outcome":"continue","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":["risk1"],"demo_requirements":[{"title":"Demo step1","acceptance_criterion":"ac1","capture_target":"browser"}],"next_stage":"dev","execution_worker_capability":"linux"}',
                     '{"outcome":"continue","change_summary":["implemented"],"pr_url":"https://example/pull/1"}',
                     '{"outcome":"continue","guidance":["run tests"],"validation_scope":"targeted_only","feedback":null}',
                     '{"outcome":"blocked","summary":["Governed runtime unavailable"],"feedback":"Governed runtime unavailable","blocker_message":"Governed runtime unavailable"}',
@@ -1154,7 +1223,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             if _on_log_line is not None:
                 _on_log_line("stdout", "line-1")
                 _on_log_line("stderr", "line-2")
-            return '{"outcome":"continue","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":[],"demo_requirements":[{"title":"Demo step1","acceptance_criterion":"ac1"}],"next_stage":"dev","execution_worker_capability":"linux"}'
+            return '{"outcome":"continue","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":[],"demo_requirements":[{"title":"Demo step1","acceptance_criterion":"ac1","capture_target":"browser"}],"next_stage":"dev","execution_worker_capability":"linux"}'
 
         runtime = CodexRuntime(
             model="gpt-5-codex",
@@ -1180,7 +1249,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
         def _request(_system: str, _user: str, _working_dir: str | None = None, _on_log_line=None) -> str:
             if _on_log_line is not None:
                 _on_log_line("stdout", "line-1")
-            return '{"outcome":"continue","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":[],"demo_requirements":[{"title":"Demo step1","acceptance_criterion":"ac1"}],"next_stage":"dev","execution_worker_capability":"linux"}'
+            return '{"outcome":"continue","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":[],"demo_requirements":[{"title":"Demo step1","acceptance_criterion":"ac1","capture_target":"browser"}],"next_stage":"dev","execution_worker_capability":"linux"}'
 
         runtime = CodexRuntime(
             model="gpt-5-codex",

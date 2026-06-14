@@ -400,9 +400,9 @@ def _parse_demo_requirements(value: object) -> list[DemoRequirement] | None:
             return None
         title = _parse_optional_string(item.get("title"))
         acceptance_criterion = _parse_optional_string(item.get("acceptance_criterion"))
-        capture_target = _parse_optional_string(item.get("capture_target")) or "browser"
+        capture_target = _parse_optional_string(item.get("capture_target"))
         variants = _parse_string_list(item.get("variants"), require_non_empty=False)
-        if title is None or acceptance_criterion is None or variants is None:
+        if title is None or acceptance_criterion is None or capture_target is None or variants is None:
             return None
         if capture_target not in _VALID_QA_CAPTURE_TARGETS:
             return None
@@ -465,11 +465,11 @@ def _parse_qa_scenarios(value: object) -> list[QaScenario] | None:
             return None
         name = _parse_optional_string(item.get("name"))
         objective = _parse_optional_string(item.get("objective"))
-        capture_target = _parse_optional_string(item.get("capture_target")) or "browser"
+        capture_target = _parse_optional_string(item.get("capture_target"))
         start_path = _parse_optional_string(item.get("start_path")) or "/"
         expected_outcomes = _parse_string_list(item.get("expected_outcomes"), require_non_empty=False)
         steps = _parse_qa_steps(item.get("steps"))
-        if name is None or objective is None or expected_outcomes is None or steps is None:
+        if name is None or objective is None or capture_target is None or expected_outcomes is None or steps is None:
             return None
         if capture_target not in _VALID_QA_CAPTURE_TARGETS:
             return None
@@ -512,9 +512,9 @@ def _parse_qa_recordings(value: object) -> list[QaRecording] | None:
         name = _parse_optional_string(item.get("name"))
         artifact_url = _parse_optional_string(item.get("artifact_url"))
         object_key = _parse_optional_string(item.get("object_key"))
-        capture_target = _parse_optional_string(item.get("capture_target")) or "browser"
+        capture_target = _parse_optional_string(item.get("capture_target"))
         capture_reference = _parse_optional_string(item.get("capture_reference"))
-        if name is None or artifact_url is None or object_key is None or capture_reference is None:
+        if name is None or artifact_url is None or object_key is None or capture_target is None or capture_reference is None:
             return None
         if capture_target not in _VALID_QA_CAPTURE_TARGETS:
             return None
