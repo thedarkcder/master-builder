@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import Counter
 from dataclasses import dataclass
 import logging
 import re
@@ -14,6 +15,10 @@ _DEMO_EVIDENCE_SECTION_PATTERN = re.compile(r"^## Demo Evidence\s*$.*?(?=^## |\Z
 _DEMO_EVIDENCE_MARKER = "<!-- master-builder:qa-demo-evidence v1 -->"
 _DEMO_EVIDENCE_REQUIRED_TARGETS_PATTERN = re.compile(
     r"<!--\s*master-builder:qa-demo-required-targets\s+([^>]*)-->",
+    re.MULTILINE,
+)
+_DEMO_EVIDENCE_REQUIRED_COUNTS_PATTERN = re.compile(
+    r"<!--\s*master-builder:qa-demo-required-counts\s+([^>]*)-->",
     re.MULTILINE,
 )
 _STRUCTURED_DEMO_EVIDENCE_LINE_PATTERN = re.compile(
@@ -346,6 +351,34 @@ def _required_demo_targets_from_section(section: str) -> tuple[str, ...] | None:
         return ()
 
 
+def _normalize_required_demo_counts(required_demo_capture_counts: dict[str, int]) -> dict[str, int]:
+    normalized_counts: dict[str, int] = {}
+    for target, count in required_demo_capture_counts.items():
+        normalized_target = str(target or "").strip()
+        if normalized_target not in _SUPPORTED_DEMO_CAPTURE_TARGETS:
+            raise ValueError(f"Unsupported QA demo capture target count requirement: {normalized_target}")
+        normalized_count = int(count)
+        if normalized_count <= 0:
+            raise ValueError(f"QA demo capture target count must be positive: {normalized_target}")
+        normalized_counts[normalized_target] = normalized_count
+    return normalized_counts
+
+
+def _required_demo_counts_from_section(section: str) -> dict[str, int] | None:
+    match = _DEMO_EVIDENCE_REQUIRED_COUNTS_PATTERN.search(section)
+    if match is None:
+        return None
+    raw_entries = [entry.strip() for entry in re.split(r"[,\s]+", match.group(1).strip()) if entry.strip()]
+    parsed_counts: dict[str, int] = {}
+    try:
+        for entry in raw_entries:
+            target, raw_count = entry.split("=", 1)
+            parsed_counts[target] = int(raw_count)
+        return _normalize_required_demo_counts(parsed_counts)
+    except (TypeError, ValueError):
+        return {}
+
+
 def _demo_evidence_present(
     body: str | None,
     *,
@@ -370,4 +403,12 @@ def _demo_evidence_present(
             return False
         required_targets = tuple(dict.fromkeys((*required_targets, *embedded_required_targets)))
     recorded_targets = {structured_match.group("target") for structured_match in structured_matches}
-    return all(target in recorded_targets for target in required_targets)
+    if not all(target in recorded_targets for target in required_targets):
+        return False
+    embedded_required_counts = _required_demo_counts_from_section(section)
+    if embedded_required_counts is None:
+        return True
+    if not embedded_required_counts:
+        return False
+    recorded_counts = Counter(structured_match.group("target") for structured_match in structured_matches)
+    return all(recorded_counts.get(target, 0) >= count for target, count in embedded_required_counts.items())

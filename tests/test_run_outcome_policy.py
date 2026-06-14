@@ -244,6 +244,7 @@ def test_complete_runs_qa_demo_stage_before_finalization() -> None:
     assert checkpoint.status == "completed"
     assert checkpoint.qa_result == qa_result
     assert update_pr_mock.called
+    assert update_pr_mock.call_args.kwargs["required_recording_counts"] == {"browser": 2}
     assert finalizer_calls["workflow_result"].orchestration_stage_trace[-1]["stage"] == "qa"
 
 
@@ -614,6 +615,7 @@ def test_complete_attaches_pr_evidence_after_accumulated_qa_demo_recordings_fini
         "ios",
     ]
     assert update_pr_mock.call_args.kwargs["required_capture_targets"] == ("browser", "ios", "android")
+    assert update_pr_mock.call_args.kwargs["required_recording_counts"] == {"browser": 2, "ios": 2, "android": 2}
     deps.execution.requeue_workflow_result_for_capability_fn.assert_not_called()
     assert finalizer_calls["workflow_result"].orchestration_stage_trace[-1]["status"] == "completed"
 

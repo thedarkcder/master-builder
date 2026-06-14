@@ -40,6 +40,7 @@ from orchestrator.core.platform.tenant_secret_service import resolve_scoped_secr
 DEMO_EVIDENCE_HEADING = "## Demo Evidence"
 DEMO_EVIDENCE_MARKER = "<!-- master-builder:qa-demo-evidence v1 -->"
 DEMO_EVIDENCE_REQUIRED_TARGETS_MARKER = "<!-- master-builder:qa-demo-required-targets"
+DEMO_EVIDENCE_REQUIRED_COUNTS_MARKER = "<!-- master-builder:qa-demo-required-counts"
 _TRANSIENT_NATIVE_SELECTORS = frozenset({"id=splash_screen", "splash_screen"})
 _NATIVE_CAPTURE_TARGETS = frozenset({"ios", "android", "desktop"})
 _RELEASE_SERVICE_READY_STATUSES = frozenset({401, 403, 405})
@@ -655,6 +656,19 @@ def _normalize_required_capture_targets(required_capture_targets: list[str] | tu
     return tuple(ordered)
 
 
+def _normalize_required_recording_counts(required_recording_counts: dict[str, int] | None) -> dict[str, int]:
+    normalized_counts: dict[str, int] = {}
+    for target, count in (required_recording_counts or {}).items():
+        normalized_target = str(target or "").strip()
+        if not normalized_target:
+            continue
+        normalized_count = int(count)
+        if normalized_count <= 0:
+            raise ValueError(f"Required QA demo recording count must be positive for target: {normalized_target}")
+        normalized_counts[normalized_target] = normalized_count
+    return normalized_counts
+
+
 def remaining_capture_targets(plan: PmPlan, recordings: list[QaRecording] | tuple[QaRecording, ...]) -> tuple[str, ...]:
     recorded_counts: dict[str, int] = {}
     for recording in recordings:
@@ -695,11 +709,16 @@ def build_demo_evidence_section(
     recordings: list[QaRecording],
     *,
     required_capture_targets: list[str] | tuple[str, ...] | None = None,
+    required_recording_counts: dict[str, int] | None = None,
 ) -> str:
     lines = [DEMO_EVIDENCE_HEADING, DEMO_EVIDENCE_MARKER]
     required_targets = _normalize_required_capture_targets(required_capture_targets)
     if required_targets:
         lines.append(f"{DEMO_EVIDENCE_REQUIRED_TARGETS_MARKER} {','.join(required_targets)} -->")
+    normalized_counts = _normalize_required_recording_counts(required_recording_counts)
+    if normalized_counts:
+        serialized_counts = ",".join(f"{target}={count}" for target, count in normalized_counts.items())
+        lines.append(f"{DEMO_EVIDENCE_REQUIRED_COUNTS_MARKER} {serialized_counts} -->")
     for recording in recordings:
         lines.append(
             f"- {recording.name} "
@@ -714,8 +733,13 @@ def upsert_demo_evidence_section(
     body: str | None,
     recordings: list[QaRecording],
     required_capture_targets: list[str] | tuple[str, ...] | None = None,
+    required_recording_counts: dict[str, int] | None = None,
 ) -> str:
-    evidence = build_demo_evidence_section(recordings, required_capture_targets=required_capture_targets)
+    evidence = build_demo_evidence_section(
+        recordings,
+        required_capture_targets=required_capture_targets,
+        required_recording_counts=required_recording_counts,
+    )
     normalized_body = str(body or "").strip()
     if not normalized_body:
         return evidence
@@ -944,6 +968,26 @@ def _validate_recordings_cover_required_targets(
     if missing_targets:
         raise RuntimeError(
             "QA demo evidence is missing required capture target(s): " + ", ".join(missing_targets)
+        )
+
+
+def _validate_recordings_cover_required_counts(
+    *,
+    recordings: list[QaRecording],
+    required_recording_counts: dict[str, int] | None,
+) -> None:
+    required_counts = _normalize_required_recording_counts(required_recording_counts)
+    if not required_counts:
+        return
+    recorded_counts = Counter(str(recording.capture_target or "").strip() for recording in recordings)
+    missing_counts = [
+        f"{target} requires {required_count}, recorded {recorded_counts.get(target, 0)}"
+        for target, required_count in required_counts.items()
+        if recorded_counts.get(target, 0) < required_count
+    ]
+    if missing_counts:
+        raise RuntimeError(
+            "QA demo evidence is missing required recording count(s): " + "; ".join(missing_counts)
         )
 
 
@@ -1369,6 +1413,7 @@ def update_pull_request_with_demo_evidence(
     workflow_result,
     qa_result: QaResult,
     required_capture_targets: list[str] | tuple[str, ...] | None = None,
+    required_recording_counts: dict[str, int] | None = None,
 ) -> str:
     if not qa_result.recordings:
         raise RuntimeError("QA demo evidence PR update requires at least one recording")
@@ -1376,6 +1421,10 @@ def update_pull_request_with_demo_evidence(
     _validate_recordings_cover_required_targets(
         recordings=qa_result.recordings,
         required_capture_targets=required_capture_targets,
+    )
+    _validate_recordings_cover_required_counts(
+        recordings=qa_result.recordings,
+        required_recording_counts=required_recording_counts,
     )
     for recording in qa_result.recordings:
         ensure_artifact_url_reachable(
@@ -1409,6 +1458,7 @@ def update_pull_request_with_demo_evidence(
         body=pr_details.body,
         recordings=qa_result.recordings,
         required_capture_targets=required_capture_targets,
+        required_recording_counts=required_recording_counts,
     )
     github_client.update_pull_request(
         repo_full_name=repo_full_name,
