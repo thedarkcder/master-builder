@@ -248,6 +248,8 @@ def ensure_artifact_url_reachable(
         raise RuntimeError(f"QA demo artifact URL is not reachable: {artifact_url}: {exc}") from exc
     if status_code >= 400:
         raise RuntimeError(f"QA demo artifact URL is not reachable: {artifact_url}: HTTP {status_code}")
+    if status_code not in {200, 206}:
+        raise RuntimeError(f"QA demo artifact URL did not return playable video evidence: {artifact_url}: HTTP {status_code}")
 
 
 def ensure_release_ready_for_qa(
