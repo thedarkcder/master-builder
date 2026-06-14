@@ -248,6 +248,9 @@ function parseStageArtifact(
 type AgentOutcomeLink = {
   label: string;
   href: string;
+  captureTarget?: string | null;
+  captureReference?: string | null;
+  objectKey?: string | null;
 };
 
 function parseQaRecordingLinks(artifact: Record<string, unknown> | null): AgentOutcomeLink[] {
@@ -265,9 +268,22 @@ function parseQaRecordingLinks(artifact: Record<string, unknown> | null): AgentO
       if (!href) {
         return null;
       }
-      return { label, href } satisfies AgentOutcomeLink;
+      const captureTarget = String(item["capture_target"] ?? "").trim() || null;
+      const captureReference = String(item["capture_reference"] ?? "").trim() || null;
+      const objectKey = String(item["object_key"] ?? "").trim() || null;
+      const link: AgentOutcomeLink = { label, href, captureTarget, captureReference, objectKey };
+      return link;
     })
     .filter((item): item is AgentOutcomeLink => item !== null);
+}
+
+function formatQaRecordingMetadata(link: AgentOutcomeLink): string {
+  const parts = [
+    link.captureTarget ? `target=${link.captureTarget}` : "",
+    link.captureReference ? `reference=${link.captureReference}` : "",
+    link.objectKey ? `object_key=${link.objectKey}` : "",
+  ].filter((item) => item.length > 0);
+  return parts.join("; ");
 }
 
 function parseQaScenarioSummaries(artifact: Record<string, unknown> | null): string[] {
@@ -1247,7 +1263,10 @@ export default function RunDetailPage() {
       ...checkpointSummaryForStage("qa"),
       ...toStringList(qaArtifact?.["summary"]),
       ...parseQaScenarioSummaries(qaArtifact),
-      ...qaRecordingLinks.map((item) => `Recording: ${item.label}`),
+      ...qaRecordingLinks.map((item) => {
+        const metadata = formatQaRecordingMetadata(item);
+        return metadata ? `Recording: ${item.label} [${metadata}]` : `Recording: ${item.label}`;
+      }),
     ];
     return [
       {
@@ -1976,18 +1995,33 @@ export default function RunDetailPage() {
                       </p>
                     ) : null}
                     {outcome.links && outcome.links.length > 0 ? (
-                      <div className="mt-2 flex flex-wrap gap-2">
-                        {outcome.links.map((link) => (
-                          <Link
-                            key={`${outcome.stage}-${link.href}`}
-                            href={link.href}
-                            target="_blank"
-                            rel="noreferrer"
-                            className="inline-flex items-center rounded-md border border-primary/30 bg-primary/5 px-2 py-1 text-[11px] font-medium text-primary hover:bg-primary/10"
-                          >
-                            {link.label}
-                          </Link>
-                        ))}
+                      <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                        {outcome.links.map((link, index) => {
+                          const metadata = formatQaRecordingMetadata(link);
+                          return (
+                            <div
+                              key={`${outcome.stage}-${link.href}`}
+                              className="rounded-md border border-primary/30 bg-primary/5 px-2 py-1.5"
+                            >
+                              <Link
+                                href={link.href}
+                                target="_blank"
+                                rel="noreferrer"
+                                className="text-[11px] font-medium text-primary hover:underline"
+                              >
+                                {link.label}
+                              </Link>
+                              {metadata ? (
+                                <p
+                                  data-testid={`${outcome.stage}-recording-metadata-${index}`}
+                                  className="mt-1 break-all text-[10px] text-muted-foreground"
+                                >
+                                  {metadata}
+                                </p>
+                              ) : null}
+                            </div>
+                          );
+                        })}
                       </div>
                     ) : null}
                   </div>

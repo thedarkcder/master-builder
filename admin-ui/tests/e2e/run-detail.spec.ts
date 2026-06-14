@@ -218,10 +218,16 @@ test("renders QA demo evidence links when the QA checkpoint is present", async (
               {
                 name: "Happy path demo",
                 artifact_url: "https://cdn.example/qa/happy.webm",
+                object_key: "tenant-1/project-1/run-1/qa-demo-1.webm",
+                capture_target: "browser",
+                capture_reference: "https://preview.example",
               },
               {
-                name: "Break path demo",
-                artifact_url: "https://cdn.example/qa/break.webm",
+                name: "iOS break path demo",
+                artifact_url: "https://cdn.example/qa/break.mp4",
+                object_key: "tenant-1/project-1/run-1/qa-demo-2.mp4",
+                capture_target: "ios",
+                capture_reference: "ios-simulator://configured",
               },
             ],
             outcome: "continue",
@@ -242,9 +248,15 @@ test("renders QA demo evidence links when the QA checkpoint is present", async (
     "href",
     "https://cdn.example/qa/happy.webm",
   );
-  await expect(page.getByRole("link", { name: "Break path demo" })).toHaveAttribute(
+  await expect(page.getByTestId("qa-recording-metadata-0")).toHaveText(
+    "target=browser; reference=https://preview.example; object_key=tenant-1/project-1/run-1/qa-demo-1.webm",
+  );
+  await expect(page.getByRole("link", { name: "iOS break path demo" })).toHaveAttribute(
     "href",
-    "https://cdn.example/qa/break.webm",
+    "https://cdn.example/qa/break.mp4",
+  );
+  await expect(page.getByTestId("qa-recording-metadata-1")).toHaveText(
+    "target=ios; reference=ios-simulator://configured; object_key=tenant-1/project-1/run-1/qa-demo-2.mp4",
   );
 });
 
