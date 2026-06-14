@@ -583,6 +583,145 @@ def test_execute_qa_demo_stage_records_and_uploads() -> None:
     assert upload_mock.call_args.kwargs["content_type"] == "video/webm"
 
 
+def test_execute_qa_demo_stage_blocks_when_qa_scenarios_do_not_cover_pm_variants() -> None:
+    tenant = SimpleNamespace(tenant_id="tenant-1", github_config={})
+    project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo")
+    run = SimpleNamespace(run_id="run-1")
+    release = SimpleNamespace(
+        service_urls=[SimpleNamespace(service_kind="website", status="active", url="https://preview.example")]
+    )
+    plan = PmPlan(
+        plan_steps=["Implement"],
+        acceptance_criteria=["Feature handles happy path and bad input"],
+        risks=[],
+        demo_requirements=[
+            DemoRequirement(
+                title="Feature walkthrough",
+                acceptance_criterion="Feature handles happy path and bad input",
+                capture_target="browser",
+                variants=["Bad input shows validation", "Repeat action remains safe"],
+            )
+        ],
+    )
+    dev_result = DevResult(change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8")
+    test_result = TestResult(guidance=["pytest -q"])
+    review_result = ReviewResult(summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8")
+    fake_agents = SimpleNamespace(qa=MagicMock(return_value=_qa_result()))
+
+    with (
+        patch("orchestrator.core.qa.demo_service.build_codex_runtime"),
+        patch("orchestrator.core.qa.demo_service.CodexWorkflowAgents", return_value=fake_agents),
+        patch("orchestrator.core.qa.demo_service.record_demo_scenarios") as record_mock,
+        patch("orchestrator.core.qa.demo_service._default_service_url_probe", return_value=200),
+    ):
+        try:
+            execute_qa_demo_stage(
+                session=SimpleNamespace(),
+                settings=SimpleNamespace(qa_demo_playwright_module_dir=""),
+                tenant=tenant,
+                project=project,
+                run=run,
+                request=_request(),
+                plan=plan,
+                dev_result=dev_result,
+                test_result=test_result,
+                review_result=review_result,
+                preview_release=release,
+            )
+        except RuntimeError as exc:
+            assert "browser: expected at least 3, got 1" in str(exc)
+        else:  # pragma: no cover
+            raise AssertionError("expected QA scenario variant coverage failure")
+
+    record_mock.assert_not_called()
+
+
+def test_execute_qa_demo_stage_blocks_when_qa_scenarios_do_not_name_pm_variant_coverage() -> None:
+    tenant = SimpleNamespace(tenant_id="tenant-1", github_config={})
+    project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo")
+    run = SimpleNamespace(run_id="run-1")
+    release = SimpleNamespace(
+        service_urls=[SimpleNamespace(service_kind="website", status="active", url="https://preview.example")]
+    )
+    plan = PmPlan(
+        plan_steps=["Implement"],
+        acceptance_criteria=["Feature handles happy path and bad input"],
+        risks=[],
+        demo_requirements=[
+            DemoRequirement(
+                title="Feature walkthrough",
+                acceptance_criterion="Feature handles happy path and bad input",
+                capture_target="browser",
+                variants=["Bad input shows validation", "Repeat action remains safe"],
+            )
+        ],
+    )
+    dev_result = DevResult(change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8")
+    test_result = TestResult(guidance=["pytest -q"])
+    review_result = ReviewResult(summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8")
+    fake_agents = SimpleNamespace(
+        qa=MagicMock(
+            return_value=QaResult(
+                summary=["Planned demos"],
+                scenarios=[
+                    QaScenario(
+                        name="Happy path",
+                        objective="Show feature works",
+                        steps=[
+                            QaStep(action="goto", value="/"),
+                            QaStep(action="assert_visible", selector="text=Feature"),
+                        ],
+                    ),
+                    QaScenario(
+                        name="Validation path",
+                        objective="Show invalid entry",
+                        steps=[
+                            QaStep(action="goto", value="/"),
+                            QaStep(action="assert_visible", selector="text=Feature"),
+                        ],
+                    ),
+                    QaScenario(
+                        name="Repeat path",
+                        objective="Show repeated interaction",
+                        steps=[
+                            QaStep(action="goto", value="/"),
+                            QaStep(action="assert_visible", selector="text=Feature"),
+                        ],
+                    ),
+                ],
+            )
+        )
+    )
+
+    with (
+        patch("orchestrator.core.qa.demo_service.build_codex_runtime"),
+        patch("orchestrator.core.qa.demo_service.CodexWorkflowAgents", return_value=fake_agents),
+        patch("orchestrator.core.qa.demo_service.record_demo_scenarios") as record_mock,
+        patch("orchestrator.core.qa.demo_service._default_service_url_probe", return_value=200),
+    ):
+        try:
+            execute_qa_demo_stage(
+                session=SimpleNamespace(),
+                settings=SimpleNamespace(qa_demo_playwright_module_dir=""),
+                tenant=tenant,
+                project=project,
+                run=run,
+                request=_request(),
+                plan=plan,
+                dev_result=dev_result,
+                test_result=test_result,
+                review_result=review_result,
+                preview_release=release,
+            )
+        except RuntimeError as exc:
+            assert "missing variant coverage: browser: Bad input shows validation" in str(exc)
+            assert "browser: Repeat action remains safe" in str(exc)
+        else:  # pragma: no cover
+            raise AssertionError("expected QA scenario variant traceability failure")
+
+    record_mock.assert_not_called()
+
+
 def test_execute_qa_demo_stage_blocks_when_project_api_service_is_missing_from_release() -> None:
     tenant = SimpleNamespace(tenant_id="tenant-1", github_config={})
     project = SimpleNamespace(
@@ -1141,11 +1280,11 @@ def test_execute_qa_demo_stage_blocks_when_current_worker_target_proof_is_missin
                 preview_release=release,
             )
         except RuntimeError as exc:
-            assert "did not produce proof for current worker capture target(s): android" in str(exc)
+            assert "insufficient scenario count: android: expected at least 1, got 0" in str(exc)
         else:  # pragma: no cover
             raise AssertionError("expected current-worker missing target proof to block")
 
-    assert record_mock.call_count == 2
+    record_mock.assert_not_called()
 
 
 def test_execute_qa_demo_stage_completes_remaining_target_with_previous_recordings() -> None:

@@ -779,6 +779,63 @@ def _validate_native_scenarios(qa_result: QaResult) -> QaResult:
     return replace(qa_result, scenarios=normalized_scenarios)
 
 
+def _validate_qa_scenario_coverage(
+    *,
+    plan: PmPlan,
+    qa_result: QaResult,
+    capture_targets: dict[str, DemoCaptureTarget],
+) -> None:
+    target_names = set(capture_targets)
+    required_counts: dict[str, int] = {}
+    scenarios_by_target: dict[str, list[QaScenario]] = {}
+    missing_variants: list[str] = []
+    for requirement in plan.demo_requirements:
+        if requirement.capture_target not in target_names:
+            continue
+        required_counts[requirement.capture_target] = (
+            required_counts.get(requirement.capture_target, 0) + 1 + len(requirement.variants or [])
+        )
+    for scenario in qa_result.scenarios:
+        if scenario.capture_target in target_names:
+            scenarios_by_target.setdefault(scenario.capture_target, []).append(scenario)
+    for requirement in plan.demo_requirements:
+        if requirement.capture_target not in target_names:
+            continue
+        target_scenarios = scenarios_by_target.get(requirement.capture_target, [])
+        for variant in requirement.variants or []:
+            normalized_variant = _normalized_demo_text(variant)
+            if not any(normalized_variant in _normalized_scenario_text(scenario) for scenario in target_scenarios):
+                missing_variants.append(f"{requirement.capture_target}: {variant}")
+    missing = [
+        f"{target}: expected at least {required_count}, got {len(scenarios_by_target.get(target, []))}"
+        for target, required_count in required_counts.items()
+        if len(scenarios_by_target.get(target, [])) < required_count
+    ]
+    messages: list[str] = []
+    if missing:
+        messages.append("insufficient scenario count: " + "; ".join(missing))
+    if missing_variants:
+        messages.append("missing variant coverage: " + "; ".join(missing_variants))
+    if messages:
+        raise RuntimeError("QA demo scenarios do not cover PM demo requirement variants: " + " | ".join(messages))
+
+
+def _normalized_demo_text(value: str) -> str:
+    return " ".join(str(value or "").casefold().split())
+
+
+def _normalized_scenario_text(scenario: QaScenario) -> str:
+    return _normalized_demo_text(
+        " ".join(
+            [
+                scenario.name,
+                scenario.objective,
+                *list(scenario.expected_outcomes or []),
+            ]
+        )
+    )
+
+
 def _copy_recordings(recordings: list[LocalQaRecording]) -> list[LocalQaRecording]:
     persisted_dir = Path.cwd() / "tmp" / "qa-demos"
     persisted_dir.mkdir(parents=True, exist_ok=True)
@@ -1018,6 +1075,11 @@ def execute_qa_demo_stage(
     if qa_result.outcome != "continue":
         return qa_result
     qa_result = _validate_native_scenarios(qa_result)
+    _validate_qa_scenario_coverage(
+        plan=plan,
+        qa_result=qa_result,
+        capture_targets=current_worker_capture_targets,
+    )
     storage = storage_config_from_settings(settings)
 
     max_attempts = qa_demo_max_attempts(settings)
