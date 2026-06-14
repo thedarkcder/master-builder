@@ -401,7 +401,7 @@ def _parse_demo_requirements(value: object) -> list[DemoRequirement] | None:
         title = _parse_optional_string(item.get("title"))
         acceptance_criterion = _parse_optional_string(item.get("acceptance_criterion"))
         capture_target = _parse_optional_string(item.get("capture_target"))
-        variants = _parse_string_list(item.get("variants"), require_non_empty=False)
+        variants = _parse_string_list(item.get("variants"), require_non_empty=True)
         if title is None or acceptance_criterion is None or capture_target is None or variants is None:
             return None
         if capture_target not in _VALID_QA_CAPTURE_TARGETS:

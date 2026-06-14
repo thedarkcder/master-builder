@@ -116,7 +116,7 @@ class CheckpointCodecTests(unittest.TestCase):
                     "title": "Record iOS proof",
                     "acceptance_criterion": "Native flow works",
                     "capture_target": "ios",
-                    "variants": [],
+                    "variants": ["Repeat action remains safe"],
                 }
             ],
             "outcome": "continue",
@@ -132,6 +132,26 @@ class CheckpointCodecTests(unittest.TestCase):
         assert plan is not None
         self.assertEqual(plan.execution_worker_capability, "linux")
         self.assertEqual(plan.demo_requirements[0].capture_target, "ios")
+
+    def test_decode_pm_plan_payload_rejects_demo_requirements_without_variants(self) -> None:
+        payload = {
+            "plan_steps": ["step-1"],
+            "acceptance_criteria": ["ac-1"],
+            "risks": [],
+            "demo_requirements": [
+                {
+                    "title": "Record iOS proof",
+                    "acceptance_criterion": "Native flow works",
+                    "capture_target": "ios",
+                    "variants": [],
+                }
+            ],
+            "outcome": "continue",
+            "next_stage": "dev",
+            "execution_worker_capability": "linux",
+        }
+
+        self.assertIsNone(decode_pm_plan_payload(payload))
 
     def test_decode_pm_plan_payload_rejects_empty_required_lists(self) -> None:
         payload = {
@@ -210,6 +230,7 @@ class CheckpointCodecTests(unittest.TestCase):
                     title="Record iOS proof",
                     acceptance_criterion="Native flow works",
                     capture_target="ios",
+                    variants=["Repeat action remains safe"],
                 )
             ],
             outcome="continue",
@@ -264,7 +285,12 @@ class CheckpointCodecTests(unittest.TestCase):
                     acceptance_criteria=["ac1"],
                     risks=[],
                     demo_requirements=[
-                        DemoRequirement(title="Demo", acceptance_criterion="Show feature", capture_target="browser")
+                        DemoRequirement(
+                            title="Demo",
+                            acceptance_criterion="Show feature",
+                            capture_target="browser",
+                            variants=["Invalid input is rejected"],
+                        )
                     ],
                 ),
             )
