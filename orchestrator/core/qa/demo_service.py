@@ -152,6 +152,15 @@ def qa_demo_release_health_timeout_seconds(settings) -> float:  # noqa: ANN001
     return max(1.0, configured)
 
 
+def qa_demo_artifact_url_timeout_seconds(settings) -> float:  # noqa: ANN001
+    try:
+        raw_value = getattr(settings, "qa_demo_artifact_url_timeout_seconds", 10.0)
+        configured = 10.0 if raw_value is None else float(raw_value)
+    except (TypeError, ValueError):
+        configured = 10.0
+    return max(1.0, configured)
+
+
 def _default_service_url_probe(url: str, *, timeout_seconds: float) -> int:
     request = urllib.request.Request(
         url,
@@ -165,6 +174,39 @@ def _default_service_url_probe(url: str, *, timeout_seconds: float) -> int:
         return int(exc.code)
     except (OSError, TimeoutError, urllib.error.URLError) as exc:
         raise RuntimeError(str(exc)) from exc
+
+
+def _default_artifact_url_probe(url: str, *, timeout_seconds: float) -> int:
+    request = urllib.request.Request(
+        url,
+        headers={
+            "User-Agent": "MasterBuilder-QA-Demo/1.0",
+            "Range": "bytes=0-0",
+        },
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:  # noqa: S310
+            return int(getattr(response, "status", 200))
+    except urllib.error.HTTPError as exc:
+        return int(exc.code)
+    except (OSError, TimeoutError, urllib.error.URLError) as exc:
+        raise RuntimeError(str(exc)) from exc
+
+
+def ensure_artifact_url_reachable(
+    artifact_url: str,
+    *,
+    artifact_url_probe: Callable[[str], int] | Callable[..., int] | None = None,
+    timeout_seconds: float = 10.0,
+) -> None:
+    probe = artifact_url_probe or _default_artifact_url_probe
+    try:
+        status_code = int(probe(artifact_url, timeout_seconds=timeout_seconds))
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError(f"QA demo artifact URL is not reachable: {artifact_url}: {exc}") from exc
+    if status_code >= 400:
+        raise RuntimeError(f"QA demo artifact URL is not reachable: {artifact_url}: HTTP {status_code}")
 
 
 def ensure_release_ready_for_qa(
@@ -478,6 +520,25 @@ def _content_type_for_recording(path: Path) -> str:
     raise RuntimeError(f"Unsupported QA demo recording file type: {suffix or '<none>'}")
 
 
+def _validate_local_recording_file(path: Path) -> None:
+    if not path.exists() or not path.is_file():
+        raise RuntimeError(f"QA demo recording file is missing: {path}")
+    payload = path.read_bytes()
+    if len(payload) < 1024:
+        raise RuntimeError(f"QA demo recording file is too small to be valid video evidence: {path}")
+    suffix = path.suffix.lower()
+    if suffix == ".webm":
+        if not payload.startswith(b"\x1a\x45\xdf\xa3"):
+            raise RuntimeError(f"QA demo recording file is not valid video evidence: {path}")
+        return
+    if suffix in {".mp4", ".mov"}:
+        header = payload[:64]
+        if b"ftyp" not in header or b"moov" not in payload:
+            raise RuntimeError(f"QA demo recording file is not valid video evidence: {path}")
+        return
+    raise RuntimeError(f"Unsupported QA demo recording file type: {suffix or '<none>'}")
+
+
 def _parse_recorder_output(
     *,
     output_path: Path,
@@ -493,6 +554,7 @@ def _parse_recorder_output(
         if not name or not path:
             raise RuntimeError("QA demo recorder returned incomplete recording metadata")
         source = Path(path)
+        _validate_local_recording_file(source)
         recordings.append(
             LocalQaRecording(
                 name=name,
@@ -830,6 +892,10 @@ def execute_qa_demo_stage(
                     local_path=recording.path,
                     object_key=object_key,
                     content_type=recording.content_type,
+                )
+                ensure_artifact_url_reachable(
+                    artifact_url,
+                    timeout_seconds=qa_demo_artifact_url_timeout_seconds(settings),
                 )
                 uploaded.append(
                     QaRecording(

@@ -79,6 +79,14 @@ def _browser_capture_targets() -> dict[str, DemoCaptureTarget]:
     }
 
 
+def _fake_webm_payload() -> bytes:
+    return b"\x1a\x45\xdf\xa3" + (b"webm-video-evidence" * 128)
+
+
+def _fake_mp4_payload() -> bytes:
+    return b"\x00\x00\x00\x18ftypmp42" + (b"mp4-video-evidence" * 128) + b"moov"
+
+
 def test_qa_demo_recording_enabled_reads_effective_policy() -> None:
     assert qa_demo_recording_enabled({"qa_demo_recording_enabled": True}) is True
     assert qa_demo_recording_enabled({"qa_demo_recording_enabled": False}) is False
@@ -315,7 +323,7 @@ def test_record_demo_scenarios_passes_explicit_playwright_module_dir() -> None:
         video_dir = Path(input_payload["output_dir"])
         video_dir.mkdir(parents=True, exist_ok=True)
         source_path = video_dir / "happy-path.webm"
-        source_path.write_bytes(b"video")
+        source_path.write_bytes(_fake_webm_payload())
         output_path.write_text(
             json.dumps({"recordings": [{"name": "Happy path", "path": str(source_path)}]}),
             encoding="utf-8",
@@ -356,7 +364,7 @@ def test_record_demo_scenarios_uses_configured_desktop_recorder() -> None:
         video_dir = Path(input_payload["output_dir"])
         video_dir.mkdir(parents=True, exist_ok=True)
         source_path = video_dir / "desktop-flow.mp4"
-        source_path.write_bytes(b"video")
+        source_path.write_bytes(_fake_mp4_payload())
         output_path.write_text(
             json.dumps({"recordings": [{"name": "Desktop flow", "path": str(source_path)}]}),
             encoding="utf-8",
@@ -392,6 +400,43 @@ def test_record_demo_scenarios_uses_configured_desktop_recorder() -> None:
     assert commands[0][0][:2] == ["python", "/tmp/desktop_recorder.py"]
     assert commands[0][2]["capture_target"] == "desktop"
     assert commands[0][2]["capture_reference"] == "desktop://macos-app"
+
+
+def test_record_demo_scenarios_rejects_invalid_video_artifact() -> None:
+    def _run(cmd, **_kwargs):  # noqa: ANN001
+        output_path = Path(cmd[3])
+        input_payload = json.loads(Path(cmd[2]).read_text(encoding="utf-8"))
+        video_dir = Path(input_payload["output_dir"])
+        video_dir.mkdir(parents=True, exist_ok=True)
+        source_path = video_dir / "not-video.webm"
+        source_path.write_bytes(b"not-a-real-video" * 128)
+        output_path.write_text(
+            json.dumps({"recordings": [{"name": "Invalid", "path": str(source_path)}]}),
+            encoding="utf-8",
+        )
+        return SimpleNamespace(stdout="")
+
+    with patch("orchestrator.core.qa.demo_service.subprocess.run", side_effect=_run):
+        try:
+            record_demo_scenarios(
+                settings=SimpleNamespace(qa_demo_playwright_module_dir="/tmp/playwright-modules"),
+                request=_request(),
+                available_capture_targets=_browser_capture_targets(),
+                qa_result=QaResult(
+                    summary=["Recorded demos"],
+                    scenarios=[
+                        QaScenario(
+                            name="Invalid",
+                            objective="Reject invalid recording bytes",
+                            steps=[QaStep(action="assert_visible", selector="#feature")],
+                        )
+                    ],
+                ),
+            )
+        except RuntimeError as exc:
+            assert "not valid video evidence" in str(exc)
+        else:  # pragma: no cover
+            raise AssertionError("expected invalid recording artifact rejection")
 
 
 def test_execute_qa_demo_stage_records_and_uploads() -> None:
@@ -444,6 +489,7 @@ def test_execute_qa_demo_stage_records_and_uploads() -> None:
             return_value="https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-demo-1.webm",
         ) as upload_mock,
         patch("orchestrator.core.qa.demo_service._default_service_url_probe", return_value=200),
+        patch("orchestrator.core.qa.demo_service._default_artifact_url_probe", return_value=200, create=True),
     ):
         result = execute_qa_demo_stage(
             session=SimpleNamespace(),
@@ -465,6 +511,79 @@ def test_execute_qa_demo_stage_records_and_uploads() -> None:
     available_targets = json.loads(fake_agents.qa.call_args.kwargs["available_capture_targets_json"])
     assert {"capture_target": "browser", "capture_reference": "https://preview.example"} in available_targets
     assert upload_mock.call_args.kwargs["content_type"] == "video/webm"
+
+
+def test_execute_qa_demo_stage_retries_when_uploaded_artifact_url_is_unreachable() -> None:
+    tenant = SimpleNamespace(tenant_id="tenant-1", github_config={})
+    project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo")
+    run = SimpleNamespace(run_id="run-1")
+    release = SimpleNamespace(
+        service_urls=[SimpleNamespace(service_kind="website", status="active", url="https://preview.example")]
+    )
+    plan = PmPlan(
+        plan_steps=["Implement"],
+        acceptance_criteria=["Feature works"],
+        risks=[],
+        demo_requirements=[DemoRequirement(title="Feature walkthrough", acceptance_criterion="Feature works")],
+    )
+    fake_agents = SimpleNamespace(qa=lambda **_: _qa_result())
+    probe_attempts = {"count": 0}
+
+    def _probe(_url: str, *, timeout_seconds: float) -> int:
+        probe_attempts["count"] += 1
+        if probe_attempts["count"] < 2:
+            raise RuntimeError("artifact CDN returned 404")
+        return 200
+
+    with (
+        patch("orchestrator.core.qa.demo_service.build_codex_runtime"),
+        patch("orchestrator.core.qa.demo_service.CodexWorkflowAgents", return_value=fake_agents),
+        patch(
+            "orchestrator.core.qa.demo_service.record_demo_scenarios",
+            return_value=[
+                SimpleNamespace(
+                    name="Happy path",
+                    path="/tmp/happy.webm",
+                    capture_target="browser",
+                    capture_reference="https://preview.example",
+                    content_type="video/webm",
+                )
+            ],
+        ),
+        patch(
+            "orchestrator.core.qa.demo_service.storage_config_from_settings",
+            return_value=SimpleNamespace(
+                endpoint="minio:9000",
+                access_key="key",
+                secret_key="secret",
+                bucket="qa-demos",
+                public_base_url="https://cdn.example/qa-demos",
+                secure=False,
+            ),
+        ),
+        patch(
+            "orchestrator.core.qa.demo_service.upload_recording",
+            return_value="https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-demo-1.webm",
+        ),
+        patch("orchestrator.core.qa.demo_service._default_service_url_probe", return_value=200),
+        patch("orchestrator.core.qa.demo_service._default_artifact_url_probe", side_effect=_probe, create=True),
+    ):
+        result = execute_qa_demo_stage(
+            session=SimpleNamespace(),
+            settings=SimpleNamespace(qa_demo_playwright_module_dir="", qa_demo_max_attempts=2),
+            tenant=tenant,
+            project=project,
+            run=run,
+            request=_request(),
+            plan=plan,
+            dev_result=DevResult(change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8"),
+            test_result=TestResult(guidance=["pytest -q"]),
+            review_result=ReviewResult(summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"),
+            preview_release=release,
+        )
+
+    assert probe_attempts["count"] == 2
+    assert result.recordings[0].artifact_url.endswith("qa-demo-1.webm")
 
 
 def test_execute_qa_demo_stage_normalizes_native_selectors_before_recording() -> None:
@@ -531,6 +650,7 @@ def test_execute_qa_demo_stage_normalizes_native_selectors_before_recording() ->
             "orchestrator.core.qa.demo_service.upload_recording",
             return_value="https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-demo-1.mp4",
         ),
+        patch("orchestrator.core.qa.demo_service._default_artifact_url_probe", return_value=200),
     ):
         execute_qa_demo_stage(
             session=SimpleNamespace(),
@@ -610,6 +730,7 @@ def test_execute_qa_demo_stage_normalizes_native_wait_for_text_selector_into_val
             "orchestrator.core.qa.demo_service.upload_recording",
             return_value="https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-demo-1.mp4",
         ),
+        patch("orchestrator.core.qa.demo_service._default_artifact_url_probe", return_value=200),
     ):
         execute_qa_demo_stage(
             session=SimpleNamespace(),
@@ -788,6 +909,7 @@ def test_execute_qa_demo_stage_uses_builtin_ios_capture_on_macos() -> None:
             return_value="https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-demo-1.mp4",
         ),
         patch("orchestrator.core.qa.demo_service.ensure_capture_target_runtime_ready"),
+        patch("orchestrator.core.qa.demo_service._default_artifact_url_probe", return_value=200),
     ):
         result = execute_qa_demo_stage(
             session=SimpleNamespace(),
@@ -873,6 +995,7 @@ def test_execute_qa_demo_stage_uses_builtin_android_capture_on_linux() -> None:
             return_value="https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-demo-1.mp4",
         ),
         patch("orchestrator.core.qa.demo_service.ensure_capture_target_runtime_ready"),
+        patch("orchestrator.core.qa.demo_service._default_artifact_url_probe", return_value=200),
     ):
         result = execute_qa_demo_stage(
             session=SimpleNamespace(),
@@ -1029,6 +1152,7 @@ def test_execute_qa_demo_stage_retries_recording_failures() -> None:
         ),
         patch("orchestrator.core.qa.demo_service.upload_recording", side_effect=_upload),
         patch("orchestrator.core.qa.demo_service._default_service_url_probe", return_value=200),
+        patch("orchestrator.core.qa.demo_service._default_artifact_url_probe", return_value=200),
     ):
         result = execute_qa_demo_stage(
             session=SimpleNamespace(),
