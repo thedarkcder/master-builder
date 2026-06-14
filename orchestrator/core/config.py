@@ -153,6 +153,7 @@ class Settings(BaseSettings):
     qa_demo_artifact_public_base_url: str = ""
     qa_demo_artifact_secure: bool = True
     qa_demo_max_attempts: int = 3
+    qa_demo_release_health_timeout_seconds: float = 10.0
     qa_demo_playwright_module_dir: str = ""
     qa_demo_ios_recorder_command: str = ""
     qa_demo_ios_capture_reference: str = ""

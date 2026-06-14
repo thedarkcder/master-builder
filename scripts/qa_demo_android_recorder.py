@@ -10,6 +10,8 @@ import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
 
+from PIL import Image
+
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
@@ -235,6 +237,14 @@ def validate_png_frame(path: Path) -> None:
         raise RuntimeError(f"Android QA frame is not a PNG screencap: {path}")
     if len(payload) < 1024:
         raise RuntimeError(f"Android QA frame is too small to be valid screen evidence: {path}")
+    try:
+        with Image.open(path) as image:
+            rgb_image = image.convert("RGB")
+            channel_extrema = rgb_image.getextrema()
+    except Exception as exc:  # noqa: BLE001
+        raise RuntimeError(f"Android QA frame is not decodable visual evidence: {path}") from exc
+    if all(low == high for low, high in channel_extrema):
+        raise RuntimeError(f"Android QA frame appears blank and is not valid screen evidence: {path}")
 
 
 def encode_frames_to_mp4(*, frame_dir: Path, output_path: Path) -> None:

@@ -3,6 +3,8 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
+from PIL import Image
+
 from scripts.qa_demo_android_recorder import capture_screen_frame
 from scripts.qa_demo_android_recorder import dump_ui_elements
 from scripts.qa_demo_android_recorder import encode_frames_to_mp4
@@ -13,6 +15,7 @@ from scripts.qa_demo_android_recorder import parse_bounds
 from scripts.qa_demo_android_recorder import preferred_adb_device
 from scripts.qa_demo_android_recorder import resolve_launch_activity
 from scripts.qa_demo_android_recorder import validate_mp4_recording
+from scripts.qa_demo_android_recorder import validate_png_frame
 from scripts.qa_demo_android_recorder import _run
 from orchestrator.core.workflow.runner import QaScenario, QaStep
 
@@ -159,11 +162,19 @@ def test_run_bounds_adb_commands_with_actionable_timeout(monkeypatch) -> None:
 
 
 def test_capture_screen_frame_writes_device_screencap(monkeypatch, tmp_path) -> None:
+    source_frame = tmp_path / "source.png"
+    image = Image.new("RGB", (256, 256), color=(255, 255, 255))
+    for x in range(256):
+        for y in range(256):
+            image.putpixel((x, y), ((x * 13 + y * 17) % 256, (x * 7 + y * 19) % 256, (x * 5 + y * 23) % 256))
+    image.save(source_frame)
+    source_payload = source_frame.read_bytes()
+
     def _fake_run_binary(args, **_kwargs):  # noqa: ANN001
         assert args == ["adb", "-s", "device-1", "exec-out", "screencap", "-p"]
 
         class _Result:
-            stdout = b"\x89PNG\r\n\x1a\n" + (b"real-screen" * 128)
+            stdout = source_payload
 
         return _Result()
 
@@ -172,7 +183,30 @@ def test_capture_screen_frame_writes_device_screencap(monkeypatch, tmp_path) -> 
     frame_path = tmp_path / "0000.png"
     capture_screen_frame(device_id="device-1", frame_path=frame_path)
 
-    assert frame_path.read_bytes() == b"\x89PNG\r\n\x1a\n" + (b"real-screen" * 128)
+    assert frame_path.read_bytes() == source_payload
+
+
+def test_validate_png_frame_rejects_blank_screen_evidence(tmp_path) -> None:
+    frame_path = tmp_path / "blank.png"
+    Image.new("RGB", (64, 64), color=(0, 0, 0)).save(frame_path)
+
+    try:
+        validate_png_frame(frame_path)
+    except RuntimeError as exc:
+        assert "blank" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("expected blank frame rejection")
+
+
+def test_validate_png_frame_accepts_visible_screen_evidence(tmp_path) -> None:
+    frame_path = tmp_path / "visible.png"
+    image = Image.new("RGB", (256, 256), color=(255, 255, 255))
+    for x in range(256):
+        for y in range(256):
+            image.putpixel((x, y), ((x * 13 + y * 17) % 256, (x * 7 + y * 19) % 256, (x * 5 + y * 23) % 256))
+    image.save(frame_path)
+
+    validate_png_frame(frame_path)
 
 
 def test_encode_frames_to_mp4_uses_ffmpeg_without_screenrecord(monkeypatch, tmp_path) -> None:
