@@ -11,7 +11,11 @@ from orchestrator.tools.github_app import GitHubAppClient
 
 logger = logging.getLogger(__name__)
 _DEMO_EVIDENCE_SECTION_PATTERN = re.compile(r"^## Demo Evidence\s*$.*?(?=^## |\Z)", re.MULTILINE | re.DOTALL)
-_URL_PATTERN = re.compile(r"https?://\S+")
+_DEMO_EVIDENCE_MARKER = "<!-- master-builder:qa-demo-evidence v1 -->"
+_STRUCTURED_DEMO_EVIDENCE_LINE_PATTERN = re.compile(
+    r"^- .+ \[target=(browser|ios|android|desktop); reference=[^\]]+; object_key=[^\]]+\]: https?://\S+\s*$",
+    re.MULTILINE,
+)
 
 
 @dataclass(frozen=True)
@@ -316,4 +320,5 @@ def _demo_evidence_present(body: str | None) -> bool:
     match = _DEMO_EVIDENCE_SECTION_PATTERN.search(normalized_body)
     if match is None:
         return False
-    return _URL_PATTERN.search(match.group(0)) is not None
+    section = match.group(0)
+    return _DEMO_EVIDENCE_MARKER in section and _STRUCTURED_DEMO_EVIDENCE_LINE_PATTERN.search(section) is not None

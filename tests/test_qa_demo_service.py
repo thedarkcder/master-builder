@@ -11,6 +11,7 @@ from unittest.mock import MagicMock, patch
 from orchestrator.core.worker.capability_normalization import WorkerCapability
 from orchestrator.core.qa.demo_service import (
     DEMO_EVIDENCE_HEADING,
+    DEMO_EVIDENCE_MARKER,
     DemoCaptureTarget,
     ensure_release_ready_for_qa,
     ensure_capture_target_runtime_ready,
@@ -373,6 +374,8 @@ def test_upsert_demo_evidence_section_replaces_existing_section() -> None:
         ],
     )
     assert DEMO_EVIDENCE_HEADING in updated
+    assert DEMO_EVIDENCE_MARKER in updated
+    assert "[target=browser; reference=https://preview.example; object_key=qa/happy.webm]" in updated
     assert "old" not in updated
     assert "https://demo.example/happy.webm" in updated
     assert "## How To Test" in updated
