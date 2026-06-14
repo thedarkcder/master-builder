@@ -95,6 +95,15 @@ def qa_demo_max_attempts(settings) -> int:  # noqa: ANN001
     return max(1, configured)
 
 
+def qa_demo_recorder_process_timeout_seconds(settings) -> float:  # noqa: ANN001
+    try:
+        raw_value = getattr(settings, "qa_demo_recorder_process_timeout_seconds", 900.0)
+        configured = 900.0 if raw_value is None else float(raw_value)
+    except (TypeError, ValueError):
+        configured = 900.0
+    return max(1.0, configured)
+
+
 def storage_config_from_settings(settings) -> DemoArtifactStorageConfig:  # noqa: ANN001
     endpoint = str(getattr(settings, "qa_demo_artifact_endpoint", "") or "").strip()
     access_key = str(getattr(settings, "qa_demo_artifact_access_key", "") or "").strip()
@@ -815,6 +824,7 @@ def _invoke_json_recorder(
     payload: dict[str, object],
     env: dict[str, str] | None,
     capture_target: DemoCaptureTarget,
+    timeout_seconds: float,
 ) -> list[LocalQaRecording]:
     with TemporaryDirectory(prefix=f"qa-demo-{capture_target.capture_target}-") as tmp_dir:
         input_path = Path(tmp_dir) / "input.json"
@@ -828,7 +838,12 @@ def _invoke_json_recorder(
                 text=True,
                 capture_output=True,
                 env=env,
+                timeout=timeout_seconds,
             )
+        except subprocess.TimeoutExpired as exc:
+            raise RuntimeError(
+                f"QA demo recorder command timed out after {timeout_seconds:.1f} seconds: {' '.join(command)}"
+            ) from exc
         except subprocess.CalledProcessError as exc:
             stderr = str(exc.stderr or "").strip()
             stdout = str(exc.stdout or "").strip()
@@ -1108,6 +1123,7 @@ def record_demo_scenarios(
     if not qa_result.scenarios:
         raise RuntimeError("QA demo recording requires at least one scenario")
     _validate_executable_qa_scenarios(qa_result)
+    recorder_timeout_seconds = qa_demo_recorder_process_timeout_seconds(settings)
 
     scenarios_by_target: dict[str, list] = {}
     for scenario in qa_result.scenarios:
@@ -1158,12 +1174,18 @@ def record_demo_scenarios(
                 raise RuntimeError(f"QA demo recorder script is missing: {script_path}")
             playwright_module_dir = str(getattr(settings, "qa_demo_playwright_module_dir", "") or "").strip()
             if not playwright_module_dir:
-                playwright_module_dir = subprocess.run(
-                    ["npm", "root", "-g"],
-                    capture_output=True,
-                    check=True,
-                    text=True,
-                ).stdout.strip()
+                try:
+                    playwright_module_dir = subprocess.run(
+                        ["npm", "root", "-g"],
+                        capture_output=True,
+                        check=True,
+                        text=True,
+                        timeout=recorder_timeout_seconds,
+                    ).stdout.strip()
+                except subprocess.TimeoutExpired as exc:
+                    raise RuntimeError(
+                        f"QA demo Playwright module lookup timed out after {recorder_timeout_seconds:.1f} seconds"
+                    ) from exc
             env = dict(os.environ)
             env["NODE_PATH"] = playwright_module_dir
             env["QA_DEMO_PLAYWRIGHT_MODULE_DIR"] = playwright_module_dir
@@ -1173,6 +1195,7 @@ def record_demo_scenarios(
                 payload=payload,
                 env=env,
                 capture_target=capture_target,
+                timeout_seconds=recorder_timeout_seconds,
             )
         else:
             recordings = _invoke_json_recorder(
@@ -1180,6 +1203,7 @@ def record_demo_scenarios(
                 payload=payload,
                 env=dict(os.environ),
                 capture_target=capture_target,
+                timeout_seconds=recorder_timeout_seconds,
             )
         _validate_recordings_cover_scenarios(
             capture_target_name=capture_target_name,

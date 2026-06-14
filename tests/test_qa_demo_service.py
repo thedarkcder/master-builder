@@ -22,6 +22,7 @@ from orchestrator.core.qa.demo_service import (
     planned_capture_target_constraints_payload,
     qa_demo_max_attempts,
     qa_demo_recording_enabled,
+    qa_demo_recorder_process_timeout_seconds,
     record_demo_scenarios,
     remaining_capture_targets,
     required_capture_targets,
@@ -145,6 +146,12 @@ def test_qa_demo_max_attempts_defaults_and_caps() -> None:
     assert qa_demo_max_attempts(SimpleNamespace()) == 3
     assert qa_demo_max_attempts(SimpleNamespace(qa_demo_max_attempts=0)) == 1
     assert qa_demo_max_attempts(SimpleNamespace(qa_demo_max_attempts="5")) == 5
+
+
+def test_qa_demo_recorder_process_timeout_defaults_and_caps() -> None:
+    assert qa_demo_recorder_process_timeout_seconds(SimpleNamespace()) == 900.0
+    assert qa_demo_recorder_process_timeout_seconds(SimpleNamespace(qa_demo_recorder_process_timeout_seconds=0)) == 1.0
+    assert qa_demo_recorder_process_timeout_seconds(SimpleNamespace(qa_demo_recorder_process_timeout_seconds="123.5")) == 123.5
 
 
 def test_storage_config_from_settings_requires_complete_configuration() -> None:
@@ -604,10 +611,10 @@ def test_upsert_demo_evidence_section_includes_required_recording_counts() -> No
 
 
 def test_record_demo_scenarios_passes_explicit_playwright_module_dir() -> None:
-    commands: list[tuple[list[str], dict[str, str]]] = []
+    commands: list[tuple[list[str], dict[str, str], float | None]] = []
 
     def _run(cmd, **kwargs):  # noqa: ANN001
-        commands.append((list(cmd), dict(kwargs.get("env") or {})))
+        commands.append((list(cmd), dict(kwargs.get("env") or {}), kwargs.get("timeout")))
         if cmd[0] != "node":
             raise AssertionError(f"unexpected command: {cmd}")
         output_path = Path(cmd[3])
@@ -624,7 +631,10 @@ def test_record_demo_scenarios_passes_explicit_playwright_module_dir() -> None:
 
     with patch("orchestrator.core.qa.demo_service.subprocess.run", side_effect=_run):
         recordings = record_demo_scenarios(
-            settings=SimpleNamespace(qa_demo_playwright_module_dir="/tmp/playwright-modules"),
+            settings=SimpleNamespace(
+                qa_demo_playwright_module_dir="/tmp/playwright-modules",
+                qa_demo_recorder_process_timeout_seconds=42,
+            ),
             request=_request(),
             available_capture_targets=_browser_capture_targets(),
             qa_result=QaResult(
@@ -642,6 +652,64 @@ def test_record_demo_scenarios_passes_explicit_playwright_module_dir() -> None:
     assert len(recordings) == 1
     assert Path(recordings[0].path).exists()
     assert commands[0][1]["QA_DEMO_PLAYWRIGHT_MODULE_DIR"] == "/tmp/playwright-modules"
+    assert commands[0][2] == 42.0
+
+
+def test_record_demo_scenarios_fails_when_recorder_process_times_out() -> None:
+    with patch(
+        "orchestrator.core.qa.demo_service.subprocess.run",
+        side_effect=subprocess.TimeoutExpired(["node", "/tmp/qa_demo_recorder.mjs"], timeout=2),
+    ):
+        try:
+            record_demo_scenarios(
+                settings=SimpleNamespace(
+                    qa_demo_playwright_module_dir="/tmp/playwright-modules",
+                    qa_demo_recorder_process_timeout_seconds=2,
+                ),
+                request=_request(),
+                available_capture_targets=_browser_capture_targets(),
+                qa_result=QaResult(
+                    summary=["Recorded demos"],
+                    scenarios=[
+                        QaScenario(
+                            name="Happy path",
+                            objective="Show feature works",
+                            steps=[QaStep(action="assert_visible", selector="#feature")],
+                        )
+                    ],
+                ),
+            )
+        except RuntimeError as exc:
+            assert "QA demo recorder command timed out after 2.0 seconds" in str(exc)
+        else:  # pragma: no cover
+            raise AssertionError("expected recorder timeout to fail QA demo recording")
+
+
+def test_record_demo_scenarios_fails_when_playwright_module_lookup_times_out() -> None:
+    with patch(
+        "orchestrator.core.qa.demo_service.subprocess.run",
+        side_effect=subprocess.TimeoutExpired(["npm", "root", "-g"], timeout=3),
+    ):
+        try:
+            record_demo_scenarios(
+                settings=SimpleNamespace(qa_demo_recorder_process_timeout_seconds=3),
+                request=_request(),
+                available_capture_targets=_browser_capture_targets(),
+                qa_result=QaResult(
+                    summary=["Recorded demos"],
+                    scenarios=[
+                        QaScenario(
+                            name="Happy path",
+                            objective="Show feature works",
+                            steps=[QaStep(action="assert_visible", selector="#feature")],
+                        )
+                    ],
+                ),
+            )
+        except RuntimeError as exc:
+            assert "QA demo Playwright module lookup timed out after 3.0 seconds" in str(exc)
+        else:  # pragma: no cover
+            raise AssertionError("expected Playwright module lookup timeout to fail QA demo recording")
 
 
 def test_record_demo_scenarios_uses_configured_desktop_recorder() -> None:
