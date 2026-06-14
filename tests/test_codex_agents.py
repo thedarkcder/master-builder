@@ -198,7 +198,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
         self.assertEqual(plan.resolved_prerequisites, ["Supabase redirect URI approved"])
         self.assertEqual(plan.unresolved_prerequisites, ["Provision staging Service ID"])
 
-    def test_pm_rejects_mobile_demo_requirements_on_linux_workers(self) -> None:
+    def test_pm_accepts_mixed_platform_demo_requirements_without_forcing_execution_worker(self) -> None:
         runtime = CodexRuntime(
             model="gpt-5-codex",
             max_output_tokens=1200,
@@ -207,7 +207,9 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
                 [
                     (
                         '{"outcome":"continue","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":[],"demo_requirements":'
-                        '[{"title":"Native demo","acceptance_criterion":"ac1","capture_target":"ios"}],'
+                        '[{"title":"Browser demo","acceptance_criterion":"ac1","capture_target":"browser"},'
+                        '{"title":"iOS demo","acceptance_criterion":"ac1","capture_target":"ios"},'
+                        '{"title":"Android demo","acceptance_criterion":"ac1","capture_target":"android"}],'
                         '"next_stage":"dev","execution_worker_capability":"linux"}'
                     ),
                 ]
@@ -216,8 +218,13 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
         agents = CodexWorkflowAgents(runtime=runtime)
 
         with patch("orchestrator.core.runtime.agents.render_prompt", side_effect=lambda template_name, **_: template_name):
-            with self.assertRaises(CodexRuntimeError):
-                agents.pm(self._request(), 1, None, [], None, None, None, self._CAPTURE_TARGET_CONSTRAINTS_JSON)
+            plan = agents.pm(self._request(), 1, None, [], None, None, None, self._CAPTURE_TARGET_CONSTRAINTS_JSON)
+
+        self.assertEqual(plan.execution_worker_capability, "linux")
+        self.assertEqual(
+            [requirement.capture_target for requirement in plan.demo_requirements],
+            ["browser", "ios", "android"],
+        )
 
     def test_pm_rejects_unavailable_desktop_demo_requirements(self) -> None:
         runtime = CodexRuntime(
@@ -240,7 +247,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             with self.assertRaisesRegex(CodexRuntimeError, "selected unavailable capture target 'desktop'"):
                 agents.pm(self._request(), 1, None, [], None, None, None, self._CAPTURE_TARGET_CONSTRAINTS_JSON)
 
-    def test_pm_rejects_desktop_demo_requirements_when_worker_platform_mismatches(self) -> None:
+    def test_pm_accepts_desktop_demo_requirements_without_forcing_execution_worker(self) -> None:
         constraints = (
             '[{"capture_target":"desktop","provider_available":true,"required_worker_platform":"macos",'
             '"availability_reason":"Desktop capture uses the configured desktop recorder command."}]'
@@ -262,8 +269,10 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
         agents = CodexWorkflowAgents(runtime=runtime)
 
         with patch("orchestrator.core.runtime.agents.render_prompt", side_effect=lambda template_name, **_: template_name):
-            with self.assertRaisesRegex(CodexRuntimeError, "must choose macos execution_worker_capability when desktop demos are required"):
-                agents.pm(self._request(), 1, None, [], None, None, None, constraints)
+            plan = agents.pm(self._request(), 1, None, [], None, None, None, constraints)
+
+        self.assertEqual(plan.execution_worker_capability, "linux")
+        self.assertEqual(plan.demo_requirements[0].capture_target, "desktop")
 
     def test_pm_prompt_includes_project_metadata_in_context(self) -> None:
         runtime = CodexRuntime(

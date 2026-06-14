@@ -68,9 +68,8 @@ Required actions:
    - Use "test" only when prior dev output is sufficient and we should retest/validate.
 7. Choose execution worker capability for implementation stages (dev/test/review):
    - Output "macos" when any required implementation or verification step needs Apple-only tooling.
-   - Output "macos" when any `demo_requirement.capture_target` is `ios`.
-   - Output "linux" when any `demo_requirement.capture_target` is `android` and no macOS-only implementation or verification work is required.
-   - Output the constraint's `required_worker_platform` when `QA capture target constraints` requires one for any selected `demo_requirement.capture_target`.
+   - Do not choose implementation worker capability solely from `demo_requirement.capture_target`.
+   - Use each selected capture target's `required_worker_platform` as QA-stage routing metadata, not as the dev/test/review execution worker unless the implementation or verification work itself needs that platform.
    - Treat these as mandatory macos signals: iOS, iPadOS, Xcode, xcodebuild, XCTest, XCUITest, Simulator, simctl, SwiftUI app test execution, Apple Sign In validation on simulator/device.
    - Never output "linux" when mandatory macos signals exist, even if the current worker is linux; choose "macos" and let orchestration requeue.
    - Output "linux" only when all required implementation and verification work can run without macOS-only tooling.

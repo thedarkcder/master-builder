@@ -76,10 +76,6 @@ def encode_pm_plan(plan: PmPlan) -> dict:
         raise ValueError("PM plan requeue fields are only valid for requeue outcome")
     if outcome == "requeue" and (requeue_target is None or requeue_reason is None):
         raise ValueError("Requeue PM plan must include requeue_target and requeue_reason")
-    if execution_worker_capability != "macos" and any(
-        item.get("capture_target") == "ios" for item in demo_requirements
-    ):
-        raise ValueError("PM plan iOS demo requirements require macos execution_worker_capability")
     payload["execution_worker_capability"] = execution_worker_capability
     payload["plan_steps"] = plan_steps
     payload["acceptance_criteria"] = acceptance_criteria
@@ -222,11 +218,6 @@ def decode_pm_plan_payload(payload: dict | None) -> PmPlan | None:
         return None
     if outcome != "requeue" and (requeue_target is not None or requeue_reason is not None):
         return None
-    if execution_worker_capability != "macos" and any(
-        requirement.capture_target == "ios" for requirement in demo_requirements
-    ):
-        return None
-
     return PmPlan(
         plan_steps=plan_steps,
         acceptance_criteria=acceptance_criteria,

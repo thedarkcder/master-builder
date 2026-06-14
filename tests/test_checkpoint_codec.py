@@ -87,7 +87,7 @@ class CheckpointCodecTests(unittest.TestCase):
 
         self.assertIsNone(decode_pm_plan_payload(payload))
 
-    def test_decode_pm_plan_payload_rejects_mobile_demo_requirements_without_macos_worker(self) -> None:
+    def test_decode_pm_plan_payload_accepts_ios_demo_requirements_without_forcing_execution_worker(self) -> None:
         payload = {
             "plan_steps": ["step-1"],
             "acceptance_criteria": ["ac-1"],
@@ -97,14 +97,22 @@ class CheckpointCodecTests(unittest.TestCase):
                     "title": "Record iOS proof",
                     "acceptance_criterion": "Native flow works",
                     "capture_target": "ios",
+                    "variants": [],
                 }
             ],
             "outcome": "continue",
             "next_stage": "dev",
             "execution_worker_capability": "linux",
+            "resolved_prerequisites": [],
+            "unresolved_prerequisites": [],
         }
 
-        self.assertIsNone(decode_pm_plan_payload(payload))
+        plan = decode_pm_plan_payload(payload)
+
+        self.assertIsNotNone(plan)
+        assert plan is not None
+        self.assertEqual(plan.execution_worker_capability, "linux")
+        self.assertEqual(plan.demo_requirements[0].capture_target, "ios")
 
     def test_decode_pm_plan_payload_rejects_empty_required_lists(self) -> None:
         payload = {
@@ -173,7 +181,7 @@ class CheckpointCodecTests(unittest.TestCase):
         with self.assertRaises(ValueError):
             encode_pm_plan(plan)
 
-    def test_encode_pm_plan_rejects_mobile_demo_requirements_without_macos_worker(self) -> None:
+    def test_encode_pm_plan_accepts_ios_demo_requirements_without_forcing_execution_worker(self) -> None:
         plan = PmPlan(
             plan_steps=["step-1"],
             acceptance_criteria=["ac-1"],
@@ -190,8 +198,10 @@ class CheckpointCodecTests(unittest.TestCase):
             execution_worker_capability="linux",
         )
 
-        with self.assertRaises(ValueError):
-            encode_pm_plan(plan)
+        payload = encode_pm_plan(plan)
+
+        self.assertEqual(payload["execution_worker_capability"], "linux")
+        self.assertEqual(payload["demo_requirements"][0]["capture_target"], "ios")
 
     def test_decode_stage_result_payloads_reject_blocked_without_blocker_message(self) -> None:
         self.assertIsNone(
