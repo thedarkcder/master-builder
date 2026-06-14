@@ -110,6 +110,7 @@ def _deps() -> SimpleNamespace:
             plan_posted_update_fn=None,
             pr_opened_update_fn=None,
             run_failed_update_fn=None,
+            run_requeued_capability_update_fn=None,
             run_requeued_stale_snapshot_update_fn=None,
             send_jira_message_fn=MagicMock(),
         ),
@@ -270,6 +271,97 @@ def test_complete_blocks_success_when_qa_demo_stage_cannot_finish() -> None:
     assert checkpoint.status == "blocked"
     assert finalizer_calls["workflow_result"].outcome == "blocked"
     assert "upload failed after retries" in finalizer_calls["workflow_result"].blocker_message
+
+
+def test_complete_requeues_when_qa_demo_stage_needs_remaining_worker_platform() -> None:
+    session = SimpleNamespace(refresh=lambda _run: None)
+    deps = _deps()
+    plan = PmPlan(
+        plan_steps=["Implement feature"],
+        acceptance_criteria=["Feature works everywhere"],
+        risks=["Low risk"],
+        demo_requirements=[
+            DemoRequirement(title="Browser walkthrough", acceptance_criterion="Feature works everywhere", capture_target="browser"),
+            DemoRequirement(title="iOS walkthrough", acceptance_criterion="Feature works everywhere", capture_target="ios"),
+        ],
+    )
+    snapshot = ExecutionSnapshot.empty()
+    snapshot.apply_stage_checkpoint(
+        WorkflowStageCheckpoint(stage="pm", attempt=1, status="completed", summary="PM ready.", plan=plan)
+    )
+    snapshot.apply_stage_checkpoint(
+        WorkflowStageCheckpoint(
+            stage="dev",
+            attempt=1,
+            status="completed",
+            summary="Dev ready.",
+            dev_result=DevResult(change_summary=["Implemented feature"], pr_url="https://github.com/acme/repo/pull/8"),
+        )
+    )
+    snapshot.apply_stage_checkpoint(
+        WorkflowStageCheckpoint(
+            stage="test",
+            attempt=1,
+            status="completed",
+            summary="Tests ready.",
+            test_result=TestResult(guidance=["pytest -q"]),
+        )
+    )
+    snapshot.apply_stage_checkpoint(
+        WorkflowStageCheckpoint(
+            stage="review",
+            attempt=1,
+            status="completed",
+            summary="Review ready.",
+            review_result=ReviewResult(summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"),
+        )
+    )
+    previous_qa = QaResult(
+        summary=["Recorded browser proof"],
+        scenarios=[],
+        recordings=[
+            QaRecording(
+                name="Browser walkthrough",
+                artifact_url="https://cdn.example/qa-demo-1.webm",
+                object_key="tenant-1/project-1/run-1/qa-demo-1.webm",
+                capture_target="browser",
+                capture_reference="https://preview.example",
+            )
+        ],
+        outcome="requeue",
+        feedback="Still requires iOS",
+    )
+    snapshot.apply_stage_checkpoint(
+        WorkflowStageCheckpoint(stage="qa", attempt=1, status="requeue", summary="Still requires iOS", qa_result=previous_qa)
+    )
+    prepared = _prepared(snapshot.dump(), effective_policy={"qa_demo_recording_enabled": True})
+    workflow_result = replace(_workflow_result(), plan=plan)
+    qa_result = replace(previous_qa, feedback="QA demo recording still requires capture target(s): ios")
+
+    with (
+        patch(
+            "orchestrator.core.worker.run_outcome_policy.create_run_preview_deployment",
+            return_value=SimpleNamespace(created=False, reason="existing", release=SimpleNamespace(service_urls=[])),
+        ),
+        patch("orchestrator.core.worker.run_outcome_policy.execute_qa_demo_stage", return_value=qa_result) as qa_mock,
+    ):
+        RunOutcomePolicy(
+            session=session,
+            settings=SimpleNamespace(project_repo_checkout_base_dir="/tmp/workdirs"),
+            deps=deps,
+            cleanup_run_workspaces_safe_fn=MagicMock(),
+        ).complete(
+            prepared=prepared,
+            workflow_result=workflow_result,
+            execution_context={"execution_branch": "run/MAB-400/run-1"},
+        )
+
+    checkpoint = deps.execution.persist_stage_checkpoint_fn.call_args.kwargs["checkpoint"]
+    assert checkpoint.stage == "qa"
+    assert checkpoint.status == "requeue"
+    assert qa_mock.call_args.kwargs["previous_qa_result"] == previous_qa
+    deps.execution.requeue_workflow_result_for_capability_fn.assert_called_once()
+    assert deps.execution.requeue_workflow_result_for_capability_fn.call_args.kwargs["required_worker_capability"] == "macos"
 
 
 def test_complete_creates_preview_release_for_ios_only_demo_requirements() -> None:

@@ -543,6 +543,42 @@ def browser_capture_required(plan: PmPlan) -> bool:
     return "browser" in required_capture_targets(plan)
 
 
+def recorded_capture_targets(recordings: list[QaRecording] | tuple[QaRecording, ...]) -> tuple[str, ...]:
+    ordered: list[str] = []
+    for recording in recordings:
+        capture_target = str(recording.capture_target or "").strip()
+        if capture_target and capture_target not in ordered:
+            ordered.append(capture_target)
+    return tuple(ordered)
+
+
+def remaining_capture_targets(plan: PmPlan, recordings: list[QaRecording] | tuple[QaRecording, ...]) -> tuple[str, ...]:
+    recorded = set(recorded_capture_targets(recordings))
+    return tuple(target for target in required_capture_targets(plan) if target not in recorded)
+
+
+def next_required_qa_demo_worker_capability(
+    *,
+    settings,  # noqa: ANN001
+    plan: PmPlan,
+    recordings: list[QaRecording] | tuple[QaRecording, ...],
+):
+    constraints = planned_capture_target_constraints(settings=settings)
+    for target_name in remaining_capture_targets(plan, recordings):
+        required_platform = constraints.get(target_name).required_worker_platform if target_name in constraints else None
+        parsed = parse_worker_capability(required_platform)
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def _capture_target_runs_on_worker(*, capture_target: DemoCaptureTarget, request: WorkflowRequest) -> bool:
+    required_platform = str(capture_target.required_worker_platform or "").strip()
+    if not required_platform:
+        return True
+    return request.current_worker_capability.value == required_platform
+
+
 def build_demo_evidence_section(recordings: list[QaRecording]) -> str:
     lines = [DEMO_EVIDENCE_HEADING]
     for recording in recordings:
@@ -843,10 +879,21 @@ def execute_qa_demo_stage(
     test_result: TestResult,
     review_result: ReviewResult,
     preview_release,
+    previous_qa_result: QaResult | None = None,
 ) -> QaResult:
     required_targets = required_capture_targets(plan)
     if not required_targets:
         raise RuntimeError("QA demo recording requires PM demo requirements with explicit capture targets")
+    previous_recordings = list(previous_qa_result.recordings if previous_qa_result is not None else [])
+    previous_scenarios = list(previous_qa_result.scenarios if previous_qa_result is not None else [])
+    remaining_targets = remaining_capture_targets(plan, previous_recordings)
+    if not remaining_targets:
+        return QaResult(
+            summary=[f"QA demo recording already has proof for required target(s): {', '.join(required_targets)}."],
+            scenarios=previous_scenarios,
+            recordings=previous_recordings,
+            outcome="continue",
+        )
     ensure_release_ready_for_qa(
         preview_release,
         required_service_kinds=_release_service_kinds(preview_release),
@@ -856,33 +903,37 @@ def execute_qa_demo_stage(
     available_capture_targets = resolve_available_capture_targets(settings=settings, preview_release=preview_release)
     if not available_capture_targets:
         raise RuntimeError("QA demo recording requires at least one configured capture target")
-    missing_targets = [target for target in required_targets if target not in available_capture_targets]
+    missing_targets = [target for target in remaining_targets if target not in available_capture_targets]
     if missing_targets:
         raise RuntimeError(
             "QA demo recording requires unavailable capture target(s): " + ", ".join(sorted(missing_targets))
         )
-    incompatible_targets = [
-        target.capture_target
-        for target in available_capture_targets.values()
-        if target.capture_target in required_targets
-        and target.required_worker_platform is not None
-        and request.current_worker_capability.value != target.required_worker_platform
-    ]
-    if incompatible_targets:
-        raise RuntimeError(
-            "QA demo recording requires worker platform "
-            f"{available_capture_targets[incompatible_targets[0]].required_worker_platform} "
-            f"for capture target(s): {', '.join(sorted(incompatible_targets))}"
-        )
-    required_available_capture_targets = {
+    remaining_available_capture_targets = {
         target_name: available_capture_targets[target_name]
-        for target_name in required_targets
+        for target_name in remaining_targets
     }
-    for capture_target in required_available_capture_targets.values():
+    current_worker_capture_targets = {
+        target_name: target
+        for target_name, target in remaining_available_capture_targets.items()
+        if _capture_target_runs_on_worker(capture_target=target, request=request)
+    }
+    if not current_worker_capture_targets:
+        message = (
+            "QA demo recording requires another worker platform for remaining capture target(s): "
+            + ", ".join(remaining_targets)
+        )
+        return QaResult(
+            summary=[message],
+            scenarios=previous_scenarios,
+            recordings=previous_recordings,
+            outcome="requeue",
+            feedback=message,
+        )
+    for capture_target in current_worker_capture_targets.values():
         ensure_capture_target_runtime_ready(capture_target)
     browser_capture_reference = (
-        required_available_capture_targets.get("browser").capture_reference
-        if "browser" in required_available_capture_targets
+        current_worker_capture_targets.get("browser").capture_reference
+        if "browser" in current_worker_capture_targets
         else ""
     )
     runtime = build_codex_runtime(session=session, settings=settings)
@@ -917,7 +968,7 @@ def execute_qa_demo_stage(
         test_result=test_result,
         review_result=review_result,
         browser_capture_reference=browser_capture_reference,
-        available_capture_targets_json=json.dumps(_available_capture_targets_payload(required_available_capture_targets)),
+        available_capture_targets_json=json.dumps(_available_capture_targets_payload(current_worker_capture_targets)),
         attempt=request.attempt_number,
     )
     if qa_result.outcome != "continue":
@@ -932,13 +983,13 @@ def execute_qa_demo_stage(
             local_recordings = record_demo_scenarios(
                 settings=settings,
                 request=request,
-                available_capture_targets=available_capture_targets,
+                available_capture_targets=current_worker_capture_targets,
                 qa_result=qa_result,
             )
             uploaded: list[QaRecording] = []
             for index, recording in enumerate(local_recordings, start=1):
                 suffix = Path(recording.path).suffix.lower()
-                object_key = f"{tenant.tenant_id}/{project.project_id}/{run.run_id}/qa-demo-{index}{suffix}"
+                object_key = f"{tenant.tenant_id}/{project.project_id}/{run.run_id}/qa-demo-{len(previous_recordings) + index}{suffix}"
                 artifact_url = upload_recording(
                     storage=storage,
                     local_path=recording.path,
@@ -958,7 +1009,24 @@ def execute_qa_demo_stage(
                         capture_reference=recording.capture_reference,
                     )
                 )
-            return replace(qa_result, recordings=uploaded)
+            combined_recordings = [*previous_recordings, *uploaded]
+            combined_scenarios = [*previous_scenarios, *qa_result.scenarios]
+            still_remaining = remaining_capture_targets(plan, combined_recordings)
+            if still_remaining:
+                message = (
+                    "QA demo recording produced proof for current worker target(s) but still requires capture target(s): "
+                    + ", ".join(still_remaining)
+                )
+                return replace(
+                    qa_result,
+                    summary=[*list(qa_result.summary or []), message],
+                    scenarios=combined_scenarios,
+                    recordings=combined_recordings,
+                    outcome="requeue",
+                    feedback=message,
+                    blocker_message=None,
+                )
+            return replace(qa_result, scenarios=combined_scenarios, recordings=combined_recordings)
         except Exception as exc:  # noqa: BLE001
             last_error = exc
             if attempt >= max_attempts:
