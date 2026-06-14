@@ -40,6 +40,7 @@ DEMO_EVIDENCE_MARKER = "<!-- master-builder:qa-demo-evidence v1 -->"
 _TRANSIENT_NATIVE_SELECTORS = frozenset({"id=splash_screen", "splash_screen"})
 _NATIVE_CAPTURE_TARGETS = frozenset({"ios", "android", "desktop"})
 _RELEASE_SERVICE_READY_STATUSES = frozenset({401, 403, 405})
+_QA_PROOF_STEP_ACTIONS = frozenset({"assert_visible", "assert_text", "wait_for_text", "wait_for_url"})
 
 
 @dataclass(frozen=True)
@@ -804,6 +805,20 @@ def _validate_native_scenarios(qa_result: QaResult) -> QaResult:
     return replace(qa_result, scenarios=normalized_scenarios)
 
 
+def _validate_executable_qa_scenarios(qa_result: QaResult) -> None:
+    for scenario in qa_result.scenarios:
+        scenario_name = str(scenario.name or "").strip() or "<unnamed>"
+        capture_target = str(scenario.capture_target or "").strip() or "<unknown>"
+        if not scenario.steps:
+            raise RuntimeError(
+                f"QA demo scenario '{scenario_name}' for {capture_target} requires executable steps"
+            )
+        if not any(step.action in _QA_PROOF_STEP_ACTIONS for step in scenario.steps):
+            raise RuntimeError(
+                f"QA demo scenario '{scenario_name}' for {capture_target} requires at least one proof assertion step"
+            )
+
+
 def _validate_qa_scenario_coverage(
     *,
     plan: PmPlan,
@@ -920,6 +935,7 @@ def record_demo_scenarios(
 ) -> list[LocalQaRecording]:
     if not qa_result.scenarios:
         raise RuntimeError("QA demo recording requires at least one scenario")
+    _validate_executable_qa_scenarios(qa_result)
 
     scenarios_by_target: dict[str, list] = {}
     for scenario in qa_result.scenarios:
@@ -1136,6 +1152,7 @@ def execute_qa_demo_stage(
     if qa_result.outcome != "continue":
         return qa_result
     qa_result = _validate_native_scenarios(qa_result)
+    _validate_executable_qa_scenarios(qa_result)
     _validate_qa_scenario_coverage(
         plan=plan,
         qa_result=qa_result,

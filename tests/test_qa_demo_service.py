@@ -84,6 +84,10 @@ def _browser_capture_targets() -> dict[str, DemoCaptureTarget]:
     }
 
 
+def _proof_steps(selector: str = "text=Feature") -> list[QaStep]:
+    return [QaStep(action="assert_visible", selector=selector)]
+
+
 def _fake_webm_payload() -> bytes:
     return b"\x1a\x45\xdf\xa3" + (b"webm-video-evidence" * 128)
 
@@ -686,6 +690,61 @@ def test_record_demo_scenarios_rejects_duplicate_scenario_names_before_recording
             assert "QA demo scenarios for browser must have unique names: Happy path" in str(exc)
         else:  # pragma: no cover
             raise AssertionError("expected duplicate scenario names to block")
+
+    run_mock.assert_not_called()
+
+
+def test_record_demo_scenarios_rejects_scenario_without_executable_steps() -> None:
+    with patch("orchestrator.core.qa.demo_service.subprocess.run") as run_mock:
+        try:
+            record_demo_scenarios(
+                settings=SimpleNamespace(qa_demo_playwright_module_dir="/tmp/playwright-modules"),
+                request=_request(),
+                available_capture_targets=_browser_capture_targets(),
+                qa_result=QaResult(
+                    summary=["Recorded demos"],
+                    scenarios=[
+                        QaScenario(
+                            name="Passive page load",
+                            objective="Only opens the page",
+                            steps=[],
+                        )
+                    ],
+                ),
+            )
+        except RuntimeError as exc:
+            assert "requires executable steps" in str(exc)
+        else:  # pragma: no cover
+            raise AssertionError("expected no-step scenario to block before recording")
+
+    run_mock.assert_not_called()
+
+
+def test_record_demo_scenarios_rejects_scenario_without_proof_step() -> None:
+    with patch("orchestrator.core.qa.demo_service.subprocess.run") as run_mock:
+        try:
+            record_demo_scenarios(
+                settings=SimpleNamespace(qa_demo_playwright_module_dir="/tmp/playwright-modules"),
+                request=_request(),
+                available_capture_targets=_browser_capture_targets(),
+                qa_result=QaResult(
+                    summary=["Recorded demos"],
+                    scenarios=[
+                        QaScenario(
+                            name="Click only",
+                            objective="Clicks without proving an outcome",
+                            steps=[
+                                QaStep(action="goto", value="/"),
+                                QaStep(action="click", selector="#feature"),
+                            ],
+                        )
+                    ],
+                ),
+            )
+        except RuntimeError as exc:
+            assert "requires at least one proof assertion step" in str(exc)
+        else:  # pragma: no cover
+            raise AssertionError("expected no-proof scenario to block before recording")
 
     run_mock.assert_not_called()
 
@@ -1313,8 +1372,18 @@ def test_execute_qa_demo_stage_records_current_worker_targets_then_requeues_for_
             return_value=QaResult(
                 summary=["Recorded current worker demos"],
                 scenarios=[
-                    QaScenario(name="Browser walkthrough", objective="Show browser", capture_target="browser"),
-                    QaScenario(name="Android walkthrough", objective="Show Android", capture_target="android"),
+                    QaScenario(
+                        name="Browser walkthrough",
+                        objective="Show browser",
+                        capture_target="browser",
+                        steps=_proof_steps("text=Feature"),
+                    ),
+                    QaScenario(
+                        name="Android walkthrough",
+                        objective="Show Android",
+                        capture_target="android",
+                        steps=_proof_steps("text=Ready"),
+                    ),
                 ],
             )
         )
@@ -1406,7 +1475,12 @@ def test_execute_qa_demo_stage_blocks_when_current_worker_target_proof_is_missin
             return_value=QaResult(
                 summary=["Recorded browser only"],
                 scenarios=[
-                    QaScenario(name="Browser walkthrough", objective="Show browser", capture_target="browser"),
+                    QaScenario(
+                        name="Browser walkthrough",
+                        objective="Show browser",
+                        capture_target="browser",
+                        steps=_proof_steps("text=Feature"),
+                    ),
                 ],
             )
         )
@@ -1485,8 +1559,18 @@ def test_execute_qa_demo_stage_completes_remaining_target_with_previous_recordin
     previous_qa = QaResult(
         summary=["Recorded Linux demos"],
         scenarios=[
-            QaScenario(name="Browser walkthrough", objective="Show browser", capture_target="browser"),
-            QaScenario(name="Android walkthrough", objective="Show Android", capture_target="android"),
+            QaScenario(
+                name="Browser walkthrough",
+                objective="Show browser",
+                capture_target="browser",
+                steps=_proof_steps("text=Feature"),
+            ),
+            QaScenario(
+                name="Android walkthrough",
+                objective="Show Android",
+                capture_target="android",
+                steps=_proof_steps("text=Ready"),
+            ),
         ],
         recordings=[
             QaRecording(
@@ -1510,7 +1594,14 @@ def test_execute_qa_demo_stage_completes_remaining_target_with_previous_recordin
         qa=MagicMock(
             return_value=QaResult(
                 summary=["Recorded iOS demo"],
-                scenarios=[QaScenario(name="iOS walkthrough", objective="Show iOS", capture_target="ios")],
+                scenarios=[
+                    QaScenario(
+                        name="iOS walkthrough",
+                        objective="Show iOS",
+                        capture_target="ios",
+                        steps=_proof_steps("text=Ready"),
+                    )
+                ],
             )
         )
     )
