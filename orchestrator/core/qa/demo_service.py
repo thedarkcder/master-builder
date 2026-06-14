@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import shlex
 import subprocess
 import sys
@@ -318,6 +319,19 @@ def _is_builtin_ios_recorder_command(command: tuple[str, ...] | None) -> bool:
     return any(str(part).endswith("qa_demo_mobile_recorder.py") for part in (command or ()))
 
 
+def _required_android_recorder_tool(*, env_var: str | None, default: str) -> str:
+    if env_var is None:
+        return default
+    return str(os.environ.get(env_var) or default).strip()
+
+
+def _ensure_worker_tool_available(*, command: str, purpose: str) -> None:
+    if not command:
+        raise RuntimeError(f"{purpose} command must not be blank")
+    if shutil.which(command) is None:
+        raise RuntimeError(f"{purpose} requires {command} on the worker PATH")
+
+
 def _ready_adb_devices(adb_devices_output: str) -> tuple[str, ...]:
     devices: list[str] = []
     for raw_line in adb_devices_output.splitlines():
@@ -331,6 +345,12 @@ def _ready_adb_devices(adb_devices_output: str) -> tuple[str, ...]:
 
 
 def _ensure_builtin_android_runtime_ready() -> None:
+    for tool in (
+        _required_android_recorder_tool(env_var=None, default="adb"),
+        _required_android_recorder_tool(env_var="QA_DEMO_ANDROID_AAPT", default="aapt"),
+        _required_android_recorder_tool(env_var="QA_DEMO_FFMPEG", default="ffmpeg"),
+    ):
+        _ensure_worker_tool_available(command=tool, purpose="Android QA demo recording")
     try:
         result = subprocess.run(
             ["adb", "devices"],

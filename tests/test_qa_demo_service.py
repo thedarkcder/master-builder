@@ -454,6 +454,7 @@ def test_android_builtin_capture_runtime_requires_ready_adb_device(monkeypatch) 
         recorder_command=(sys.executable, "scripts/qa_demo_android_recorder.py"),
         required_worker_platform="linux",
     )
+    monkeypatch.setattr("orchestrator.core.qa.demo_service.shutil.which", lambda command: f"/usr/bin/{command}")
 
     def _fake_run(args, **_kwargs):  # noqa: ANN001
         assert args == ["adb", "devices"]
@@ -471,6 +472,33 @@ def test_android_builtin_capture_runtime_requires_ready_adb_device(monkeypatch) 
         assert "No available Android emulator/device" in str(exc)
     else:  # pragma: no cover
         raise AssertionError("expected Android capture runtime readiness failure")
+
+
+def test_android_builtin_capture_runtime_requires_recorder_toolchain_before_adb_probe(monkeypatch) -> None:
+    target = DemoCaptureTarget(
+        capture_target="android",
+        capture_reference="android-emulator://configured",
+        recorder_command=(sys.executable, "scripts/qa_demo_android_recorder.py"),
+        required_worker_platform="linux",
+    )
+
+    def _which(command: str) -> str | None:
+        if command == "aapt":
+            return None
+        return f"/usr/bin/{command}"
+
+    adb_probe = MagicMock(side_effect=AssertionError("adb devices should not run when recorder tools are missing"))
+    monkeypatch.setattr("orchestrator.core.qa.demo_service.shutil.which", _which)
+    monkeypatch.setattr("orchestrator.core.qa.demo_service.subprocess.run", adb_probe)
+
+    try:
+        ensure_capture_target_runtime_ready(target)
+    except RuntimeError as exc:
+        assert "Android QA demo recording requires aapt on the worker PATH" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("expected Android recorder toolchain readiness failure")
+
+    adb_probe.assert_not_called()
 
 
 def test_upsert_demo_evidence_section_replaces_existing_section() -> None:
