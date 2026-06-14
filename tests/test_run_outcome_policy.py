@@ -273,6 +273,57 @@ def test_complete_blocks_success_when_qa_demo_stage_cannot_finish() -> None:
     assert "upload failed after retries" in finalizer_calls["workflow_result"].blocker_message
 
 
+def test_complete_blocks_demo_required_success_when_preview_release_is_not_created() -> None:
+    session = SimpleNamespace(refresh=lambda _run: None)
+    deps = _deps()
+    prepared = _prepared(_build_snapshot(), effective_policy={"qa_demo_recording_enabled": True})
+    workflow_result = _workflow_result()
+    finalizer_calls: dict[str, object] = {}
+
+    class _Finalizer:
+        def __init__(self, **_kwargs):
+            pass
+
+        def finalize(self, **kwargs):
+            finalizer_calls.update(kwargs)
+            return SimpleNamespace(
+                run=prepared.run,
+                workflow_result=kwargs["workflow_result"],
+                persisted_status="blocked",
+                last_error=kwargs["workflow_result"].blocker_message,
+                persisted_plan=prepared.run.plan,
+                event_types=(),
+                tail_steps=(),
+            )
+
+    qa_mock = MagicMock()
+    with (
+        patch(
+            "orchestrator.core.worker.run_outcome_policy.create_run_preview_deployment",
+            return_value=SimpleNamespace(created=False, reason="preview_prs_disabled", release=None),
+        ),
+        patch("orchestrator.core.worker.run_outcome_policy.execute_qa_demo_stage", qa_mock),
+        patch("orchestrator.core.worker.run_outcome_policy.WorkflowFinalizer", _Finalizer),
+        patch("orchestrator.core.worker.run_outcome_policy.CompletionTailExecutor") as tail_executor_cls,
+    ):
+        tail_executor_cls.return_value.execute.return_value = None
+        RunOutcomePolicy(
+            session=session,
+            settings=SimpleNamespace(project_repo_checkout_base_dir="/tmp/workdirs"),
+            deps=deps,
+            cleanup_run_workspaces_safe_fn=MagicMock(),
+        ).complete(
+            prepared=prepared,
+            workflow_result=workflow_result,
+            execution_context={"execution_branch": "run/MAB-400/run-1"},
+        )
+
+    qa_mock.assert_not_called()
+    assert finalizer_calls["workflow_result"].outcome == "blocked"
+    assert "preview deployment was not created: preview_prs_disabled" in finalizer_calls["workflow_result"].blocker_message
+    deps.execution.persist_stage_checkpoint_fn.assert_not_called()
+
+
 def test_complete_requeues_when_qa_demo_stage_needs_remaining_worker_platform() -> None:
     session = SimpleNamespace(refresh=lambda _run: None)
     deps = _deps()
