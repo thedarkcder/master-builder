@@ -190,7 +190,16 @@ def test_resolve_available_capture_targets_includes_builtin_ios_and_android_reco
     assert targets["android"].required_worker_platform == "linux"
 
 
-def test_planned_capture_target_constraints_payload_marks_unconfigured_desktop_unavailable() -> None:
+def test_planned_capture_target_constraints_payload_marks_native_targets_available_when_runtime_ready(monkeypatch) -> None:
+    def _fake_run(args, **_kwargs):  # noqa: ANN001
+        if args == ["adb", "devices"]:
+            return SimpleNamespace(stdout="List of devices attached\nemulator-5554\tdevice\n")
+        if args == ["xcrun", "simctl", "list", "devices", "available"]:
+            return SimpleNamespace(stdout="    iPhone 16 (A1B2C3D4-0000-0000-0000-000000000000) (Shutdown)\n")
+        raise AssertionError(f"unexpected command: {args}")
+
+    monkeypatch.setattr("orchestrator.core.qa.demo_service.subprocess.run", _fake_run)
+
     payload = planned_capture_target_constraints_payload(settings=SimpleNamespace())
     by_target = {item["capture_target"]: item for item in payload}
 
@@ -201,6 +210,40 @@ def test_planned_capture_target_constraints_payload_marks_unconfigured_desktop_u
     assert by_target["android"]["required_worker_platform"] == "linux"
     assert by_target["desktop"]["provider_available"] is False
     assert "no desktop recorder command is configured" in str(by_target["desktop"]["availability_reason"])
+
+
+def test_planned_capture_target_constraints_marks_android_unavailable_without_ready_device(monkeypatch) -> None:
+    def _fake_run(args, **_kwargs):  # noqa: ANN001
+        if args == ["adb", "devices"]:
+            return SimpleNamespace(stdout="List of devices attached\nemulator-5554\toffline\n")
+        if args == ["xcrun", "simctl", "list", "devices", "available"]:
+            return SimpleNamespace(stdout="    iPhone 16 (A1B2C3D4-0000-0000-0000-000000000000) (Shutdown)\n")
+        raise AssertionError(f"unexpected command: {args}")
+
+    monkeypatch.setattr("orchestrator.core.qa.demo_service.subprocess.run", _fake_run)
+
+    payload = planned_capture_target_constraints_payload(settings=SimpleNamespace())
+    by_target = {item["capture_target"]: item for item in payload}
+
+    assert by_target["android"]["provider_available"] is False
+    assert "No available Android emulator/device" in str(by_target["android"]["availability_reason"])
+
+
+def test_planned_capture_target_constraints_marks_ios_unavailable_without_simulator(monkeypatch) -> None:
+    def _fake_run(args, **_kwargs):  # noqa: ANN001
+        if args == ["adb", "devices"]:
+            return SimpleNamespace(stdout="List of devices attached\nemulator-5554\tdevice\n")
+        if args == ["xcrun", "simctl", "list", "devices", "available"]:
+            return SimpleNamespace(stdout="== Devices ==\n")
+        raise AssertionError(f"unexpected command: {args}")
+
+    monkeypatch.setattr("orchestrator.core.qa.demo_service.subprocess.run", _fake_run)
+
+    payload = planned_capture_target_constraints_payload(settings=SimpleNamespace())
+    by_target = {item["capture_target"]: item for item in payload}
+
+    assert by_target["ios"]["provider_available"] is False
+    assert "No available iPhone simulator" in str(by_target["ios"]["availability_reason"])
 
 
 def test_ensure_release_ready_for_qa_requires_active_urls_for_required_services() -> None:
@@ -651,6 +694,7 @@ def test_execute_qa_demo_stage_normalizes_native_selectors_before_recording() ->
             return_value="https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-demo-1.mp4",
         ),
         patch("orchestrator.core.qa.demo_service._default_artifact_url_probe", return_value=200),
+        patch("orchestrator.core.qa.demo_service.ensure_capture_target_runtime_ready"),
     ):
         execute_qa_demo_stage(
             session=SimpleNamespace(),
@@ -731,6 +775,7 @@ def test_execute_qa_demo_stage_normalizes_native_wait_for_text_selector_into_val
             return_value="https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-demo-1.mp4",
         ),
         patch("orchestrator.core.qa.demo_service._default_artifact_url_probe", return_value=200),
+        patch("orchestrator.core.qa.demo_service.ensure_capture_target_runtime_ready"),
     ):
         execute_qa_demo_stage(
             session=SimpleNamespace(),
@@ -785,6 +830,7 @@ def test_execute_qa_demo_stage_rejects_transient_native_splash_assertions() -> N
     with (
         patch("orchestrator.core.qa.demo_service.build_codex_runtime"),
         patch("orchestrator.core.qa.demo_service.CodexWorkflowAgents", return_value=fake_agents),
+        patch("orchestrator.core.qa.demo_service.ensure_capture_target_runtime_ready"),
     ):
         try:
             execute_qa_demo_stage(

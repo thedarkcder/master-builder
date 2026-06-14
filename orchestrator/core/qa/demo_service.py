@@ -17,6 +17,7 @@ from orchestrator.core.runtime.agent_runtime_resolver import build_runtime_for_s
 from orchestrator.core.runtime.agents import CodexWorkflowAgents
 from orchestrator.core.runtime.runtime import build_codex_runtime
 from orchestrator.core.runtime.tools import execute_agent_tool
+from orchestrator.core.qa.mobile_xcuitest_recorder import preferred_simulator_udid
 from orchestrator.core.worker.capability_normalization import parse_worker_capability
 from orchestrator.core.workflow.runner import (
     DevResult,
@@ -263,6 +264,10 @@ def _is_builtin_android_recorder_command(command: tuple[str, ...] | None) -> boo
     return any(str(part).endswith("qa_demo_android_recorder.py") for part in (command or ()))
 
 
+def _is_builtin_ios_recorder_command(command: tuple[str, ...] | None) -> bool:
+    return any(str(part).endswith("qa_demo_mobile_recorder.py") for part in (command or ()))
+
+
 def _ready_adb_devices(adb_devices_output: str) -> tuple[str, ...]:
     devices: list[str] = []
     for raw_line in adb_devices_output.splitlines():
@@ -275,11 +280,7 @@ def _ready_adb_devices(adb_devices_output: str) -> tuple[str, ...]:
     return tuple(devices)
 
 
-def ensure_capture_target_runtime_ready(capture_target: DemoCaptureTarget) -> None:
-    if capture_target.capture_target != "android" or not _is_builtin_android_recorder_command(
-        capture_target.recorder_command
-    ):
-        return
+def _ensure_builtin_android_runtime_ready() -> None:
     try:
         result = subprocess.run(
             ["adb", "devices"],
@@ -299,6 +300,57 @@ def ensure_capture_target_runtime_ready(capture_target: DemoCaptureTarget) -> No
         raise RuntimeError(f"Android QA demo recording could not list adb devices: {details}") from exc
     if not _ready_adb_devices(result.stdout):
         raise RuntimeError("No available Android emulator/device found via adb devices")
+
+
+def _ensure_builtin_ios_runtime_ready() -> None:
+    try:
+        result = subprocess.run(
+            ["xcrun", "simctl", "list", "devices", "available"],
+            capture_output=True,
+            check=True,
+            text=True,
+            timeout=10,
+        )
+    except FileNotFoundError as exc:
+        raise RuntimeError("iOS QA demo recording requires xcrun on the worker PATH") from exc
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError("iOS QA demo recording timed out while checking available simulators") from exc
+    except subprocess.CalledProcessError as exc:
+        stderr = str(exc.stderr or "").strip()
+        stdout = str(exc.stdout or "").strip()
+        details = stderr or stdout or f"exit code {exc.returncode}"
+        raise RuntimeError(f"iOS QA demo recording could not list available simulators: {details}") from exc
+    try:
+        preferred_simulator_udid(result.stdout)
+    except ValueError as exc:
+        raise RuntimeError(str(exc)) from exc
+
+
+def _native_provider_runtime_status(
+    *,
+    capture_target: str,
+    recorder_command: tuple[str, ...] | None,
+) -> tuple[bool, str | None]:
+    if capture_target == "ios" and _is_builtin_ios_recorder_command(recorder_command):
+        try:
+            _ensure_builtin_ios_runtime_ready()
+        except RuntimeError as exc:
+            return False, str(exc)
+    if capture_target == "android" and _is_builtin_android_recorder_command(recorder_command):
+        try:
+            _ensure_builtin_android_runtime_ready()
+        except RuntimeError as exc:
+            return False, str(exc)
+    return True, None
+
+
+def ensure_capture_target_runtime_ready(capture_target: DemoCaptureTarget) -> None:
+    ready, reason = _native_provider_runtime_status(
+        capture_target=capture_target.capture_target,
+        recorder_command=capture_target.recorder_command,
+    )
+    if not ready:
+        raise RuntimeError(reason or f"QA demo capture target is not runtime-ready: {capture_target.capture_target}")
 
 
 def _default_ios_recorder_command() -> tuple[str, ...] | None:
@@ -403,14 +455,18 @@ def planned_capture_target_constraints(*, settings) -> dict[str, PlannedCaptureT
         if configured_ios_command
         else _default_ios_recorder_command()
     )
+    ios_runtime_ready, ios_unavailable_reason = _native_provider_runtime_status(
+        capture_target="ios",
+        recorder_command=ios_recorder_command,
+    ) if ios_recorder_command is not None else (False, "iOS capture provider is unavailable because no native iOS recorder command exists.")
     constraints["ios"] = PlannedCaptureTargetConstraint(
         capture_target="ios",
-        provider_available=ios_recorder_command is not None,
-        required_worker_platform="macos" if ios_recorder_command is not None else None,
+        provider_available=ios_recorder_command is not None and ios_runtime_ready,
+        required_worker_platform="macos" if ios_recorder_command is not None and ios_runtime_ready else None,
         availability_reason=(
             "iOS capture requires the built-in or configured native recorder on a macOS worker."
-            if ios_recorder_command is not None
-            else "iOS capture provider is unavailable because no native iOS recorder command exists."
+            if ios_recorder_command is not None and ios_runtime_ready
+            else ios_unavailable_reason
         ),
     )
 
@@ -420,14 +476,18 @@ def planned_capture_target_constraints(*, settings) -> dict[str, PlannedCaptureT
         if configured_android_command
         else _default_android_recorder_command()
     )
+    android_runtime_ready, android_unavailable_reason = _native_provider_runtime_status(
+        capture_target="android",
+        recorder_command=android_recorder_command,
+    ) if android_recorder_command is not None else (False, "Android capture provider is unavailable because no native Android recorder command exists.")
     constraints["android"] = PlannedCaptureTargetConstraint(
         capture_target="android",
-        provider_available=android_recorder_command is not None,
-        required_worker_platform="linux" if android_recorder_command is not None else None,
+        provider_available=android_recorder_command is not None and android_runtime_ready,
+        required_worker_platform="linux" if android_recorder_command is not None and android_runtime_ready else None,
         availability_reason=(
             "Android capture requires the built-in or configured native recorder on a Linux Android worker."
-            if android_recorder_command is not None
-            else "Android capture provider is unavailable because no native Android recorder command exists."
+            if android_recorder_command is not None and android_runtime_ready
+            else android_unavailable_reason
         ),
     )
 
