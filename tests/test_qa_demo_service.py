@@ -12,6 +12,7 @@ from orchestrator.core.worker.capability_normalization import WorkerCapability
 from orchestrator.core.qa.demo_service import (
     DEMO_EVIDENCE_HEADING,
     DEMO_EVIDENCE_MARKER,
+    DEMO_EVIDENCE_REQUIRED_COUNTS_MARKER,
     DEMO_EVIDENCE_REQUIRED_TARGETS_MARKER,
     DemoCaptureTarget,
     ensure_artifact_url_reachable,
@@ -582,6 +583,24 @@ def test_upsert_demo_evidence_section_includes_required_capture_targets() -> Non
     )
 
     assert f"{DEMO_EVIDENCE_REQUIRED_TARGETS_MARKER} browser,ios,android -->" in updated
+
+
+def test_upsert_demo_evidence_section_includes_required_recording_counts() -> None:
+    updated = upsert_demo_evidence_section(
+        body="## Summary\n- change",
+        recordings=[
+            QaRecording(
+                name="Browser walkthrough",
+                artifact_url="https://demo.example/browser.webm",
+                object_key="qa/browser.webm",
+                capture_target="browser",
+                capture_reference="https://preview.example",
+            ),
+        ],
+        required_recording_counts={"browser": 2, "ios": 1},
+    )
+
+    assert f"{DEMO_EVIDENCE_REQUIRED_COUNTS_MARKER} browser=2,ios=1 -->" in updated
 
 
 def test_record_demo_scenarios_passes_explicit_playwright_module_dir() -> None:
@@ -2435,6 +2454,50 @@ def test_update_pull_request_with_demo_evidence_rejects_missing_required_capture
             assert "QA demo evidence is missing required capture target(s): ios" in str(exc)
         else:  # pragma: no cover
             raise AssertionError("expected missing required capture target to block PR evidence update")
+
+    url_probe.assert_not_called()
+    github_client_mock.assert_not_called()
+
+
+def test_update_pull_request_with_demo_evidence_rejects_missing_required_recording_count_before_url_probe() -> None:
+    with (
+        patch("orchestrator.core.qa.demo_service.github_client_from_tenant_config") as github_client_mock,
+        patch("orchestrator.core.qa.demo_service._default_artifact_url_probe") as url_probe,
+    ):
+        try:
+            update_pull_request_with_demo_evidence(
+                session=SimpleNamespace(),
+                settings=SimpleNamespace(secrets_encryption_key="", qa_demo_artifact_url_timeout_seconds=1),
+                tenant=SimpleNamespace(tenant_id="tenant-1", github_config={}),
+                project=SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo"),
+                workflow_result=SimpleNamespace(pr_url="https://github.com/acme/repo/pull/8"),
+                qa_result=QaResult(
+                    summary=["Recorded demos"],
+                    scenarios=[
+                        QaScenario(
+                            name="Browser happy path",
+                            objective="Show browser happy path",
+                            capture_target="browser",
+                            steps=_proof_steps("text=Feature"),
+                        )
+                    ],
+                    recordings=[
+                        QaRecording(
+                            name="Browser happy path",
+                            artifact_url="https://demo.example/browser.webm",
+                            object_key="qa/browser.webm",
+                            capture_target="browser",
+                            capture_reference="https://preview.example",
+                        )
+                    ],
+                ),
+                required_capture_targets=("browser",),
+                required_recording_counts={"browser": 2},
+            )
+        except RuntimeError as exc:
+            assert "QA demo evidence is missing required recording count(s): browser requires 2, recorded 1" in str(exc)
+        else:  # pragma: no cover
+            raise AssertionError("expected missing required recording count to block PR evidence update")
 
     url_probe.assert_not_called()
     github_client_mock.assert_not_called()
