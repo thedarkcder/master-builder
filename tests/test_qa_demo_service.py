@@ -1662,6 +1662,57 @@ def test_execute_qa_demo_stage_completes_remaining_target_with_previous_recordin
     assert available_targets == [{"capture_target": "ios", "capture_reference": "ios-simulator://configured"}]
 
 
+def test_execute_qa_demo_stage_rejects_previous_recording_without_matching_scenario() -> None:
+    tenant = SimpleNamespace(tenant_id="tenant-1", github_config={})
+    project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo")
+    run = SimpleNamespace(run_id="run-1")
+    plan = PmPlan(
+        plan_steps=["Implement"],
+        acceptance_criteria=["Feature works on browser"],
+        risks=[],
+        demo_requirements=[
+            DemoRequirement(title="Browser walkthrough", acceptance_criterion="Feature works on browser", capture_target="browser"),
+        ],
+    )
+    previous_qa = QaResult(
+        summary=["Recorded browser demo"],
+        scenarios=[],
+        recordings=[
+            QaRecording(
+                name="Browser walkthrough",
+                artifact_url="https://cdn.example/qa-demo-1.webm",
+                object_key="tenant-1/project-1/run-1/qa-demo-1.webm",
+                capture_target="browser",
+                capture_reference="https://preview.example",
+            )
+        ],
+        outcome="requeue",
+    )
+
+    with patch("orchestrator.core.qa.demo_service.CodexWorkflowAgents") as agents_cls:
+        try:
+            execute_qa_demo_stage(
+                session=SimpleNamespace(),
+                settings=SimpleNamespace(qa_demo_playwright_module_dir=""),
+                tenant=tenant,
+                project=project,
+                run=run,
+                request=_request(),
+                plan=plan,
+                dev_result=DevResult(change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8"),
+                test_result=TestResult(guidance=["pytest -q"]),
+                review_result=ReviewResult(summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"),
+                preview_release=SimpleNamespace(service_urls=[]),
+                previous_qa_result=previous_qa,
+            )
+        except RuntimeError as exc:
+            assert "missing matching executable scenario(s): browser: Browser walkthrough" in str(exc)
+        else:  # pragma: no cover
+            raise AssertionError("expected orphaned previous recording proof to block")
+
+    agents_cls.assert_not_called()
+
+
 def test_execute_qa_demo_stage_uses_builtin_ios_capture_on_macos() -> None:
     tenant = SimpleNamespace(tenant_id="tenant-1", github_config={})
     project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo")
@@ -2009,7 +2060,13 @@ def test_update_pull_request_with_demo_evidence_refreshes_pr_body() -> None:
             workflow_result=SimpleNamespace(pr_url="https://github.com/acme/repo/pull/8"),
             qa_result=QaResult(
                 summary=["Recorded demos"],
-                scenarios=[],
+                scenarios=[
+                    QaScenario(
+                        name="Happy path",
+                        objective="Show feature works",
+                        steps=_proof_steps("text=Feature"),
+                    )
+                ],
                 recordings=[
                     QaRecording(
                         name="Happy path",
@@ -2039,7 +2096,20 @@ def test_update_pull_request_with_demo_evidence_rejects_unreachable_accumulated_
                 workflow_result=SimpleNamespace(pr_url="https://github.com/acme/repo/pull/8"),
                 qa_result=QaResult(
                     summary=["Recorded demos"],
-                    scenarios=[],
+                    scenarios=[
+                        QaScenario(
+                            name="Browser walkthrough",
+                            objective="Show browser",
+                            capture_target="browser",
+                            steps=_proof_steps("text=Feature"),
+                        ),
+                        QaScenario(
+                            name="iOS walkthrough",
+                            objective="Show iOS",
+                            capture_target="ios",
+                            steps=_proof_steps("text=Ready"),
+                        ),
+                    ],
                     recordings=[
                         QaRecording(
                             name="Browser walkthrough",
@@ -2061,6 +2131,82 @@ def test_update_pull_request_with_demo_evidence_rejects_unreachable_accumulated_
             assert "QA demo artifact URL is not reachable" in str(exc)
         else:  # pragma: no cover
             raise AssertionError("expected unreachable accumulated recording to block PR evidence update")
+
+
+def test_update_pull_request_with_demo_evidence_rejects_recording_without_matching_scenario() -> None:
+    with patch("orchestrator.core.qa.demo_service._default_artifact_url_probe") as url_probe:
+        try:
+            update_pull_request_with_demo_evidence(
+                session=SimpleNamespace(),
+                settings=SimpleNamespace(secrets_encryption_key="", qa_demo_artifact_url_timeout_seconds=1),
+                tenant=SimpleNamespace(tenant_id="tenant-1", github_config={}),
+                project=SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo"),
+                workflow_result=SimpleNamespace(pr_url="https://github.com/acme/repo/pull/8"),
+                qa_result=QaResult(
+                    summary=["Recorded demos"],
+                    scenarios=[],
+                    recordings=[
+                        QaRecording(
+                            name="Browser walkthrough",
+                            artifact_url="https://demo.example/browser.webm",
+                            object_key="qa/browser.webm",
+                            capture_target="browser",
+                            capture_reference="https://preview.example",
+                        )
+                    ],
+                ),
+            )
+        except RuntimeError as exc:
+            assert "missing matching executable scenario(s): browser: Browser walkthrough" in str(exc)
+        else:  # pragma: no cover
+            raise AssertionError("expected orphaned recording proof to block PR evidence update")
+
+    url_probe.assert_not_called()
+
+
+def test_update_pull_request_with_demo_evidence_rejects_duplicate_accumulated_recording_key() -> None:
+    with patch("orchestrator.core.qa.demo_service._default_artifact_url_probe") as url_probe:
+        try:
+            update_pull_request_with_demo_evidence(
+                session=SimpleNamespace(),
+                settings=SimpleNamespace(secrets_encryption_key="", qa_demo_artifact_url_timeout_seconds=1),
+                tenant=SimpleNamespace(tenant_id="tenant-1", github_config={}),
+                project=SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo"),
+                workflow_result=SimpleNamespace(pr_url="https://github.com/acme/repo/pull/8"),
+                qa_result=QaResult(
+                    summary=["Recorded demos"],
+                    scenarios=[
+                        QaScenario(
+                            name="Browser walkthrough",
+                            objective="Show browser",
+                            capture_target="browser",
+                            steps=_proof_steps("text=Feature"),
+                        )
+                    ],
+                    recordings=[
+                        QaRecording(
+                            name="Browser walkthrough",
+                            artifact_url="https://demo.example/browser-1.webm",
+                            object_key="qa/browser-1.webm",
+                            capture_target="browser",
+                            capture_reference="https://preview.example",
+                        ),
+                        QaRecording(
+                            name="Browser walkthrough",
+                            artifact_url="https://demo.example/browser-2.webm",
+                            object_key="qa/browser-2.webm",
+                            capture_target="browser",
+                            capture_reference="https://preview.example",
+                        ),
+                    ],
+                ),
+            )
+        except RuntimeError as exc:
+            assert "recording proof keys must be unique before PR evidence: browser: Browser walkthrough" in str(exc)
+        else:  # pragma: no cover
+            raise AssertionError("expected duplicate recording proof key to block PR evidence update")
+
+    url_probe.assert_not_called()
 
 
 def test_artifact_url_validation_rejects_no_content_response_as_demo_proof() -> None:
