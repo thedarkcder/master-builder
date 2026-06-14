@@ -1401,7 +1401,10 @@ def test_update_pull_request_with_demo_evidence_refreshes_pr_body() -> None:
         ),
         update_pull_request=lambda **kwargs: kwargs,
     )
-    with patch("orchestrator.core.qa.demo_service.github_client_from_tenant_config", return_value=github_client):
+    with (
+        patch("orchestrator.core.qa.demo_service.github_client_from_tenant_config", return_value=github_client),
+        patch("orchestrator.core.qa.demo_service._default_artifact_url_probe", return_value=200),
+    ):
         updated_body = update_pull_request_with_demo_evidence(
             session=SimpleNamespace(),
             settings=SimpleNamespace(secrets_encryption_key=""),
@@ -1424,3 +1427,41 @@ def test_update_pull_request_with_demo_evidence_refreshes_pr_body() -> None:
 
     assert DEMO_EVIDENCE_HEADING in updated_body
     assert "https://demo.example/happy.webm" in updated_body
+
+
+def test_update_pull_request_with_demo_evidence_rejects_unreachable_accumulated_recording() -> None:
+    with patch(
+        "orchestrator.core.qa.demo_service._default_artifact_url_probe",
+        side_effect=RuntimeError("object expired"),
+    ):
+        try:
+            update_pull_request_with_demo_evidence(
+                session=SimpleNamespace(),
+                settings=SimpleNamespace(secrets_encryption_key="", qa_demo_artifact_url_timeout_seconds=1),
+                tenant=SimpleNamespace(tenant_id="tenant-1", github_config={}),
+                project=SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo"),
+                workflow_result=SimpleNamespace(pr_url="https://github.com/acme/repo/pull/8"),
+                qa_result=QaResult(
+                    summary=["Recorded demos"],
+                    scenarios=[],
+                    recordings=[
+                        QaRecording(
+                            name="Browser walkthrough",
+                            artifact_url="https://demo.example/browser.webm",
+                            object_key="qa/browser.webm",
+                            capture_reference="https://preview.example",
+                        ),
+                        QaRecording(
+                            name="iOS walkthrough",
+                            artifact_url="https://demo.example/ios.mp4",
+                            object_key="qa/ios.mp4",
+                            capture_target="ios",
+                            capture_reference="ios-simulator://configured",
+                        ),
+                    ],
+                ),
+            )
+        except RuntimeError as exc:
+            assert "QA demo artifact URL is not reachable" in str(exc)
+        else:  # pragma: no cover
+            raise AssertionError("expected unreachable accumulated recording to block PR evidence update")

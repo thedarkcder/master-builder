@@ -1047,6 +1047,13 @@ def update_pull_request_with_demo_evidence(
     workflow_result,
     qa_result: QaResult,
 ) -> str:
+    if not qa_result.recordings:
+        raise RuntimeError("QA demo evidence PR update requires at least one recording")
+    for recording in qa_result.recordings:
+        ensure_artifact_url_reachable(
+            recording.artifact_url,
+            timeout_seconds=qa_demo_artifact_url_timeout_seconds(settings),
+        )
     pr_url = str(getattr(workflow_result, "pr_url", "") or "").strip()
     match = re.search(r"/pull/(\d+)(?:/|$)", pr_url)
     if not pr_url or match is None:
