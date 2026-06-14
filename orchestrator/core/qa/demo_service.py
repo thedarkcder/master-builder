@@ -455,18 +455,14 @@ def planned_capture_target_constraints(*, settings) -> dict[str, PlannedCaptureT
         if configured_ios_command
         else _default_ios_recorder_command()
     )
-    ios_runtime_ready, ios_unavailable_reason = _native_provider_runtime_status(
-        capture_target="ios",
-        recorder_command=ios_recorder_command,
-    ) if ios_recorder_command is not None else (False, "iOS capture provider is unavailable because no native iOS recorder command exists.")
     constraints["ios"] = PlannedCaptureTargetConstraint(
         capture_target="ios",
-        provider_available=ios_recorder_command is not None and ios_runtime_ready,
-        required_worker_platform="macos" if ios_recorder_command is not None and ios_runtime_ready else None,
+        provider_available=ios_recorder_command is not None,
+        required_worker_platform="macos" if ios_recorder_command is not None else None,
         availability_reason=(
-            "iOS capture requires the built-in or configured native recorder on a macOS worker."
-            if ios_recorder_command is not None and ios_runtime_ready
-            else ios_unavailable_reason
+            "iOS capture requires the built-in or configured native recorder on a macOS worker. Runtime readiness is verified on the selected worker before recording."
+            if ios_recorder_command is not None
+            else "iOS capture provider is unavailable because no native iOS recorder command exists."
         ),
     )
 
@@ -476,18 +472,14 @@ def planned_capture_target_constraints(*, settings) -> dict[str, PlannedCaptureT
         if configured_android_command
         else _default_android_recorder_command()
     )
-    android_runtime_ready, android_unavailable_reason = _native_provider_runtime_status(
-        capture_target="android",
-        recorder_command=android_recorder_command,
-    ) if android_recorder_command is not None else (False, "Android capture provider is unavailable because no native Android recorder command exists.")
     constraints["android"] = PlannedCaptureTargetConstraint(
         capture_target="android",
-        provider_available=android_recorder_command is not None and android_runtime_ready,
-        required_worker_platform="linux" if android_recorder_command is not None and android_runtime_ready else None,
+        provider_available=android_recorder_command is not None,
+        required_worker_platform="linux" if android_recorder_command is not None else None,
         availability_reason=(
-            "Android capture requires the built-in or configured native recorder on a Linux Android worker."
-            if android_recorder_command is not None and android_runtime_ready
-            else android_unavailable_reason
+            "Android capture requires the built-in or configured native recorder on a Linux Android worker. Runtime readiness is verified on the selected worker before recording."
+            if android_recorder_command is not None
+            else "Android capture provider is unavailable because no native Android recorder command exists."
         ),
     )
 
