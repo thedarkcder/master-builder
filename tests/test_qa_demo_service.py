@@ -541,6 +541,48 @@ def test_record_demo_scenarios_rejects_invalid_video_artifact() -> None:
             raise AssertionError("expected invalid recording artifact rejection")
 
 
+def test_record_demo_scenarios_rejects_missing_recording_for_planned_scenario() -> None:
+    def _run(cmd, **_kwargs):  # noqa: ANN001
+        output_path = Path(cmd[3])
+        input_payload = json.loads(Path(cmd[2]).read_text(encoding="utf-8"))
+        video_dir = Path(input_payload["output_dir"])
+        video_dir.mkdir(parents=True, exist_ok=True)
+        source_path = video_dir / "happy-path.webm"
+        source_path.write_bytes(_fake_webm_payload())
+        output_path.write_text(
+            json.dumps({"recordings": [{"name": "Happy path", "path": str(source_path)}]}),
+            encoding="utf-8",
+        )
+        return SimpleNamespace(stdout="")
+
+    with patch("orchestrator.core.qa.demo_service.subprocess.run", side_effect=_run):
+        try:
+            record_demo_scenarios(
+                settings=SimpleNamespace(qa_demo_playwright_module_dir="/tmp/playwright-modules"),
+                request=_request(),
+                available_capture_targets=_browser_capture_targets(),
+                qa_result=QaResult(
+                    summary=["Recorded demos"],
+                    scenarios=[
+                        QaScenario(
+                            name="Happy path",
+                            objective="Show feature works",
+                            steps=[QaStep(action="assert_visible", selector="#feature")],
+                        ),
+                        QaScenario(
+                            name="Bad input shows validation",
+                            objective="Show validation works",
+                            steps=[QaStep(action="assert_visible", selector="#validation")],
+                        ),
+                    ],
+                ),
+            )
+        except RuntimeError as exc:
+            assert "did not produce recording(s) for browser scenario(s): Bad input shows validation" in str(exc)
+        else:  # pragma: no cover
+            raise AssertionError("expected missing scenario recording to block")
+
+
 def test_execute_qa_demo_stage_records_and_uploads() -> None:
     tenant = SimpleNamespace(tenant_id="tenant-1", github_config={})
     project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo")
