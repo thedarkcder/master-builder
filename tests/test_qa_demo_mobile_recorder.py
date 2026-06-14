@@ -2,8 +2,12 @@ from __future__ import annotations
 
 from unittest.mock import patch
 
+import pytest
+
+from scripts.qa_demo_mobile_recorder import _ios_command_timeout_seconds
 from scripts.qa_demo_mobile_recorder import _combined_recording_failure
 from scripts.qa_demo_mobile_recorder import _reboot_simulator
+from scripts.qa_demo_mobile_recorder import _run
 
 
 def test_combined_recording_failure_prefers_primary_error() -> None:
@@ -48,3 +52,45 @@ def test_reboot_simulator_shuts_down_then_boots() -> None:
 
     assert calls == [["xcrun", "simctl", "shutdown", "SIM-123"]]
     ensure_mock.assert_called_once_with("SIM-123")
+
+
+def test_ios_command_timeout_defaults_to_bounded_value(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.delenv("QA_DEMO_IOS_COMMAND_TIMEOUT_SECONDS", raising=False)
+
+    assert _ios_command_timeout_seconds() == 600
+
+
+def test_ios_command_timeout_rejects_invalid_env(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("QA_DEMO_IOS_COMMAND_TIMEOUT_SECONDS", "0")
+
+    with pytest.raises(RuntimeError, match="greater than zero"):
+        _ios_command_timeout_seconds()
+
+
+def test_run_passes_bounded_timeout_to_subprocess(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("QA_DEMO_IOS_COMMAND_TIMEOUT_SECONDS", "123")
+    captured: dict[str, object] = {}
+
+    def _fake_run(args, **kwargs):  # noqa: ANN001
+        captured["args"] = args
+        captured["timeout"] = kwargs.get("timeout")
+        return type("Completed", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+    monkeypatch.setattr("scripts.qa_demo_mobile_recorder.subprocess.run", _fake_run)
+
+    _run(["xcodebuild", "-version"], capture_output=True)
+
+    assert captured["args"] == ["xcodebuild", "-version"]
+    assert captured["timeout"] == 123
+
+
+def test_run_surfaces_timeout_as_runtime_error(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("QA_DEMO_IOS_COMMAND_TIMEOUT_SECONDS", "123")
+
+    def _fake_run(args, **kwargs):  # noqa: ANN001
+        raise TimeoutError("timer expired")
+
+    monkeypatch.setattr("scripts.qa_demo_mobile_recorder.subprocess.run", _fake_run)
+
+    with pytest.raises(RuntimeError, match="timed out after 123 seconds"):
+        _run(["xcodebuild", "-version"], capture_output=True)
