@@ -55,6 +55,7 @@ ENV ORCHESTRATOR_ADMIN_USERNAME=admin
 ENV ORCHESTRATOR_ADMIN_PASSWORD=change-me
 ENV VIRTUAL_ENV=/opt/venv
 ENV PATH="${VIRTUAL_ENV}/bin:${PATH}"
+ENV PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT=120000
 
 ARG CODEX_NPM_VERSION=latest
 ARG PLAYWRIGHT_NPM_VERSION=1.51.1
@@ -123,7 +124,7 @@ Path("/tmp/requirements-voice.txt").write_text("\n".join(voice_dependencies) + "
 PY
 
 RUN --mount=type=cache,target=/root/.cache/pip \
-    "${VIRTUAL_ENV}/bin/pip" install -r /tmp/requirements-base.txt
+    "${VIRTUAL_ENV}/bin/pip" install --retries 10 --timeout 120 -r /tmp/requirements-base.txt
 FROM python-common-base AS app-runtime-base
 
 COPY README.md ./
@@ -214,7 +215,7 @@ COPY --from=live-voice-transport-builder /root/.local /root/.local
 COPY --from=live-voice-transport-builder /tmp/live-voice-transport /usr/local/bin/live-voice-transport
 
 RUN --mount=type=cache,target=/root/.cache/pip \
-    "${VIRTUAL_ENV}/bin/pip" install -r /tmp/requirements-voice.txt
+    "${VIRTUAL_ENV}/bin/pip" install --retries 10 --timeout 120 -r /tmp/requirements-voice.txt
 
 COPY README.md ./
 COPY .codex ./.codex
