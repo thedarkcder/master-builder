@@ -134,6 +134,45 @@ def _release_service_kinds(release) -> tuple[str, ...]:  # noqa: ANN001
     return tuple(ordered)
 
 
+def _service_kind_from_item(item: object) -> str | None:
+    if isinstance(item, dict):
+        kind = str(item.get("kind") or item.get("service_kind") or "").strip()
+        public = item.get("public", True)
+    else:
+        kind = str(getattr(item, "kind", "") or getattr(item, "service_kind", "") or "").strip()
+        public = getattr(item, "public", True)
+    if not kind or kind not in {"website", "api"}:
+        return None
+    if public is False:
+        return None
+    return kind
+
+
+def _service_kinds_from_services(value: object) -> tuple[str, ...]:
+    if not isinstance(value, list):
+        return ()
+    ordered: list[str] = []
+    for item in value:
+        kind = _service_kind_from_item(item)
+        if kind and kind not in ordered:
+            ordered.append(kind)
+    return tuple(ordered)
+
+
+def required_release_service_kinds(*, project, preview_release) -> tuple[str, ...]:  # noqa: ANN001
+    release_snapshot = getattr(preview_release, "deployment_snapshot", None)
+    if isinstance(release_snapshot, dict):
+        snapshot_kinds = _service_kinds_from_services(release_snapshot.get("services"))
+        if snapshot_kinds:
+            return snapshot_kinds
+    project_deployment_config = getattr(project, "deployment_config", None)
+    if isinstance(project_deployment_config, dict):
+        project_kinds = _service_kinds_from_services(project_deployment_config.get("services"))
+        if project_kinds:
+            return project_kinds
+    return _release_service_kinds(preview_release)
+
+
 def _parse_recorder_command(raw_value: object, *, provider_name: str) -> tuple[str, ...]:
     raw = str(raw_value or "").strip()
     if not raw:
@@ -896,7 +935,7 @@ def execute_qa_demo_stage(
         )
     ensure_release_ready_for_qa(
         preview_release,
-        required_service_kinds=_release_service_kinds(preview_release),
+        required_service_kinds=required_release_service_kinds(project=project, preview_release=preview_release),
         service_url_probe=_default_service_url_probe,
         timeout_seconds=qa_demo_release_health_timeout_seconds(settings),
     )

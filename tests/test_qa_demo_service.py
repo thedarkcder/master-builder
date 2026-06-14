@@ -20,6 +20,7 @@ from orchestrator.core.qa.demo_service import (
     qa_demo_recording_enabled,
     record_demo_scenarios,
     required_capture_targets,
+    required_release_service_kinds,
     resolve_available_capture_targets,
     resolve_preview_demo_url,
     storage_config_from_settings,
@@ -292,6 +293,46 @@ def test_ensure_release_ready_for_qa_rejects_server_error_service_response() -> 
         raise AssertionError("expected server error readiness failure")
 
 
+def test_required_release_service_kinds_prefers_release_deployment_snapshot() -> None:
+    project = SimpleNamespace(
+        deployment_config={
+            "services": [
+                {"kind": "website"},
+            ]
+        }
+    )
+    release = SimpleNamespace(
+        deployment_snapshot={
+            "services": [
+                {"kind": "website"},
+                {"kind": "api"},
+                {"kind": "worker"},
+                {"kind": "api"},
+                {"kind": "website", "public": False},
+            ]
+        },
+        service_urls=[SimpleNamespace(service_kind="website", status="active", url="https://preview.example")],
+    )
+
+    assert required_release_service_kinds(project=project, preview_release=release) == ("website", "api")
+
+
+def test_required_release_service_kinds_uses_project_deployment_services_before_present_release_urls() -> None:
+    project = SimpleNamespace(
+        deployment_config={
+            "services": [
+                {"kind": "website"},
+                {"kind": "api"},
+            ]
+        }
+    )
+    release = SimpleNamespace(
+        service_urls=[SimpleNamespace(service_kind="website", status="active", url="https://preview.example")]
+    )
+
+    assert required_release_service_kinds(project=project, preview_release=release) == ("website", "api")
+
+
 def test_android_builtin_capture_runtime_requires_ready_adb_device(monkeypatch) -> None:
     target = DemoCaptureTarget(
         capture_target="android",
@@ -537,6 +578,64 @@ def test_execute_qa_demo_stage_records_and_uploads() -> None:
     available_targets = json.loads(fake_agents.qa.call_args.kwargs["available_capture_targets_json"])
     assert {"capture_target": "browser", "capture_reference": "https://preview.example"} in available_targets
     assert upload_mock.call_args.kwargs["content_type"] == "video/webm"
+
+
+def test_execute_qa_demo_stage_blocks_when_project_api_service_is_missing_from_release() -> None:
+    tenant = SimpleNamespace(tenant_id="tenant-1", github_config={})
+    project = SimpleNamespace(
+        project_id="project-1",
+        github_repository="https://github.com/acme/repo",
+        deployment_config={
+            "services": [
+                {"kind": "website"},
+                {"kind": "api"},
+            ]
+        },
+    )
+    run = SimpleNamespace(run_id="run-1")
+    release = SimpleNamespace(
+        service_urls=[SimpleNamespace(service_kind="website", status="active", url="https://preview.example")]
+    )
+    plan = PmPlan(
+        plan_steps=["Implement"],
+        acceptance_criteria=["Feature works"],
+        risks=[],
+        demo_requirements=[DemoRequirement(title="Feature walkthrough", acceptance_criterion="Feature works")],
+    )
+    dev_result = DevResult(change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8")
+    test_result = TestResult(guidance=["pytest -q"])
+    review_result = ReviewResult(summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8")
+
+    runtime_mock = MagicMock()
+    qa_agent = MagicMock(return_value=_qa_result())
+    fake_agents = SimpleNamespace(qa=qa_agent)
+
+    with (
+        patch("orchestrator.core.qa.demo_service.build_codex_runtime", runtime_mock),
+        patch("orchestrator.core.qa.demo_service.CodexWorkflowAgents", return_value=fake_agents),
+        patch("orchestrator.core.qa.demo_service._default_service_url_probe", return_value=200),
+    ):
+        try:
+            execute_qa_demo_stage(
+                session=SimpleNamespace(),
+                settings=SimpleNamespace(qa_demo_playwright_module_dir=""),
+                tenant=tenant,
+                project=project,
+                run=run,
+                request=_request(),
+                plan=plan,
+                dev_result=dev_result,
+                test_result=test_result,
+                review_result=review_result,
+                preview_release=release,
+            )
+        except RuntimeError as exc:
+            assert "not active: api" in str(exc)
+        else:  # pragma: no cover
+            raise AssertionError("expected QA demo stage to block on missing API release service")
+
+    runtime_mock.assert_not_called()
+    qa_agent.assert_not_called()
 
 
 def test_execute_qa_demo_stage_retries_when_uploaded_artifact_url_is_unreachable() -> None:
