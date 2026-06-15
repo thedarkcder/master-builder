@@ -251,6 +251,8 @@ type AgentOutcomeLink = {
   captureTarget?: string | null;
   captureReference?: string | null;
   objectKey?: string | null;
+  contentSha256?: string | null;
+  releaseContextSha256?: string | null;
 };
 
 function parseQaRecordingLinks(artifact: Record<string, unknown> | null): AgentOutcomeLink[] {
@@ -271,7 +273,17 @@ function parseQaRecordingLinks(artifact: Record<string, unknown> | null): AgentO
       const captureTarget = String(item["capture_target"] ?? "").trim() || null;
       const captureReference = String(item["capture_reference"] ?? "").trim() || null;
       const objectKey = String(item["object_key"] ?? "").trim() || null;
-      const link: AgentOutcomeLink = { label, href, captureTarget, captureReference, objectKey };
+      const contentSha256 = String(item["content_sha256"] ?? "").trim() || null;
+      const releaseContextSha256 = String(item["release_context_sha256"] ?? "").trim() || null;
+      const link: AgentOutcomeLink = {
+        label,
+        href,
+        captureTarget,
+        captureReference,
+        objectKey,
+        contentSha256,
+        releaseContextSha256
+      };
       return link;
     })
     .filter((item): item is AgentOutcomeLink => item !== null);
@@ -282,6 +294,8 @@ function formatQaRecordingMetadata(link: AgentOutcomeLink): string {
     link.captureTarget ? `target=${link.captureTarget}` : "",
     link.captureReference ? `reference=${link.captureReference}` : "",
     link.objectKey ? `object_key=${link.objectKey}` : "",
+    link.contentSha256 ? `sha256=${link.contentSha256}` : "",
+    link.releaseContextSha256 ? `release_context_sha256=${link.releaseContextSha256}` : "",
   ].filter((item) => item.length > 0);
   return parts.join("; ");
 }

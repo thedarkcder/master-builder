@@ -221,6 +221,8 @@ test("renders QA demo evidence links when the QA checkpoint is present", async (
                 object_key: "tenant-1/project-1/run-1/qa-demo-1.webm",
                 capture_target: "browser",
                 capture_reference: "https://preview.example",
+                content_sha256: "1111111111111111111111111111111111111111111111111111111111111111",
+                release_context_sha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
               },
               {
                 name: "iOS break path demo",
@@ -228,6 +230,8 @@ test("renders QA demo evidence links when the QA checkpoint is present", async (
                 object_key: "tenant-1/project-1/run-1/qa-demo-2.mp4",
                 capture_target: "ios",
                 capture_reference: "ios-simulator://configured",
+                content_sha256: "2222222222222222222222222222222222222222222222222222222222222222",
+                release_context_sha256: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
               },
             ],
             outcome: "continue",
@@ -249,14 +253,14 @@ test("renders QA demo evidence links when the QA checkpoint is present", async (
     "https://cdn.example/qa/happy.webm",
   );
   await expect(page.getByTestId("qa-recording-metadata-0")).toHaveText(
-    "target=browser; reference=https://preview.example; object_key=tenant-1/project-1/run-1/qa-demo-1.webm",
+    "target=browser; reference=https://preview.example; object_key=tenant-1/project-1/run-1/qa-demo-1.webm; sha256=1111111111111111111111111111111111111111111111111111111111111111; release_context_sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   );
   await expect(page.getByRole("link", { name: "iOS break path demo" })).toHaveAttribute(
     "href",
     "https://cdn.example/qa/break.mp4",
   );
   await expect(page.getByTestId("qa-recording-metadata-1")).toHaveText(
-    "target=ios; reference=ios-simulator://configured; object_key=tenant-1/project-1/run-1/qa-demo-2.mp4",
+    "target=ios; reference=ios-simulator://configured; object_key=tenant-1/project-1/run-1/qa-demo-2.mp4; sha256=2222222222222222222222222222222222222222222222222222222222222222; release_context_sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
   );
 });
 
