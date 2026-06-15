@@ -880,6 +880,7 @@ def _invoke_json_recorder(
     payload: dict[str, object],
     env: dict[str, str] | None,
     capture_target: DemoCaptureTarget,
+    request: WorkflowRequest,
     timeout_seconds: float,
 ) -> list[LocalQaRecording]:
     with TemporaryDirectory(prefix=f"qa-demo-{capture_target.capture_target}-") as tmp_dir:
@@ -912,7 +913,7 @@ def _invoke_json_recorder(
                 f"QA demo recorder command failed ({exc.returncode}): {' '.join(command)}"
             ) from exc
         recordings = _parse_recorder_output(output_path=output_path, capture_target=capture_target)
-        return _copy_recordings(recordings)
+        return _copy_recordings(recordings, request=request)
 
 
 def _canonical_native_selector(selector: str | None) -> str | None:
@@ -1161,8 +1162,11 @@ def _normalized_scenario_text(scenario: QaScenario) -> str:
     )
 
 
-def _copy_recordings(recordings: list[LocalQaRecording]) -> list[LocalQaRecording]:
-    persisted_dir = Path.cwd() / "tmp" / "qa-demos"
+def _copy_recordings(recordings: list[LocalQaRecording], *, request: WorkflowRequest) -> list[LocalQaRecording]:
+    tenant_id = _safe_recording_path_segment(request.tenant_id, field_name="tenant_id")
+    project_id = _safe_recording_path_segment(request.project_id, field_name="project_id")
+    run_id = _safe_recording_path_segment(request.run_id, field_name="run_id")
+    persisted_dir = Path.cwd() / "tmp" / "qa-demos" / tenant_id / project_id / run_id
     persisted_dir.mkdir(parents=True, exist_ok=True)
     copied: list[LocalQaRecording] = []
     for index, recording in enumerate(recordings, start=1):
@@ -1179,6 +1183,16 @@ def _copy_recordings(recordings: list[LocalQaRecording]) -> list[LocalQaRecordin
             )
         )
     return copied
+
+
+def _safe_recording_path_segment(value: str | None, *, field_name: str) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        raise RuntimeError(f"QA demo recording copy scope requires {field_name}")
+    normalized = re.sub(r"[^A-Za-z0-9._-]+", "-", raw).strip(".-")
+    if not normalized:
+        raise RuntimeError(f"QA demo recording copy scope has invalid {field_name}: {raw!r}")
+    return normalized
 
 
 def _validate_recordings_cover_scenarios(
@@ -1298,6 +1312,7 @@ def record_demo_scenarios(
                 payload=payload,
                 env=env,
                 capture_target=capture_target,
+                request=request,
                 timeout_seconds=recorder_timeout_seconds,
             )
         else:
@@ -1306,6 +1321,7 @@ def record_demo_scenarios(
                 payload=payload,
                 env=dict(os.environ),
                 capture_target=capture_target,
+                request=request,
                 timeout_seconds=recorder_timeout_seconds,
             )
         _validate_recordings_cover_scenarios(
