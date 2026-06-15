@@ -1057,6 +1057,55 @@ def test_record_demo_scenarios_rejects_invalid_video_artifact() -> None:
             raise AssertionError("expected invalid recording artifact rejection")
 
 
+def test_record_demo_scenarios_rejects_duplicate_local_recording_paths() -> None:
+    def _run(cmd, **_kwargs):  # noqa: ANN001
+        output_path = Path(cmd[3])
+        input_payload = json.loads(Path(cmd[2]).read_text(encoding="utf-8"))
+        video_dir = Path(input_payload["output_dir"])
+        video_dir.mkdir(parents=True, exist_ok=True)
+        source_path = video_dir / "shared-proof.webm"
+        source_path.write_bytes(_fake_webm_payload())
+        output_path.write_text(
+            json.dumps(
+                {
+                    "recordings": [
+                        {"name": "Happy path", "path": str(source_path)},
+                        {"name": "Bad input shows validation", "path": str(source_path)},
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        return SimpleNamespace(stdout="")
+
+    with patch("orchestrator.core.qa.demo_service.subprocess.run", side_effect=_run):
+        try:
+            record_demo_scenarios(
+                settings=SimpleNamespace(qa_demo_playwright_module_dir="/tmp/playwright-modules"),
+                request=_request(),
+                available_capture_targets=_browser_capture_targets(),
+                qa_result=QaResult(
+                    summary=["Recorded demos"],
+                    scenarios=[
+                        QaScenario(
+                            name="Happy path",
+                            objective="Show feature works",
+                            steps=[QaStep(action="assert_visible", selector="#feature")],
+                        ),
+                        QaScenario(
+                            name="Bad input shows validation",
+                            objective="Show validation works",
+                            steps=[QaStep(action="assert_visible", selector="#validation")],
+                        ),
+                    ],
+                ),
+            )
+        except RuntimeError as exc:
+            assert "QA demo recorder returned duplicate local recording path" in str(exc)
+        else:  # pragma: no cover
+            raise AssertionError("expected duplicate local recording path to block")
+
+
 def test_record_demo_scenarios_rejects_missing_recording_for_planned_scenario() -> None:
     def _run(cmd, **_kwargs):  # noqa: ANN001
         output_path = Path(cmd[3])

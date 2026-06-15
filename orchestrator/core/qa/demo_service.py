@@ -852,6 +852,7 @@ def _parse_recorder_output(
 ) -> list[LocalQaRecording]:
     result = json.loads(output_path.read_text(encoding="utf-8"))
     recordings: list[LocalQaRecording] = []
+    seen_paths: set[str] = set()
     for item in list(result.get("recordings") or []):
         if not isinstance(item, dict):
             raise RuntimeError("QA demo recorder returned invalid recordings payload")
@@ -859,7 +860,11 @@ def _parse_recorder_output(
         path = str(item.get("path") or "").strip()
         if not name or not path:
             raise RuntimeError("QA demo recorder returned incomplete recording metadata")
-        source = Path(path)
+        source = Path(path).resolve()
+        source_key = str(source)
+        if source_key in seen_paths:
+            raise RuntimeError(f"QA demo recorder returned duplicate local recording path: {source}")
+        seen_paths.add(source_key)
         _validate_local_recording_file(source)
         recordings.append(
             LocalQaRecording(
