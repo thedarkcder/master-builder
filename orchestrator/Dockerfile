@@ -133,6 +133,7 @@ COPY orchestrator ./orchestrator
 COPY scripts/bootstrap_deployment_host_agent.py ./scripts/bootstrap_deployment_host_agent.py
 COPY scripts/qa_demo_android_recorder.py ./scripts/qa_demo_android_recorder.py
 COPY scripts/qa_demo_mobile_recorder.py ./scripts/qa_demo_mobile_recorder.py
+COPY scripts/qa_demo_release_context.py ./scripts/qa_demo_release_context.py
 COPY scripts/qa_demo_recorder.mjs ./scripts/qa_demo_recorder.mjs
 COPY alembic.ini ./alembic.ini
 
@@ -186,6 +187,7 @@ COPY .codex ./.codex
 COPY orchestrator ./orchestrator
 COPY scripts/qa_demo_android_recorder.py ./scripts/qa_demo_android_recorder.py
 COPY scripts/qa_demo_mobile_recorder.py ./scripts/qa_demo_mobile_recorder.py
+COPY scripts/qa_demo_release_context.py ./scripts/qa_demo_release_context.py
 COPY scripts/qa_demo_recorder.mjs ./scripts/qa_demo_recorder.mjs
 COPY alembic.ini ./alembic.ini
 

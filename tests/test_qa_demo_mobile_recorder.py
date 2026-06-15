@@ -118,7 +118,10 @@ def test_qa_demo_launch_environment_maps_release_context() -> None:
     assert launch_environment["MB_QA_DEMO_RELEASE_API_BASE_URL"] == "https://api.preview.example"
     assert launch_environment["QA_DEMO_API_BASE_URL"] == "https://api.preview.example"
     assert launch_environment["QA_DEMO_BROWSER_URL"] == "https://web.preview.example"
-    assert '"service_kind": "api"' in launch_environment["MB_QA_DEMO_RELEASE_SERVICE_URLS_JSON"]
+    assert (
+        launch_environment["MB_QA_DEMO_RELEASE_SERVICE_URLS_JSON"]
+        == '[{"service_kind":"api","url":"https://api.preview.example"}]'
+    )
 
 
 def test_render_xcuitest_source_injects_release_context_launch_environment() -> None:

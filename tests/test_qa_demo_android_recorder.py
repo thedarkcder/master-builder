@@ -247,7 +247,10 @@ def test_qa_demo_launch_extras_maps_release_context() -> None:
     assert launch_extras["MB_QA_DEMO_RELEASE_API_BASE_URL"] == "https://api.preview.example"
     assert launch_extras["QA_DEMO_API_BASE_URL"] == "https://api.preview.example"
     assert launch_extras["QA_DEMO_BROWSER_URL"] == "https://web.preview.example"
-    assert '"service_kind": "api"' in launch_extras["MB_QA_DEMO_RELEASE_SERVICE_URLS_JSON"]
+    assert (
+        launch_extras["MB_QA_DEMO_RELEASE_SERVICE_URLS_JSON"]
+        == '[{"service_kind":"api","url":"https://api.preview.example"}]'
+    )
 
 
 def test_build_debug_apk_discovers_android_app_in_monorepo_subdirectory(monkeypatch, tmp_path) -> None:
