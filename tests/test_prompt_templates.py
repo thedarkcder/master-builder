@@ -229,6 +229,18 @@ class PromptTemplateTests(unittest.TestCase):
         self.assertIn("CODE_SIGNING_ALLOWED=NO", prompt_text)
         self.assertIn('If you return outcome="blocked" or outcome="waiting_for_input", `blocker_message` is required', prompt_text)
 
+    def test_review_prompt_does_not_fail_before_downstream_qa_demo_recording(self) -> None:
+        prompts_dir = Path(__file__).resolve().parents[1] / "orchestrator" / "prompts" / "workflow"
+        review_system = (prompts_dir / "review_system.j2").read_text(encoding="utf-8")
+        review_user = (prompts_dir / "review_user.j2").read_text(encoding="utf-8")
+
+        self.assertIn("decide if work can advance to the next workflow stage", review_system)
+        self.assertIn("downstream release/QA or ready-gate stages may still be required", review_system)
+        self.assertIn("Demo requirements define the downstream QA recording contract", review_user)
+        self.assertIn("review does not produce release URLs, native release contexts", review_user)
+        self.assertIn("Do not return outcome=\"failed\" solely because browser/iOS/Android demo recordings", review_user)
+        self.assertIn("release/QA must produce the recordings before ready-for-review", review_user)
+
     def test_test_system_prompt_requires_blocker_message_for_blocked_or_waiting(self) -> None:
         prompt_path = (
             Path(__file__).resolve().parents[1]
