@@ -714,6 +714,7 @@ class AdminApiTests(AdminApiTestHarness):
         self.assertIsNone(create_project.json()["discord"])
         self.assertEqual(create_project.json()["effective_policy"]["codex_model"], "gpt-5.4")
         self.assertEqual(create_project.json()["effective_policy"]["codex_reasoning_effort"], "medium")
+        self.assertFalse(create_project.json()["effective_policy"]["qa_demo_recording_enabled"])
 
         duplicate_repo = self.client.post(
             "/api/admin/tenants/tenant-a/projects",
@@ -755,6 +756,7 @@ class AdminApiTests(AdminApiTestHarness):
                     "allowed_commands": ["git status"],
                     "codex_model": "gpt-5.4-mini",
                     "codex_reasoning_effort": "high",
+                    "qa_demo_recording_enabled": True,
                 },
             },
             auth=("admin", "secret"),
@@ -795,8 +797,10 @@ class AdminApiTests(AdminApiTestHarness):
         self.assertEqual(body["policy_overrides"]["knowledge_auto_answer_mode"], "safe")
         self.assertEqual(body["policy_overrides"]["allowed_commands"], ["git status"])
         self.assertEqual(body["policy_overrides"]["codex_reasoning_effort"], "high")
+        self.assertTrue(body["policy_overrides"]["qa_demo_recording_enabled"])
         self.assertEqual(body["effective_policy"]["codex_model"], "gpt-5.4-mini")
         self.assertEqual(body["effective_policy"]["codex_reasoning_effort"], "high")
+        self.assertTrue(body["effective_policy"]["qa_demo_recording_enabled"])
         self.assertFalse(body["effective_policy"]["allow_code_reviews"])
         self.assertFalse(body["effective_policy"]["allow_pr_remediation"])
         self.assertFalse(body["effective_policy"]["allow_manual_pr_fix_requests"])

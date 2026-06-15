@@ -116,6 +116,7 @@ class ObservabilityPolicyConfig(BaseModel):
 
 class PolicyConfig(BaseModel):
     default_worker_capability: Literal["linux", "macos"] | None = None
+    qa_demo_recording_enabled: bool = False
     allow_jira_transitions: bool = False
     allow_pr_creation: bool = True
     allow_code_reviews: bool = True
