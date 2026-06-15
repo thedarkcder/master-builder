@@ -1423,6 +1423,49 @@ class CodexInvocationTests(unittest.TestCase):
         self.assertIn("raw gh pr command", str(raised.exception))
         self.assertIn("github.open_pr", str(raised.exception))
 
+    def test_invoke_runtime_json_with_tools_rejects_raw_github_api_shell_bypass(self) -> None:
+        class _Runtime:
+            def run_json(self, **kwargs):  # noqa: ANN003
+                on_log_line = kwargs.get("on_log_line")
+                if callable(on_log_line):
+                    on_log_line(
+                        "stdout",
+                        (
+                            '{"type":"response_item","payload":{"type":"function_call",'
+                            '"name":"exec_command","arguments":"{\\"cmd\\":'
+                            '\\"curl -s \\\\\\"https://api.github.com/repos/thedarkcder/consumer-app/pulls?'
+                            'head=thedarkcder:feature/CAP-8&state=open\\\\\\"\\",'
+                            '\\"workdir\\":\\"/tmp/repo\\"}"}}'
+                        ),
+                    )
+                return {"type": "final_response", "result": {"message": "published"}}
+
+        context = AgentInvocationContext(
+            channel="worker",
+            tenant_id="tenant-1",
+            project_id="proj-1",
+            command="workflow",
+            stage="dev",
+            working_dir=".",
+            run_id="run-1",
+        )
+
+        with (
+            patch("orchestrator.core.runtime.invocation._get_log_writer", return_value=self._Writer()),
+            self.assertRaises(GovernedToolShellPolicyError) as raised,
+        ):
+            invoke_runtime_json_with_tools(
+                runtime=_Runtime(),  # type: ignore[arg-type]
+                context=context,
+                system_prompt="system",
+                user_prompt="user",
+                allowed_tools={"github.push_branch", "github.open_pr", "github.get_pr_details"},
+                execute_tool=lambda _tool_name, _tool_args: {"ok": True},
+            )
+
+        self.assertIn("raw GitHub API command", str(raised.exception))
+        self.assertIn("github.get_pr_details", str(raised.exception))
+
     def test_invoke_runtime_json_with_tools_fails_on_disallowed_tool(self) -> None:
         runtime_calls: list[dict[str, object]] = []
 
