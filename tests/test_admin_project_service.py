@@ -163,6 +163,38 @@ def test_get_project_raises_when_project_missing() -> None:
         assert exc.status_code == 404
 
 
+def test_update_project_policy_rejects_qa_demo_without_preview_deployments() -> None:
+    from orchestrator.storage.models import Tenant
+
+    session = _Session()
+    tenant = SimpleNamespace(tenant_id="t1", policy_config={}, updated_at=None)
+    project = SimpleNamespace(
+        project_id="p1",
+        tenant_id="t1",
+        name="Project One",
+        policy_overrides={},
+        deployment_config={},
+        updated_at=None,
+    )
+    session.set(Tenant, "t1", tenant)
+    session.set(Project, "p1", project)
+
+    try:
+        _service().update_project_policy(
+            session=session,
+            tenant_id="t1",
+            project_id="p1",
+            payload=SimpleNamespace(policy_overrides={"qa_demo_recording_enabled": True}),
+        )
+        assert False, "expected HTTPException"
+    except HTTPException as exc:
+        assert exc.status_code == 409
+        assert "QA demo recording requires preview deployments to be enabled" in str(exc.detail)
+
+    assert session.commits == 0
+    assert project.policy_overrides == {}
+
+
 def test_create_project_clones_repository_after_commit() -> None:
     from orchestrator.storage.models import Tenant
 
@@ -206,6 +238,33 @@ def test_create_project_clones_repository_after_commit() -> None:
     assert created_project.project_id.startswith("proj_")
     assert "t1" not in created_project.project_id
     assert "run_board_id" not in created_project.policy_overrides
+
+
+def test_create_project_rejects_qa_demo_without_preview_deployments() -> None:
+    from orchestrator.storage.models import Tenant
+
+    session = _Session()
+    session.set(Tenant, "t1", SimpleNamespace(tenant_id="t1", policy_config={}, updated_at=None))
+    payload = SimpleNamespace(
+        name="Sample",
+        github_repository="https://github.com/example/repo",
+        jira_project_key="tp",
+        policy_overrides={"qa_demo_recording_enabled": True},
+        environment=None,
+        secret_refs=None,
+        architecture_docs=None,
+        discord=None,
+    )
+
+    try:
+        _service().create_project(session=session, tenant_id="t1", payload=payload)
+        assert False, "expected HTTPException"
+    except HTTPException as exc:
+        assert exc.status_code == 409
+        assert "QA demo recording requires preview deployments to be enabled" in str(exc.detail)
+
+    assert session.added == []
+    assert session.commits == 0
 
 
 def test_create_project_returns_502_and_deletes_project_when_clone_fails() -> None:

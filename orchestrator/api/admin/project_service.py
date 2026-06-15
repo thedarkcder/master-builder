@@ -320,6 +320,10 @@ class AdminProjectService:
             created_at=now,
             updated_at=now,
         )
+        _assert_qa_demo_policy_can_create_preview_release(
+            policy_overrides=normalized_policy_overrides,
+            project=project,
+        )
         try:
             project.secret_refs = self._materialize_project_secret_refs(
                 session=session,
@@ -1205,7 +1209,12 @@ class AdminProjectService:
 
     def update_project_policy(self, *, session, tenant_id: str, project_id: str, payload) -> object:  # noqa: ANN001
         project, tenant = self._project_and_tenant_or_404(session=session, tenant_id=tenant_id, project_id=project_id)
-        project.policy_overrides = self._normalize_project_policy_overrides(payload.policy_overrides)
+        normalized_policy_overrides = self._normalize_project_policy_overrides(payload.policy_overrides)
+        _assert_qa_demo_policy_can_create_preview_release(
+            policy_overrides=normalized_policy_overrides,
+            project=project,
+        )
+        project.policy_overrides = normalized_policy_overrides
         project.updated_at = datetime.now(timezone.utc)
         return self._commit_project_update(session=session, project=project, tenant=tenant)
 
@@ -1304,6 +1313,18 @@ def _coerce_dict(value: object) -> dict[str, object]:
 def _normalize_optional_string(value: object) -> str | None:
     normalized = str(value or "").strip()
     return normalized or None
+
+
+def _assert_qa_demo_policy_can_create_preview_release(*, policy_overrides: dict, project: Project) -> None:
+    if not bool((policy_overrides or {}).get("qa_demo_recording_enabled")):
+        return
+    deployment_policy = project_deployment_policy_to_schema(project)
+    if deployment_policy.enabled and deployment_policy.preview_prs_enabled:
+        return
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail="QA demo recording requires preview deployments to be enabled before it can be switched on.",
+    )
 
 
 def _project_app_to_schema(app: ProjectApp, *, latest_release: ProjectDeploymentRelease | None = None) -> ProjectAppRead:
