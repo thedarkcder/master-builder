@@ -291,9 +291,11 @@ class GitHubWebhookProductionPathTests(ProductionPathApiTestCase):
             recordings,
             (
                 {
+                    "name": "Browser happy path",
                     "artifact_url": "https://cdn.example/qa-demos/route25/route25-default/run-1/qa-demo-1.webm",
                     "object_key": "route25/route25-default/run-1/qa-demo-1.webm",
                     "capture_target": "browser",
+                    "capture_reference": "https://preview.example",
                     "content_sha256": f"{1:064x}",
                     "release_commit_sha": "b" * 40,
                     "release_context_sha256": "a" * 64,

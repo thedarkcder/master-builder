@@ -24,7 +24,8 @@ _DEMO_EVIDENCE_REQUIRED_COUNTS_PATTERN = re.compile(
     re.MULTILINE,
 )
 _STRUCTURED_DEMO_EVIDENCE_LINE_PATTERN = re.compile(
-    r"^- .+ \[target=(?P<target>browser|ios|android|desktop); reference=[^\]]+; "
+    r"^- (?P<name>.+?) \[target=(?P<target>browser|ios|android|desktop); "
+    r"reference=(?P<reference>[^;\]]+); "
     r"object_key=(?P<object_key>[^;\]]+); sha256=(?P<sha256>[0-9a-f]{64}); "
     r"release_commit_sha=(?P<release_commit_sha>[0-9a-f]{7,64}); "
     r"release_context_sha256=(?P<release_context_sha256>[0-9a-f]{64})\]: "
@@ -487,7 +488,9 @@ def _structured_demo_evidence_matches_expected_recordings(
         return False
     actual = {
         (
+            str(match.group("name") or "").strip(),
             match.group("target"),
+            str(match.group("reference") or "").strip(),
             match.group("object_key"),
             match.group("sha256"),
             match.group("release_commit_sha"),
@@ -496,10 +499,12 @@ def _structured_demo_evidence_matches_expected_recordings(
         )
         for match in structured_matches
     }
-    expected: set[tuple[str, str, str, str, str, str]] = set()
+    expected: set[tuple[str, str, str, str, str, str, str, str]] = set()
     for recording in expected_recordings:
         fingerprint = (
+            str(recording.get("name") or "").strip(),
             str(recording.get("capture_target") or "").strip(),
+            str(recording.get("capture_reference") or "").strip(),
             str(recording.get("object_key") or "").strip(),
             str(recording.get("content_sha256") or "").strip().lower(),
             str(recording.get("release_commit_sha") or "").strip().lower(),
