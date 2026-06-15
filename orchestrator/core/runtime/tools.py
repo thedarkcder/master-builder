@@ -1391,6 +1391,11 @@ def _execute_github_tool(
         head_branch = str(args.get("head_branch") or "").strip()
         base_branch = str(args.get("base_branch") or default_base_branch).strip()
         body = str(args.get("body") or "").strip()
+        effective_policy = resolve_effective_policy(
+            tenant_policy=context.tenant.policy_config,
+            project_overrides=context.project.policy_overrides,
+        )
+        draft = bool(args.get("draft")) or bool(effective_policy.get("qa_demo_recording_enabled"))
         remediation_pr_number = _extract_remediation_pr_number_from_run(getattr(context, "run", None))
         if remediation_pr_number is not None:
             try:
@@ -1431,6 +1436,7 @@ def _execute_github_tool(
             head_branch=head_branch,
             base_branch=base_branch,
             body=body,
+            draft=draft,
         )
         return {"pr_number": result.number, "pr_url": result.html_url}
 
