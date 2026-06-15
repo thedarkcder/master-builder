@@ -5,6 +5,7 @@ from uuid import uuid4
 
 from fastapi import HTTPException, Request, status
 from fastapi.responses import JSONResponse
+from sqlalchemy import select
 from sqlalchemy.orm import Session
 
 from orchestrator.api.webhooks.payload_utils import read_json_payload
@@ -26,6 +27,7 @@ from orchestrator.core.platform.secret_service import resolve_platform_secret_re
 from orchestrator.core.platform.tenant_secret_service import resolve_scoped_secret_ref
 from orchestrator.core.projects.policy import resolve_effective_policy
 from orchestrator.core.review.reviewer import ReviewAgentGate
+from orchestrator.storage.models import Run
 from orchestrator.tools.github_app import github_client_from_tenant_config
 
 
@@ -275,8 +277,37 @@ def build_github_review_runtime(*, session, settings, tenant, project):
         require_demo_evidence=bool(effective_policy.get("qa_demo_recording_enabled")),
         tenant_id=tenant.tenant_id,
         project_id=project.project_id,
+        demo_evidence_run_id_resolver=lambda pr_url: _latest_run_id_for_pr_url(
+            session=session,
+            tenant_id=tenant.tenant_id,
+            project_id=project.project_id,
+            pr_url=pr_url,
+        ),
     )
     return github_client, reviewer_gate
+
+
+def _latest_run_id_for_pr_url(
+    *,
+    session,
+    tenant_id: str,
+    project_id: str,
+    pr_url: str | None,
+) -> str | None:
+    normalized_pr_url = str(pr_url or "").strip()
+    if not normalized_pr_url:
+        return None
+    statement = (
+        select(Run.run_id)
+        .where(
+            Run.tenant_id == tenant_id,
+            Run.project_id == project_id,
+            Run.pr_url == normalized_pr_url,
+        )
+        .order_by(Run.created_at.desc(), Run.run_id.desc())
+        .limit(1)
+    )
+    return session.execute(statement).scalar_one_or_none()
 
 
 async def prepare_github_webhook_runtime(
