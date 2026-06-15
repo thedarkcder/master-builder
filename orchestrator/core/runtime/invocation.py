@@ -10,6 +10,7 @@ import shlex
 import threading
 import time
 from typing import Callable
+from urllib.parse import urlparse
 from uuid import uuid4
 
 from sqlalchemy.orm import Session
@@ -1546,6 +1547,19 @@ def _strip_shell_env_prefix(tokens: list[str]) -> list[str]:
     return remaining
 
 
+def _github_api_url_from_shell_token(token: str) -> str | None:
+    normalized = str(token or "").strip().strip("'\"")
+    normalized = normalized.removeprefix('\\"').removesuffix('\\"')
+    parsed = urlparse(normalized)
+    if parsed.scheme not in {"http", "https"}:
+        return None
+    if parsed.netloc.lower() != "api.github.com":
+        return None
+    if not parsed.path.startswith("/repos/"):
+        return None
+    return normalized
+
+
 def _governed_github_shell_policy_violation(command: str, *, depth: int = 0) -> str | None:
     normalized = str(command or "").strip()
     if not normalized or depth > 3:
@@ -1570,6 +1584,8 @@ def _governed_github_shell_policy_violation(command: str, *, depth: int = 0) -> 
         return f"raw git push: {redact_sensitive_text(normalized)}"
     if executable == "gh" and len(tokens) >= 2 and tokens[1] == "pr":
         return f"raw gh pr command: {redact_sensitive_text(normalized)}"
+    if executable in {"curl", "wget"} and any(_github_api_url_from_shell_token(token) for token in tokens[1:]):
+        return f"raw GitHub API command: {redact_sensitive_text(normalized)}"
     return None
 
 
