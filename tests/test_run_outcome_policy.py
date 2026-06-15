@@ -436,7 +436,11 @@ def test_complete_blocks_demo_required_success_when_preview_release_failed() -> 
             return_value=SimpleNamespace(
                 created=False,
                 reason="existing",
-                release=SimpleNamespace(status="failed", service_urls=[]),
+                release=SimpleNamespace(
+                    status="failed",
+                    service_urls=[],
+                    last_error='[{"output":"Deployment failed: certificate has expired","hidden":false}]',
+                ),
             ),
         ),
         patch("orchestrator.core.worker.run_outcome_policy.execute_qa_demo_stage") as qa_mock,
@@ -460,6 +464,7 @@ def test_complete_blocks_demo_required_success_when_preview_release_failed() -> 
     update_pr_mock.assert_not_called()
     assert finalizer_calls["workflow_result"].outcome == "blocked"
     assert "preview release is failed" in finalizer_calls["workflow_result"].blocker_message
+    assert "certificate has expired" in finalizer_calls["workflow_result"].blocker_message
 
 
 def test_complete_blocks_demo_required_success_without_pr_url_before_preview_release() -> None:

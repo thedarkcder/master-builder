@@ -149,6 +149,36 @@ class DeploymentHostApiTests(SqliteTemplateApiTestCase):
             )
             session.commit()
 
+    def test_registered_host_claims_no_command_when_queue_is_empty(self) -> None:
+        self._insert_jira_connection()
+        create_tenant = self.client.post("/api/admin/tenants", json=self._tenant_payload(), auth=("admin", "secret"))
+        self.assertEqual(create_tenant.status_code, 201, create_tenant.text)
+        create_host_response = self.client.post(
+            "/api/admin/deployment-hosts",
+            json={"label": "empty-queue-host", "capabilities": ["local_preview_routes"]},
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_host_response.status_code, 201, create_host_response.text)
+        bootstrap_token = create_host_response.json()["bootstrap_token"]
+        register_response = self.client.post(
+            "/api/internal/deployment-hosts/register",
+            json={
+                "bootstrap_token": bootstrap_token,
+                "agent_version": "test-agent",
+                "advertised_capabilities": ["local_preview_routes"],
+            },
+        )
+        self.assertEqual(register_response.status_code, 200, register_response.text)
+        access_token = register_response.json()["access_token"]
+
+        claim_response = self.client.post(
+            "/api/internal/deployment-hosts/commands/claim",
+            headers={"Authorization": f"Bearer {access_token}"},
+        )
+
+        self.assertEqual(claim_response.status_code, 200, claim_response.text)
+        self.assertIsNone(claim_response.json()["command"])
+
     def _create_project_with_database_backup(self) -> tuple[str, str]:
         create_project = self.client.post(
             "/api/admin/tenants/tenant-a/projects",

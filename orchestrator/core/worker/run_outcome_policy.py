@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 
 from orchestrator.core.deployment_previews import create_run_preview_deployment
@@ -376,6 +377,9 @@ class RunOutcomePolicy:
                 "QA demo recording requires a live run preview deployment/release before recording; "
                 f"preview release is {preview_release_status}."
             )
+            failure_detail = _preview_release_failure_detail(preview_release)
+            if failure_detail:
+                message = f"{message} Release failure: {failure_detail}"
             return _workflow_result_with_qa_blocker(
                 workflow_result=workflow_result,
                 attempt=attempt,
@@ -694,6 +698,33 @@ def _stage_trace_entry(*, stage: str, attempt: int, status: str, summary: str) -
         "attempt": attempt,
         "summary": summary,
     }
+
+
+def _preview_release_failure_detail(preview_release) -> str:  # noqa: ANN001
+    raw_error = str(getattr(preview_release, "last_error", "") or "").strip()
+    if not raw_error:
+        return ""
+    text = raw_error
+    try:
+        parsed = json.loads(raw_error)
+    except json.JSONDecodeError:
+        parsed = None
+    if isinstance(parsed, list):
+        visible_outputs = [
+            str(item.get("output") or "").strip()
+            for item in parsed
+            if isinstance(item, dict) and not bool(item.get("hidden")) and str(item.get("output") or "").strip()
+        ]
+        if visible_outputs:
+            text = "\n".join(visible_outputs)
+    for line in text.splitlines():
+        normalized = line.strip()
+        lowered = normalized.lower()
+        if not normalized:
+            continue
+        if "deployment failed" in lowered or "error:" in lowered or "failed to " in lowered:
+            return normalized[:500]
+    return text.strip().replace("\n", " ")[:500]
 
 
 def _checkpoint_status_for_stage_outcome(outcome: str) -> str:

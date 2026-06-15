@@ -48,7 +48,7 @@ export type ProjectDeploymentBackupPolicyRecord = {
 export type ProjectDeploymentConfigRecord = {
   enabled: boolean;
   environment_name: string | null;
-  source_strategy: "dockerfile" | "docker_compose" | null;
+  source_strategy: "dockerfile" | "docker_compose" | "nixpacks" | null;
   environment: Record<string, string>;
   secret_refs: Record<string, string>;
   domains: ProjectDeploymentDomainRecord[];
@@ -235,7 +235,7 @@ export type ProjectAppDeploymentConfigRecord = ProjectDeploymentConfigRecord & {
 export type ProjectAppDeploymentConfigUpdatePayload = {
   enabled: boolean;
   environment_name: string | null;
-  source_strategy: "dockerfile" | "docker_compose" | null;
+  source_strategy: "dockerfile" | "docker_compose" | "nixpacks" | null;
   environment: Record<string, string>;
   secret_refs: Record<string, string>;
   domains: ProjectDeploymentDomainRecord[];

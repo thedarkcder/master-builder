@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from orchestrator.api.admin.deployment_config_service import tenant_deployment_plane_to_schema
 from orchestrator.api.admin.deployment_release_service import (
+    _normalize_local_coolify_api_base_url,
     update_project_deployment_release_status,
     verify_release_route_bindings,
 )
@@ -68,7 +69,7 @@ def _required_plane_value(value: str | None, field_name: str) -> str:
 def _coolify_api_base_url(*, tenant_plane: TenantDeploymentPlaneRead) -> str:
     configured = _normalize_optional_string(tenant_plane.api_base_url)
     if configured is not None:
-        return configured.rstrip("/")
+        return _normalize_local_coolify_api_base_url(configured.rstrip("/"))
     if tenant_plane.platform_subdomain and tenant_plane.base_domain:
         return f"https://{tenant_plane.platform_subdomain}.{tenant_plane.base_domain}/api/v1"
     raise HTTPException(

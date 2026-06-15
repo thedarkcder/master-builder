@@ -912,6 +912,53 @@ class OrchestratedRunRunnerTests(unittest.TestCase):
         self.assertEqual(stage_agents.test_calls, 0)
         self.assertEqual(stage_agents.review_calls, 1)
 
+    def test_qa_resume_skips_all_model_stages_and_returns_success_for_qa_policy(self) -> None:
+        stage_agents = _StubStageAgents(
+            plan=PmPlan(plan_steps=["unused"], acceptance_criteria=["unused"], risks=[]),
+            dev_results=[],
+            test_results=[],
+            review_results=[],
+        )
+        checkpoints: list[WorkflowStageCheckpoint] = []
+
+        result = self._executor(stage_agents).execute(
+            replace(
+                self._request(),
+                entry_mode="resume",
+                entry_stage="qa",
+                checkpoint_kind="execution",
+                checkpoint_payload=self._resume_payload(
+                    plan=PmPlan(plan_steps=["plan"], acceptance_criteria=["ac1"], risks=[]),
+                    dev_result=DevResult(
+                        outcome="continue",
+                        change_summary=["Implemented QA demo ready indicator"],
+                        pr_url="https://example/pull/1",
+                    ),
+                    test_result=TestResult(
+                        outcome="continue",
+                        guidance=["pytest -q"],
+                        feedback=None,
+                    ),
+                    review_result=ReviewResult(
+                        outcome="continue",
+                        summary=["Approved for QA proof"],
+                        feedback=None,
+                        pr_url="https://example/pull/1",
+                    ),
+                ),
+            ),
+            stage_checkpoint_hook=checkpoints.append,
+        )
+
+        self.assertEqual(result.outcome, "success")
+        self.assertEqual(result.pr_url, "https://example/pull/1")
+        self.assertEqual(stage_agents.pm_calls, 0)
+        self.assertEqual(stage_agents.dev_calls, 0)
+        self.assertEqual(stage_agents.test_calls, 0)
+        self.assertEqual(stage_agents.review_calls, 0)
+        self.assertEqual([checkpoint.stage for checkpoint in checkpoints], ["pm", "dev", "test", "review"])
+        self.assertEqual([entry["stage"] for entry in result.orchestration_stage_trace], ["pm", "dev", "test", "review"])
+
     def test_review_resume_without_pr_publishes_with_governed_github_tools_when_pr_creation_required(self) -> None:
         stage_agents = _StubStageAgents(
             plan=PmPlan(plan_steps=["unused"], acceptance_criteria=["unused"], risks=[]),

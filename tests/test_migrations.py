@@ -65,7 +65,45 @@ class MigrationTests(unittest.TestCase):
 
         duplicates = {revision_id: count for revision_id, count in Counter(revision_ids).items() if count > 1}
         self.assertEqual(duplicates, {})
-        self.assertEqual(script.get_heads(), ["20260530_0117"])
+        self.assertEqual(script.get_heads(), ["20260615_0120"])
+
+    def test_project_app_deployment_config_migration_removes_qa_capture_metadata(self) -> None:
+        migration = self._load_migration_module(
+            "20260615_0119_remove_qa_capture_metadata_from_project_app_deployment_config.py",
+            "migration_20260615_0119",
+        )
+
+        updated, changed = migration.strip_qa_capture_metadata(
+            {
+                "source_strategy": "nixpacks",
+                "capture_target": "browser",
+                "mobile_platform": "android",
+                "services": [{"kind": "website"}],
+            }
+        )
+
+        self.assertTrue(changed)
+        self.assertEqual(updated, {"source_strategy": "nixpacks", "services": [{"kind": "website"}]})
+
+    def test_qa_checkpoint_stage_repair_detects_snapshot_qa_stage(self) -> None:
+        migration = self._load_migration_module(
+            "20260615_0120_repair_qa_requeue_checkpoint_stage.py",
+            "migration_20260615_0120",
+        )
+
+        updated_stage, changed = migration.checkpoint_stage_from_snapshot(
+            {
+                "version": 1,
+                "stages": {
+                    "test": {"status": "completed"},
+                    "qa": {"status": "requeue"},
+                },
+            },
+            "test",
+        )
+
+        self.assertTrue(changed)
+        self.assertEqual(updated_stage, "qa")
 
     def test_project_install_request_label_normalization_migration_canonicalizes_provider_labels(self) -> None:
         module = self._load_migration_module(
@@ -110,7 +148,7 @@ class MigrationTests(unittest.TestCase):
             with engine.connect() as connection:
                 versions = connection.execute(text("SELECT version_num FROM alembic_version")).scalars().all()
 
-            self.assertEqual(versions, ["20260530_0117"])
+            self.assertEqual(versions, ["20260615_0120"])
 
     def test_requeue_snapshot_reason_repair_migration_backfills_missing_reason(self) -> None:
         migration = self._load_migration_module(
@@ -2005,7 +2043,7 @@ class MigrationTests(unittest.TestCase):
 
             with engine.begin() as connection:
                 versions = connection.execute(text("SELECT version_num FROM alembic_version")).scalars().all()
-            self.assertEqual(versions, ["20260530_0117"])
+            self.assertEqual(versions, ["20260615_0120"])
 
     def test_run_migrations_disables_alembic_logger_reconfiguration(self) -> None:
         fake_config = MagicMock()
