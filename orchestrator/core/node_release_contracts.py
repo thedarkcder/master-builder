@@ -5,7 +5,7 @@ import re
 
 NODE_INSTALL_WITH_LEGACY_PEERS_COMMAND = "npm install --package-lock=false --legacy-peer-deps --production=false"
 LEGACY_EXPO_CLI_PACKAGE = "expo-cli@3.28.6"
-LEGACY_EXPO_WEB_START_COMMAND = "npx expo-cli start --web --non-interactive --host 0.0.0.0 --port 19006"
+LEGACY_EXPO_WEB_START_COMMAND = "npx expo-cli start --web --non-interactive --host 0.0.0.0"
 LEGACY_EXPO_CLI_INSTALL_COMMAND = (
     f"{NODE_INSTALL_WITH_LEGACY_PEERS_COMMAND} && npm install --no-save --legacy-peer-deps {LEGACY_EXPO_CLI_PACKAGE}"
 )

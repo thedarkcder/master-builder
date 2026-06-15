@@ -3503,7 +3503,7 @@ class DeploymentContractTests(unittest.TestCase):
         self.assertEqual(fake_client.application_payload["base_directory"], "/")
         self.assertEqual(
             fake_client.application_payload["start_command"],
-            "npx expo-cli start --web --non-interactive --host 0.0.0.0 --port 19006",
+            "npx expo-cli start --web --non-interactive --host 0.0.0.0",
         )
         self.assertEqual(
             fake_client.application_payload["install_command"],
