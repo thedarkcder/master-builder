@@ -277,6 +277,7 @@ def build_github_review_runtime(*, session, settings, tenant, project):
         require_demo_evidence=bool(effective_policy.get("qa_demo_recording_enabled")),
         tenant_id=tenant.tenant_id,
         project_id=project.project_id,
+        demo_artifact_public_base_url=getattr(settings, "qa_demo_artifact_public_base_url", None),
         demo_evidence_run_id_resolver=lambda pr_url: _latest_run_id_for_pr_url(
             session=session,
             tenant_id=tenant.tenant_id,

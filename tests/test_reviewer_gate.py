@@ -76,6 +76,7 @@ class ReviewerGateTests(unittest.TestCase):
             required_demo_capture_targets=required_targets,
             tenant_id="example",
             project_id="example-default",
+            demo_artifact_public_base_url="https://cdn.example/qa-demos",
             demo_evidence_run_id_resolver=lambda _pr_url: current_run_id,
         )
 
@@ -328,6 +329,46 @@ class ReviewerGateTests(unittest.TestCase):
                     "<!-- master-builder:qa-demo-evidence v1 -->\n"
                     "- Browser walkthrough [target=browser; reference=https://preview.example; "
                     "object_key=tenant-1/project-1/run-1/qa-demo-1.webm]: https://cdn.example/qa/browser.webm\n"
+                ),
+            )
+        )
+
+        signal = gate.evaluate_pr(
+            repo_full_name="example/repo",
+            pr_number=18,
+        )
+
+        self.assertFalse(signal.ready)
+        self.assertEqual(signal.state, "missing_demo_evidence")
+
+    def test_reviewer_blocks_structured_demo_evidence_from_unconfigured_artifact_host(self) -> None:
+        gate = self._gate_with_demo_requirement(
+            _FakeGitHubClient(
+                checks=[
+                    WorkflowCheckSuite(name="CI", status="completed", conclusion="success"),
+                    WorkflowCheckSuite(name="Security", status="completed", conclusion="success"),
+                ],
+                files=[
+                    PullRequestFileChange(filename="orchestrator/core/reviewer.py", patch="+ change"),
+                    PullRequestFileChange(filename="tests/test_reviewer_gate.py", patch="+ test"),
+                ],
+                review_body=(
+                    "Good:\n- implemented\n\n"
+                    "Risks:\n- low\n\n"
+                    "Must-fix:\n- none\n\n"
+                    "Tests:\n- pytest -q\n\n"
+                    "Questions:\n- none\n\n"
+                    "Follow-ups:\n- none\n\n"
+                    "## Demo Evidence\n"
+                    "<!-- master-builder:qa-demo-evidence v1 -->\n"
+                    "<!-- master-builder:qa-demo-required-targets browser -->\n"
+                    "<!-- master-builder:qa-demo-required-counts browser=1 -->\n"
+                    "- Browser walkthrough [target=browser; reference=https://preview.example; "
+                    "object_key=example/example-default/run-1/qa-demo-1.webm; "
+                    "sha256=0000000000000000000000000000000000000000000000000000000000000001; "
+                    "release_commit_sha=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb; "
+                    "release_context_sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa]: "
+                    "https://manual.example/qa-demos/example/example-default/run-1/qa-demo-1.webm\n"
                 ),
             )
         )
