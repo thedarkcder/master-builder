@@ -1366,6 +1366,21 @@ def _validate_qa_scenario_coverage(
         raise RuntimeError("QA demo scenarios do not cover PM demo requirement variants: " + " | ".join(messages))
 
 
+def _validate_recorded_qa_result_covers_plan(*, plan: PmPlan, qa_result: QaResult) -> None:
+    capture_targets = {
+        target: DemoCaptureTarget(capture_target=target, capture_reference="")
+        for target in recorded_capture_targets(qa_result.recordings)
+        if target in required_capture_targets(plan)
+    }
+    if not capture_targets:
+        return
+    _validate_qa_scenario_coverage(
+        plan=plan,
+        qa_result=qa_result,
+        capture_targets=capture_targets,
+    )
+
+
 def _validate_reusable_qa_recording_links(
     *,
     settings,  # noqa: ANN001
@@ -1796,6 +1811,7 @@ def execute_qa_demo_stage(
     required_targets = required_capture_targets(plan)
     if previous_qa_result is not None:
         previous_qa_result = _validate_recorded_scenario_proof(previous_qa_result)
+        _validate_recorded_qa_result_covers_plan(plan=plan, qa_result=previous_qa_result)
     previous_recordings = list(previous_qa_result.recordings if previous_qa_result is not None else [])
     previous_scenarios = list(previous_qa_result.scenarios if previous_qa_result is not None else [])
     ensure_release_ready_for_qa(
@@ -1972,6 +1988,7 @@ def execute_qa_demo_stage(
             combined_result = _validate_recorded_scenario_proof(
                 replace(qa_result, scenarios=combined_scenarios, recordings=combined_recordings)
             )
+            _validate_recorded_qa_result_covers_plan(plan=plan, qa_result=combined_result)
             still_remaining = remaining_capture_targets(plan, combined_recordings)
             if still_remaining:
                 missing_current_worker_targets = [

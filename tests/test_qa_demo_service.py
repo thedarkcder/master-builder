@@ -3604,6 +3604,96 @@ def test_execute_qa_demo_stage_revalidates_release_readiness_before_previous_rec
             raise AssertionError("expected broken preview release to block previous QA demo proof reuse")
 
 
+def test_execute_qa_demo_stage_rejects_previous_recording_without_current_pm_coverage() -> None:
+    tenant = SimpleNamespace(tenant_id="tenant-1", github_config={})
+    project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo")
+    run = SimpleNamespace(run_id="run-1")
+    plan = PmPlan(
+        plan_steps=["Implement"],
+        acceptance_criteria=["New dashboard saves settings"],
+        risks=[],
+        demo_requirements=[
+            DemoRequirement(
+                title="New dashboard walkthrough",
+                acceptance_criterion="New dashboard saves settings",
+                capture_target="browser",
+                variants=["Invalid settings show validation"],
+            )
+        ],
+    )
+    previous_qa = QaResult(
+        summary=["Previous demos"],
+        scenarios=[
+            QaScenario(
+                name="Old profile walkthrough",
+                objective="Show old profile still renders",
+                capture_target="browser",
+                steps=_proof_steps("text=Old profile"),
+            ),
+            QaScenario(
+                name="Old profile repeat action",
+                objective="Repeat action remains safe on the old profile",
+                capture_target="browser",
+                steps=_proof_steps("text=Old profile"),
+            ),
+        ],
+        recordings=[
+            QaRecording(
+                name="Old profile walkthrough",
+                artifact_url="https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-demo-1.webm",
+                object_key="tenant-1/project-1/run-1/qa-demo-1.webm",
+                capture_target="browser",
+                capture_reference="https://preview.example",
+                content_sha256=_sha256(55),
+                release_context_sha256=_release_context_sha256(),
+            ),
+            QaRecording(
+                name="Old profile repeat action",
+                artifact_url="https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-demo-2.webm",
+                object_key="tenant-1/project-1/run-1/qa-demo-2.webm",
+                capture_target="browser",
+                capture_reference="https://preview.example",
+                content_sha256=_sha256(56),
+                release_context_sha256=_release_context_sha256(),
+            ),
+        ],
+    )
+
+    with (
+        patch("orchestrator.core.qa.demo_service._default_artifact_url_probe", return_value=200) as artifact_probe,
+        patch("orchestrator.core.qa.demo_service._default_service_url_probe", return_value=200),
+        patch("orchestrator.core.qa.demo_service.CodexWorkflowAgents") as agents_cls,
+    ):
+        try:
+            execute_qa_demo_stage(
+                session=SimpleNamespace(),
+                settings=_qa_artifact_settings(),
+                tenant=tenant,
+                project=project,
+                run=run,
+                request=_request(),
+                plan=plan,
+                dev_result=DevResult(change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8"),
+                test_result=TestResult(guidance=["pytest -q"]),
+                review_result=ReviewResult(summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"),
+                preview_release=SimpleNamespace(
+                    service_urls=[
+                        SimpleNamespace(service_kind="website", status="active", url="https://preview.example")
+                    ]
+                ),
+                previous_qa_result=previous_qa,
+            )
+        except RuntimeError as exc:
+            assert "QA demo scenarios do not cover PM demo requirement variants" in str(exc)
+            assert "New dashboard walkthrough" in str(exc)
+            assert "Invalid settings show validation" in str(exc)
+        else:  # pragma: no cover
+            raise AssertionError("expected stale PM coverage proof to block previous QA demo proof reuse")
+
+    artifact_probe.assert_not_called()
+    agents_cls.assert_not_called()
+
+
 def test_execute_qa_demo_stage_rejects_previous_recording_from_different_release_context() -> None:
     tenant = SimpleNamespace(tenant_id="tenant-1", github_config={})
     project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo")
