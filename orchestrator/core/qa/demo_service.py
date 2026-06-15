@@ -1163,9 +1163,21 @@ def _normalized_scenario_text(scenario: QaScenario) -> str:
 
 
 def _copy_recordings(recordings: list[LocalQaRecording], *, request: WorkflowRequest) -> list[LocalQaRecording]:
-    tenant_id = _safe_recording_path_segment(request.tenant_id, field_name="tenant_id")
-    project_id = _safe_recording_path_segment(request.project_id, field_name="project_id")
-    run_id = _safe_recording_path_segment(request.run_id, field_name="run_id")
+    tenant_id = _require_safe_recording_scope_segment(
+        request.tenant_id,
+        field_name="tenant_id",
+        scope_name="recording copy scope",
+    )
+    project_id = _require_safe_recording_scope_segment(
+        request.project_id,
+        field_name="project_id",
+        scope_name="recording copy scope",
+    )
+    run_id = _require_safe_recording_scope_segment(
+        request.run_id,
+        field_name="run_id",
+        scope_name="recording copy scope",
+    )
     persisted_dir = Path.cwd() / "tmp" / "qa-demos" / tenant_id / project_id / run_id
     persisted_dir.mkdir(parents=True, exist_ok=True)
     copied: list[LocalQaRecording] = []
@@ -1185,14 +1197,32 @@ def _copy_recordings(recordings: list[LocalQaRecording], *, request: WorkflowReq
     return copied
 
 
-def _safe_recording_path_segment(value: str | None, *, field_name: str) -> str:
+def _require_safe_recording_scope_segment(value: str | None, *, field_name: str, scope_name: str) -> str:
     raw = str(value or "").strip()
     if not raw:
-        raise RuntimeError(f"QA demo recording copy scope requires {field_name}")
-    normalized = re.sub(r"[^A-Za-z0-9._-]+", "-", raw).strip(".-")
-    if not normalized:
-        raise RuntimeError(f"QA demo recording copy scope has invalid {field_name}: {raw!r}")
-    return normalized
+        raise RuntimeError(f"QA demo {scope_name} requires {field_name}")
+    if raw in {".", ".."} or "/" in raw or "\\" in raw or not re.fullmatch(r"[A-Za-z0-9._-]+", raw):
+        raise RuntimeError(f"QA demo {scope_name} has unsafe {field_name}: {raw!r}")
+    return raw
+
+
+def _demo_artifact_object_key(*, tenant, project, run, index: int, suffix: str) -> str:  # noqa: ANN001
+    tenant_id = _require_safe_recording_scope_segment(
+        getattr(tenant, "tenant_id", None),
+        field_name="tenant_id",
+        scope_name="artifact object key scope",
+    )
+    project_id = _require_safe_recording_scope_segment(
+        getattr(project, "project_id", None),
+        field_name="project_id",
+        scope_name="artifact object key scope",
+    )
+    run_id = _require_safe_recording_scope_segment(
+        getattr(run, "run_id", None),
+        field_name="run_id",
+        scope_name="artifact object key scope",
+    )
+    return f"{tenant_id}/{project_id}/{run_id}/qa-demo-{index}{suffix}"
 
 
 def _validate_recordings_cover_scenarios(
@@ -1494,7 +1524,13 @@ def execute_qa_demo_stage(
             uploaded: list[QaRecording] = []
             for index, recording in enumerate(local_recordings, start=1):
                 suffix = Path(recording.path).suffix.lower()
-                object_key = f"{tenant.tenant_id}/{project.project_id}/{run.run_id}/qa-demo-{len(previous_recordings) + index}{suffix}"
+                object_key = _demo_artifact_object_key(
+                    tenant=tenant,
+                    project=project,
+                    run=run,
+                    index=len(previous_recordings) + index,
+                    suffix=suffix,
+                )
                 artifact_url = upload_recording(
                     storage=storage,
                     local_path=recording.path,
