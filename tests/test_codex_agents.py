@@ -226,6 +226,36 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             ["browser", "ios", "android"],
         )
 
+    def test_pm_rejects_executable_plan_missing_explicit_ticket_demo_targets(self) -> None:
+        runtime = CodexRuntime(
+            model="gpt-5-codex",
+            max_output_tokens=1200,
+            command="override",
+            _request=_RuntimeQueue(
+                [
+                    (
+                        '{"outcome":"continue","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":[],"demo_requirements":'
+                        '[{"title":"Browser demo","acceptance_criterion":"ac1","capture_target":"browser","variants":["Invalid input is rejected"]}],'
+                        '"next_stage":"dev","execution_worker_capability":"linux"}'
+                    ),
+                ]
+            ),
+        )
+        agents = CodexWorkflowAgents(runtime=runtime)
+        request = replace(
+            self._request(),
+            issue_description=(
+                "Acceptance criteria: the delivered feature must be demoed in browser, iOS, and Android."
+            ),
+        )
+
+        with patch("orchestrator.core.runtime.agents.render_prompt", side_effect=lambda template_name, **_: template_name):
+            with self.assertRaisesRegex(
+                CodexRuntimeError,
+                "missing required demo capture target\\(s\\): android, ios",
+            ):
+                agents.pm(request, 1, None, [], None, None, None, self._CAPTURE_TARGET_CONSTRAINTS_JSON)
+
     def test_pm_rejects_unavailable_desktop_demo_requirements(self) -> None:
         runtime = CodexRuntime(
             model="gpt-5-codex",
