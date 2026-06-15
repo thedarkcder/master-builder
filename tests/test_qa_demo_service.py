@@ -2793,6 +2793,51 @@ def test_update_pull_request_with_demo_evidence_rejects_recording_url_key_mismat
     github_client_mock.assert_not_called()
 
 
+def test_update_pull_request_with_demo_evidence_rejects_unsafe_metadata_before_url_probe() -> None:
+    with (
+        patch("orchestrator.core.qa.demo_service.github_client_from_tenant_config") as github_client_mock,
+        patch("orchestrator.core.qa.demo_service._default_artifact_url_probe") as url_probe,
+    ):
+        try:
+            update_pull_request_with_demo_evidence(
+                session=SimpleNamespace(),
+                settings=_qa_artifact_settings(),
+                tenant=SimpleNamespace(tenant_id="tenant-1", github_config={}),
+                project=SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo"),
+                run=SimpleNamespace(run_id="run-1"),
+                workflow_result=SimpleNamespace(pr_url="https://github.com/acme/repo/pull/8"),
+                qa_result=QaResult(
+                    summary=["Recorded demos"],
+                    scenarios=[
+                        QaScenario(
+                            name="Browser walkthrough\n- Injected",
+                            objective="Show browser",
+                            capture_target="browser",
+                            steps=_proof_steps("text=Feature"),
+                        )
+                    ],
+                    recordings=[
+                        QaRecording(
+                            name="Browser walkthrough\n- Injected",
+                            artifact_url="https://cdn.example/qa-demos/tenant-1/project-1/run-1/browser.webm",
+                            object_key="tenant-1/project-1/run-1/browser.webm",
+                            capture_target="browser",
+                            capture_reference="https://preview.example",
+                        )
+                    ],
+                ),
+                required_capture_targets=("browser",),
+                required_recording_counts={"browser": 1},
+            )
+        except RuntimeError as exc:
+            assert "QA demo evidence recording metadata is not serializable" in str(exc)
+        else:  # pragma: no cover
+            raise AssertionError("expected unsafe recording metadata to block PR evidence update")
+
+    url_probe.assert_not_called()
+    github_client_mock.assert_not_called()
+
+
 def test_update_pull_request_with_demo_evidence_rejects_missing_required_capture_target_before_url_probe() -> None:
     with (
         patch("orchestrator.core.qa.demo_service.github_client_from_tenant_config") as github_client_mock,
