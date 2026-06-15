@@ -540,6 +540,7 @@ class RunLifecycleTests(unittest.TestCase):
                         capture_reference="ios-simulator://configured",
                         capture_target="ios",
                         content_sha256=f"{1:064x}",
+                        release_commit_sha="b" * 40,
                         release_context_sha256=f"{999:064x}",
                     )
                 ],

@@ -326,6 +326,7 @@ def _repair_legacy_qa_recordings_without_content_sha256(artifact: object) -> dic
         return None
     if all(
         _is_valid_content_sha256(recording.get("content_sha256"))
+        and _is_valid_commit_sha(recording.get("release_commit_sha"))
         and _is_valid_content_sha256(recording.get("release_context_sha256"))
         for recording in recordings
     ):
@@ -374,6 +375,13 @@ def _is_valid_content_sha256(value: object) -> bool:
         return False
     normalized = value.strip().lower()
     return len(normalized) == 64 and all(char in "0123456789abcdef" for char in normalized)
+
+
+def _is_valid_commit_sha(value: object) -> bool:
+    if not isinstance(value, str):
+        return False
+    normalized = value.strip().lower()
+    return 7 <= len(normalized) <= 64 and all(char in "0123456789abcdef" for char in normalized)
 
 
 def _repair_legacy_mobile_capture_targets(artifact: object) -> dict[str, Any] | None:

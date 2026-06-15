@@ -1145,6 +1145,7 @@ def _qa_recordings(value: object) -> list[QaRecording]:
         capture_target = _optional_string(item.get("capture_target"))
         capture_reference = _optional_string(item.get("capture_reference"))
         content_sha256 = _content_sha256(item.get("content_sha256"))
+        release_commit_sha = _commit_sha(item.get("release_commit_sha"))
         release_context_sha256 = _content_sha256(item.get("release_context_sha256"))
         if (
             name is None
@@ -1153,6 +1154,7 @@ def _qa_recordings(value: object) -> list[QaRecording]:
             or capture_target is None
             or capture_reference is None
             or content_sha256 is None
+            or release_commit_sha is None
             or release_context_sha256 is None
         ):
             return []
@@ -1166,10 +1168,21 @@ def _qa_recordings(value: object) -> list[QaRecording]:
                 capture_target=capture_target,  # type: ignore[arg-type]
                 capture_reference=capture_reference,
                 content_sha256=content_sha256,
+                release_commit_sha=release_commit_sha,
                 release_context_sha256=release_context_sha256,
             )
         )
     return parsed
+
+
+def _commit_sha(value: object) -> str | None:
+    parsed = _optional_string(value)
+    if parsed is None:
+        return None
+    normalized = parsed.lower()
+    if len(normalized) < 7 or len(normalized) > 64 or any(char not in "0123456789abcdef" for char in normalized):
+        return None
+    return normalized
 
 
 def _content_sha256(value: object) -> str | None:
