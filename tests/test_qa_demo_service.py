@@ -2117,6 +2117,55 @@ def test_execute_qa_demo_stage_requires_pm_demo_variants_before_qa_agent() -> No
     fake_agents.qa.assert_not_called()
 
 
+def test_execute_qa_demo_stage_requires_pm_demo_targets_to_cover_project_targets() -> None:
+    tenant = SimpleNamespace(tenant_id="tenant-1", github_config={})
+    project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo")
+    run = SimpleNamespace(run_id="run-1")
+    release = SimpleNamespace(
+        service_urls=[SimpleNamespace(service_kind="website", status="active", url="https://preview.example")]
+    )
+    plan = PmPlan(
+        plan_steps=["Implement"],
+        acceptance_criteria=["Feature works"],
+        risks=[],
+        demo_requirements=[
+            DemoRequirement(
+                title="Browser walkthrough",
+                acceptance_criterion="Feature works",
+                capture_target="browser",
+                variants=["Repeat action remains safe"],
+            )
+        ],
+    )
+    request = replace(_request(), project_demo_capture_targets=("browser", "ios", "android"))
+    fake_agents = SimpleNamespace(qa=MagicMock())
+
+    with (
+        patch("orchestrator.core.qa.demo_service.build_codex_runtime"),
+        patch("orchestrator.core.qa.demo_service.CodexWorkflowAgents", return_value=fake_agents),
+    ):
+        try:
+            execute_qa_demo_stage(
+                session=SimpleNamespace(),
+                settings=SimpleNamespace(qa_demo_playwright_module_dir=""),
+                tenant=tenant,
+                project=project,
+                run=run,
+                request=request,
+                plan=plan,
+                dev_result=DevResult(change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8"),
+                test_result=TestResult(guidance=["pytest -q"]),
+                review_result=ReviewResult(summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"),
+                preview_release=release,
+            )
+        except RuntimeError as exc:
+            assert "missing required project demo capture target(s): android, ios" in str(exc)
+        else:  # pragma: no cover
+            raise AssertionError("expected QA demo project capture target contract failure")
+
+    fake_agents.qa.assert_not_called()
+
+
 def test_execute_qa_demo_stage_blocks_when_qa_scenarios_do_not_cover_pm_variants() -> None:
     tenant = SimpleNamespace(tenant_id="tenant-1", github_config={})
     project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo")

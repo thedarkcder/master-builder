@@ -696,6 +696,21 @@ def ensure_pm_demo_requirements_are_recordable(plan: PmPlan) -> None:
         )
 
 
+def ensure_pm_demo_requirements_cover_project_targets(*, plan: PmPlan, request: WorkflowRequest) -> None:
+    selected_targets = set(required_capture_targets(plan))
+    required_project_targets = {
+        target
+        for target in request.project_demo_capture_targets
+        if target in _DEMO_CAPTURE_TARGETS
+    }
+    missing_targets = sorted(required_project_targets - selected_targets)
+    if missing_targets:
+        raise RuntimeError(
+            "QA demo recording PM requirements are missing required project demo capture target(s): "
+            + ", ".join(missing_targets)
+        )
+
+
 def required_recording_counts_by_target(plan: PmPlan) -> dict[str, int]:
     required_counts: dict[str, int] = {}
     for requirement in plan.demo_requirements:
@@ -1765,6 +1780,7 @@ def execute_qa_demo_stage(
     previous_qa_result: QaResult | None = None,
 ) -> QaResult:
     ensure_pm_demo_requirements_are_recordable(plan)
+    ensure_pm_demo_requirements_cover_project_targets(plan=plan, request=request)
     required_targets = required_capture_targets(plan)
     if previous_qa_result is not None:
         previous_qa_result = _validate_recorded_scenario_proof(previous_qa_result)
