@@ -430,6 +430,33 @@ def test_resolve_available_capture_targets_includes_configured_native_recorders(
     assert targets["desktop"].required_worker_platform == "macos"
 
 
+def test_resolve_available_capture_targets_allows_configured_android_worker_platform() -> None:
+    targets = resolve_available_capture_targets(
+        settings=SimpleNamespace(
+            qa_demo_android_recorder_command="python /tmp/android_recorder.py",
+            qa_demo_android_worker_platform="macos",
+        ),
+        preview_release=SimpleNamespace(service_urls=[]),
+    )
+
+    assert targets["android"].required_worker_platform == "macos"
+
+
+def test_resolve_available_capture_targets_rejects_invalid_android_worker_platform() -> None:
+    try:
+        resolve_available_capture_targets(
+            settings=SimpleNamespace(
+                qa_demo_android_recorder_command="python /tmp/android_recorder.py",
+                qa_demo_android_worker_platform="windows",
+            ),
+            preview_release=SimpleNamespace(service_urls=[]),
+        )
+    except RuntimeError as exc:
+        assert "android worker platform is invalid" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("expected invalid android worker platform failure")
+
+
 def test_resolve_available_capture_targets_rejects_invalid_desktop_worker_platform() -> None:
     try:
         resolve_available_capture_targets(
