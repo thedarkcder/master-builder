@@ -6,10 +6,16 @@ from unittest.mock import patch
 
 import pytest
 
-from orchestrator.api.webhooks.github_webhook_context import _latest_run_id_for_pr_url, build_github_review_runtime
+from orchestrator.api.webhooks.github_webhook_context import (
+    _latest_run_id_for_pr_url,
+    _qa_demo_recordings_for_run,
+    build_github_review_runtime,
+)
 from orchestrator.core.config import get_settings
 from orchestrator.core.review.pr_review_findings import PrReviewFindingsResult, ReviewFinding
 from orchestrator.core.worker.webhook_job_service import process_next_webhook_job
+from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
+from orchestrator.core.workflow.runner import QaRecording, QaResult, QaScenario, QaStep, WorkflowStageCheckpoint
 from orchestrator.storage.models import Project, Run, WorkflowExecution
 from tests.production_path_support import (
     load_json_fixture,
@@ -194,6 +200,100 @@ class GitHubWebhookProductionPathTests(ProductionPathApiTestCase):
         self.assertEqual(
             gate_cls.call_args.kwargs["demo_artifact_public_base_url"],
             "https://cdn.example/qa-demos",
+        )
+        self.assertIn("demo_evidence_recordings_resolver", gate_cls.call_args.kwargs)
+
+    def test_qa_demo_review_runtime_resolves_persisted_qa_recordings_for_run(self) -> None:
+        snapshot = ExecutionSnapshot.empty()
+        snapshot.apply_stage_checkpoint(
+            WorkflowStageCheckpoint(
+                stage="qa",
+                attempt=1,
+                status="completed",
+                summary="recorded",
+                qa_result=QaResult(
+                    summary=["recorded"],
+                    scenarios=[
+                        QaScenario(
+                            name="Browser happy path",
+                            objective="Show browser feature",
+                            capture_target="browser",
+                            steps=[QaStep(action="assert_visible", selector="text=Feature")],
+                        )
+                    ],
+                    recordings=[
+                        QaRecording(
+                            name="Browser happy path",
+                            artifact_url="https://cdn.example/qa-demos/route25/route25-default/run-1/qa-demo-1.webm",
+                            object_key="route25/route25-default/run-1/qa-demo-1.webm",
+                            capture_target="browser",
+                            capture_reference="https://preview.example",
+                            content_sha256=f"{1:064x}",
+                            release_commit_sha="b" * 40,
+                            release_context_sha256="a" * 64,
+                        )
+                    ],
+                ),
+            )
+        )
+        with self.session_factory() as session:
+            session.add(
+                WorkflowExecution(
+                    workflow_id="workflow-qa-demo-proof",
+                    workflow_type_key="issue_execution",
+                    tenant_id="route25",
+                    project_id="route25-default",
+                    source_system="jira",
+                    source_ref="GP-123",
+                    repo_url="https://github.com/org/repo",
+                    branch="feature/GP-123",
+                    pr_url="https://github.com/org/repo/pull/17",
+                    orchestration_backend="temporal",
+                    dedupe_scope="issue_execution",
+                    status="completed",
+                    created_at=datetime.now(timezone.utc),
+                    updated_at=datetime.now(timezone.utc),
+                )
+            )
+            session.add(
+                Run(
+                    run_id="run-qa-demo-proof",
+                    workflow_id="workflow-qa-demo-proof",
+                    tenant_id="route25",
+                    project_id="route25-default",
+                    issue_key="GP-123",
+                    repo_url="https://github.com/org/repo",
+                    branch="feature/GP-123",
+                    pr_url="https://github.com/org/repo/pull/17",
+                    attempt_number=1,
+                    entry_stage="qa",
+                    dedupe_scope="issue_execution",
+                    status="succeeded",
+                    created_at=datetime.now(timezone.utc),
+                    plan=snapshot.dump(),
+                )
+            )
+            session.commit()
+
+            recordings = _qa_demo_recordings_for_run(
+                session=session,
+                tenant_id="route25",
+                project_id="route25-default",
+                run_id="run-qa-demo-proof",
+            )
+
+        self.assertEqual(
+            recordings,
+            (
+                {
+                    "artifact_url": "https://cdn.example/qa-demos/route25/route25-default/run-1/qa-demo-1.webm",
+                    "object_key": "route25/route25-default/run-1/qa-demo-1.webm",
+                    "capture_target": "browser",
+                    "content_sha256": f"{1:064x}",
+                    "release_commit_sha": "b" * 40,
+                    "release_context_sha256": "a" * 64,
+                },
+            ),
         )
 
     def test_qa_demo_review_runtime_resolves_latest_run_for_pr_url(self) -> None:

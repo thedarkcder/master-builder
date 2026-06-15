@@ -27,6 +27,7 @@ from orchestrator.core.platform.secret_service import resolve_platform_secret_re
 from orchestrator.core.platform.tenant_secret_service import resolve_scoped_secret_ref
 from orchestrator.core.projects.policy import resolve_effective_policy
 from orchestrator.core.review.reviewer import ReviewAgentGate
+from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 from orchestrator.storage.models import Run
 from orchestrator.tools.github_app import github_client_from_tenant_config
 
@@ -284,6 +285,12 @@ def build_github_review_runtime(*, session, settings, tenant, project):
             project_id=project.project_id,
             pr_url=pr_url,
         ),
+        demo_evidence_recordings_resolver=lambda run_id: _qa_demo_recordings_for_run(
+            session=session,
+            tenant_id=tenant.tenant_id,
+            project_id=project.project_id,
+            run_id=run_id,
+        ),
     )
     return github_client, reviewer_gate
 
@@ -309,6 +316,40 @@ def _latest_run_id_for_pr_url(
         .limit(1)
     )
     return session.execute(statement).scalar_one_or_none()
+
+
+def _qa_demo_recordings_for_run(
+    *,
+    session,
+    tenant_id: str,
+    project_id: str,
+    run_id: str | None,
+) -> tuple[dict[str, str], ...] | None:
+    normalized_run_id = str(run_id or "").strip()
+    if not normalized_run_id:
+        return None
+    statement = select(Run.plan).where(
+        Run.tenant_id == tenant_id,
+        Run.project_id == project_id,
+        Run.run_id == normalized_run_id,
+    )
+    snapshot = ExecutionSnapshot.load(session.execute(statement).scalar_one_or_none())
+    if snapshot is None:
+        return None
+    qa_result = snapshot.qa_result()
+    if qa_result is None or qa_result.outcome != "continue" or not qa_result.recordings:
+        return None
+    return tuple(
+        {
+            "artifact_url": recording.artifact_url,
+            "object_key": recording.object_key,
+            "capture_target": recording.capture_target,
+            "content_sha256": recording.content_sha256,
+            "release_commit_sha": recording.release_commit_sha,
+            "release_context_sha256": recording.release_context_sha256,
+        }
+        for recording in qa_result.recordings
+    )
 
 
 async def prepare_github_webhook_runtime(
