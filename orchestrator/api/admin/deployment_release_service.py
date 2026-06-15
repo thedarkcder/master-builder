@@ -21,6 +21,7 @@ from orchestrator.core.deployment_setup.compose_normalizer import (
 )
 from orchestrator.core.local_preview_route_sync import ensure_local_preview_route_cleanup_command
 from orchestrator.core.node_release_contracts import (
+    INVALID_LEGACY_EXPO_WEB_START_COMMAND,
     LEGACY_EXPO_CLI_INSTALL_COMMAND,
     LEGACY_EXPO_WEB_START_COMMAND,
     NODE_INSTALL_WITH_LEGACY_PEERS_COMMAND,
@@ -1584,6 +1585,7 @@ def _uses_stale_legacy_expo_contract(*, project_app: ProjectApp, project_deploym
         return False
     return _normalize_optional_string(project_app.start_command) in {
         "npm run web",
+        INVALID_LEGACY_EXPO_WEB_START_COMMAND,
         STALE_LEGACY_EXPO_WEB_START_COMMAND,
     } and _normalize_optional_string(project_deployment.install_command) in {
         NODE_INSTALL_WITH_LEGACY_PEERS_COMMAND,
