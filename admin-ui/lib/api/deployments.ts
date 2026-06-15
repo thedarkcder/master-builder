@@ -49,6 +49,8 @@ export type ProjectDeploymentConfigRecord = {
   enabled: boolean;
   environment_name: string | null;
   source_strategy: "dockerfile" | "docker_compose" | "nixpacks" | null;
+  install_command?: string | null;
+  build_command?: string | null;
   environment: Record<string, string>;
   secret_refs: Record<string, string>;
   domains: ProjectDeploymentDomainRecord[];

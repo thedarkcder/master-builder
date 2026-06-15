@@ -763,6 +763,8 @@ class ProjectDeploymentConfigWrite(BaseModel):
     deployment_branch: str | None = None
     deployment_commit_sha: str | None = None
     deployment_compose_path: str | None = None
+    install_command: str | None = None
+    build_command: str | None = None
     environment: dict[str, str] = Field(default_factory=dict)
     secret_refs: dict[str, str] = Field(default_factory=dict)
     domains: list[ProjectDeploymentDomainWrite] = Field(default_factory=list)
@@ -789,7 +791,7 @@ class ProjectDeploymentConfigWrite(BaseModel):
             raise ValueError("source_strategy must be dockerfile, docker_compose, or nixpacks")
         return lowered
 
-    @field_validator("source_branch", "deployment_branch", "deployment_compose_path")
+    @field_validator("source_branch", "deployment_branch", "deployment_compose_path", "install_command", "build_command")
     @classmethod
     def normalize_optional_deployment_strings(cls, value: object) -> str | None:
         return _normalize_optional_string(value)
@@ -1053,6 +1055,8 @@ class ProjectDeploymentConfigRead(BaseModel):
     deployment_branch: str | None = None
     deployment_commit_sha: str | None = None
     deployment_compose_path: str | None = None
+    install_command: str | None = None
+    build_command: str | None = None
     environment: dict[str, str] = Field(default_factory=dict)
     secret_refs: dict[str, str] = Field(default_factory=dict)
     domains: list[ProjectDeploymentDomainWrite] = Field(default_factory=list)

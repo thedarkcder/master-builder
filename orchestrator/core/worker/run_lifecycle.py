@@ -354,6 +354,20 @@ def _non_stale_requeue_resume_stage(*, workflow_result: WorkflowResult) -> str |
     return None
 
 
+def _non_stale_requeue_waiting_release_id(*, workflow_result: WorkflowResult) -> str | None:
+    for item in reversed(list(workflow_result.orchestration_stage_trace or [])):
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("status") or "").strip().lower() != "requeue":
+            continue
+        if str(item.get("wait_reason") or "").strip() != "qa_demo_preview_release":
+            continue
+        release_id = str(item.get("wait_for_release_id") or "").strip()
+        if release_id:
+            return release_id
+    return None
+
+
 def finalize_cancelled_run(
     session: Session,
     *,
@@ -521,7 +535,6 @@ def requeue_workflow_result_for_stale_snapshot(
     snapshot.workflow.outcome = "requeue"
     snapshot.workflow.requeue_target = None
     snapshot.workflow.requeue_reason = error
-    run.plan = snapshot.dump()
     if mark_stale_snapshot:
         run.pr_url = None
     else:
@@ -529,6 +542,11 @@ def requeue_workflow_result_for_stale_snapshot(
         workflow = _workflow_for_run(session, run=run)
         if workflow is not None and str(run.pr_url or "").strip():
             workflow.pr_url = run.pr_url
+        waiting_release_id = _non_stale_requeue_waiting_release_id(workflow_result=workflow_result)
+        if waiting_release_id is not None:
+            snapshot.context.execution_context["qa_demo_waiting_release_id"] = waiting_release_id
+        else:
+            snapshot.context.execution_context.pop("qa_demo_waiting_release_id", None)
         resume_stage = _non_stale_requeue_resume_stage(workflow_result=workflow_result)
         checkpoint_kind = checkpoint_kind_for_stage(resume_stage)
         if checkpoint_kind is not None:
@@ -541,6 +559,7 @@ def requeue_workflow_result_for_stale_snapshot(
                 payload=snapshot.dump(),
                 now=datetime.now(timezone.utc),
             )
+    run.plan = snapshot.dump()
     transitions.reset_for_new_attempt(run=run, now=datetime.now(timezone.utc))
     session.commit()
     session.refresh(run)

@@ -17,9 +17,11 @@ from orchestrator.core.worker.capabilities import (
 )
 from orchestrator.core.worker.run_lifecycle import claim_run_for_dispatch
 from orchestrator.core.worker.run_execution_context import resolve_run_execution_policy_context
-from orchestrator.storage.models import Project, Run, Tenant, TenantRunClaim
+from orchestrator.storage.models import Project, ProjectDeploymentRelease, Run, Tenant, TenantRunClaim
 
 logger = logging.getLogger(__name__)
+
+_QA_DEMO_PREVIEW_PENDING_STATUSES = frozenset({"queued", "provisioning", "deploying", "route_activating"})
 
 
 @dataclass(frozen=True)
@@ -56,6 +58,7 @@ class QueueClaimabilityReason(str, Enum):
     CAPABILITY_MISMATCH = "capability_mismatch"
     RUNTIME_UNAVAILABLE = "runtime_unavailable"
     CONCURRENCY_LIMIT = "concurrency_limit"
+    WAITING_FOR_QA_DEMO_RELEASE = "waiting_for_qa_demo_release"
 
 
 @dataclass(frozen=True)
@@ -92,6 +95,7 @@ class QueueScanResult:
     saw_capability_mismatch: bool
     saw_runtime_unavailable: bool
     saw_concurrency_limit: bool
+    saw_qa_demo_release_wait: bool
 
 
 def coerce_positive_int(value: object, *, default: int) -> int:
@@ -233,6 +237,39 @@ def _evaluate_candidate(
     )
 
 
+def _qa_demo_waiting_release_id(candidate: Run) -> str | None:
+    plan = candidate.plan if isinstance(candidate.plan, dict) else {}
+    context = plan.get("context") if isinstance(plan, dict) else None
+    if not isinstance(context, dict):
+        return None
+    execution_context = context.get("execution_context")
+    if not isinstance(execution_context, dict):
+        return None
+    release_id = str(execution_context.get("qa_demo_waiting_release_id") or "").strip()
+    return release_id or None
+
+
+def _candidate_is_waiting_for_qa_demo_release(session: Session, *, candidate: Run) -> bool:
+    release_id = _qa_demo_waiting_release_id(candidate)
+    if release_id is None:
+        return False
+    release = session.get(ProjectDeploymentRelease, release_id)
+    if release is None:
+        return False
+    status = str(release.status or "").strip().lower()
+    if status in _QA_DEMO_PREVIEW_PENDING_STATUSES:
+        logger.info(
+            "worker_skipping_run_waiting_for_qa_demo_release run_id=%s tenant_id=%s issue_key=%s release_id=%s release_status=%s",
+            candidate.run_id,
+            candidate.tenant_id,
+            candidate.issue_key,
+            release.release_id,
+            status,
+        )
+        return True
+    return False
+
+
 def _candidate_selection_details(
     session: Session,
     *,
@@ -320,6 +357,7 @@ def _scan_queued_candidates(
     saw_capability_mismatch = False
     saw_runtime_unavailable = False
     saw_concurrency_limit = False
+    saw_qa_demo_release_wait = False
     blocked_candidate: Run | None = None
     candidate_run_ids = _queued_run_ids(session, queued_status=queued_status)
 
@@ -330,6 +368,13 @@ def _scan_queued_candidates(
             else session.get(Run, run_id)
         )
         if candidate is None:
+            if lock_for_claim:
+                session.rollback()
+            continue
+
+        if _candidate_is_waiting_for_qa_demo_release(session, candidate=candidate):
+            saw_qa_demo_release_wait = True
+            blocked_candidate = blocked_candidate or candidate
             if lock_for_claim:
                 session.rollback()
             continue
@@ -387,6 +432,7 @@ def _scan_queued_candidates(
                 saw_capability_mismatch=saw_capability_mismatch,
                 saw_runtime_unavailable=saw_runtime_unavailable,
                 saw_concurrency_limit=saw_concurrency_limit,
+                saw_qa_demo_release_wait=saw_qa_demo_release_wait,
             )
         if claimability.reason == QueueClaimabilityReason.CLAIMABLE:
             return QueueScanResult(
@@ -396,6 +442,7 @@ def _scan_queued_candidates(
                 saw_capability_mismatch=saw_capability_mismatch,
                 saw_runtime_unavailable=saw_runtime_unavailable,
                 saw_concurrency_limit=saw_concurrency_limit,
+                saw_qa_demo_release_wait=saw_qa_demo_release_wait,
             )
         if claimability.reason == QueueClaimabilityReason.CONCURRENCY_LIMIT:
             saw_concurrency_limit = True
@@ -420,6 +467,7 @@ def _scan_queued_candidates(
         saw_capability_mismatch=saw_capability_mismatch,
         saw_runtime_unavailable=saw_runtime_unavailable,
         saw_concurrency_limit=saw_concurrency_limit,
+        saw_qa_demo_release_wait=saw_qa_demo_release_wait,
     )
 
 
@@ -475,6 +523,8 @@ def probe_claimable_queued_run(
         )
     if scan.saw_concurrency_limit:
         reason = QueueClaimabilityReason.CONCURRENCY_LIMIT
+    elif scan.saw_qa_demo_release_wait:
+        reason = QueueClaimabilityReason.WAITING_FOR_QA_DEMO_RELEASE
     elif scan.saw_runtime_unavailable:
         reason = QueueClaimabilityReason.RUNTIME_UNAVAILABLE
     elif scan.saw_capability_mismatch:

@@ -111,6 +111,7 @@ def _target_for_route_binding(
     *,
     service_map: dict[str, dict[str, object]],
     route_binding: dict[str, object],
+    allow_single_container_match: bool = False,
 ) -> RouteTarget:
     service_key = _normalize_optional_string(route_binding.get("service_key"))
     host = _normalize_optional_string(route_binding.get("host"))
@@ -118,6 +119,8 @@ def _target_for_route_binding(
     if service_key is None or host is None or port is None:
         raise LocalPreviewRouteSyncError("Route binding is missing service_key, host, or port")
     details = service_map.get(service_key)
+    if details is None and allow_single_container_match and len(service_map) == 1:
+        details = next(iter(service_map.values()))
     if details is None:
         raise LocalPreviewRouteSyncError(f"Running container for service '{service_key}' was not found")
     networks = _coerce_dict(_coerce_dict(details.get("NetworkSettings")).get("Networks"))
@@ -183,7 +186,11 @@ def sync_local_preview_routes(
         subprocess_run_fn=subprocess_run_fn,
     )
     targets = [
-        _target_for_route_binding(service_map=service_map, route_binding=route_binding)
+        _target_for_route_binding(
+            service_map=service_map,
+            route_binding=route_binding,
+            allow_single_container_match=len(route_bindings) == 1,
+        )
         for route_binding in route_bindings
     ]
     route_file.write_text(

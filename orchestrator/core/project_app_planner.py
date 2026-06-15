@@ -15,6 +15,10 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator, model_valida
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
+from orchestrator.core.node_release_contracts import (
+    NODE_INSTALL_WITH_LEGACY_PEERS_COMMAND,
+    legacy_expo_web_release_contract,
+)
 from orchestrator.storage.models import Project, ProjectApp, ProjectAppAnalysisRun, Tenant
 
 _IGNORE_DIR_NAMES = {
@@ -51,6 +55,10 @@ _NODE_HINTS = (
     ("astro", "astro", "typescript", 4321, "npm run start"),
     ("vite", "vite", "javascript", 4173, "npm run preview"),
     ("@sveltejs/kit", "sveltekit", "javascript", 3000, "npm run start"),
+)
+_STALE_TAOBAO_YARN_REGISTRY_MARKERS = (
+    "https://registry.npm.taobao.org/",
+    "http://registry.npm.taobao.org/",
 )
 _JAVA_DEFAULT_PORT = 8080
 _DEPLOYMENT_SOURCE_STRATEGIES = frozenset({"dockerfile", "docker_compose", "nixpacks"})
@@ -621,6 +629,12 @@ def _normalize_package_json(text: str) -> tuple[str | None, str | None, int | No
     return package_name, None, None, None, start_command, 0.25 if package_name else 0.0
 
 
+def _has_stale_taobao_yarn_lock(text: object) -> bool:
+    if not isinstance(text, str):
+        return False
+    return any(marker in text for marker in _STALE_TAOBAO_YARN_REGISTRY_MARKERS)
+
+
 def _normalize_requirements_text(text: str) -> tuple[str | None, str | None, int | None, str | None, float]:
     lowered = text.lower()
     for framework, port in _PYTHON_DEFAULT_PORTS.items():
@@ -762,6 +776,13 @@ def _build_candidate_from_directory(*, repo_root: Path, directory: Path, evidenc
             exposed_port = default_port
         if default_start is not None and start_command is None:
             start_command = default_start
+        if runtime == "react_native_web":
+            legacy_expo_contract = legacy_expo_web_release_contract(package_json_text)
+            if legacy_expo_contract:
+                start_command = legacy_expo_contract["start_command"]
+                deployment_config["install_command"] = legacy_expo_contract["install_command"]
+        if runtime == "react_native_web" and _has_stale_taobao_yarn_lock(evidence.get("yarn_lock_text")):
+            deployment_config.setdefault("install_command", NODE_INSTALL_WITH_LEGACY_PEERS_COMMAND)
         detection_confidence = max(detection_confidence, confidence)
     pyproject_text = evidence.get("pyproject_text")
     if isinstance(pyproject_text, str):
@@ -1016,6 +1037,8 @@ def _scan_repo_for_evidence(repo_root: Path) -> dict[str, dict[str, object]]:
                 evidence["name"] = str(payload.get("name"))
             if isinstance(payload, dict):
                 evidence["package_name"] = payload.get("name")
+        elif lowered == "yarn.lock":
+            evidence["yarn_lock_text"] = content
         elif lowered == "pyproject.toml":
             evidence["pyproject_text"] = content
             if not evidence.get("name"):

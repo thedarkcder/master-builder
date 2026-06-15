@@ -20,6 +20,11 @@ from orchestrator.core.deployment_setup.compose_normalizer import (
     normalize_compose_for_coolify,
 )
 from orchestrator.core.local_preview_route_sync import ensure_local_preview_route_cleanup_command
+from orchestrator.core.node_release_contracts import (
+    LEGACY_EXPO_CLI_INSTALL_COMMAND,
+    LEGACY_EXPO_WEB_START_COMMAND,
+    NODE_INSTALL_WITH_LEGACY_PEERS_COMMAND,
+)
 from orchestrator.core.platform.secret_service import resolve_platform_secret_ref
 from orchestrator.core.platform.secret_manager import normalize_secret_ref, resolve_scoped_secret_ref
 from orchestrator.api.admin.deployment_config_service import (
@@ -1052,9 +1057,15 @@ def submit_internal_coolify_release(
             "autogenerate_domain": False,
             "base_directory": base_directory,
         }
-        start_command = _normalize_optional_string(project_app.start_command)
+        start_command = _coolify_start_command(project_app=project_app, project_deployment=project_deployment)
         if start_command is not None:
             application_payload["start_command"] = start_command
+        install_command = _coolify_install_command(project_app=project_app, project_deployment=project_deployment)
+        if install_command is not None:
+            application_payload["install_command"] = install_command
+        build_command = _normalize_optional_string(getattr(project_deployment, "build_command", None))
+        if build_command is not None:
+            application_payload["build_command"] = build_command
         if project_deployment.source_strategy == "dockerfile":
             application_payload["dockerfile_location"] = "/Dockerfile"
         domains = "" if payload.release_kind == "run_preview" else ",".join(_domain_url(domain) for domain in project_deployment.domains)
@@ -1094,6 +1105,7 @@ def submit_internal_coolify_release(
             service_kind="website",
             url=fqdn,
             url_kind="generated" if not project_deployment.domains else "custom",
+            port=_coolify_ports_exposes(project_app=project_app),
         )
         route_bindings.append(route_binding)
     return {
@@ -1341,6 +1353,7 @@ def _route_binding_from_url(
     url: str,
     url_kind: str,
     domain_key: str | None = None,
+    port: str | int | None = None,
 ) -> dict[str, object]:
     parsed = urlsplit(url)
     if parsed.scheme not in {"http", "https"} or parsed.hostname is None:
@@ -1348,6 +1361,7 @@ def _route_binding_from_url(
             status_code=status.HTTP_409_CONFLICT,
             detail=f"Deployment route for service '{service_key}' must be an absolute http(s) URL",
         )
+    proxy_port = parsed.port if parsed.port is not None else port
     return {
         "service_key": service_key,
         "service_name": service_name,
@@ -1357,7 +1371,8 @@ def _route_binding_from_url(
         "path": parsed.path or "",
         "url_kind": "custom" if url_kind == "custom" else "generated",
         "status": "pending",
-        "proxy_port": parsed.port,
+        "port": str(proxy_port) if proxy_port is not None else None,
+        "proxy_port": proxy_port,
         "domain_key": domain_key,
     }
 
@@ -1561,6 +1576,26 @@ def _coolify_ports_exposes(*, project_app: ProjectApp) -> str:
             detail="Project app must define exposed_port before Coolify deployment",
         )
     return str(int(project_app.exposed_port))
+
+
+def _uses_stale_legacy_expo_contract(*, project_app: ProjectApp, project_deployment: ProjectDeploymentConfigRead) -> bool:
+    return (
+        _normalize_optional_string(project_app.detected_runtime) == "react_native_web"
+        and _normalize_optional_string(project_app.start_command) == "npm run web"
+        and _normalize_optional_string(project_deployment.install_command) == NODE_INSTALL_WITH_LEGACY_PEERS_COMMAND
+    )
+
+
+def _coolify_start_command(*, project_app: ProjectApp, project_deployment: ProjectDeploymentConfigRead) -> str | None:
+    if _uses_stale_legacy_expo_contract(project_app=project_app, project_deployment=project_deployment):
+        return LEGACY_EXPO_WEB_START_COMMAND
+    return _normalize_optional_string(project_app.start_command)
+
+
+def _coolify_install_command(*, project_app: ProjectApp, project_deployment: ProjectDeploymentConfigRead) -> str | None:
+    if _uses_stale_legacy_expo_contract(project_app=project_app, project_deployment=project_deployment):
+        return LEGACY_EXPO_CLI_INSTALL_COMMAND
+    return _normalize_optional_string(project_deployment.install_command)
 
 
 def _coolify_application_name(*, project_app: ProjectApp, payload: ProjectDeploymentReleaseCreate) -> str:

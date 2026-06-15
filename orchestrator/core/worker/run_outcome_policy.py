@@ -184,6 +184,10 @@ class RunOutcomePolicy:
                         run=run,
                         settings=self._settings,
                         pr_url=workflow_result.pr_url,
+                        force=_qa_demo_preview_force_requested(
+                            workflow_request=getattr(prepared, "workflow_request", None),
+                            demo_recording_required=demo_recording_required,
+                        ),
                     )
                     preview_release = preview_result.release
                     if demo_recording_required and preview_release is None:
@@ -371,6 +375,7 @@ class RunOutcomePolicy:
                 workflow_result=workflow_result,
                 attempt=attempt,
                 message=message,
+                wait_for_release_id=str(getattr(preview_release, "release_id", "") or "").strip() or None,
             )
         if preview_release_status in _QA_DEMO_PREVIEW_TERMINAL_FAILURE_STATUSES:
             message = (
@@ -778,6 +783,14 @@ def _qa_demo_missing_project_capture_targets(*, qa_plan, workflow_request) -> tu
     return tuple(target for target in project_targets if target not in selected_targets)
 
 
+def _qa_demo_preview_force_requested(*, workflow_request, demo_recording_required: bool) -> bool:  # noqa: ANN001
+    if not demo_recording_required:
+        return False
+    entry_mode = str(getattr(workflow_request, "entry_mode", "") or "").strip().lower()
+    entry_stage = str(getattr(workflow_request, "entry_stage", "") or "").strip().lower()
+    return entry_mode == "resume" and entry_stage == "qa"
+
+
 def _workflow_result_with_qa_blocker(*, workflow_result, attempt: int, message: str):
     return replace(
         workflow_result,
@@ -790,7 +803,17 @@ def _workflow_result_with_qa_blocker(*, workflow_result, attempt: int, message: 
     )
 
 
-def _workflow_result_with_generic_qa_requeue(*, workflow_result, attempt: int, message: str):
+def _workflow_result_with_generic_qa_requeue(
+    *,
+    workflow_result,
+    attempt: int,
+    message: str,
+    wait_for_release_id: str | None = None,
+):
+    trace_entry = _stage_trace_entry(stage="qa", attempt=attempt, status="requeue", summary=message)
+    if wait_for_release_id is not None:
+        trace_entry["wait_for_release_id"] = wait_for_release_id
+        trace_entry["wait_reason"] = "qa_demo_preview_release"
     return replace(
         workflow_result,
         outcome="requeue",
@@ -798,7 +821,7 @@ def _workflow_result_with_generic_qa_requeue(*, workflow_result, attempt: int, m
         requeue_reason=message,
         orchestration_stage_trace=[
             *list(workflow_result.orchestration_stage_trace or []),
-            _stage_trace_entry(stage="qa", attempt=attempt, status="requeue", summary=message),
+            trace_entry,
         ],
     )
 
