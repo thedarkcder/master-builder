@@ -1624,6 +1624,12 @@ def execute_qa_demo_stage(
             recordings=previous_recordings,
         )
     remaining_targets = remaining_capture_targets(plan, previous_recordings)
+    ensure_release_ready_for_qa(
+        preview_release,
+        required_service_kinds=required_release_service_kinds(project=project, preview_release=preview_release),
+        service_url_probe=_default_service_url_probe,
+        timeout_seconds=qa_demo_release_health_timeout_seconds(settings),
+    )
     if not remaining_targets:
         _validate_recordings_cover_required_targets(
             recordings=previous_recordings,
@@ -1639,12 +1645,6 @@ def execute_qa_demo_stage(
             recordings=previous_recordings,
             outcome="continue",
         )
-    ensure_release_ready_for_qa(
-        preview_release,
-        required_service_kinds=required_release_service_kinds(project=project, preview_release=preview_release),
-        service_url_probe=_default_service_url_probe,
-        timeout_seconds=qa_demo_release_health_timeout_seconds(settings),
-    )
     available_capture_targets = resolve_available_capture_targets(settings=settings, preview_release=preview_release)
     if not available_capture_targets:
         raise RuntimeError("QA demo recording requires at least one configured capture target")
