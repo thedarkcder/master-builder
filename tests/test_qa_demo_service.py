@@ -26,6 +26,7 @@ from orchestrator.core.qa.demo_service import (
     qa_demo_recorder_process_timeout_seconds,
     record_demo_scenarios,
     remaining_capture_targets,
+    release_context_sha256_for_service_urls,
     required_capture_targets,
     required_recording_counts_by_target,
     required_release_service_kinds,
@@ -159,6 +160,18 @@ def _sha256(index: int) -> str:
     return f"{index:064x}"
 
 
+def _release_context_sha256(*, include_api: bool = False) -> str:
+    website_service_name = "web" if include_api else ""
+    urls = [{"service_kind": "website", "service_name": website_service_name, "url": "https://preview.example"}]
+    if include_api:
+        urls.insert(0, {"service_kind": "api", "service_name": "api", "url": "https://api.preview.example"})
+    return release_context_sha256_for_service_urls(urls)
+
+
+def _empty_release_context_sha256() -> str:
+    return release_context_sha256_for_service_urls([])
+
+
 def test_qa_demo_recording_enabled_reads_effective_policy() -> None:
     assert qa_demo_recording_enabled({"qa_demo_recording_enabled": True}) is True
     assert qa_demo_recording_enabled({"qa_demo_recording_enabled": False}) is False
@@ -189,6 +202,7 @@ def test_storage_config_from_settings_requires_complete_configuration() -> None:
 def test_upload_recording_persists_and_verifies_content_sha256_metadata(monkeypatch) -> None:
     calls: dict[str, object] = {}
     expected_digest = _sha256(47)
+    expected_release_context_digest = _release_context_sha256()
 
     class FakeMinio:
         def __init__(self, endpoint: str, *, access_key: str, secret_key: str, secure: bool) -> None:
@@ -222,7 +236,12 @@ def test_upload_recording_persists_and_verifies_content_sha256_metadata(monkeypa
 
         def stat_object(self, bucket: str, object_key: str) -> SimpleNamespace:
             calls["stat_object"] = {"bucket": bucket, "object_key": object_key}
-            return SimpleNamespace(metadata={"X-Amz-Meta-Content-Sha256": expected_digest})
+            return SimpleNamespace(
+                metadata={
+                    "X-Amz-Meta-Content-Sha256": expected_digest,
+                    "X-Amz-Meta-Release-Context-Sha256": expected_release_context_digest,
+                }
+            )
 
     monkeypatch.setitem(sys.modules, "minio", SimpleNamespace(Minio=FakeMinio))
 
@@ -232,6 +251,7 @@ def test_upload_recording_persists_and_verifies_content_sha256_metadata(monkeypa
         object_key="tenant-1/project-1/run-1/qa-demo-1.webm",
         content_type="video/webm",
         content_sha256=expected_digest,
+        release_context_sha256=expected_release_context_digest,
     )
 
     assert artifact_url == "https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-demo-1.webm"
@@ -240,7 +260,10 @@ def test_upload_recording_persists_and_verifies_content_sha256_metadata(monkeypa
         "object_key": "tenant-1/project-1/run-1/qa-demo-1.webm",
         "local_path": "/tmp/demo.webm",
         "content_type": "video/webm",
-        "metadata": {"content-sha256": expected_digest},
+        "metadata": {
+            "content-sha256": expected_digest,
+            "release-context-sha256": expected_release_context_digest,
+        },
     }
     assert calls["stat_object"] == {
         "bucket": "qa-demos",
@@ -279,11 +302,58 @@ def test_upload_recording_rejects_storage_metadata_digest_mismatch(monkeypatch) 
             object_key="tenant-1/project-1/run-1/qa-demo-1.webm",
             content_type="video/webm",
             content_sha256=_sha256(48),
+            release_context_sha256=_release_context_sha256(),
         )
     except RuntimeError as exc:
         assert "QA demo artifact metadata sha256 mismatch after upload" in str(exc)
     else:  # pragma: no cover
         raise AssertionError("expected storage metadata digest mismatch to block upload")
+
+
+def test_upload_recording_rejects_storage_release_context_metadata_digest_mismatch(monkeypatch) -> None:
+    expected_digest = _sha256(48)
+
+    class FakeMinio:
+        def __init__(self, endpoint: str, *, access_key: str, secret_key: str, secure: bool) -> None:
+            pass
+
+        def bucket_exists(self, bucket: str) -> bool:
+            return True
+
+        def fput_object(
+            self,
+            bucket: str,
+            object_key: str,
+            local_path: str,
+            *,
+            content_type: str,
+            metadata: dict[str, str],
+        ) -> None:
+            pass
+
+        def stat_object(self, bucket: str, object_key: str) -> SimpleNamespace:
+            return SimpleNamespace(
+                metadata={
+                    "X-Amz-Meta-Content-Sha256": expected_digest,
+                    "X-Amz-Meta-Release-Context-Sha256": _sha256(49),
+                }
+            )
+
+    monkeypatch.setitem(sys.modules, "minio", SimpleNamespace(Minio=FakeMinio))
+
+    try:
+        upload_recording(
+            storage=storage_config_from_settings(_qa_artifact_settings()),
+            local_path="/tmp/demo.webm",
+            object_key="tenant-1/project-1/run-1/qa-demo-1.webm",
+            content_type="video/webm",
+            content_sha256=expected_digest,
+            release_context_sha256=_release_context_sha256(),
+        )
+    except RuntimeError as exc:
+        assert "QA demo artifact metadata release context sha256 mismatch after upload" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("expected storage release context metadata digest mismatch to block upload")
 
 
 def test_resolve_preview_demo_url_prefers_active_website() -> None:
@@ -356,6 +426,7 @@ def test_remaining_capture_targets_requires_recording_per_requirement_and_varian
                 capture_target="browser",
                 capture_reference="https://preview.example",
                 content_sha256=_sha256(1),
+                release_context_sha256=_release_context_sha256(),
             ),
             QaRecording(
                 name="iOS walkthrough",
@@ -364,6 +435,7 @@ def test_remaining_capture_targets_requires_recording_per_requirement_and_varian
                 capture_target="ios",
                 capture_reference="ios-simulator://configured",
                 content_sha256=_sha256(2),
+                release_context_sha256=_release_context_sha256(),
             ),
         ],
     ) == ("browser",)
@@ -378,6 +450,7 @@ def test_remaining_capture_targets_requires_recording_per_requirement_and_varian
                     capture_target="browser",
                     capture_reference="https://preview.example",
                     content_sha256=_sha256(3),
+                    release_context_sha256=_release_context_sha256(),
                 ),
                 QaRecording(
                     name="Browser invalid input",
@@ -386,6 +459,7 @@ def test_remaining_capture_targets_requires_recording_per_requirement_and_varian
                     capture_target="browser",
                     capture_reference="https://preview.example",
                     content_sha256=_sha256(4),
+                    release_context_sha256=_release_context_sha256(),
                 ),
                 QaRecording(
                     name="Browser repeat action",
@@ -394,6 +468,7 @@ def test_remaining_capture_targets_requires_recording_per_requirement_and_varian
                     capture_target="browser",
                     capture_reference="https://preview.example",
                     content_sha256=_sha256(5),
+                    release_context_sha256=_release_context_sha256(),
                 ),
                 QaRecording(
                     name="iOS walkthrough",
@@ -402,6 +477,7 @@ def test_remaining_capture_targets_requires_recording_per_requirement_and_varian
                     capture_target="ios",
                     capture_reference="ios-simulator://configured",
                     content_sha256=_sha256(6),
+                    release_context_sha256=_release_context_sha256(),
                 ),
             ],
         )
@@ -767,12 +843,16 @@ def test_upsert_demo_evidence_section_replaces_existing_section() -> None:
                 object_key="qa/happy.webm",
                 capture_reference="https://preview.example",
                 content_sha256=_sha256(7),
+                release_context_sha256=_release_context_sha256(),
             )
         ],
     )
     assert DEMO_EVIDENCE_HEADING in updated
     assert DEMO_EVIDENCE_MARKER in updated
-    assert "[target=browser; reference=https://preview.example; object_key=qa/happy.webm; sha256=" in updated
+    assert (
+        "[target=browser; reference=https://preview.example; object_key=qa/happy.webm; sha256=" in updated
+    )
+    assert "release_context_sha256=" in updated
     assert "old" not in updated
     assert "https://demo.example/happy.webm" in updated
     assert "## How To Test" in updated
@@ -789,6 +869,7 @@ def test_upsert_demo_evidence_section_includes_required_capture_targets() -> Non
                 capture_target="browser",
                 capture_reference="https://preview.example",
                 content_sha256=_sha256(8),
+                release_context_sha256=_release_context_sha256(),
             ),
             QaRecording(
                 name="iOS walkthrough",
@@ -797,6 +878,7 @@ def test_upsert_demo_evidence_section_includes_required_capture_targets() -> Non
                 capture_target="ios",
                 capture_reference="ios-simulator://configured",
                 content_sha256=_sha256(9),
+                release_context_sha256=_release_context_sha256(),
             ),
         ],
         required_capture_targets=("browser", "ios", "android"),
@@ -816,6 +898,7 @@ def test_upsert_demo_evidence_section_includes_required_recording_counts() -> No
                 capture_target="browser",
                 capture_reference="https://preview.example",
                 content_sha256=_sha256(10),
+                release_context_sha256=_release_context_sha256(),
             ),
         ],
         required_recording_counts={"browser": 2, "ios": 1},
@@ -838,6 +921,7 @@ def test_upsert_demo_evidence_section_rejects_multiline_recording_metadata() -> 
                     capture_target="browser",
                     capture_reference="https://preview.example",
                     content_sha256=_sha256(11),
+                    release_context_sha256=_release_context_sha256(),
                 )
             ],
             required_capture_targets=("browser",),
@@ -861,6 +945,7 @@ def test_upsert_demo_evidence_section_rejects_structural_delimiters_in_recording
                     capture_target="browser",
                     capture_reference="https://preview.example] [target=ios",
                     content_sha256=_sha256(12),
+                    release_context_sha256=_release_context_sha256(),
                 )
             ],
             required_capture_targets=("browser",),
@@ -884,6 +969,7 @@ def test_upsert_demo_evidence_section_rejects_unsupported_recording_capture_targ
                     capture_target="tablet",
                     capture_reference="tablet://configured",
                     content_sha256=_sha256(13),
+                    release_context_sha256=_release_context_sha256(),
                 )
             ],
             required_capture_targets=("tablet",),
@@ -1794,6 +1880,7 @@ def test_execute_qa_demo_stage_records_and_uploads() -> None:
     assert result.recordings[0].artifact_url.endswith("qa-demo-1.webm")
     assert result.recordings[0].capture_target == "browser"
     assert result.recordings[0].capture_reference == "https://preview.example"
+    assert result.recordings[0].release_context_sha256 == _release_context_sha256(include_api=True)
     available_targets = json.loads(fake_agents.qa.call_args.kwargs["available_capture_targets_json"])
     browser_target = next(item for item in available_targets if item["capture_target"] == "browser")
     assert browser_target["capture_reference"] == "https://preview.example"
@@ -1813,6 +1900,7 @@ def test_execute_qa_demo_stage_records_and_uploads() -> None:
         },
     ]
     assert upload_mock.call_args.kwargs["content_type"] == "video/webm"
+    assert upload_mock.call_args.kwargs["release_context_sha256"] == _release_context_sha256(include_api=True)
 
 
 def test_execute_qa_demo_stage_rejects_unsafe_artifact_scope_before_upload() -> None:
@@ -2982,6 +3070,7 @@ def test_execute_qa_demo_stage_completes_remaining_target_with_previous_recordin
                 capture_target="browser",
                 capture_reference="https://preview.example",
                 content_sha256=_sha256(20),
+                release_context_sha256=_empty_release_context_sha256(),
             ),
             QaRecording(
                 name="Browser repeat action",
@@ -2990,6 +3079,7 @@ def test_execute_qa_demo_stage_completes_remaining_target_with_previous_recordin
                 capture_target="browser",
                 capture_reference="https://preview.example",
                 content_sha256=_sha256(21),
+                release_context_sha256=_empty_release_context_sha256(),
             ),
             QaRecording(
                 name="Android walkthrough",
@@ -2998,6 +3088,7 @@ def test_execute_qa_demo_stage_completes_remaining_target_with_previous_recordin
                 capture_target="android",
                 capture_reference="android-emulator://configured",
                 content_sha256=_sha256(22),
+                release_context_sha256=_empty_release_context_sha256(),
             ),
             QaRecording(
                 name="Android repeat action",
@@ -3006,6 +3097,7 @@ def test_execute_qa_demo_stage_completes_remaining_target_with_previous_recordin
                 capture_target="android",
                 capture_reference="android-emulator://configured",
                 content_sha256=_sha256(23),
+                release_context_sha256=_empty_release_context_sha256(),
             ),
         ],
         outcome="requeue",
@@ -3173,6 +3265,7 @@ def test_execute_qa_demo_stage_revalidates_partial_previous_recording_links_befo
                 capture_target="browser",
                 capture_reference="https://preview.example",
                 content_sha256=_sha256(24),
+                release_context_sha256=_empty_release_context_sha256(),
             ),
             QaRecording(
                 name="Browser repeat action",
@@ -3181,6 +3274,7 @@ def test_execute_qa_demo_stage_revalidates_partial_previous_recording_links_befo
                 capture_target="browser",
                 capture_reference="https://preview.example",
                 content_sha256=_sha256(25),
+                release_context_sha256=_empty_release_context_sha256(),
             ),
             QaRecording(
                 name="Android walkthrough",
@@ -3189,6 +3283,7 @@ def test_execute_qa_demo_stage_revalidates_partial_previous_recording_links_befo
                 capture_target="android",
                 capture_reference="android-emulator://configured",
                 content_sha256=_sha256(26),
+                release_context_sha256=_empty_release_context_sha256(),
             ),
             QaRecording(
                 name="Android repeat action",
@@ -3197,6 +3292,7 @@ def test_execute_qa_demo_stage_revalidates_partial_previous_recording_links_befo
                 capture_target="android",
                 capture_reference="android-emulator://configured",
                 content_sha256=_sha256(27),
+                release_context_sha256=_empty_release_context_sha256(),
             ),
         ],
         outcome="requeue",
@@ -3324,6 +3420,7 @@ def test_execute_qa_demo_stage_revalidates_previous_recording_links_before_short
                 capture_target="browser",
                 capture_reference="https://preview.example",
                 content_sha256=_sha256(28),
+                release_context_sha256=_release_context_sha256(),
             ),
             QaRecording(
                 name="Repeat action remains safe",
@@ -3332,13 +3429,14 @@ def test_execute_qa_demo_stage_revalidates_previous_recording_links_before_short
                 capture_target="browser",
                 capture_reference="https://preview.example",
                 content_sha256=_sha256(29),
+                release_context_sha256=_release_context_sha256(),
             ),
         ],
     )
 
-    with patch(
-        "orchestrator.core.qa.demo_service._default_artifact_url_probe",
-        side_effect=RuntimeError("object expired"),
+    with (
+        patch("orchestrator.core.qa.demo_service._default_artifact_url_probe", side_effect=RuntimeError("object expired")),
+        patch("orchestrator.core.qa.demo_service._default_service_url_probe", return_value=200),
     ):
         try:
             execute_qa_demo_stage(
@@ -3400,6 +3498,7 @@ def test_execute_qa_demo_stage_revalidates_release_readiness_before_previous_rec
                 capture_target="browser",
                 capture_reference="https://preview.example",
                 content_sha256=_sha256(50),
+                release_context_sha256=_release_context_sha256(),
             ),
             QaRecording(
                 name="Repeat action remains safe",
@@ -3408,6 +3507,7 @@ def test_execute_qa_demo_stage_revalidates_release_readiness_before_previous_rec
                 capture_target="browser",
                 capture_reference="https://preview.example",
                 content_sha256=_sha256(51),
+                release_context_sha256=_release_context_sha256(),
             ),
         ],
     )
@@ -3442,6 +3542,79 @@ def test_execute_qa_demo_stage_revalidates_release_readiness_before_previous_rec
             raise AssertionError("expected broken preview release to block previous QA demo proof reuse")
 
 
+def test_execute_qa_demo_stage_rejects_previous_recording_from_different_release_context() -> None:
+    tenant = SimpleNamespace(tenant_id="tenant-1", github_config={})
+    project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo")
+    run = SimpleNamespace(run_id="run-1")
+    plan = PmPlan(
+        plan_steps=["Implement"],
+        acceptance_criteria=["Feature works"],
+        risks=[],
+        demo_requirements=[_demo_requirement()],
+    )
+    previous_qa = QaResult(
+        summary=["Previous demos"],
+        scenarios=[
+            QaScenario(
+                name="Happy path",
+                objective="Show feature works",
+                capture_target="browser",
+                steps=_proof_steps("text=Feature"),
+            ),
+            QaScenario(
+                name="Repeat action remains safe",
+                objective="Repeat action remains safe",
+                capture_target="browser",
+                steps=_proof_steps("text=Feature"),
+            ),
+        ],
+        recordings=[
+            QaRecording(
+                name="Happy path",
+                artifact_url="https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-demo-1.webm",
+                object_key="tenant-1/project-1/run-1/qa-demo-1.webm",
+                capture_target="browser",
+                capture_reference="https://preview.example",
+                content_sha256=_sha256(52),
+                release_context_sha256="f" * 64,
+            )
+        ],
+    )
+
+    with (
+        patch("orchestrator.core.qa.demo_service._default_artifact_url_probe", return_value=200) as artifact_probe,
+        patch("orchestrator.core.qa.demo_service._default_service_url_probe", return_value=200),
+        patch("orchestrator.core.qa.demo_service.CodexWorkflowAgents") as agents_cls,
+    ):
+        try:
+            execute_qa_demo_stage(
+                session=SimpleNamespace(),
+                settings=_qa_artifact_settings(),
+                tenant=tenant,
+                project=project,
+                run=run,
+                request=_request(),
+                plan=plan,
+                dev_result=DevResult(change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8"),
+                test_result=TestResult(guidance=["pytest -q"]),
+                review_result=ReviewResult(summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"),
+                preview_release=SimpleNamespace(
+                    service_urls=[
+                        SimpleNamespace(service_kind="website", service_name="web", status="active", url="https://preview.example")
+                    ]
+                ),
+                previous_qa_result=previous_qa,
+            )
+        except RuntimeError as exc:
+            assert "release context does not match current release before reuse" in str(exc)
+            assert "Happy path" in str(exc)
+        else:  # pragma: no cover
+            raise AssertionError("expected stale release-context proof to block previous QA demo proof reuse")
+
+    artifact_probe.assert_not_called()
+    agents_cls.assert_not_called()
+
+
 def test_execute_qa_demo_stage_rejects_previous_recording_without_matching_scenario() -> None:
     tenant = SimpleNamespace(tenant_id="tenant-1", github_config={})
     project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo")
@@ -3469,6 +3642,7 @@ def test_execute_qa_demo_stage_rejects_previous_recording_without_matching_scena
                 capture_target="browser",
                 capture_reference="https://preview.example",
                 content_sha256=_sha256(45),
+                release_context_sha256=_release_context_sha256(),
             )
         ],
         outcome="requeue",
@@ -3910,6 +4084,7 @@ def test_update_pull_request_with_demo_evidence_refreshes_pr_body() -> None:
                         object_key="tenant-1/project-1/run-1/happy.webm",
                         capture_reference="https://preview.example",
                         content_sha256=_sha256(30),
+                        release_context_sha256=_release_context_sha256(),
                     )
                 ],
             ),
@@ -3961,6 +4136,7 @@ def test_update_pull_request_with_demo_evidence_verifies_pr_readback_after_updat
                             object_key="tenant-1/project-1/run-1/happy.webm",
                             capture_reference="https://preview.example",
                             content_sha256=_sha256(46),
+                            release_context_sha256=_release_context_sha256(),
                         )
                     ],
                 ),
@@ -3974,6 +4150,51 @@ def test_update_pull_request_with_demo_evidence_verifies_pr_readback_after_updat
 
     assert github_client.update_pull_request.called
     assert github_client.get_pull_request_details.call_count == 2
+
+
+def test_update_pull_request_with_demo_evidence_rejects_missing_release_context_before_url_probe() -> None:
+    with (
+        patch("orchestrator.core.qa.demo_service.github_client_from_tenant_config") as github_client_mock,
+        patch("orchestrator.core.qa.demo_service._default_artifact_url_probe") as url_probe,
+    ):
+        try:
+            update_pull_request_with_demo_evidence(
+                session=SimpleNamespace(),
+                settings=_qa_artifact_settings(),
+                tenant=SimpleNamespace(tenant_id="tenant-1", github_config={}),
+                project=SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo"),
+                run=SimpleNamespace(run_id="run-1"),
+                workflow_result=SimpleNamespace(pr_url="https://github.com/acme/repo/pull/8"),
+                qa_result=QaResult(
+                    summary=["Recorded demos"],
+                    scenarios=[
+                        QaScenario(
+                            name="Browser walkthrough",
+                            objective="Show browser",
+                            capture_target="browser",
+                            steps=_proof_steps("text=Feature"),
+                        )
+                    ],
+                    recordings=[
+                        SimpleNamespace(
+                            name="Browser walkthrough",
+                            artifact_url="https://cdn.example/qa-demos/tenant-1/project-1/run-1/browser.webm",
+                            object_key="tenant-1/project-1/run-1/browser.webm",
+                            capture_target="browser",
+                            capture_reference="https://preview.example",
+                            content_sha256=_sha256(47),
+                        )
+                    ],
+                ),
+                required_capture_targets=("browser",),
+            )
+        except RuntimeError as exc:
+            assert "QA demo recording release context sha256 is required before PR evidence" in str(exc)
+        else:  # pragma: no cover
+            raise AssertionError("expected missing release context metadata to block PR evidence update")
+
+    url_probe.assert_not_called()
+    github_client_mock.assert_not_called()
 
 
 def test_update_pull_request_with_demo_evidence_rejects_pr_url_for_another_repository() -> None:
@@ -4007,6 +4228,7 @@ def test_update_pull_request_with_demo_evidence_rejects_pr_url_for_another_repos
                             capture_target="browser",
                             capture_reference="https://preview.example",
                             content_sha256=_sha256(31),
+                            release_context_sha256=_release_context_sha256(),
                         )
                     ],
                 ),
@@ -4057,6 +4279,7 @@ def test_update_pull_request_with_demo_evidence_rejects_external_recording_befor
                             capture_target="browser",
                             capture_reference="https://preview.example",
                             content_sha256=_sha256(32),
+                            release_context_sha256=_release_context_sha256(),
                         )
                     ],
                 ),
@@ -4108,6 +4331,7 @@ def test_update_pull_request_with_demo_evidence_rejects_out_of_scope_recording_k
                             capture_target="browser",
                             capture_reference="https://preview.example",
                             content_sha256=_sha256(33),
+                            release_context_sha256=_release_context_sha256(),
                         )
                     ],
                 ),
@@ -4159,6 +4383,7 @@ def test_update_pull_request_with_demo_evidence_rejects_recording_url_key_mismat
                             capture_target="browser",
                             capture_reference="https://preview.example",
                             content_sha256=_sha256(34),
+                            release_context_sha256=_release_context_sha256(),
                         )
                     ],
                 ),
@@ -4210,6 +4435,7 @@ def test_update_pull_request_with_demo_evidence_rejects_unsafe_metadata_before_u
                             capture_target="browser",
                             capture_reference="https://preview.example",
                             content_sha256=_sha256(35),
+                            release_context_sha256=_release_context_sha256(),
                         )
                     ],
                 ),
@@ -4256,6 +4482,7 @@ def test_update_pull_request_with_demo_evidence_rejects_missing_required_capture
                             capture_target="browser",
                             capture_reference="https://preview.example",
                             content_sha256=_sha256(36),
+                            release_context_sha256=_release_context_sha256(),
                         )
                     ],
                 ),
@@ -4301,6 +4528,7 @@ def test_update_pull_request_with_demo_evidence_rejects_missing_required_recordi
                             capture_target="browser",
                             capture_reference="https://preview.example",
                             content_sha256=_sha256(37),
+                            release_context_sha256=_release_context_sha256(),
                         )
                     ],
                 ),
@@ -4352,6 +4580,7 @@ def test_update_pull_request_with_demo_evidence_rejects_unreachable_accumulated_
                             object_key="tenant-1/project-1/run-1/browser.webm",
                             capture_reference="https://preview.example",
                             content_sha256=_sha256(38),
+                            release_context_sha256=_release_context_sha256(),
                         ),
                         QaRecording(
                             name="iOS walkthrough",
@@ -4360,6 +4589,7 @@ def test_update_pull_request_with_demo_evidence_rejects_unreachable_accumulated_
                             capture_target="ios",
                             capture_reference="ios-simulator://configured",
                             content_sha256=_sha256(39),
+                            release_context_sha256=_release_context_sha256(),
                         ),
                     ],
                 ),
@@ -4391,6 +4621,7 @@ def test_update_pull_request_with_demo_evidence_rejects_recording_without_matchi
                             capture_target="browser",
                             capture_reference="https://preview.example",
                             content_sha256=_sha256(40),
+                            release_context_sha256=_release_context_sha256(),
                         )
                     ],
                 ),
@@ -4431,6 +4662,7 @@ def test_update_pull_request_with_demo_evidence_rejects_duplicate_accumulated_re
                             capture_target="browser",
                             capture_reference="https://preview.example",
                             content_sha256=_sha256(41),
+                            release_context_sha256=_release_context_sha256(),
                         ),
                         QaRecording(
                             name="Browser walkthrough",
@@ -4439,6 +4671,7 @@ def test_update_pull_request_with_demo_evidence_rejects_duplicate_accumulated_re
                             capture_target="browser",
                             capture_reference="https://preview.example",
                             content_sha256=_sha256(42),
+                            release_context_sha256=_release_context_sha256(),
                         ),
                     ],
                 ),
@@ -4488,6 +4721,7 @@ def test_update_pull_request_with_demo_evidence_rejects_duplicate_object_key_bef
                             capture_target="browser",
                             capture_reference="https://preview.example",
                             content_sha256=_sha256(43),
+                            release_context_sha256=_release_context_sha256(),
                         ),
                         QaRecording(
                             name="Browser edge case",
@@ -4496,6 +4730,7 @@ def test_update_pull_request_with_demo_evidence_rejects_duplicate_object_key_bef
                             capture_target="browser",
                             capture_reference="https://preview.example",
                             content_sha256=_sha256(44),
+                            release_context_sha256=_release_context_sha256(),
                         ),
                     ],
                 ),
@@ -4572,6 +4807,7 @@ def test_update_pull_request_with_demo_evidence_rejects_duplicate_content_sha256
             capture_target="browser",
             capture_reference="https://preview.example",
             content_sha256=duplicated_digest,
+            release_context_sha256=_release_context_sha256(),
         ),
         SimpleNamespace(
             name="Browser edge case",
@@ -4580,6 +4816,7 @@ def test_update_pull_request_with_demo_evidence_rejects_duplicate_content_sha256
             capture_target="browser",
             capture_reference="https://preview.example",
             content_sha256=duplicated_digest,
+            release_context_sha256=_release_context_sha256(),
         ),
     ]
     with (

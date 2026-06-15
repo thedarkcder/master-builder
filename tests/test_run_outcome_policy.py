@@ -49,6 +49,7 @@ def _qa_recording(
         capture_target=capture_target,  # type: ignore[arg-type]
         capture_reference=capture_reference,
         content_sha256=f"{index:064x}",
+        release_context_sha256=f"{999:064x}",
     )
 
 
@@ -618,6 +619,7 @@ def test_complete_requeues_when_qa_demo_stage_needs_remaining_worker_platform() 
                 capture_target="browser",
                 capture_reference="https://preview.example",
                 content_sha256=f"{1:064x}",
+                release_context_sha256=f"{999:064x}",
             )
         ],
         outcome="requeue",
@@ -1080,6 +1082,7 @@ def test_complete_blocks_when_qa_continue_result_has_too_few_variant_recordings(
                 capture_target="browser",
                 capture_reference="https://preview.example",
                 content_sha256=f"{101:064x}",
+                release_context_sha256=f"{999:064x}",
             )
         ],
         outcome="continue",
@@ -1164,6 +1167,7 @@ def test_complete_creates_preview_release_for_ios_only_demo_requirements() -> No
                 capture_target="ios",
                 capture_reference="ios-simulator://girlpower",
                 content_sha256=f"{102:064x}",
+                release_context_sha256=f"{999:064x}",
             )
         ],
     )

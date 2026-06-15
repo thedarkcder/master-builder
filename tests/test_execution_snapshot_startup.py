@@ -274,6 +274,8 @@ class ExecutionSnapshotStartupBootstrapTests(unittest.TestCase):
                                 "object_key": "tenant/project/run/demo.mp4",
                                 "capture_reference": "mobile://configured",
                                 "capture_target": "mobile",
+                                "content_sha256": f"{1:064x}",
+                                "release_context_sha256": f"{2:064x}",
                             }
                         ],
                         "outcome": "continue",
@@ -443,7 +445,7 @@ class ExecutionSnapshotStartupBootstrapTests(unittest.TestCase):
         qa_artifact = repaired["stages"]["qa"]["artifact"]
         self.assertEqual(qa_artifact["outcome"], "blocked")
         self.assertEqual(qa_artifact["recordings"], [])
-        self.assertIn("Legacy QA demo recordings predate SHA-256 proof metadata", qa_artifact["blocker_message"])
+        self.assertIn("Legacy QA demo recordings predate SHA-256 proof and release context metadata", qa_artifact["blocker_message"])
         self.assertIsNotNone(ExecutionSnapshot.load(repaired))
 
     def test_repair_execution_snapshot_payload_backfills_legacy_qa_scenario_capture_targets(self) -> None:
