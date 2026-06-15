@@ -135,6 +135,47 @@ plugins {
     assert android_app_candidate.deployment_config["mobile_platform"] == "android"
 
 
+def test_scan_repo_for_project_apps_detects_react_native_web_browser_target() -> None:
+    with TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _write(
+            root / "package.json",
+            """\
+{
+  "name": "consumer-app",
+  "scripts": {
+    "start": "react-native start",
+    "web": "expo start --web"
+  },
+  "dependencies": {
+    "expo": "^37.0.0",
+    "react-native": "~0.61.5",
+    "react-native-web": "~0.11.7"
+  }
+}
+""",
+        )
+        _write(root / "ios" / "Consumer.xcodeproj" / "project.pbxproj", "// !$*UTF8*$!\n")
+        _write(root / "android" / "settings.gradle", 'rootProject.name = "Consumer"\ninclude ":app"\n')
+        _write(
+            root / "android" / "app" / "build.gradle",
+            """\
+plugins {
+    id 'com.android.application'
+}
+""",
+        )
+
+        candidates = scan_repo_for_project_apps(checkout_path=str(root), analysis_source="deployment_setup")
+
+    root_candidate = next(candidate for candidate in candidates if candidate.source_path == ".")
+    assert root_candidate.detected_runtime == "react_native_web"
+    assert root_candidate.exposed_port == 19006
+    assert root_candidate.start_command == "npm run web"
+    assert root_candidate.deployment_config["capture_target"] == "browser"
+    assert {"android/app", "ios"}.issubset({candidate.source_path for candidate in candidates})
+
+
 def test_scan_repo_for_project_apps_extracts_docker_compose_resources() -> None:
     with TemporaryDirectory() as tmp:
         root = Path(tmp)

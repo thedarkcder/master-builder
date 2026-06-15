@@ -45,11 +45,24 @@ _NODE_HINTS = (
     ("@remix-run/", "remix", "javascript", 3000, "npm run start"),
     ("next", "nextjs", "javascript", 3000, "npm run start"),
     ("nuxt", "nuxt", "javascript", 3000, "npm run start"),
+    ("react-native-web", "react_native_web", "javascript", 19006, "npm run web"),
     ("@nestjs/core", "nestjs", "typescript", 3000, "npm run start:prod"),
     ("express", "express", "javascript", 3000, "npm start"),
     ("astro", "astro", "typescript", 4321, "npm run start"),
     ("vite", "vite", "javascript", 4173, "npm run preview"),
     ("@sveltejs/kit", "sveltekit", "javascript", 3000, "npm run start"),
+)
+_BROWSER_CAPTURE_RUNTIMES = frozenset(
+    {
+        "remix",
+        "nextjs",
+        "nuxt",
+        "react_native_web",
+        "react",
+        "astro",
+        "vite",
+        "sveltekit",
+    }
 )
 _JAVA_DEFAULT_PORT = 8080
 _DEPLOYMENT_OWNED_APP_STATUSES = frozenset({"deploying", "live", "failed"})
@@ -598,6 +611,8 @@ def _normalize_package_json(text: str) -> tuple[str | None, str | None, int | No
     lowered_dependencies = {str(key).lower() for key in dependencies}
     for marker, runtime, language, port, default_start in _NODE_HINTS:
         if any(marker in dependency for dependency in lowered_dependencies):
+            if runtime == "react_native_web" and isinstance(scripts, dict) and "web" in scripts:
+                start_command = "npm run web"
             return package_name, runtime, language, port, start_command or default_start, 0.85
     if "react-scripts" in lowered_dependencies:
         return package_name, "react", "javascript", 3000, start_command or "npm start", 0.75
@@ -739,6 +754,11 @@ def _build_candidate_from_directory(*, repo_root: Path, directory: Path, evidenc
             name = package_name
         if runtime is not None:
             detected_runtime = runtime
+            if runtime in _BROWSER_CAPTURE_RUNTIMES:
+                deployment_config = {
+                    **deployment_config,
+                    "capture_target": "browser",
+                }
         if language is not None:
             detected_language = language
         if default_port is not None and exposed_port is None:
