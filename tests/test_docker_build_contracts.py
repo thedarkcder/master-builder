@@ -112,6 +112,22 @@ class DockerBuildContractTests(unittest.TestCase):
             msg="The console shim should remain after app source copy in the voice target.",
         )
 
+    def test_qa_demo_recorder_helper_is_copied_to_runtime_images(self) -> None:
+        dockerfile = (ROOT / "orchestrator" / "Dockerfile").read_text(encoding="utf-8")
+        helper_copy = "COPY scripts/qa_demo_release_context.py ./scripts/qa_demo_release_context.py"
+
+        app_target = dockerfile.split("FROM python-common-base AS app-runtime-base", 1)[1].split(
+            "FROM python-common-base AS python-android-base",
+            1,
+        )[0]
+        android_target = dockerfile.split("FROM python-android-base AS android-runtime", 1)[1].split(
+            "FROM python-common-base AS voice-runtime",
+            1,
+        )[0]
+
+        self.assertIn(helper_copy, app_target)
+        self.assertIn(helper_copy, android_target)
+
     def test_default_voice_image_keeps_existing_local_ml_dependencies(self) -> None:
         pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
         compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")

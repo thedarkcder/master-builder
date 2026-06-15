@@ -17,6 +17,7 @@ if str(REPO_ROOT) not in sys.path:
 
 from orchestrator.core.workflow.checkpoint_codec import decode_qa_result_payload  # noqa: E402
 from orchestrator.core.workflow.runner import QaScenario, QaStep  # noqa: E402
+from scripts.qa_demo_release_context import qa_demo_launch_context  # noqa: E402
 
 DEFAULT_ADB_COMMAND_TIMEOUT_SECONDS = 60
 
@@ -114,25 +115,7 @@ def _target_source_paths(value: object) -> list[str]:
 
 
 def qa_demo_launch_extras(payload: dict[str, object]) -> dict[str, str]:
-    release_service_urls = payload.get("release_service_urls")
-    serialized_service_urls = (
-        json.dumps(release_service_urls, sort_keys=True)
-        if isinstance(release_service_urls, list)
-        else ""
-    )
-    candidates = {
-        "MB_QA_DEMO_RELEASE_COMMIT_SHA": payload.get("release_commit_sha"),
-        "MB_QA_DEMO_RELEASE_SERVICE_URLS_JSON": serialized_service_urls,
-        "MB_QA_DEMO_RELEASE_API_BASE_URL": payload.get("release_api_base_url"),
-        "MB_QA_DEMO_RELEASE_BROWSER_URL": payload.get("release_browser_url"),
-        "QA_DEMO_API_BASE_URL": payload.get("release_api_base_url"),
-        "QA_DEMO_BROWSER_URL": payload.get("release_browser_url"),
-    }
-    return {
-        key: str(value).strip()
-        for key, value in candidates.items()
-        if str(value or "").strip()
-    }
+    return qa_demo_launch_context(payload)
 
 
 def build_debug_apk(*, repo_dir: Path, target_source_paths: list[str] | None = None) -> Path:
