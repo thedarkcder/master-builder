@@ -19,6 +19,7 @@ _VALID_STAGE_OUTCOMES: set[str] = {"continue", "requeue", "waiting_for_input", "
 _VALID_PM_NEXT_STAGES: set[str] = {"dev", "test"}
 _VALID_TEST_VALIDATION_SCOPES: set[str] = {"targeted_only", "current_head_acceptance", "full_suite"}
 _VALID_QA_CAPTURE_TARGETS: set[str] = {"browser", "ios", "android", "desktop"}
+_MIN_DEMO_REQUIREMENT_VARIANTS = 2
 
 
 def encode_stage_checkpoint_artifact(checkpoint: WorkflowStageCheckpoint) -> dict | None:
@@ -402,7 +403,13 @@ def _parse_demo_requirements(value: object) -> list[DemoRequirement] | None:
         acceptance_criterion = _parse_optional_string(item.get("acceptance_criterion"))
         capture_target = _parse_optional_string(item.get("capture_target"))
         variants = _parse_string_list(item.get("variants"), require_non_empty=True)
-        if title is None or acceptance_criterion is None or capture_target is None or variants is None:
+        if (
+            title is None
+            or acceptance_criterion is None
+            or capture_target is None
+            or variants is None
+            or len(variants) < _MIN_DEMO_REQUIREMENT_VARIANTS
+        ):
             return None
         if capture_target not in _VALID_QA_CAPTURE_TARGETS:
             return None
