@@ -98,7 +98,7 @@ Required actions:
 13d. Put structured clarification items under `request_context.questions`. Never emit top-level `questions`, and never omit `request_type`.
 13e. When a Decision Gate clarification is required, use `request_type="decision_gate_clarification"`.
 14. If you can proceed, set outcome to `continue` and provide the plan fields.
-15. If the current worker cannot execute the required capability, set outcome to `requeue`, set execution_worker_capability to the required capability, and set `requeue_target` and `requeue_reason`.
+15. If the current worker cannot execute the required implementation, test, or review capability, set outcome to `requeue`, set execution_worker_capability to the required capability, and set `requeue_target` and `requeue_reason`; do not requeue PM solely because a QA demo capture target later needs a different worker platform.
 16. If you cannot proceed because of a real blocker, set outcome to `blocked` or `waiting_for_input` and provide `blocker_message`.
 17. Never guess that an evidence source is missing from ticket wording alone. For `decision_state`, `jira_issue`, and `knowledge`, first call the matching tool and use the result.
 
