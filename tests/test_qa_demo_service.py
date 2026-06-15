@@ -687,6 +687,28 @@ def test_upsert_demo_evidence_section_rejects_structural_delimiters_in_recording
         raise AssertionError("expected structured metadata delimiters to block PR evidence rendering")
 
 
+def test_upsert_demo_evidence_section_rejects_unsupported_recording_capture_target() -> None:
+    try:
+        upsert_demo_evidence_section(
+            body="## Summary\n- change",
+            recordings=[
+                QaRecording(
+                    name="Tablet walkthrough",
+                    artifact_url="https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-demo-1.webm",
+                    object_key="tenant-1/project-1/run-1/qa-demo-1.webm",
+                    capture_target="tablet",
+                    capture_reference="tablet://configured",
+                )
+            ],
+            required_capture_targets=("tablet",),
+            required_recording_counts={"tablet": 1},
+        )
+    except ValueError as exc:
+        assert "Unsupported QA demo capture target" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("expected unsupported capture target to block PR evidence rendering")
+
+
 def test_record_demo_scenarios_passes_explicit_playwright_module_dir() -> None:
     commands: list[tuple[list[str], dict[str, str], float | None]] = []
 

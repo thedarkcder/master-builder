@@ -42,6 +42,7 @@ DEMO_EVIDENCE_MARKER = "<!-- master-builder:qa-demo-evidence v1 -->"
 DEMO_EVIDENCE_REQUIRED_TARGETS_MARKER = "<!-- master-builder:qa-demo-required-targets"
 DEMO_EVIDENCE_REQUIRED_COUNTS_MARKER = "<!-- master-builder:qa-demo-required-counts"
 _TRANSIENT_NATIVE_SELECTORS = frozenset({"id=splash_screen", "splash_screen"})
+_DEMO_CAPTURE_TARGETS = frozenset({"browser", "ios", "android", "desktop"})
 _NATIVE_CAPTURE_TARGETS = frozenset({"ios", "android", "desktop"})
 _RELEASE_SERVICE_READY_STATUSES = frozenset({401, 403, 405})
 _QA_PROOF_STEP_ACTIONS = frozenset({"assert_visible", "assert_text", "wait_for_text", "wait_for_url"})
@@ -655,7 +656,11 @@ def _normalize_required_capture_targets(required_capture_targets: list[str] | tu
     ordered: list[str] = []
     for target in required_capture_targets or ():
         normalized = str(target or "").strip()
-        if normalized and normalized not in ordered:
+        if not normalized:
+            continue
+        if normalized not in _DEMO_CAPTURE_TARGETS:
+            raise ValueError(f"Unsupported QA demo capture target: {normalized}")
+        if normalized not in ordered:
             ordered.append(normalized)
     return tuple(ordered)
 
@@ -666,6 +671,8 @@ def _normalize_required_recording_counts(required_recording_counts: dict[str, in
         normalized_target = str(target or "").strip()
         if not normalized_target:
             continue
+        if normalized_target not in _DEMO_CAPTURE_TARGETS:
+            raise ValueError(f"Unsupported QA demo capture target: {normalized_target}")
         normalized_count = int(count)
         if normalized_count <= 0:
             raise ValueError(f"Required QA demo recording count must be positive for target: {normalized_target}")
@@ -684,6 +691,13 @@ def _require_demo_evidence_line_field(value: object, *, field: str) -> str:
     normalized = _require_demo_evidence_field(value, field=field)
     if "[" in normalized or "]" in normalized:
         raise RuntimeError(f"QA demo evidence recording metadata is not serializable: {field}")
+    return normalized
+
+
+def _require_demo_evidence_capture_target(value: object) -> str:
+    normalized = _require_demo_evidence_line_field(value, field="capture_target")
+    if normalized not in _DEMO_CAPTURE_TARGETS:
+        raise ValueError(f"Unsupported QA demo capture target: {normalized}")
     return normalized
 
 
@@ -739,7 +753,7 @@ def build_demo_evidence_section(
         lines.append(f"{DEMO_EVIDENCE_REQUIRED_COUNTS_MARKER} {serialized_counts} -->")
     for recording in recordings:
         name = _require_demo_evidence_line_field(recording.name, field="name")
-        capture_target = _require_demo_evidence_line_field(recording.capture_target, field="capture_target")
+        capture_target = _require_demo_evidence_capture_target(recording.capture_target)
         capture_reference = _require_demo_evidence_line_field(recording.capture_reference, field="capture_reference")
         object_key = _require_demo_evidence_line_field(recording.object_key, field="object_key")
         artifact_url = _require_demo_evidence_field(recording.artifact_url, field="artifact_url")
