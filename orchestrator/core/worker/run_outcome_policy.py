@@ -143,6 +143,19 @@ class RunOutcomePolicy:
                         "preview release."
                     ),
                 )
+            if (
+                demo_recording_required
+                and workflow_result.outcome == "success"
+                and not _qa_demo_project_capture_targets(getattr(prepared, "workflow_request", None))
+            ):
+                workflow_result = _workflow_result_with_qa_blocker(
+                    workflow_result=workflow_result,
+                    attempt=max(1, int(workflow_result.attempts or 1)),
+                    message=(
+                        "QA demo recording requires project demo capture targets derived from project app metadata "
+                        "before creating the run preview release."
+                    ),
+                )
             try:
                 if workflow_result.outcome == "success" and (not demo_recording_required or qa_plan is not None):
                     preview_result = create_run_preview_deployment(
@@ -697,6 +710,15 @@ def _workflow_plan_for_qa(*, workflow_result, persisted_plan):
     if snapshot is None:
         return None
     return snapshot.plan()
+
+
+def _qa_demo_project_capture_targets(workflow_request) -> tuple[str, ...]:  # noqa: ANN001
+    targets = getattr(workflow_request, "project_demo_capture_targets", ()) if workflow_request is not None else ()
+    return tuple(
+        target
+        for target in targets
+        if str(target or "").strip() in {"browser", "ios", "android"}
+    )
 
 
 def _workflow_result_with_qa_blocker(*, workflow_result, attempt: int, message: str):

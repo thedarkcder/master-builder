@@ -125,7 +125,12 @@ def _prepared(run_plan: dict[str, object], *, effective_policy: dict[str, object
         worker_service_instance_id="worker-1",
         claim_id="claim-1",
         notifier=SimpleNamespace(stage_updates=[], append=lambda item: None),
-        workflow_request=SimpleNamespace(attempt_number=1, start_point_ref=None, start_point_sha=None),
+        workflow_request=SimpleNamespace(
+            attempt_number=1,
+            start_point_ref=None,
+            start_point_sha=None,
+            project_demo_capture_targets=("browser",),
+        ),
         jira_issue_url="https://jira.example/browse/MAB-400",
         run_dashboard_url="https://admin.example/runs/run-1",
         agent_id="worker-linux-local",
@@ -554,6 +559,59 @@ def test_complete_blocks_demo_required_success_without_pm_demo_plan() -> None:
     deps.execution.persist_stage_checkpoint_fn.assert_not_called()
     assert finalizer_calls["workflow_result"].outcome == "blocked"
     assert "requires persisted PM demo requirements before creating the run preview release" in str(
+        finalizer_calls["workflow_result"].blocker_message
+    )
+
+
+def test_complete_blocks_demo_required_success_without_project_demo_targets() -> None:
+    session = SimpleNamespace(refresh=lambda _run: None)
+    deps = _deps()
+    prepared = _prepared(_build_snapshot(), effective_policy={"qa_demo_recording_enabled": True})
+    prepared.workflow_request.project_demo_capture_targets = ()
+    workflow_result = _workflow_result()
+    finalizer_calls: dict[str, object] = {}
+
+    class _Finalizer:
+        def __init__(self, **_kwargs):
+            pass
+
+        def finalize(self, **kwargs):
+            finalizer_calls.update(kwargs)
+            return SimpleNamespace(
+                run=prepared.run,
+                workflow_result=kwargs["workflow_result"],
+                persisted_status="blocked",
+                last_error=kwargs["workflow_result"].blocker_message,
+                persisted_plan=prepared.run.plan,
+                event_types=(),
+                tail_steps=(),
+            )
+
+    with (
+        patch("orchestrator.core.worker.run_outcome_policy.create_run_preview_deployment") as preview_mock,
+        patch("orchestrator.core.worker.run_outcome_policy.execute_qa_demo_stage") as qa_mock,
+        patch("orchestrator.core.worker.run_outcome_policy.update_pull_request_with_demo_evidence") as update_pr_mock,
+        patch("orchestrator.core.worker.run_outcome_policy.WorkflowFinalizer", _Finalizer),
+        patch("orchestrator.core.worker.run_outcome_policy.CompletionTailExecutor") as tail_executor_cls,
+    ):
+        tail_executor_cls.return_value.execute.return_value = None
+        RunOutcomePolicy(
+            session=session,
+            settings=SimpleNamespace(project_repo_checkout_base_dir="/tmp/workdirs"),
+            deps=deps,
+            cleanup_run_workspaces_safe_fn=MagicMock(),
+        ).complete(
+            prepared=prepared,
+            workflow_result=workflow_result,
+            execution_context={"execution_branch": "run/MAB-400/run-1"},
+        )
+
+    preview_mock.assert_not_called()
+    qa_mock.assert_not_called()
+    update_pr_mock.assert_not_called()
+    deps.execution.persist_stage_checkpoint_fn.assert_not_called()
+    assert finalizer_calls["workflow_result"].outcome == "blocked"
+    assert "requires project demo capture targets derived from project app metadata" in str(
         finalizer_calls["workflow_result"].blocker_message
     )
 
