@@ -1281,14 +1281,24 @@ def _validate_recordings_cover_scenarios(
     recordings: list[LocalQaRecording],
 ) -> None:
     unmatched_scenario_names = [str(scenario.name or "").strip() for scenario in scenarios]
+    planned_scenario_names = set(unmatched_scenario_names)
+    unplanned_recording_names: list[str] = []
     for recording in recordings:
         recording_name = str(recording.name or "").strip()
+        if recording_name not in planned_scenario_names:
+            unplanned_recording_names.append(recording_name or "<unnamed>")
+            continue
         if recording_name in unmatched_scenario_names:
             unmatched_scenario_names.remove(recording_name)
     if unmatched_scenario_names:
         raise RuntimeError(
             f"QA demo recorder did not produce recording(s) for {capture_target_name} scenario(s): "
             + ", ".join(unmatched_scenario_names)
+        )
+    if unplanned_recording_names:
+        raise RuntimeError(
+            f"QA demo recorder produced unplanned recording(s) for {capture_target_name} scenario(s): "
+            + ", ".join(unplanned_recording_names)
         )
 
 
