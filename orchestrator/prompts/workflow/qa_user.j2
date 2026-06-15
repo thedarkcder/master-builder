@@ -15,6 +15,7 @@ Attempt: {{ attempt }}
 Browser capture reference: {{ browser_capture_reference }}
 Available capture targets: {{ available_capture_targets_json }}
 Available capture target `source_paths` identify the project app directories that belong to each capture target. Use those paths as the primary local repository context for native selector and flow evidence.
+Available capture target `release_service_urls`, `release_api_base_url`, and `release_browser_url` are the verified run preview release URLs. Native walkthroughs must exercise app behavior against those release services when the app needs backend/API connectivity.
 PR URL: {{ pr_url }}
 Acceptance criteria: {{ acceptance_criteria_json }}
 PM demo requirements: {{ demo_requirements_json }}
