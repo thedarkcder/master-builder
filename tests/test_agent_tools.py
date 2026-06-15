@@ -777,6 +777,122 @@ def test_github_open_pr_updates_existing_pull_request_body_when_requested() -> N
     assert fake_client.update_args["body"] == "## Demo Evidence\n- https://demo.example/video.webm"
 
 
+def test_github_open_pr_creates_draft_when_qa_demo_recording_is_enabled() -> None:
+    class _FakeTenant:
+        tenant_id = "example"
+        github_config = {"installation_id": "12345"}
+        policy_config = {"qa_demo_recording_enabled": True}
+
+    class _FakeProject:
+        project_id = "example-default"
+        github_repository = "https://github.com/acme/repo"
+        policy_overrides = {}
+        environment = {"default_branch": "staging"}
+
+    class _FakeRun:
+        branch = "feature/MAB-1-shared"
+
+    class _FakeContext:
+        tenant = _FakeTenant()
+        project = _FakeProject()
+        run = _FakeRun()
+        stage = "dev"
+        issue_key = "MAB-1"
+        run_id = "run-1"
+        repo_dir = Path("/tmp/repo")
+
+    class _FakeGitHubClient:
+        def __init__(self) -> None:
+            self.create_args: dict[str, object] | None = None
+
+        def find_open_pull_request(self, **_kwargs):  # noqa: ANN003, ANN202
+            return None
+
+        def create_pull_request(self, **kwargs):  # noqa: ANN003, ANN202
+            self.create_args = dict(kwargs)
+            return SimpleNamespace(number=43, html_url="https://github.com/acme/repo/pull/43")
+
+    fake_client = _FakeGitHubClient()
+    with (
+        patch("orchestrator.core.runtime.tools._resolve_context", return_value=_FakeContext()),
+        patch("orchestrator.core.runtime.tools._ensure_repo_checkout_exists"),
+        patch("orchestrator.core.runtime.tools.github_client_from_tenant_config", return_value=fake_client),
+    ):
+        payload = execute_agent_tool(
+            session=SimpleNamespace(flush=lambda: None),  # type: ignore[arg-type]
+            settings=SimpleNamespace(secrets_encryption_key=""),
+            tenant_id="example",
+            project_id="example-default",
+            run_id="run-1",
+            issue_key="MAB-1",
+            stage="dev",
+            tool_name="github.open_pr",
+            tool_args={"title": "MAB-1: update"},
+        )
+
+    assert payload == {"pr_number": 43, "pr_url": "https://github.com/acme/repo/pull/43"}
+    assert fake_client.create_args is not None
+    assert fake_client.create_args["draft"] is True
+
+
+def test_github_open_pr_honors_explicit_draft_request() -> None:
+    class _FakeTenant:
+        tenant_id = "example"
+        github_config = {"installation_id": "12345"}
+        policy_config = {}
+
+    class _FakeProject:
+        project_id = "example-default"
+        github_repository = "https://github.com/acme/repo"
+        policy_overrides = {}
+        environment = {"default_branch": "staging"}
+
+    class _FakeRun:
+        branch = "feature/MAB-1-shared"
+
+    class _FakeContext:
+        tenant = _FakeTenant()
+        project = _FakeProject()
+        run = _FakeRun()
+        stage = "dev"
+        issue_key = "MAB-1"
+        run_id = "run-1"
+        repo_dir = Path("/tmp/repo")
+
+    class _FakeGitHubClient:
+        def __init__(self) -> None:
+            self.create_args: dict[str, object] | None = None
+
+        def find_open_pull_request(self, **_kwargs):  # noqa: ANN003, ANN202
+            return None
+
+        def create_pull_request(self, **kwargs):  # noqa: ANN003, ANN202
+            self.create_args = dict(kwargs)
+            return SimpleNamespace(number=44, html_url="https://github.com/acme/repo/pull/44")
+
+    fake_client = _FakeGitHubClient()
+    with (
+        patch("orchestrator.core.runtime.tools._resolve_context", return_value=_FakeContext()),
+        patch("orchestrator.core.runtime.tools._ensure_repo_checkout_exists"),
+        patch("orchestrator.core.runtime.tools.github_client_from_tenant_config", return_value=fake_client),
+    ):
+        payload = execute_agent_tool(
+            session=SimpleNamespace(flush=lambda: None),  # type: ignore[arg-type]
+            settings=SimpleNamespace(secrets_encryption_key=""),
+            tenant_id="example",
+            project_id="example-default",
+            run_id="run-1",
+            issue_key="MAB-1",
+            stage="dev",
+            tool_name="github.open_pr",
+            tool_args={"title": "MAB-1: update", "draft": True},
+        )
+
+    assert payload == {"pr_number": 44, "pr_url": "https://github.com/acme/repo/pull/44"}
+    assert fake_client.create_args is not None
+    assert fake_client.create_args["draft"] is True
+
+
 def test_github_open_pr_prefers_remediation_pr_number_when_open() -> None:
     class _FakeTenant:
         tenant_id = "example"

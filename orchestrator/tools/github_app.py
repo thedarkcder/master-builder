@@ -43,6 +43,7 @@ class PullRequestDetails:
     head_sha: str
     title: str
     state: str
+    node_id: str | None = None
     head_ref: str | None = None
     base_ref: str | None = None
     base_sha: str | None = None
@@ -375,19 +376,23 @@ class GitHubAppClient:
         head_branch: str,
         base_branch: str,
         body: str,
+        draft: bool = False,
     ) -> PullRequestResult:
         enforce_repo_match(f"https://github.com/{repo_full_name}", github_repository)
         installation_token = self.get_installation_token()
+        payload = {
+            "title": title,
+            "head": head_branch,
+            "base": base_branch,
+            "body": body,
+        }
+        if draft:
+            payload["draft"] = True
         response = self._request_json(
             method="POST",
             path=f"/repos/{repo_full_name}/pulls",
             bearer_token=installation_token,
-            payload={
-                "title": title,
-                "head": head_branch,
-                "base": base_branch,
-                "body": body,
-            },
+            payload=payload,
         )
         number = response.get("number")
         html_url = response.get("html_url")
@@ -397,6 +402,34 @@ class GitHubAppClient:
             raise GitHubApiError("GitHub PR response did not include html_url")
 
         return PullRequestResult(number=number, html_url=html_url)
+
+    def mark_pull_request_ready_for_review(self, *, repo_full_name: str, pr_number: int) -> PullRequestDetails:
+        details = self.get_pull_request_details(repo_full_name=repo_full_name, pr_number=pr_number)
+        if not details.draft:
+            return details
+        if not details.node_id:
+            raise GitHubApiError("GitHub PR details response did not include node_id for ready-for-review mutation")
+        installation_token = self.get_installation_token()
+        response = self._request_json(
+            method="POST",
+            path="/graphql",
+            bearer_token=installation_token,
+            payload={
+                "query": (
+                    "mutation($pullRequestId: ID!) { "
+                    "markPullRequestReadyForReview(input: {pullRequestId: $pullRequestId}) { "
+                    "pullRequest { number isDraft url } } }"
+                ),
+                "variables": {"pullRequestId": details.node_id},
+            },
+        )
+        errors = response.get("errors")
+        if errors:
+            raise GitHubApiError(f"GitHub ready-for-review mutation failed: {errors}")
+        refreshed = self.get_pull_request_details(repo_full_name=repo_full_name, pr_number=pr_number)
+        if refreshed.draft:
+            raise GitHubApiError("GitHub ready-for-review mutation completed but PR remained draft")
+        return refreshed
 
     def update_pull_request(
         self,
@@ -446,6 +479,7 @@ class GitHubAppClient:
         base_sha = base.get("sha") if isinstance(base, dict) else None
         title = response.get("title")
         state = response.get("state")
+        node_id = response.get("node_id")
         draft = bool(response.get("draft"))
         mergeable = response.get("mergeable")
         if mergeable is not None and not isinstance(mergeable, bool):
@@ -473,6 +507,7 @@ class GitHubAppClient:
             head_sha=head_sha,
             title=title.strip(),
             state=state.strip(),
+            node_id=node_id.strip() if isinstance(node_id, str) and node_id.strip() else None,
             head_ref=head_ref.strip() if isinstance(head_ref, str) and head_ref.strip() else None,
             base_ref=base_ref.strip() if isinstance(base_ref, str) and base_ref.strip() else None,
             base_sha=base_sha.strip() if isinstance(base_sha, str) and base_sha.strip() else None,

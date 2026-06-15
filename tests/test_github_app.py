@@ -192,7 +192,198 @@ class GitHubAppClientTests(unittest.TestCase):
         self.assertEqual(payload["head"], "jira/MAB-8-add-github-client")
         self.assertEqual(payload["base"], "main")
         self.assertEqual(payload["body"], "PR body")
+        self.assertNotIn("draft", payload)
         self.assertEqual(requests[1].get_header("Authorization"), "Bearer inst_token_2")
+
+    def test_create_pull_request_can_create_draft_pr(self) -> None:
+        config = GitHubAppConfig(
+            app_id="12345",
+            installation_id="999",
+            private_key_pem="unused",
+        )
+        client = GitHubAppClient(config)
+
+        requests: list = []
+        responses = [
+            {
+                "token": "inst_token_2",
+                "expires_at": "2099-01-01T00:00:00Z",
+            },
+            {
+                "number": 42,
+                "html_url": "https://github.com/example/repo/pull/42",
+            },
+        ]
+
+        def fake_urlopen(request, timeout=30):  # noqa: ANN001
+            requests.append(request)
+            return _FakeHTTPResponse(responses.pop(0))
+
+        with patch.object(client, "create_app_jwt", return_value="app.jwt"), patch(
+            "orchestrator.tools.github_app.urlopen",
+            side_effect=fake_urlopen,
+        ):
+            client.create_pull_request(
+                repo_full_name="example/repo",
+                github_repository="https://github.com/example/repo",
+                title="MAB-8: add github client",
+                head_branch="jira/MAB-8-add-github-client",
+                base_branch="main",
+                body="PR body",
+                draft=True,
+            )
+
+        payload = json.loads(requests[1].data.decode("utf-8"))
+        self.assertIs(payload["draft"], True)
+
+    def test_mark_pull_request_ready_for_review_uses_graphql_mutation_for_drafts(self) -> None:
+        config = GitHubAppConfig(
+            app_id="12345",
+            installation_id="999",
+            private_key_pem="unused",
+        )
+        client = GitHubAppClient(config)
+        draft_details = PullRequestDetails(
+            number=42,
+            html_url="https://github.com/example/repo/pull/42",
+            head_sha="abc123",
+            title="MAB-8: add github client",
+            state="open",
+            node_id="PR_kwDOExample",
+            draft=True,
+        )
+        ready_details = PullRequestDetails(
+            number=42,
+            html_url="https://github.com/example/repo/pull/42",
+            head_sha="abc123",
+            title="MAB-8: add github client",
+            state="open",
+            node_id="PR_kwDOExample",
+            draft=False,
+        )
+
+        with (
+            patch.object(client, "get_installation_token", return_value="token"),
+            patch.object(
+                client,
+                "get_pull_request_details",
+                side_effect=[draft_details, ready_details],
+            ) as details_mock,
+            patch.object(
+                client,
+                "_request_json",
+                return_value={"data": {"markPullRequestReadyForReview": {}}},
+            ) as request_mock,
+        ):
+            result = client.mark_pull_request_ready_for_review(repo_full_name="example/repo", pr_number=42)
+
+        self.assertIs(result, ready_details)
+        self.assertEqual(details_mock.call_count, 2)
+        self.assertEqual(request_mock.call_args.kwargs["path"], "/graphql")
+        self.assertEqual(
+            request_mock.call_args.kwargs["payload"]["variables"],
+            {"pullRequestId": "PR_kwDOExample"},
+        )
+
+    def test_mark_pull_request_ready_for_review_noops_for_non_draft_pr(self) -> None:
+        config = GitHubAppConfig(
+            app_id="12345",
+            installation_id="999",
+            private_key_pem="unused",
+        )
+        client = GitHubAppClient(config)
+        details = PullRequestDetails(
+            number=42,
+            html_url="https://github.com/example/repo/pull/42",
+            head_sha="abc123",
+            title="MAB-8: add github client",
+            state="open",
+            draft=False,
+        )
+
+        with (
+            patch.object(client, "get_pull_request_details", return_value=details),
+            patch.object(client, "_request_json") as request_mock,
+        ):
+            result = client.mark_pull_request_ready_for_review(repo_full_name="example/repo", pr_number=42)
+
+        self.assertIs(result, details)
+        request_mock.assert_not_called()
+
+    def test_mark_pull_request_ready_for_review_requires_graphql_node_id(self) -> None:
+        config = GitHubAppConfig(
+            app_id="12345",
+            installation_id="999",
+            private_key_pem="unused",
+        )
+        client = GitHubAppClient(config)
+        details = PullRequestDetails(
+            number=42,
+            html_url="https://github.com/example/repo/pull/42",
+            head_sha="abc123",
+            title="MAB-8: add github client",
+            state="open",
+            draft=True,
+        )
+
+        with (
+            patch.object(client, "get_pull_request_details", return_value=details),
+            patch.object(client, "_request_json") as request_mock,
+        ):
+            with self.assertRaisesRegex(GitHubApiError, "did not include node_id"):
+                client.mark_pull_request_ready_for_review(repo_full_name="example/repo", pr_number=42)
+
+        request_mock.assert_not_called()
+
+    def test_mark_pull_request_ready_for_review_raises_on_graphql_errors(self) -> None:
+        config = GitHubAppConfig(
+            app_id="12345",
+            installation_id="999",
+            private_key_pem="unused",
+        )
+        client = GitHubAppClient(config)
+        details = PullRequestDetails(
+            number=42,
+            html_url="https://github.com/example/repo/pull/42",
+            head_sha="abc123",
+            title="MAB-8: add github client",
+            state="open",
+            node_id="PR_kwDOExample",
+            draft=True,
+        )
+
+        with (
+            patch.object(client, "get_installation_token", return_value="token"),
+            patch.object(client, "get_pull_request_details", return_value=details),
+            patch.object(client, "_request_json", return_value={"errors": [{"message": "not authorized"}]}),
+        ):
+            with self.assertRaisesRegex(GitHubApiError, "ready-for-review mutation failed"):
+                client.mark_pull_request_ready_for_review(repo_full_name="example/repo", pr_number=42)
+
+    def test_mark_pull_request_ready_for_review_requires_refreshed_pr_to_leave_draft(self) -> None:
+        config = GitHubAppConfig(
+            app_id="12345",
+            installation_id="999",
+            private_key_pem="unused",
+        )
+        client = GitHubAppClient(config)
+        details = PullRequestDetails(
+            number=42,
+            html_url="https://github.com/example/repo/pull/42",
+            head_sha="abc123",
+            title="MAB-8: add github client",
+            state="open",
+            node_id="PR_kwDOExample",
+            draft=True,
+        )
+
+        with (
+            patch.object(client, "get_installation_token", return_value="token"),
+            patch.object(client, "get_pull_request_details", side_effect=[details, details]),
+            patch.object(client, "_request_json", return_value={"data": {"markPullRequestReadyForReview": {}}}),
+        ):
+            with self.assertRaisesRegex(GitHubApiError, "PR remained draft"):
+                client.mark_pull_request_ready_for_review(repo_full_name="example/repo", pr_number=42)
 
     def test_create_check_run_uses_installation_token_and_payload(self) -> None:
         config = GitHubAppConfig(
@@ -593,6 +784,7 @@ class GitHubAppClientTests(unittest.TestCase):
                 "base": {"ref": "main"},
                 "title": "MAB-12: Update",
                 "state": "open",
+                "node_id": "PR_kwDOExample",
             },
         ]
 
@@ -613,6 +805,7 @@ class GitHubAppClientTests(unittest.TestCase):
                 head_sha="abc123sha",
                 title="MAB-12: Update",
                 state="open",
+                node_id="PR_kwDOExample",
                 base_ref="main",
             ),
         )
