@@ -1406,10 +1406,21 @@ def _validate_qa_scenario_coverage(
 
 
 def _validate_recorded_qa_result_covers_plan(*, plan: PmPlan, qa_result: QaResult) -> None:
+    required_targets = set(required_capture_targets(plan))
+    out_of_plan_targets = [
+        target
+        for target in recorded_capture_targets(qa_result.recordings)
+        if target not in required_targets
+    ]
+    if out_of_plan_targets:
+        raise RuntimeError(
+            "QA demo previous recording proof contains capture target(s) outside the current PM demo plan: "
+            + ", ".join(out_of_plan_targets)
+        )
     capture_targets = {
         target: DemoCaptureTarget(capture_target=target, capture_reference="")
         for target in recorded_capture_targets(qa_result.recordings)
-        if target in required_capture_targets(plan)
+        if target in required_targets
     }
     if not capture_targets:
         return
