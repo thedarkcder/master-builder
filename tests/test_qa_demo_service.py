@@ -173,6 +173,22 @@ def test_resolve_preview_demo_url_prefers_active_website() -> None:
     assert resolve_preview_demo_url(release) == "https://preview.example"
 
 
+def test_resolve_preview_demo_url_rejects_inactive_website() -> None:
+    release = SimpleNamespace(
+        service_urls=[
+            SimpleNamespace(service_kind="api", status="active", url="https://api.example"),
+            SimpleNamespace(service_kind="website", status="pending", url="https://preview.example"),
+        ]
+    )
+
+    try:
+        resolve_preview_demo_url(release)
+    except RuntimeError as exc:
+        assert "active preview website URL" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("expected inactive browser preview URL to be rejected")
+
+
 def test_required_capture_targets_preserves_pm_order() -> None:
     plan = PmPlan(
         plan_steps=["Implement"],
