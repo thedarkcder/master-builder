@@ -86,6 +86,19 @@ _ANDROID_COMPOSE_TEXT_RE = re.compile(r'Text\(\s*"([^"]+)"')
 _NATIVE_INPUT_ID_HINTS = ("field", "input", "email", "password", "search", "username", "code", "otp")
 _TEST_VALIDATION_SCOPES = frozenset({"targeted_only", "current_head_acceptance", "full_suite"})
 _QA_CAPTURE_TARGETS = frozenset({"browser", "ios", "android", "desktop"})
+_ISSUE_REQUIRED_CAPTURE_TARGET_PATTERNS: dict[str, tuple[re.Pattern[str], ...]] = {
+    "browser": (
+        re.compile(r"\bweb(?:site| app)?\b", re.IGNORECASE),
+        re.compile(r"\bbrowser\b", re.IGNORECASE),
+        re.compile(r"\bfrontend\b", re.IGNORECASE),
+    ),
+    "ios": (
+        re.compile(r"\bios\b", re.IGNORECASE),
+        re.compile(r"\biphone\b", re.IGNORECASE),
+        re.compile(r"\bipad\b", re.IGNORECASE),
+    ),
+    "android": (re.compile(r"\bandroid\b", re.IGNORECASE),),
+}
 
 
 def _capture_target_constraints(value: str | None) -> dict[str, dict[str, object]]:
@@ -111,6 +124,15 @@ def _capture_target_constraints(value: str | None) -> dict[str, dict[str, object
             "availability_reason": _optional_string(item.get("availability_reason")),
         }
     return constraints
+
+
+def _required_demo_capture_targets_from_issue_text(*values: str | None) -> set[str]:
+    text = "\n".join(str(value or "") for value in values)
+    required_targets: set[str] = set()
+    for capture_target, patterns in _ISSUE_REQUIRED_CAPTURE_TARGET_PATTERNS.items():
+        if any(pattern.search(text) for pattern in patterns):
+            required_targets.add(capture_target)
+    return required_targets
 
 
 def _native_selector_catalog(repo_dir: str | None) -> dict[str, list[str]]:
@@ -527,6 +549,18 @@ class CodexWorkflowAgents:
             raise CodexRuntimeError("Codex pm response missing requeue_reason for requeue outcome")
         demo_requirements = _required_demo_requirements(payload.get("demo_requirements"), stage="pm")
         target_constraints = _capture_target_constraints(capture_target_constraints_json)
+        if outcome == "continue":
+            required_issue_targets = _required_demo_capture_targets_from_issue_text(
+                request.issue_summary,
+                request.issue_description,
+            )
+            selected_targets = {requirement.capture_target for requirement in demo_requirements}
+            missing_required_targets = sorted(required_issue_targets - selected_targets)
+            if missing_required_targets:
+                raise CodexRuntimeError(
+                    "Codex pm response missing required demo capture target(s): "
+                    + ", ".join(missing_required_targets)
+                )
         for requirement in demo_requirements:
             constraint = target_constraints.get(requirement.capture_target)
             if constraint is None:
