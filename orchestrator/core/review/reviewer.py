@@ -56,6 +56,7 @@ class ReviewAgentGate:
         project_id: str | None = None,
         demo_artifact_public_base_url: str | None = None,
         demo_evidence_run_id_resolver: Callable[[str], str | None] | None = None,
+        demo_evidence_recordings_resolver: Callable[[str], tuple[dict[str, str], ...] | None] | None = None,
     ):
         self._github_client = github_client
         self._required_workflows = required_workflows
@@ -65,6 +66,7 @@ class ReviewAgentGate:
         self._project_id = project_id
         self._demo_artifact_public_base_url = str(demo_artifact_public_base_url or "").strip().rstrip("/")
         self._demo_evidence_run_id_resolver = demo_evidence_run_id_resolver
+        self._demo_evidence_recordings_resolver = demo_evidence_recordings_resolver
 
     def evaluate_pr(
         self,
@@ -150,6 +152,11 @@ class ReviewAgentGate:
                 if self._demo_evidence_run_id_resolver is not None
                 else None
             )
+            expected_recordings = (
+                self._demo_evidence_recordings_resolver(expected_run_id)
+                if self._demo_evidence_recordings_resolver is not None and expected_run_id is not None
+                else None
+            )
             if not _demo_evidence_present(
                 pr.body,
                 required_demo_capture_targets=self._required_demo_capture_targets,
@@ -157,6 +164,7 @@ class ReviewAgentGate:
                 project_id=self._project_id,
                 run_id=expected_run_id,
                 artifact_public_base_url=self._demo_artifact_public_base_url,
+                expected_recordings=expected_recordings,
             ):
                 return ReviewerSignal(
                     ready=False,
@@ -407,6 +415,7 @@ def _demo_evidence_present(
     project_id: str | None = None,
     run_id: str | None = None,
     artifact_public_base_url: str | None = None,
+    expected_recordings: tuple[dict[str, str], ...] | None = None,
 ) -> bool:
     normalized_body = str(body or "").strip()
     if not normalized_body:
@@ -442,6 +451,11 @@ def _demo_evidence_present(
         for match in structured_matches
     ):
         return False
+    if expected_recordings is not None and not _structured_demo_evidence_matches_expected_recordings(
+        structured_matches=structured_matches,
+        expected_recordings=expected_recordings,
+    ):
+        return False
     content_sha256_counts = Counter(match.group("sha256") for match in structured_matches)
     if any(count > 1 for count in content_sha256_counts.values()):
         return False
@@ -464,6 +478,40 @@ def _demo_evidence_present(
         return False
     recorded_counts = Counter(structured_match.group("target") for structured_match in structured_matches)
     return all(recorded_counts.get(target, 0) >= count for target, count in embedded_required_counts.items())
+
+
+def _structured_demo_evidence_matches_expected_recordings(
+    *,
+    structured_matches: list[re.Match[str]],
+    expected_recordings: tuple[dict[str, str], ...],
+) -> bool:
+    if not expected_recordings:
+        return False
+    actual = {
+        (
+            match.group("target"),
+            match.group("object_key"),
+            match.group("sha256"),
+            match.group("release_commit_sha"),
+            match.group("release_context_sha256"),
+            str(match.group("artifact_url") or "").strip(),
+        )
+        for match in structured_matches
+    }
+    expected: set[tuple[str, str, str, str, str, str]] = set()
+    for recording in expected_recordings:
+        fingerprint = (
+            str(recording.get("capture_target") or "").strip(),
+            str(recording.get("object_key") or "").strip(),
+            str(recording.get("content_sha256") or "").strip().lower(),
+            str(recording.get("release_commit_sha") or "").strip().lower(),
+            str(recording.get("release_context_sha256") or "").strip().lower(),
+            str(recording.get("artifact_url") or "").strip(),
+        )
+        if not all(fingerprint):
+            return False
+        expected.add(fingerprint)
+    return actual == expected
 
 
 def _structured_demo_evidence_line_is_run_artifact(
