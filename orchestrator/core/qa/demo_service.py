@@ -179,6 +179,18 @@ def release_context_sha256_for_service_urls(release_service_urls: list[dict[str,
     return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
 
+def release_context_sha256_for_release(*, release, release_service_urls: list[dict[str, str]]) -> str:  # noqa: ANN001
+    commit_sha = str(getattr(release, "commit_sha", "") or "").strip()
+    if not commit_sha:
+        return release_context_sha256_for_service_urls(release_service_urls)
+    payload = {
+        "commit_sha": commit_sha,
+        "service_urls": release_service_urls,
+    }
+    serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
 def _service_kind_from_item(item: object) -> str | None:
     if isinstance(item, dict):
         kind = str(item.get("kind") or item.get("service_kind") or "").strip()
@@ -1793,7 +1805,10 @@ def execute_qa_demo_stage(
         timeout_seconds=qa_demo_release_health_timeout_seconds(settings),
     )
     release_service_urls = _release_service_urls_payload(preview_release)
-    release_context_sha256 = release_context_sha256_for_service_urls(release_service_urls)
+    release_context_sha256 = release_context_sha256_for_release(
+        release=preview_release,
+        release_service_urls=release_service_urls,
+    )
     if previous_recordings:
         _validate_reusable_qa_recording_links(
             settings=settings,

@@ -27,6 +27,7 @@ from orchestrator.core.qa.demo_service import (
     record_demo_scenarios,
     remaining_capture_targets,
     release_context_sha256_for_service_urls,
+    release_context_sha256_for_release,
     required_capture_targets,
     required_recording_counts_by_target,
     required_release_service_kinds,
@@ -166,6 +167,17 @@ def _release_context_sha256(*, include_api: bool = False) -> str:
     if include_api:
         urls.insert(0, {"service_kind": "api", "service_name": "api", "url": "https://api.preview.example"})
     return release_context_sha256_for_service_urls(urls)
+
+
+def _release_context_sha256_with_commit(*, include_api: bool = False, commit_sha: str = "b" * 40) -> str:
+    website_service_name = "web" if include_api else ""
+    urls = [{"service_kind": "website", "service_name": website_service_name, "url": "https://preview.example"}]
+    if include_api:
+        urls.insert(0, {"service_kind": "api", "service_name": "api", "url": "https://api.preview.example"})
+    return release_context_sha256_for_release(
+        release=SimpleNamespace(commit_sha=commit_sha),
+        release_service_urls=urls,
+    )
 
 
 def _empty_release_context_sha256() -> str:
@@ -1818,6 +1830,7 @@ def test_execute_qa_demo_stage_records_and_uploads() -> None:
     project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo")
     run = SimpleNamespace(run_id="run-1")
     release = SimpleNamespace(
+        commit_sha="b" * 40,
         service_urls=[
             SimpleNamespace(service_kind="api", service_name="api", status="active", url="https://api.preview.example"),
             SimpleNamespace(service_kind="website", service_name="web", status="active", url="https://preview.example"),
@@ -1880,7 +1893,7 @@ def test_execute_qa_demo_stage_records_and_uploads() -> None:
     assert result.recordings[0].artifact_url.endswith("qa-demo-1.webm")
     assert result.recordings[0].capture_target == "browser"
     assert result.recordings[0].capture_reference == "https://preview.example"
-    assert result.recordings[0].release_context_sha256 == _release_context_sha256(include_api=True)
+    assert result.recordings[0].release_context_sha256 == _release_context_sha256_with_commit(include_api=True)
     available_targets = json.loads(fake_agents.qa.call_args.kwargs["available_capture_targets_json"])
     browser_target = next(item for item in available_targets if item["capture_target"] == "browser")
     assert browser_target["capture_reference"] == "https://preview.example"
@@ -1900,7 +1913,7 @@ def test_execute_qa_demo_stage_records_and_uploads() -> None:
         },
     ]
     assert upload_mock.call_args.kwargs["content_type"] == "video/webm"
-    assert upload_mock.call_args.kwargs["release_context_sha256"] == _release_context_sha256(include_api=True)
+    assert upload_mock.call_args.kwargs["release_context_sha256"] == _release_context_sha256_with_commit(include_api=True)
 
 
 def test_execute_qa_demo_stage_rejects_unsafe_artifact_scope_before_upload() -> None:
@@ -3659,6 +3672,89 @@ def test_execute_qa_demo_stage_rejects_previous_recording_from_different_release
             assert "Happy path" in str(exc)
         else:  # pragma: no cover
             raise AssertionError("expected stale release-context proof to block previous QA demo proof reuse")
+
+    artifact_probe.assert_not_called()
+    agents_cls.assert_not_called()
+
+
+def test_execute_qa_demo_stage_rejects_previous_recording_from_different_release_commit() -> None:
+    tenant = SimpleNamespace(tenant_id="tenant-1", github_config={})
+    project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo")
+    run = SimpleNamespace(run_id="run-1")
+    plan = PmPlan(
+        plan_steps=["Implement"],
+        acceptance_criteria=["Feature works"],
+        risks=[],
+        demo_requirements=[_demo_requirement()],
+    )
+    previous_qa = QaResult(
+        summary=["Previous demos"],
+        scenarios=[
+            QaScenario(
+                name="Happy path",
+                objective="Show feature works",
+                capture_target="browser",
+                steps=_proof_steps("text=Feature"),
+            ),
+            QaScenario(
+                name="Repeat action remains safe",
+                objective="Repeat action remains safe",
+                capture_target="browser",
+                steps=_proof_steps("text=Feature"),
+            ),
+        ],
+        recordings=[
+            QaRecording(
+                name="Happy path",
+                artifact_url="https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-demo-1.webm",
+                object_key="tenant-1/project-1/run-1/qa-demo-1.webm",
+                capture_target="browser",
+                capture_reference="https://preview.example",
+                content_sha256=_sha256(53),
+                release_context_sha256=_release_context_sha256(),
+            ),
+            QaRecording(
+                name="Repeat action remains safe",
+                artifact_url="https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-demo-2.webm",
+                object_key="tenant-1/project-1/run-1/qa-demo-2.webm",
+                capture_target="browser",
+                capture_reference="https://preview.example",
+                content_sha256=_sha256(54),
+                release_context_sha256=_release_context_sha256(),
+            ),
+        ],
+    )
+
+    with (
+        patch("orchestrator.core.qa.demo_service._default_artifact_url_probe", return_value=200) as artifact_probe,
+        patch("orchestrator.core.qa.demo_service._default_service_url_probe", return_value=200),
+        patch("orchestrator.core.qa.demo_service.CodexWorkflowAgents") as agents_cls,
+    ):
+        try:
+            execute_qa_demo_stage(
+                session=SimpleNamespace(),
+                settings=_qa_artifact_settings(),
+                tenant=tenant,
+                project=project,
+                run=run,
+                request=_request(),
+                plan=plan,
+                dev_result=DevResult(change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8"),
+                test_result=TestResult(guidance=["pytest -q"]),
+                review_result=ReviewResult(summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"),
+                preview_release=SimpleNamespace(
+                    commit_sha="b" * 40,
+                    service_urls=[
+                        SimpleNamespace(service_kind="website", status="active", url="https://preview.example")
+                    ],
+                ),
+                previous_qa_result=previous_qa,
+            )
+        except RuntimeError as exc:
+            assert "release context does not match current release before reuse" in str(exc)
+            assert "Happy path" in str(exc)
+        else:  # pragma: no cover
+            raise AssertionError("expected stale release-commit proof to block previous QA demo proof reuse")
 
     artifact_probe.assert_not_called()
     agents_cls.assert_not_called()
