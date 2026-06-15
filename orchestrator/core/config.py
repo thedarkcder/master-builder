@@ -76,6 +76,7 @@ class Settings(BaseSettings):
     codex_max_output_tokens: int = 1800
     codex_hang_detection_quiet_seconds: int = 300
     codex_hang_detection_report_interval_seconds: int = 120
+    codex_runtime_invocation_timeout_seconds: int = 900
     runtime_log_batch_size: int = 50
     runtime_log_batch_flush_ms: int = 50
     log_db_batch_size: int = 200
