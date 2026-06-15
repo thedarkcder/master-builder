@@ -1861,6 +1861,9 @@ def update_pull_request_with_demo_evidence(
         base_branch=pr_details.base_ref or "main",
         body=body,
     )
+    updated_pr_details = github_client.get_pull_request_details(repo_full_name=repo_full_name, pr_number=pr_number)
+    if updated_pr_details.body != body:
+        raise RuntimeError("QA demo evidence PR update did not persist required evidence")
     return body
 
 
