@@ -594,13 +594,18 @@ def planned_capture_target_constraints_payload(*, settings) -> list[dict[str, st
     return payload
 
 
-def _available_capture_targets_payload(targets: dict[str, DemoCaptureTarget]) -> list[dict[str, str]]:
-    payload: list[dict[str, str]] = []
+def _available_capture_targets_payload(
+    targets: dict[str, DemoCaptureTarget],
+    *,
+    source_paths_by_target: dict[str, tuple[str, ...]] | None = None,
+) -> list[dict[str, object]]:
+    payload: list[dict[str, object]] = []
     for target in targets.values():
         payload.append(
             {
                 "capture_target": target.capture_target,
                 "capture_reference": target.capture_reference,
+                "source_paths": list((source_paths_by_target or {}).get(target.capture_target, ())),
             }
         )
     return payload
@@ -1441,7 +1446,12 @@ def execute_qa_demo_stage(
         test_result=test_result,
         review_result=review_result,
         browser_capture_reference=browser_capture_reference,
-        available_capture_targets_json=json.dumps(_available_capture_targets_payload(current_worker_capture_targets)),
+        available_capture_targets_json=json.dumps(
+            _available_capture_targets_payload(
+                current_worker_capture_targets,
+                source_paths_by_target=request.project_demo_capture_target_sources,
+            )
+        ),
         attempt=request.attempt_number,
     )
     if qa_result.outcome != "continue":

@@ -1139,8 +1139,115 @@ def test_execute_qa_demo_stage_records_and_uploads() -> None:
     assert result.recordings[0].capture_target == "browser"
     assert result.recordings[0].capture_reference == "https://preview.example"
     available_targets = json.loads(fake_agents.qa.call_args.kwargs["available_capture_targets_json"])
-    assert {"capture_target": "browser", "capture_reference": "https://preview.example"} in available_targets
+    assert {
+        "capture_target": "browser",
+        "capture_reference": "https://preview.example",
+        "source_paths": [],
+    } in available_targets
     assert upload_mock.call_args.kwargs["content_type"] == "video/webm"
+
+
+def test_execute_qa_demo_stage_includes_project_source_paths_in_qa_prompt_targets() -> None:
+    tenant = SimpleNamespace(tenant_id="tenant-1", github_config={})
+    project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo")
+    run = SimpleNamespace(run_id="run-1")
+    plan = PmPlan(
+        plan_steps=["Implement"],
+        acceptance_criteria=["Feature works on Android"],
+        risks=[],
+        demo_requirements=[
+            _demo_requirement(
+                title="Android walkthrough",
+                acceptance_criterion="Feature works on Android",
+                capture_target="android",
+            )
+        ],
+    )
+    request = replace(_request(), project_demo_capture_target_sources={"android": ("apps/android",)})
+    fake_agents = SimpleNamespace(
+        qa=MagicMock(
+            return_value=QaResult(
+                summary=["Recorded demos"],
+                scenarios=[
+                    QaScenario(
+                        name="Android walkthrough",
+                        objective="Show Android feature works",
+                        capture_target="android",
+                        steps=[QaStep(action="assert_visible", selector="text=Ready")],
+                    ),
+                    QaScenario(
+                        name="Android repeat action",
+                        objective="Repeat action remains safe on Android",
+                        capture_target="android",
+                        steps=[QaStep(action="assert_visible", selector="text=Ready")],
+                    ),
+                ],
+            )
+        )
+    )
+
+    with (
+        patch("orchestrator.core.qa.demo_service.build_codex_runtime"),
+        patch("orchestrator.core.qa.demo_service.CodexWorkflowAgents", return_value=fake_agents),
+        patch(
+            "orchestrator.core.qa.demo_service.record_demo_scenarios",
+            return_value=[
+                _local_recording(
+                    name="Android walkthrough",
+                    path="/tmp/android.mp4",
+                    capture_target="android",
+                    capture_reference="android-emulator://configured",
+                    content_type="video/mp4",
+                ),
+                _local_recording(
+                    name="Android repeat action",
+                    path="/tmp/android-repeat.mp4",
+                    capture_target="android",
+                    capture_reference="android-emulator://configured",
+                    content_type="video/mp4",
+                ),
+            ],
+        ),
+        patch(
+            "orchestrator.core.qa.demo_service.storage_config_from_settings",
+            return_value=SimpleNamespace(
+                endpoint="minio:9000",
+                access_key="key",
+                secret_key="secret",
+                bucket="qa-demos",
+                public_base_url="https://cdn.example/qa-demos",
+                secure=False,
+            ),
+        ),
+        patch(
+            "orchestrator.core.qa.demo_service.upload_recording",
+            return_value="https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-demo-1.mp4",
+        ),
+        patch("orchestrator.core.qa.demo_service.ensure_capture_target_runtime_ready"),
+        patch("orchestrator.core.qa.demo_service._default_artifact_url_probe", return_value=200),
+    ):
+        execute_qa_demo_stage(
+            session=SimpleNamespace(),
+            settings=SimpleNamespace(qa_demo_playwright_module_dir=""),
+            tenant=tenant,
+            project=project,
+            run=run,
+            request=request,
+            plan=plan,
+            dev_result=DevResult(change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8"),
+            test_result=TestResult(guidance=["./gradlew test"]),
+            review_result=ReviewResult(summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"),
+            preview_release=SimpleNamespace(service_urls=[]),
+        )
+
+    available_targets = json.loads(fake_agents.qa.call_args.kwargs["available_capture_targets_json"])
+    assert available_targets == [
+        {
+            "capture_target": "android",
+            "capture_reference": "android-emulator://configured",
+            "source_paths": ["apps/android"],
+        }
+    ]
 
 
 def test_execute_qa_demo_stage_requires_pm_demo_variants_before_qa_agent() -> None:
@@ -2252,7 +2359,13 @@ def test_execute_qa_demo_stage_completes_remaining_target_with_previous_recordin
     ]
     assert upload_mock.call_args.kwargs["object_key"].endswith("qa-demo-6.mp4")
     available_targets = json.loads(fake_agents.qa.call_args.kwargs["available_capture_targets_json"])
-    assert available_targets == [{"capture_target": "ios", "capture_reference": "ios-simulator://configured"}]
+    assert available_targets == [
+        {
+            "capture_target": "ios",
+            "capture_reference": "ios-simulator://configured",
+            "source_paths": [],
+        }
+    ]
 
 
 def test_execute_qa_demo_stage_rejects_previous_recording_without_matching_scenario() -> None:
@@ -2413,7 +2526,7 @@ def test_execute_qa_demo_stage_uses_builtin_ios_capture_on_macos() -> None:
     assert result.recordings[0].artifact_url.endswith("qa-demo-1.mp4")
     assert result.recordings[0].capture_target == "ios"
     assert fake_agents.qa.call_args.kwargs["available_capture_targets_json"] == (
-        '[{"capture_target": "ios", "capture_reference": "ios-simulator://configured"}]'
+        '[{"capture_target": "ios", "capture_reference": "ios-simulator://configured", "source_paths": []}]'
     )
 
 
@@ -2511,7 +2624,7 @@ def test_execute_qa_demo_stage_uses_builtin_android_capture_on_linux() -> None:
 
     assert result.recordings[0].capture_target == "android"
     assert fake_agents.qa.call_args.kwargs["available_capture_targets_json"] == (
-        '[{"capture_target": "android", "capture_reference": "android-emulator://configured"}]'
+        '[{"capture_target": "android", "capture_reference": "android-emulator://configured", "source_paths": []}]'
     )
 
 
