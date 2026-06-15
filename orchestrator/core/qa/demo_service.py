@@ -710,6 +710,21 @@ def _validate_demo_evidence_recording_metadata(recordings: list[QaRecording]) ->
         _require_demo_evidence_field(recording.artifact_url, field="artifact_url")
 
 
+def _validate_distinct_demo_recording_artifacts(recordings: list[QaRecording]) -> None:
+    object_key_counts = Counter(str(recording.object_key or "").strip() for recording in recordings)
+    duplicate_object_keys = [object_key for object_key, count in object_key_counts.items() if object_key and count > 1]
+    if duplicate_object_keys:
+        raise RuntimeError(
+            "QA demo recording object keys must be unique before PR evidence: " + ", ".join(duplicate_object_keys)
+        )
+    artifact_url_counts = Counter(str(recording.artifact_url or "").strip() for recording in recordings)
+    duplicate_artifact_urls = [url for url, count in artifact_url_counts.items() if url and count > 1]
+    if duplicate_artifact_urls:
+        raise RuntimeError(
+            "QA demo recording artifact URLs must be unique before PR evidence: " + ", ".join(duplicate_artifact_urls)
+        )
+
+
 def remaining_capture_targets(plan: PmPlan, recordings: list[QaRecording] | tuple[QaRecording, ...]) -> tuple[str, ...]:
     recorded_counts: dict[str, int] = {}
     for recording in recordings:
@@ -1525,6 +1540,7 @@ def update_pull_request_with_demo_evidence(
         raise RuntimeError("QA demo evidence PR update requires at least one recording")
     qa_result = _validate_recorded_scenario_proof(qa_result)
     _validate_demo_evidence_recording_metadata(qa_result.recordings)
+    _validate_distinct_demo_recording_artifacts(qa_result.recordings)
     _validate_recordings_cover_required_targets(
         recordings=qa_result.recordings,
         required_capture_targets=required_capture_targets,
