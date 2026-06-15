@@ -3558,14 +3558,21 @@ def test_execute_qa_demo_stage_retries_recording_failures() -> None:
 
 
 def test_update_pull_request_with_demo_evidence_refreshes_pr_body() -> None:
-    github_client = SimpleNamespace(
-        get_pull_request_details=lambda **_: SimpleNamespace(
-            title="MAB-400: Add QA demos",
-            body="## Summary\n- change",
-            base_ref="main",
-        ),
-        update_pull_request=lambda **kwargs: kwargs,
-    )
+    class _GitHubClient:
+        body = "## Summary\n- change"
+
+        def get_pull_request_details(self, **_kwargs: object) -> SimpleNamespace:
+            return SimpleNamespace(
+                title="MAB-400: Add QA demos",
+                body=self.body,
+                base_ref="main",
+            )
+
+        def update_pull_request(self, **kwargs: object) -> object:
+            self.body = str(kwargs["body"])
+            return kwargs
+
+    github_client = _GitHubClient()
     with (
         patch("orchestrator.core.qa.demo_service.github_client_from_tenant_config", return_value=github_client),
         patch("orchestrator.core.qa.demo_service._default_artifact_url_probe", return_value=200),
@@ -3602,6 +3609,61 @@ def test_update_pull_request_with_demo_evidence_refreshes_pr_body() -> None:
     assert DEMO_EVIDENCE_HEADING in updated_body
     assert f"{DEMO_EVIDENCE_REQUIRED_TARGETS_MARKER} browser -->" in updated_body
     assert "https://cdn.example/qa-demos/tenant-1/project-1/run-1/happy.webm" in updated_body
+
+
+def test_update_pull_request_with_demo_evidence_verifies_pr_readback_after_update() -> None:
+    github_client = SimpleNamespace(
+        get_pull_request_details=MagicMock(
+            return_value=SimpleNamespace(
+                title="MAB-400: Add QA demos",
+                body="## Summary\n- change",
+                base_ref="main",
+            )
+        ),
+        update_pull_request=MagicMock(return_value=SimpleNamespace(number=8, html_url="https://github.com/acme/repo/pull/8")),
+    )
+
+    with (
+        patch("orchestrator.core.qa.demo_service.github_client_from_tenant_config", return_value=github_client),
+        patch("orchestrator.core.qa.demo_service._default_artifact_url_probe", return_value=200),
+    ):
+        try:
+            update_pull_request_with_demo_evidence(
+                session=SimpleNamespace(),
+                settings=_qa_artifact_settings(),
+                tenant=SimpleNamespace(tenant_id="tenant-1", github_config={}),
+                project=SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo"),
+                run=SimpleNamespace(run_id="run-1"),
+                workflow_result=SimpleNamespace(pr_url="https://github.com/acme/repo/pull/8"),
+                qa_result=QaResult(
+                    summary=["Recorded demos"],
+                    scenarios=[
+                        QaScenario(
+                            name="Happy path",
+                            objective="Show feature works",
+                            steps=_proof_steps("text=Feature"),
+                        )
+                    ],
+                    recordings=[
+                        QaRecording(
+                            name="Happy path",
+                            artifact_url="https://cdn.example/qa-demos/tenant-1/project-1/run-1/happy.webm",
+                            object_key="tenant-1/project-1/run-1/happy.webm",
+                            capture_reference="https://preview.example",
+                            content_sha256=_sha256(46),
+                        )
+                    ],
+                ),
+                required_capture_targets=("browser",),
+                required_recording_counts={"browser": 1},
+            )
+        except RuntimeError as exc:
+            assert "QA demo evidence PR update did not persist required evidence" in str(exc)
+        else:  # pragma: no cover
+            raise AssertionError("expected stale PR readback to block evidence attachment")
+
+    assert github_client.update_pull_request.called
+    assert github_client.get_pull_request_details.call_count == 2
 
 
 def test_update_pull_request_with_demo_evidence_rejects_pr_url_for_another_repository() -> None:
