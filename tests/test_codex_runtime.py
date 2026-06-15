@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import subprocess
+import signal
 import unittest
 import json
 import os
@@ -225,6 +226,7 @@ class BuildCodexRuntimeDefaultProfileTests(unittest.TestCase):
             codex_stderr_log_mode="all",
             codex_hang_detection_quiet_seconds=300,
             codex_hang_detection_report_interval_seconds=120,
+            codex_runtime_invocation_timeout_seconds=900,
             runtime_home="",
             agent_id="worker-macos-local",
         )
@@ -249,6 +251,7 @@ class BuildHttpRuntimeTests(unittest.TestCase):
             codex_stderr_log_mode="all",
             codex_hang_detection_quiet_seconds=300,
             codex_hang_detection_report_interval_seconds=120,
+            codex_runtime_invocation_timeout_seconds=900,
             runtime_home="",
             agent_id="worker-macos-local",
         )
@@ -531,6 +534,7 @@ class BuildCodexRuntimeTests(unittest.TestCase):
             codex_stderr_log_mode="all",
             codex_hang_detection_quiet_seconds=300,
             codex_hang_detection_report_interval_seconds=120,
+            codex_runtime_invocation_timeout_seconds=900,
             runtime_home="/tmp/master-builder-test-runtime-home",
             agent_id="worker-macos-local",
         )
@@ -1057,6 +1061,7 @@ class BuildCodexRuntimeTests(unittest.TestCase):
         settings = self._settings()
         settings.codex_hang_detection_quiet_seconds = 30
         settings.codex_hang_detection_report_interval_seconds = 15
+        settings.codex_runtime_invocation_timeout_seconds = 300
 
         class _FakePipe:
             def readline(self) -> str:
@@ -1123,6 +1128,88 @@ class BuildCodexRuntimeTests(unittest.TestCase):
                     for stream, message in logged
                 )
             )
+
+    def test_cli_request_times_out_and_terminates_process_group(self) -> None:
+        settings = self._settings()
+        settings.codex_runtime_invocation_timeout_seconds = 30
+
+        class _FakePipe:
+            def readline(self) -> str:
+                return ""
+
+            def close(self) -> None:
+                return None
+
+        class _FakeStdin:
+            def write(self, _content: str) -> None:
+                return None
+
+            def close(self) -> None:
+                return None
+
+        class _FakePopen:
+            def __init__(self, output_path: str) -> None:
+                self.stdin = _FakeStdin()
+                self.stdout = _FakePipe()
+                self.stderr = _FakePipe()
+                self.pid = 4321
+                self.terminated = False
+                Path(output_path).write_text('{"ok": true}', encoding="utf-8")
+
+            def wait(self, timeout: float | None = None) -> int:  # noqa: ARG002
+                if self.terminated:
+                    return 143
+                raise subprocess.TimeoutExpired(cmd="codex", timeout=1.0)
+
+            def kill(self) -> None:
+                self.terminated = True
+
+        holder: dict[str, _FakePopen] = {}
+
+        def fake_popen(args: list[str], **_kwargs: object):
+            output_idx = args.index("--output-last-message") + 1
+            proc = _FakePopen(args[output_idx])
+            holder["proc"] = proc
+            return proc
+
+        def fake_killpg(pid: int, sig: int) -> None:
+            self.assertEqual(pid, 4321)
+            self.assertEqual(sig, signal.SIGTERM)
+            holder["proc"].terminated = True
+
+        # initial=0, mark_activity=0, first polling timeout at 31s exceeds the hard limit.
+        monotonic_values = iter([0.0, 0.0, 31.0])
+
+        def _fake_monotonic() -> float:
+            try:
+                return next(monotonic_values)
+            except StopIteration:
+                return 31.0
+
+        with (
+            patch("orchestrator.core.runtime.runtime.time.monotonic", side_effect=_fake_monotonic),
+            patch("orchestrator.core.runtime.runtime.shutil.which", return_value="/usr/bin/codex"),
+            patch("orchestrator.core.runtime.runtime.os.killpg", side_effect=fake_killpg) as killpg_mock,
+            patch("orchestrator.core.runtime.runtime.subprocess.Popen", side_effect=fake_popen) as popen_mock,
+        ):
+            runtime = build_codex_runtime(settings=settings)
+            logged: list[tuple[str, str]] = []
+            with self.assertRaises(CodexRuntimeError) as raised:
+                runtime.run_text(
+                    system_prompt="s",
+                    user_prompt="u",
+                    on_log_line=lambda stream, message: logged.append((stream, message)),
+                )
+
+        self.assertIn("timed out after 30.0 seconds", str(raised.exception))
+        self.assertTrue(killpg_mock.called)
+        self.assertTrue(popen_mock.call_args.kwargs["start_new_session"])
+        self.assertTrue(
+            any(
+                stream == "system" and "codex_process_timed_out" in message
+                for stream, message in logged
+            )
+        )
 
     def test_cli_request_streams_log_lines(self) -> None:
         settings = self._settings()

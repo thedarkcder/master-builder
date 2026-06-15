@@ -4,6 +4,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import tempfile
 import threading
@@ -390,6 +391,46 @@ def _should_emit_log_line(*, stream_name: str, line: str, stderr_log_mode: str) 
         lowered = line.lower()
         return any(marker in lowered for marker in _STDERR_ERROR_MARKERS)
     return True
+
+
+def _codex_runtime_invocation_timeout_seconds(settings: Settings) -> float:
+    try:
+        timeout_seconds = float(settings.codex_runtime_invocation_timeout_seconds)
+    except (TypeError, ValueError) as exc:
+        raise CodexRuntimeError("codex_runtime_invocation_timeout_seconds must be a number") from exc
+    if timeout_seconds <= 0:
+        raise CodexRuntimeError("codex_runtime_invocation_timeout_seconds must be greater than zero")
+    return timeout_seconds
+
+
+def _terminate_process_group_or_process(process: subprocess.Popen[str]) -> None:
+    pid = getattr(process, "pid", None)
+    if isinstance(pid, int) and pid > 0:
+        try:
+            os.killpg(pid, signal.SIGTERM)
+            return
+        except ProcessLookupError:
+            return
+        except OSError:
+            pass
+    terminate = getattr(process, "terminate", None)
+    if callable(terminate):
+        terminate()
+
+
+def _kill_process_group_or_process(process: subprocess.Popen[str]) -> None:
+    pid = getattr(process, "pid", None)
+    if isinstance(pid, int) and pid > 0:
+        try:
+            os.killpg(pid, signal.SIGKILL)
+            return
+        except ProcessLookupError:
+            return
+        except OSError:
+            pass
+    kill = getattr(process, "kill", None)
+    if callable(kill):
+        kill()
 
 
 def _extract_session_id_from_json_line(line: str) -> str | None:
@@ -1146,6 +1187,7 @@ def build_cli_runtime(
             runtime_kind=str(runtime_kind_override or "codex_cli").strip().lower() or "codex_cli",
         )
         stderr_log_mode = _normalize_stderr_log_mode(getattr(settings, "codex_stderr_log_mode", "all"))
+        invocation_timeout_seconds = _codex_runtime_invocation_timeout_seconds(settings)
         normalized_reasoning_effort = str(reasoning_effort or settings.codex_reasoning_effort).strip().lower()
         if normalized_reasoning_effort not in {"low", "medium", "high"}:
             normalized_reasoning_effort = (
@@ -1221,11 +1263,13 @@ def build_cli_runtime(
                 text=True,
                 cwd=command_cwd or None,
                 env=subprocess_env,
+                start_new_session=True,
             )
             stdout_lines: list[str] = []
             stderr_lines: list[str] = []
             activity_lock = threading.Lock()
-            last_activity_monotonic = time.monotonic()
+            invocation_started_monotonic = time.monotonic()
+            last_activity_monotonic = invocation_started_monotonic
 
             def _mark_activity() -> None:
                 nonlocal last_activity_monotonic
@@ -1287,6 +1331,28 @@ def build_cli_runtime(
                     returncode = process.wait(timeout=1.0)
                     break
                 except subprocess.TimeoutExpired:
+                    elapsed_seconds = max(0.0, time.monotonic() - invocation_started_monotonic)
+                    if elapsed_seconds >= invocation_timeout_seconds:
+                        if on_log_line is not None:
+                            on_log_line(
+                                "system",
+                                "codex_process_timed_out "
+                                f"elapsed_seconds={int(elapsed_seconds)} "
+                                f"timeout_seconds={int(invocation_timeout_seconds)} "
+                                f"pid={getattr(process, 'pid', 'unknown')}",
+                            )
+                        _terminate_process_group_or_process(process)
+                        try:
+                            process.wait(timeout=5.0)
+                        except subprocess.TimeoutExpired:
+                            _kill_process_group_or_process(process)
+                            process.wait(timeout=5.0)
+                        stdout_thread.join(timeout=1.0)
+                        stderr_thread.join(timeout=1.0)
+                        raise CodexRuntimeError(
+                            "Codex CLI command timed out "
+                            f"after {invocation_timeout_seconds:.1f} seconds"
+                        )
                     idle_seconds = _current_idle_seconds()
                     if idle_seconds < quiet_threshold_seconds:
                         continue
