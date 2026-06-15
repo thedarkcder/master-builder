@@ -402,16 +402,13 @@ def _demo_evidence_present(
         return False
     required_targets = _normalize_required_demo_targets(required_demo_capture_targets)
     embedded_required_targets = _required_demo_targets_from_section(section)
-    if embedded_required_targets is not None:
-        if not embedded_required_targets:
-            return False
-        required_targets = tuple(dict.fromkeys((*required_targets, *embedded_required_targets)))
+    if not embedded_required_targets:
+        return False
+    required_targets = tuple(dict.fromkeys((*required_targets, *embedded_required_targets)))
     recorded_targets = {structured_match.group("target") for structured_match in structured_matches}
     if not all(target in recorded_targets for target in required_targets):
         return False
     embedded_required_counts = _required_demo_counts_from_section(section)
-    if embedded_required_counts is None:
-        return True
     if not embedded_required_counts:
         return False
     recorded_counts = Counter(structured_match.group("target") for structured_match in structured_matches)
