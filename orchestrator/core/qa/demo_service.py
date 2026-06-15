@@ -701,6 +701,15 @@ def _require_demo_evidence_capture_target(value: object) -> str:
     return normalized
 
 
+def _validate_demo_evidence_recording_metadata(recordings: list[QaRecording]) -> None:
+    for recording in recordings:
+        _require_demo_evidence_line_field(recording.name, field="name")
+        _require_demo_evidence_capture_target(recording.capture_target)
+        _require_demo_evidence_line_field(recording.capture_reference, field="capture_reference")
+        _require_demo_evidence_line_field(recording.object_key, field="object_key")
+        _require_demo_evidence_field(recording.artifact_url, field="artifact_url")
+
+
 def remaining_capture_targets(plan: PmPlan, recordings: list[QaRecording] | tuple[QaRecording, ...]) -> tuple[str, ...]:
     recorded_counts: dict[str, int] = {}
     for recording in recordings:
@@ -1515,6 +1524,7 @@ def update_pull_request_with_demo_evidence(
     if not qa_result.recordings:
         raise RuntimeError("QA demo evidence PR update requires at least one recording")
     qa_result = _validate_recorded_scenario_proof(qa_result)
+    _validate_demo_evidence_recording_metadata(qa_result.recordings)
     _validate_recordings_cover_required_targets(
         recordings=qa_result.recordings,
         required_capture_targets=required_capture_targets,
