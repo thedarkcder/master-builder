@@ -4,13 +4,12 @@ from __future__ import annotations
 import json
 import os
 import re
+import signal
 import subprocess
 import sys
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
-
-from PIL import Image
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 if str(REPO_ROOT) not in sys.path:
@@ -71,21 +70,15 @@ def main(argv: list[str]) -> int:
     for scenario in qa_result.scenarios:
         sanitized_name = sanitize_recording_name(scenario.name)
         local_video_path = output_dir / f"{sanitized_name}.mp4"
-        frame_dir = output_dir / f"{sanitized_name}-frames"
-        frame_dir.mkdir(parents=True, exist_ok=True)
         reset_app_state(device_id=device_id, package_name=package_name)
         launch_app(device_id=device_id, launch_activity=launch_activity)
-        execute_scenario_with_frame_capture(
+        record_live_screen_demo(
             device_id=device_id,
             package_name=package_name,
             launch_activity=launch_activity,
             scenario=scenario,
-            frame_dir=frame_dir,
+            output_path=local_video_path,
         )
-        encode_frames_to_mp4(frame_dir=frame_dir, output_path=local_video_path)
-        if not local_video_path.exists():
-            raise RuntimeError(f"Expected Android QA recording missing: {local_video_path}")
-        validate_mp4_recording(local_video_path)
         recordings.append({"name": scenario.name, "path": str(local_video_path)})
 
     output_path.write_text(json.dumps({"recordings": recordings}, indent=2), encoding="utf-8")
@@ -157,20 +150,46 @@ def execute_scenario(*, device_id: str, package_name: str, launch_activity: str,
         execute_step(device_id=device_id, package_name=package_name, launch_activity=launch_activity, step=step)
 
 
-def execute_scenario_with_frame_capture(
+def record_live_screen_demo(
     *,
     device_id: str,
     package_name: str,
     launch_activity: str,
     scenario: QaScenario,
-    frame_dir: Path,
+    output_path: Path,
 ) -> None:
-    frame_index = 0
-    capture_screen_frame(device_id=device_id, frame_path=frame_dir / f"{frame_index:04d}.png")
-    for step in scenario.steps:
-        execute_step(device_id=device_id, package_name=package_name, launch_activity=launch_activity, step=step)
-        frame_index += 1
-        capture_screen_frame(device_id=device_id, frame_path=frame_dir / f"{frame_index:04d}.png")
+    remote_path = f"/sdcard/Download/master-builder-qa-demo-{sanitize_recording_name(scenario.name)}.mp4"
+    _run(["adb", "-s", device_id, "shell", "rm", "-f", remote_path], capture_output=True, check=False)
+    recorder = subprocess.Popen(
+        ["adb", "-s", device_id, "shell", "screenrecord", remote_path],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        text=True,
+    )
+    primary_error: Exception | None = None
+    stop_error: Exception | None = None
+    try:
+        execute_scenario(
+            device_id=device_id,
+            package_name=package_name,
+            launch_activity=launch_activity,
+            scenario=scenario,
+        )
+    except Exception as exc:  # noqa: BLE001
+        primary_error = exc
+    finally:
+        try:
+            stop_screenrecord(recorder)
+        except Exception as exc:  # noqa: BLE001
+            stop_error = exc
+    combined_error = combined_recording_failure(primary_error=primary_error, stop_error=stop_error)
+    if combined_error is not None:
+        raise combined_error
+    _run(["adb", "-s", device_id, "pull", remote_path, str(output_path)], capture_output=True)
+    _run(["adb", "-s", device_id, "shell", "rm", "-f", remote_path], capture_output=True, check=False)
+    if not output_path.exists():
+        raise RuntimeError(f"Expected Android QA recording missing: {output_path}")
+    validate_mp4_recording(output_path)
 
 
 def execute_step(*, device_id: str, package_name: str, launch_activity: str, step: QaStep) -> None:
@@ -223,53 +242,6 @@ def execute_step(*, device_id: str, package_name: str, launch_activity: str, ste
         find_element(device_id=device_id, selector=f"text={require_value(step)}")
         return
     raise RuntimeError(f"Unsupported Android QA step action: {step.action}")
-
-
-def capture_screen_frame(*, device_id: str, frame_path: Path) -> None:
-    result = _run_binary(["adb", "-s", device_id, "exec-out", "screencap", "-p"], capture_output=True)
-    frame_path.write_bytes(result.stdout)
-    validate_png_frame(frame_path)
-
-
-def validate_png_frame(path: Path) -> None:
-    payload = path.read_bytes()
-    if not payload.startswith(b"\x89PNG\r\n\x1a\n"):
-        raise RuntimeError(f"Android QA frame is not a PNG screencap: {path}")
-    if len(payload) < 1024:
-        raise RuntimeError(f"Android QA frame is too small to be valid screen evidence: {path}")
-    try:
-        with Image.open(path) as image:
-            rgb_image = image.convert("RGB")
-            channel_extrema = rgb_image.getextrema()
-    except Exception as exc:  # noqa: BLE001
-        raise RuntimeError(f"Android QA frame is not decodable visual evidence: {path}") from exc
-    if all(low == high for low, high in channel_extrema):
-        raise RuntimeError(f"Android QA frame appears blank and is not valid screen evidence: {path}")
-
-
-def encode_frames_to_mp4(*, frame_dir: Path, output_path: Path) -> None:
-    ffmpeg = str(os.environ.get("QA_DEMO_FFMPEG") or "ffmpeg").strip()
-    if not ffmpeg:
-        raise RuntimeError("QA_DEMO_FFMPEG must not be blank")
-    frames_glob = str(frame_dir / "*.png")
-    _run(
-        [
-            ffmpeg,
-            "-y",
-            "-framerate",
-            "1",
-            "-pattern_type",
-            "glob",
-            "-i",
-            frames_glob,
-            "-vf",
-            "scale=trunc(iw/2)*2:trunc(ih/2)*2,format=yuv420p",
-            "-movflags",
-            "+faststart",
-            str(output_path),
-        ],
-        capture_output=True,
-    )
 
 
 def find_element(*, device_id: str, selector: str) -> AndroidElement:
@@ -328,6 +300,31 @@ def validate_mp4_recording(path: Path) -> None:
         raise RuntimeError(f"Android QA recording is empty: {path}")
     if b"moov" not in payload:
         raise RuntimeError(f"Android QA recording is incomplete; missing moov atom: {path}")
+
+
+def stop_screenrecord(process: subprocess.Popen[str]) -> None:
+    if process.poll() is None:
+        process.send_signal(signal.SIGINT)
+        try:
+            process.wait(timeout=10)
+        except subprocess.TimeoutExpired as exc:  # pragma: no cover
+            process.kill()
+            process.wait(timeout=5)
+            raise RuntimeError("Timed out stopping Android screen recording") from exc
+    if process.returncode not in {0, -signal.SIGINT}:
+        raise RuntimeError(f"Android screen recording failed with exit code {process.returncode}")
+
+
+def combined_recording_failure(
+    *,
+    primary_error: Exception | None,
+    stop_error: Exception | None,
+) -> Exception | None:
+    if primary_error is None:
+        return stop_error
+    if stop_error is None:
+        return primary_error
+    return RuntimeError(f"{primary_error}\nAndroid screen recording shutdown also failed: {stop_error}")
 
 
 def sanitize_recording_name(name: str) -> str:
@@ -391,36 +388,6 @@ def _adb_command_timeout_seconds() -> int:
     if configured < 1:
         raise RuntimeError("QA_DEMO_ANDROID_ADB_TIMEOUT_SECONDS must be greater than zero")
     return configured
-
-
-def _run_binary(
-    args: list[str],
-    *,
-    cwd: Path | None = None,
-    capture_output: bool,
-    check: bool = True,
-) -> subprocess.CompletedProcess[bytes]:
-    timeout_seconds = _adb_command_timeout_seconds()
-    try:
-        return subprocess.run(
-            args,
-            cwd=cwd,
-            check=check,
-            capture_output=capture_output,
-            timeout=timeout_seconds,
-        )
-    except subprocess.TimeoutExpired as exc:
-        raise RuntimeError(
-            f"Android QA recorder command timed out after {timeout_seconds} seconds: {' '.join(args)}"
-        ) from exc
-    except subprocess.CalledProcessError as exc:
-        stdout = bytes(exc.stdout or b"").decode("utf-8", errors="replace").strip()
-        stderr = bytes(exc.stderr or b"").decode("utf-8", errors="replace").strip()
-        details = "\n".join(part for part in (stdout, stderr) if part)
-        suffix = f"\n{details}" if details else ""
-        raise RuntimeError(
-            f"Android QA recorder command failed with exit code {exc.returncode}: {' '.join(args)}{suffix}"
-        ) from exc
 
 
 if __name__ == "__main__":

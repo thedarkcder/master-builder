@@ -3,19 +3,15 @@ from __future__ import annotations
 import subprocess
 from pathlib import Path
 
-from PIL import Image
-
-from scripts.qa_demo_android_recorder import capture_screen_frame
 from scripts.qa_demo_android_recorder import dump_ui_elements
-from scripts.qa_demo_android_recorder import encode_frames_to_mp4
 from scripts.qa_demo_android_recorder import execute_scenario
 from scripts.qa_demo_android_recorder import find_element
 from scripts.qa_demo_android_recorder import launch_app
 from scripts.qa_demo_android_recorder import parse_bounds
 from scripts.qa_demo_android_recorder import preferred_adb_device
+from scripts.qa_demo_android_recorder import record_live_screen_demo
 from scripts.qa_demo_android_recorder import resolve_launch_activity
 from scripts.qa_demo_android_recorder import validate_mp4_recording
-from scripts.qa_demo_android_recorder import validate_png_frame
 from scripts.qa_demo_android_recorder import _run
 from orchestrator.core.workflow.runner import QaScenario, QaStep
 
@@ -161,76 +157,69 @@ def test_run_bounds_adb_commands_with_actionable_timeout(monkeypatch) -> None:
         raise AssertionError("expected timeout")
 
 
-def test_capture_screen_frame_writes_device_screencap(monkeypatch, tmp_path) -> None:
-    source_frame = tmp_path / "source.png"
-    image = Image.new("RGB", (256, 256), color=(255, 255, 255))
-    for x in range(256):
-        for y in range(256):
-            image.putpixel((x, y), ((x * 13 + y * 17) % 256, (x * 7 + y * 19) % 256, (x * 5 + y * 23) % 256))
-    image.save(source_frame)
-    source_payload = source_frame.read_bytes()
-
-    def _fake_run_binary(args, **_kwargs):  # noqa: ANN001
-        assert args == ["adb", "-s", "device-1", "exec-out", "screencap", "-p"]
-
-        class _Result:
-            stdout = source_payload
-
-        return _Result()
-
-    monkeypatch.setattr("scripts.qa_demo_android_recorder._run_binary", _fake_run_binary)
-
-    frame_path = tmp_path / "0000.png"
-    capture_screen_frame(device_id="device-1", frame_path=frame_path)
-
-    assert frame_path.read_bytes() == source_payload
-
-
-def test_validate_png_frame_rejects_blank_screen_evidence(tmp_path) -> None:
-    frame_path = tmp_path / "blank.png"
-    Image.new("RGB", (64, 64), color=(0, 0, 0)).save(frame_path)
-
-    try:
-        validate_png_frame(frame_path)
-    except RuntimeError as exc:
-        assert "blank" in str(exc)
-    else:  # pragma: no cover
-        raise AssertionError("expected blank frame rejection")
-
-
-def test_validate_png_frame_accepts_visible_screen_evidence(tmp_path) -> None:
-    frame_path = tmp_path / "visible.png"
-    image = Image.new("RGB", (256, 256), color=(255, 255, 255))
-    for x in range(256):
-        for y in range(256):
-            image.putpixel((x, y), ((x * 13 + y * 17) % 256, (x * 7 + y * 19) % 256, (x * 5 + y * 23) % 256))
-    image.save(frame_path)
-
-    validate_png_frame(frame_path)
-
-
-def test_encode_frames_to_mp4_uses_ffmpeg_without_screenrecord(monkeypatch, tmp_path) -> None:
+def test_record_live_screen_demo_uses_android_screenrecord_around_scenario(monkeypatch, tmp_path) -> None:
     calls: list[list[str]] = []
+    recorder_running = False
+
+    class _Recorder:
+        returncode = None
+
+        def __init__(self, args, **_kwargs):  # noqa: ANN001
+            nonlocal recorder_running
+            calls.append(list(args))
+            recorder_running = True
+
+        def poll(self):  # noqa: ANN201
+            return self.returncode
+
+        def send_signal(self, signal_value):  # noqa: ANN001
+            calls.append(["send_signal", str(signal_value)])
+
+        def wait(self, timeout=None):  # noqa: ANN001, ANN201
+            nonlocal recorder_running
+            calls.append(["wait", str(timeout)])
+            recorder_running = False
+            self.returncode = 0
+            return 0
 
     def _fake_run(args, **_kwargs):  # noqa: ANN001
         calls.append(list(args))
-        Path(args[-1]).write_bytes(b"\x00\x00\x00\x18ftypmp42\x00\x00\x00\x08moov")
+        if args[:4] == ["adb", "-s", "device-1", "pull"]:
+            Path(args[-1]).write_bytes(b"\x00\x00\x00\x18ftypmp42\x00\x00\x00\x08moov")
 
         class _Result:
             stdout = ""
 
         return _Result()
 
+    def _fake_execute_scenario(**_kwargs):  # noqa: ANN001
+        assert recorder_running is True
+        calls.append(["execute_scenario"])
+
     monkeypatch.setattr("scripts.qa_demo_android_recorder._run", _fake_run)
+    monkeypatch.setattr("scripts.qa_demo_android_recorder.subprocess.Popen", _Recorder)
+    monkeypatch.setattr("scripts.qa_demo_android_recorder.execute_scenario", _fake_execute_scenario)
 
-    frame_dir = tmp_path / "frames"
-    frame_dir.mkdir()
-    (frame_dir / "0000.png").write_bytes(b"\x89PNG\r\n\x1a\n")
     output_path = tmp_path / "demo.mp4"
-    encode_frames_to_mp4(frame_dir=frame_dir, output_path=output_path)
+    record_live_screen_demo(
+        device_id="device-1",
+        package_name="com.example.app",
+        launch_activity="com.example.app/.MainActivity",
+        scenario=QaScenario(
+            name="Live Android walkthrough",
+            objective="Prove live device recording",
+            capture_target="android",
+            steps=[QaStep(action="goto")],
+        ),
+        output_path=output_path,
+    )
 
-    assert calls[0][:7] == ["ffmpeg", "-y", "-framerate", "1", "-pattern_type", "glob", "-i"]
-    assert "screenrecord" not in " ".join(calls[0])
+    assert calls[0][:5] == ["adb", "-s", "device-1", "shell", "rm"]
+    assert calls[1][:5] == ["adb", "-s", "device-1", "shell", "screenrecord"]
+    assert calls[2] == ["execute_scenario"]
+    assert calls[3][0] == "send_signal"
+    assert calls[5][:5] == ["adb", "-s", "device-1", "pull", "/sdcard/Download/master-builder-qa-demo-live-android-walkthrough.mp4"]
+    assert not any("screencap" in " ".join(call) for call in calls)
     assert output_path.exists()
 
 
