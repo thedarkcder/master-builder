@@ -1024,6 +1024,12 @@ def _validate_recordings_use_configured_storage(
                 "QA demo recording object key must be scoped to this run before PR evidence update: "
                 f"{recording.capture_target}: {recording.name}"
             )
+        expected_artifact_url = f"{public_base_url}/{object_key}"
+        if artifact_url != expected_artifact_url:
+            raise RuntimeError(
+                "QA demo recording URL must match its uploaded object key before PR evidence update: "
+                f"{recording.capture_target}: {recording.name}"
+            )
 
 
 def _validate_qa_scenario_coverage(

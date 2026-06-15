@@ -2681,6 +2681,50 @@ def test_update_pull_request_with_demo_evidence_rejects_out_of_scope_recording_k
     github_client_mock.assert_not_called()
 
 
+def test_update_pull_request_with_demo_evidence_rejects_recording_url_key_mismatch_before_url_probe() -> None:
+    with (
+        patch("orchestrator.core.qa.demo_service.github_client_from_tenant_config") as github_client_mock,
+        patch("orchestrator.core.qa.demo_service._default_artifact_url_probe") as url_probe,
+    ):
+        try:
+            update_pull_request_with_demo_evidence(
+                session=SimpleNamespace(),
+                settings=_qa_artifact_settings(),
+                tenant=SimpleNamespace(tenant_id="tenant-1", github_config={}),
+                project=SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo"),
+                run=SimpleNamespace(run_id="run-1"),
+                workflow_result=SimpleNamespace(pr_url="https://github.com/acme/repo/pull/8"),
+                qa_result=QaResult(
+                    summary=["Recorded demos"],
+                    scenarios=[
+                        QaScenario(
+                            name="Browser walkthrough",
+                            objective="Show browser",
+                            capture_target="browser",
+                            steps=_proof_steps("text=Feature"),
+                        )
+                    ],
+                    recordings=[
+                        QaRecording(
+                            name="Browser walkthrough",
+                            artifact_url="https://cdn.example/qa-demos/tenant-1/project-1/run-1/other.webm",
+                            object_key="tenant-1/project-1/run-1/browser.webm",
+                            capture_target="browser",
+                            capture_reference="https://preview.example",
+                        )
+                    ],
+                ),
+                required_capture_targets=("browser",),
+            )
+        except RuntimeError as exc:
+            assert "QA demo recording URL must match its uploaded object key" in str(exc)
+        else:  # pragma: no cover
+            raise AssertionError("expected URL/object-key mismatch to block PR evidence update")
+
+    url_probe.assert_not_called()
+    github_client_mock.assert_not_called()
+
+
 def test_update_pull_request_with_demo_evidence_rejects_missing_required_capture_target_before_url_probe() -> None:
     with (
         patch("orchestrator.core.qa.demo_service.github_client_from_tenant_config") as github_client_mock,
