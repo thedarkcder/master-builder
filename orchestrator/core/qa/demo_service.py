@@ -1759,6 +1759,14 @@ def update_pull_request_with_demo_evidence(
     match = re.search(r"/pull/(\d+)(?:/|$)", pr_url)
     if not pr_url or match is None:
         raise RuntimeError("QA demo recording requires a PR URL")
+    normalized_repo = normalize_repo_identifier(project.github_repository)
+    pr_repo = _repo_full_name_from_pull_request_url(pr_url)
+    repo_full_name = _repo_full_name_from_normalized_repo(normalized_repo)
+    if pr_repo != repo_full_name:
+        raise RuntimeError(
+            "QA demo recording PR URL must match project repository before PR evidence update: "
+            f"{pr_repo or '<unknown>'} != {repo_full_name}"
+        )
     pr_number = int(match.group(1))
     github_client = github_client_from_tenant_config(
         tenant.github_config,
@@ -1775,8 +1783,6 @@ def update_pull_request_with_demo_evidence(
             encryption_key=settings.secrets_encryption_key,
         ),
     )
-    normalized_repo = normalize_repo_identifier(project.github_repository)
-    repo_full_name = normalized_repo.split("/", 1)[1] if normalized_repo.startswith("github.com/") else "/".join(normalized_repo.split("/")[-2:])
     pr_details = github_client.get_pull_request_details(repo_full_name=repo_full_name, pr_number=pr_number)
     body = upsert_demo_evidence_section(
         body=pr_details.body,
@@ -1793,3 +1799,20 @@ def update_pull_request_with_demo_evidence(
         body=body,
     )
     return body
+
+
+def _repo_full_name_from_normalized_repo(normalized_repo: str) -> str:
+    normalized = str(normalized_repo or "").strip().strip("/")
+    if normalized.startswith("github.com/"):
+        return normalized.split("/", 1)[1]
+    return "/".join(normalized.split("/")[-2:])
+
+
+def _repo_full_name_from_pull_request_url(pr_url: str) -> str | None:
+    parsed = urllib.parse.urlparse(str(pr_url or "").strip())
+    if parsed.netloc.lower() != "github.com":
+        return None
+    parts = [part for part in parsed.path.strip("/").split("/") if part]
+    if len(parts) < 4 or parts[2] != "pull":
+        return None
+    return f"{parts[0].lower()}/{parts[1].lower()}"

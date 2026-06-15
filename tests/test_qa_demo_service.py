@@ -3427,6 +3427,49 @@ def test_update_pull_request_with_demo_evidence_refreshes_pr_body() -> None:
     assert "https://cdn.example/qa-demos/tenant-1/project-1/run-1/happy.webm" in updated_body
 
 
+def test_update_pull_request_with_demo_evidence_rejects_pr_url_for_another_repository() -> None:
+    with (
+        patch("orchestrator.core.qa.demo_service.github_client_from_tenant_config") as github_client_mock,
+        patch("orchestrator.core.qa.demo_service._default_artifact_url_probe", return_value=200),
+    ):
+        try:
+            update_pull_request_with_demo_evidence(
+                session=SimpleNamespace(),
+                settings=_qa_artifact_settings(),
+                tenant=SimpleNamespace(tenant_id="tenant-1", github_config={}),
+                project=SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo"),
+                run=SimpleNamespace(run_id="run-1"),
+                workflow_result=SimpleNamespace(pr_url="https://github.com/other/repo/pull/8"),
+                qa_result=QaResult(
+                    summary=["Recorded demos"],
+                    scenarios=[
+                        QaScenario(
+                            name="Browser walkthrough",
+                            objective="Show browser",
+                            capture_target="browser",
+                            steps=_proof_steps("text=Feature"),
+                        )
+                    ],
+                    recordings=[
+                        QaRecording(
+                            name="Browser walkthrough",
+                            artifact_url="https://cdn.example/qa-demos/tenant-1/project-1/run-1/browser.webm",
+                            object_key="tenant-1/project-1/run-1/browser.webm",
+                            capture_target="browser",
+                            capture_reference="https://preview.example",
+                        )
+                    ],
+                ),
+                required_capture_targets=("browser",),
+            )
+        except RuntimeError as exc:
+            assert "QA demo recording PR URL must match project repository" in str(exc)
+        else:  # pragma: no cover
+            raise AssertionError("expected cross-repository PR URL to block PR evidence update")
+
+    github_client_mock.assert_not_called()
+
+
 def test_update_pull_request_with_demo_evidence_rejects_external_recording_before_url_probe() -> None:
     with (
         patch("orchestrator.core.qa.demo_service.github_client_from_tenant_config") as github_client_mock,
