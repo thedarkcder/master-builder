@@ -235,6 +235,47 @@ class WorkerRunHealthTests(unittest.TestCase):
             ).scalars().all()
             self.assertEqual({event.event_type for event in stale_events}, {"RUN_FAILED", "TASK_FAILED"})
 
+    def test_recover_stale_running_runs_preserves_active_child_exclusions(self) -> None:
+        now = datetime.now(timezone.utc)
+        stale_started = now - timedelta(minutes=20)
+        with self.session_factory() as session:
+            for run_id in ("run-active-child", "run-orphaned"):
+                add_run_with_workflow(
+                    session,
+                    make_run(
+                        run_id=run_id,
+                        tenant_id="tenant-a",
+                        issue_key=f"TA-{run_id}",
+                        issue_summary=run_id,
+                        issue_description="desc",
+                        repo_url="https://github.com/example/a",
+                        created_at=stale_started,
+                        status="running",
+                        started_at=stale_started,
+                        last_heartbeat_at=stale_started,
+                        worker_service_instance_id="node-a:1234",
+                    ),
+                    workflow_status="running",
+                )
+            session.commit()
+
+            recovered = recover_stale_running_runs(
+                session=session,
+                settings=SimpleNamespace(worker_run_stale_timeout_seconds=300),
+                recovered_by_agent_id="worker",
+                recovered_by_service_instance_id="node-z:7777",
+                excluded_run_ids=("run-active-child",),
+                now=now,
+            )
+
+            self.assertEqual([item.run_id for item in recovered], ["run-orphaned"])
+            active_child = session.get(Run, "run-active-child")
+            orphaned = session.get(Run, "run-orphaned")
+            assert active_child is not None
+            assert orphaned is not None
+            self.assertEqual(active_child.status, "running")
+            self.assertEqual(orphaned.status, "failed")
+
 
 if __name__ == "__main__":
     unittest.main()

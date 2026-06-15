@@ -6,6 +6,7 @@ import os
 import threading
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
+from typing import Collection
 from uuid import uuid4
 
 from sqlalchemy import func, select, update
@@ -95,15 +96,24 @@ def recover_stale_running_runs(
     settings: Settings,
     recovered_by_agent_id: str,
     recovered_by_service_instance_id: str,
+    excluded_run_ids: Collection[str] | None = None,
     now: datetime | None = None,
 ) -> list[StaleRunRecoveryRecord]:
     cutoff = stale_run_cutoff(settings=settings, now=now)
+    normalized_excluded_run_ids = {
+        str(run_id).strip()
+        for run_id in (excluded_run_ids or ())
+        if str(run_id).strip()
+    }
+    filters = [
+        Run.status.in_((RUN_STATUS_DISPATCHING, RUN_STATUS_RUNNING)),
+        _effective_last_seen_expr() <= cutoff,
+    ]
+    if normalized_excluded_run_ids:
+        filters.append(Run.run_id.not_in(normalized_excluded_run_ids))
     rows = session.execute(
         select(Run)
-        .where(
-            Run.status.in_((RUN_STATUS_DISPATCHING, RUN_STATUS_RUNNING)),
-            _effective_last_seen_expr() <= cutoff,
-        )
+        .where(*filters)
         .order_by(Run.started_at.asc(), Run.created_at.asc())
     ).scalars().all()
 

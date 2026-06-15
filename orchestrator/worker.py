@@ -386,6 +386,7 @@ def _recover_worker_run_health_once(
     settings: Settings,
     agent_id: str,
     service_instance_id: str,
+    excluded_run_ids: tuple[str, ...] = (),
 ) -> None:
     with session_factory() as session:
         recovered = recover_stale_running_runs(
@@ -393,6 +394,7 @@ def _recover_worker_run_health_once(
             settings=settings,
             recovered_by_agent_id=agent_id,
             recovered_by_service_instance_id=service_instance_id,
+            excluded_run_ids=excluded_run_ids,
         )
     for item in recovered:
         logger.warning(
@@ -423,16 +425,19 @@ async def _run_stale_recovery_loop(
     stop_event: asyncio.Event,
     agent_id: str,
     service_instance_id: str,
+    active_run_ids_fn,
 ) -> None:
     interval_seconds = max(15, int(getattr(settings, "worker_stale_sweep_interval_seconds", 60)))
     while not stop_event.is_set():
         try:
+            excluded_run_ids = tuple(sorted(active_run_ids_fn()))
             await asyncio.to_thread(
                 _recover_worker_run_health_once,
                 session_factory=session_factory,
                 settings=settings,
                 agent_id=agent_id,
                 service_instance_id=service_instance_id,
+                excluded_run_ids=excluded_run_ids,
             )
         except Exception:
             logger.exception("worker_stale_recovery_failed")
@@ -648,6 +653,7 @@ async def run_worker(*, mode: str = WORKER_MODE_RUNS) -> None:
                     stop_event=stop_event,
                     agent_id=agent_id,
                     service_instance_id=service_instance_id,
+                    active_run_ids_fn=lambda: _active_child_claimed_run_ids(active_children),
                 )
             )
             archived_tenant_purge_task = asyncio.create_task(
@@ -944,6 +950,7 @@ async def run_worker(*, mode: str = WORKER_MODE_RUNS) -> None:
             worker_runtime_heartbeat_task.cancel()
             with suppress(asyncio.CancelledError):
                 await worker_runtime_heartbeat_task
+
         with suppress(Exception):
             await asyncio.to_thread(
                 _stop_worker_runtime_once,
@@ -955,6 +962,20 @@ async def run_worker(*, mode: str = WORKER_MODE_RUNS) -> None:
             )
         listener.stop()
         logger.info("worker_stopped mode=%s", mode)
+
+
+def _active_child_claimed_run_ids(
+    active_children: dict[asyncio.Task[WorkerChildProcessResult], WorkerChildProcessHandle],
+) -> set[str]:
+    return {
+        run_id
+        for run_id in (
+            str(handle.claimed_run_id or "").strip()
+            for handle in active_children.values()
+            if handle.process.returncode is None
+        )
+        if run_id
+    }
 
 
 def main(*, mode: str = WORKER_MODE_RUNS) -> None:
