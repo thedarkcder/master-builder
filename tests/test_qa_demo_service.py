@@ -32,6 +32,7 @@ from orchestrator.core.qa.demo_service import (
     resolve_preview_demo_url,
     storage_config_from_settings,
     update_pull_request_with_demo_evidence,
+    upload_recording,
     upsert_demo_evidence_section,
 )
 from orchestrator.core.workflow.runner import (
@@ -182,6 +183,106 @@ def test_storage_config_from_settings_requires_complete_configuration() -> None:
         assert "not fully configured" in str(exc)
     else:  # pragma: no cover
         raise AssertionError("expected storage config validation failure")
+
+
+def test_upload_recording_persists_and_verifies_content_sha256_metadata(monkeypatch) -> None:
+    calls: dict[str, object] = {}
+    expected_digest = _sha256(47)
+
+    class FakeMinio:
+        def __init__(self, endpoint: str, *, access_key: str, secret_key: str, secure: bool) -> None:
+            calls["init"] = {
+                "endpoint": endpoint,
+                "access_key": access_key,
+                "secret_key": secret_key,
+                "secure": secure,
+            }
+
+        def bucket_exists(self, bucket: str) -> bool:
+            calls["bucket_exists"] = bucket
+            return True
+
+        def fput_object(
+            self,
+            bucket: str,
+            object_key: str,
+            local_path: str,
+            *,
+            content_type: str,
+            metadata: dict[str, str],
+        ) -> None:
+            calls["fput_object"] = {
+                "bucket": bucket,
+                "object_key": object_key,
+                "local_path": local_path,
+                "content_type": content_type,
+                "metadata": metadata,
+            }
+
+        def stat_object(self, bucket: str, object_key: str) -> SimpleNamespace:
+            calls["stat_object"] = {"bucket": bucket, "object_key": object_key}
+            return SimpleNamespace(metadata={"X-Amz-Meta-Content-Sha256": expected_digest})
+
+    monkeypatch.setitem(sys.modules, "minio", SimpleNamespace(Minio=FakeMinio))
+
+    artifact_url = upload_recording(
+        storage=storage_config_from_settings(_qa_artifact_settings()),
+        local_path="/tmp/demo.webm",
+        object_key="tenant-1/project-1/run-1/qa-demo-1.webm",
+        content_type="video/webm",
+        content_sha256=expected_digest,
+    )
+
+    assert artifact_url == "https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-demo-1.webm"
+    assert calls["fput_object"] == {
+        "bucket": "qa-demos",
+        "object_key": "tenant-1/project-1/run-1/qa-demo-1.webm",
+        "local_path": "/tmp/demo.webm",
+        "content_type": "video/webm",
+        "metadata": {"content-sha256": expected_digest},
+    }
+    assert calls["stat_object"] == {
+        "bucket": "qa-demos",
+        "object_key": "tenant-1/project-1/run-1/qa-demo-1.webm",
+    }
+
+
+def test_upload_recording_rejects_storage_metadata_digest_mismatch(monkeypatch) -> None:
+    class FakeMinio:
+        def __init__(self, endpoint: str, *, access_key: str, secret_key: str, secure: bool) -> None:
+            pass
+
+        def bucket_exists(self, bucket: str) -> bool:
+            return True
+
+        def fput_object(
+            self,
+            bucket: str,
+            object_key: str,
+            local_path: str,
+            *,
+            content_type: str,
+            metadata: dict[str, str],
+        ) -> None:
+            pass
+
+        def stat_object(self, bucket: str, object_key: str) -> SimpleNamespace:
+            return SimpleNamespace(metadata={"X-Amz-Meta-Content-Sha256": _sha256(49)})
+
+    monkeypatch.setitem(sys.modules, "minio", SimpleNamespace(Minio=FakeMinio))
+
+    try:
+        upload_recording(
+            storage=storage_config_from_settings(_qa_artifact_settings()),
+            local_path="/tmp/demo.webm",
+            object_key="tenant-1/project-1/run-1/qa-demo-1.webm",
+            content_type="video/webm",
+            content_sha256=_sha256(48),
+        )
+    except RuntimeError as exc:
+        assert "QA demo artifact metadata sha256 mismatch after upload" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("expected storage metadata digest mismatch to block upload")
 
 
 def test_resolve_preview_demo_url_prefers_active_website() -> None:

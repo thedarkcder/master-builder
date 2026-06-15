@@ -48,6 +48,8 @@ _DEMO_CAPTURE_TARGETS = frozenset({"browser", "ios", "android", "desktop"})
 _NATIVE_CAPTURE_TARGETS = frozenset({"ios", "android", "desktop"})
 _RELEASE_SERVICE_READY_STATUSES = frozenset({401, 403, 405})
 _QA_PROOF_STEP_ACTIONS = frozenset({"assert_visible", "assert_text", "wait_for_text", "wait_for_url"})
+_QA_DEMO_CONTENT_SHA256_METADATA_KEY = "content-sha256"
+_QA_DEMO_CONTENT_SHA256_METADATA_HEADER = f"x-amz-meta-{_QA_DEMO_CONTENT_SHA256_METADATA_KEY}"
 
 
 @dataclass(frozen=True)
@@ -1543,9 +1545,11 @@ def upload_recording(
     local_path: str,
     object_key: str,
     content_type: str,
+    content_sha256: str,
 ) -> str:
     from minio import Minio
 
+    digest = _require_content_sha256_value(content_sha256)
     client = Minio(
         storage.endpoint,
         access_key=storage.access_key,
@@ -1559,8 +1563,34 @@ def upload_recording(
         object_key,
         local_path,
         content_type=content_type,
+        metadata={_QA_DEMO_CONTENT_SHA256_METADATA_KEY: digest},
     )
+    object_stat = client.stat_object(storage.bucket, object_key)
+    stored_digest = _metadata_content_sha256(getattr(object_stat, "metadata", None))
+    if stored_digest != digest:
+        raise RuntimeError(
+            "QA demo artifact metadata sha256 mismatch after upload: "
+            f"{object_key} expected {digest}, got {stored_digest or '<missing>'}"
+        )
     return f"{storage.public_base_url}/{object_key}"
+
+
+def _require_content_sha256_value(value: object) -> str:
+    digest = str(value or "").strip().lower()
+    if not re.fullmatch(r"[0-9a-f]{64}", digest):
+        raise RuntimeError("QA demo recording content sha256 is required before artifact upload")
+    return digest
+
+
+def _metadata_content_sha256(metadata: object) -> str:
+    items = getattr(metadata, "items", None)
+    if not callable(items):
+        return ""
+    for raw_key, raw_value in items():
+        normalized_key = str(raw_key or "").strip().lower()
+        if normalized_key in {_QA_DEMO_CONTENT_SHA256_METADATA_KEY, _QA_DEMO_CONTENT_SHA256_METADATA_HEADER}:
+            return str(raw_value or "").strip().lower()
+    return ""
 
 
 def execute_qa_demo_stage(
@@ -1727,6 +1757,7 @@ def execute_qa_demo_stage(
                     local_path=recording.path,
                     object_key=object_key,
                     content_type=recording.content_type,
+                    content_sha256=recording.content_sha256,
                 )
                 ensure_artifact_url_reachable(
                     artifact_url,
