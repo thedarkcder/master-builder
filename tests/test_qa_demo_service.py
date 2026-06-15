@@ -1106,6 +1106,43 @@ def test_record_demo_scenarios_rejects_duplicate_local_recording_paths() -> None
             raise AssertionError("expected duplicate local recording path to block")
 
 
+def test_record_demo_scenarios_rejects_recording_path_outside_recorder_output_dir() -> None:
+    def _run(cmd, **_kwargs):  # noqa: ANN001
+        output_path = Path(cmd[3])
+        input_payload = json.loads(Path(cmd[2]).read_text(encoding="utf-8"))
+        video_dir = Path(input_payload["output_dir"])
+        video_dir.mkdir(parents=True, exist_ok=True)
+        external_path = video_dir.parent / "preexisting-proof.webm"
+        external_path.write_bytes(_fake_webm_payload())
+        output_path.write_text(
+            json.dumps({"recordings": [{"name": "Happy path", "path": str(external_path)}]}),
+            encoding="utf-8",
+        )
+        return SimpleNamespace(stdout="")
+
+    with patch("orchestrator.core.qa.demo_service.subprocess.run", side_effect=_run):
+        try:
+            record_demo_scenarios(
+                settings=SimpleNamespace(qa_demo_playwright_module_dir="/tmp/playwright-modules"),
+                request=_request(),
+                available_capture_targets=_browser_capture_targets(),
+                qa_result=QaResult(
+                    summary=["Recorded demos"],
+                    scenarios=[
+                        QaScenario(
+                            name="Happy path",
+                            objective="Show feature works",
+                            steps=[QaStep(action="assert_visible", selector="#feature")],
+                        )
+                    ],
+                ),
+            )
+        except RuntimeError as exc:
+            assert "QA demo recorder returned recording path outside recorder output directory" in str(exc)
+        else:  # pragma: no cover
+            raise AssertionError("expected recording path outside recorder output directory to block")
+
+
 def test_record_demo_scenarios_rejects_missing_recording_for_planned_scenario() -> None:
     def _run(cmd, **_kwargs):  # noqa: ANN001
         output_path = Path(cmd[3])
