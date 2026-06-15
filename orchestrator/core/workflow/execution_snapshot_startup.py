@@ -16,7 +16,6 @@ from orchestrator.storage.models import Run, WorkflowCheckpoint
 logger = logging.getLogger(__name__)
 
 _EXECUTION_SNAPSHOT_MIGRATION_LOCK_KEY = 740_002_611
-_LEGACY_DEFAULT_DEMO_VARIANT = "legacy-default"
 _LEGACY_QA_RECORDING_DIGEST_BLOCKER = (
     "Legacy QA demo recordings predate SHA-256 proof and release context metadata and must be regenerated."
 )
@@ -228,15 +227,6 @@ def _repair_execution_stage_record(*, stage_name: object, stage_record: object) 
         return None
     artifact = stage_record.get("artifact")
     repaired_artifact = _repair_legacy_test_artifact(artifact) if stage_name == "test" else None
-    demo_requirement_repaired_artifact = (
-        _repair_legacy_demo_requirements(artifact) if stage_name == "pm" else None
-    )
-    if demo_requirement_repaired_artifact is not None:
-        repaired_artifact = (
-            demo_requirement_repaired_artifact
-            if repaired_artifact is None
-            else _merge_artifact_repairs(repaired_artifact, demo_requirement_repaired_artifact)
-        )
     qa_digest_repaired_artifact = (
         _repair_legacy_qa_recordings_without_content_sha256(artifact) if stage_name == "qa" else None
     )
@@ -287,33 +277,6 @@ def _merge_artifact_repairs(primary: dict[str, Any], secondary: dict[str, Any]) 
     for key, value in secondary.items():
         merged[key] = value
     return merged
-
-
-def _repair_legacy_demo_requirements(artifact: object) -> dict[str, Any] | None:
-    if not isinstance(artifact, dict):
-        return None
-    demo_requirements = artifact.get("demo_requirements")
-    if not isinstance(demo_requirements, list):
-        return None
-    repaired_requirements: list[Any] = []
-    changed = False
-    for requirement in demo_requirements:
-        if not isinstance(requirement, dict):
-            return None
-        repaired_requirement = dict(requirement)
-        variants = requirement.get("variants")
-        if isinstance(variants, list) and not variants:
-            repaired_requirement["variants"] = [_LEGACY_DEFAULT_DEMO_VARIANT]
-            changed = True
-        if "capture_target" not in repaired_requirement:
-            repaired_requirement["capture_target"] = "browser"
-            changed = True
-        repaired_requirements.append(repaired_requirement)
-    if not changed:
-        return None
-    repaired_artifact = dict(artifact)
-    repaired_artifact["demo_requirements"] = repaired_requirements
-    return repaired_artifact
 
 
 def _repair_legacy_qa_recordings_without_content_sha256(artifact: object) -> dict[str, Any] | None:

@@ -242,7 +242,7 @@ class ExecutionSnapshotStartupBootstrapTests(unittest.TestCase):
                                 "title": "Native walkthrough",
                                 "acceptance_criterion": "native app works",
                                 "capture_target": "mobile",
-                                "variants": [],
+                                "variants": ["Invalid input is rejected", "Repeat action remains safe"],
                             }
                         ],
                         "outcome": "continue",
@@ -320,7 +320,7 @@ class ExecutionSnapshotStartupBootstrapTests(unittest.TestCase):
 
         self.assertIsNone(repaired)
 
-    def test_repair_execution_snapshot_payload_backfills_legacy_empty_demo_variants(self) -> None:
+    def test_repair_execution_snapshot_payload_does_not_backfill_legacy_empty_demo_variants(self) -> None:
         payload = {
             "version": 1,
             "context": {"trigger_context": {}, "execution_context": {}},
@@ -356,12 +356,10 @@ class ExecutionSnapshotStartupBootstrapTests(unittest.TestCase):
 
         repaired = _repair_execution_snapshot_payload(payload)
 
-        assert repaired is not None
-        variants = repaired["stages"]["pm"]["artifact"]["demo_requirements"][0]["variants"]
-        self.assertEqual(variants, ["legacy-default"])
-        self.assertIsNotNone(ExecutionSnapshot.load(repaired))
+        self.assertIsNone(repaired)
+        self.assertIsNone(ExecutionSnapshot.load(payload))
 
-    def test_repair_execution_snapshot_payload_backfills_legacy_missing_demo_capture_target(self) -> None:
+    def test_repair_execution_snapshot_payload_does_not_backfill_legacy_missing_demo_capture_target(self) -> None:
         payload = {
             "version": 1,
             "context": {"trigger_context": {}, "execution_context": {}},
@@ -383,7 +381,7 @@ class ExecutionSnapshotStartupBootstrapTests(unittest.TestCase):
                             {
                                 "title": "Browser walkthrough",
                                 "acceptance_criterion": "browser workflow works",
-                                "variants": ["happy path"],
+                                "variants": ["Invalid input is rejected", "Repeat action remains safe"],
                             }
                         ],
                         "outcome": "continue",
@@ -396,10 +394,8 @@ class ExecutionSnapshotStartupBootstrapTests(unittest.TestCase):
 
         repaired = _repair_execution_snapshot_payload(payload)
 
-        assert repaired is not None
-        capture_target = repaired["stages"]["pm"]["artifact"]["demo_requirements"][0]["capture_target"]
-        self.assertEqual(capture_target, "browser")
-        self.assertIsNotNone(ExecutionSnapshot.load(repaired))
+        self.assertIsNone(repaired)
+        self.assertIsNone(ExecutionSnapshot.load(payload))
 
     def test_repair_execution_snapshot_payload_blocks_legacy_qa_recordings_without_digests(self) -> None:
         payload = {
