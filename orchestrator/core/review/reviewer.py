@@ -4,6 +4,7 @@ from collections import Counter
 from dataclasses import dataclass
 import logging
 import re
+from urllib.parse import urlparse
 
 from orchestrator.core.policy_pack import find_banned_pattern_violations, select_policy_pack_for_files
 from orchestrator.core.review.pr_ready import PrReadinessResult, evaluate_pr_readiness
@@ -22,7 +23,8 @@ _DEMO_EVIDENCE_REQUIRED_COUNTS_PATTERN = re.compile(
     re.MULTILINE,
 )
 _STRUCTURED_DEMO_EVIDENCE_LINE_PATTERN = re.compile(
-    r"^- .+ \[target=(?P<target>browser|ios|android|desktop); reference=[^\]]+; object_key=[^\]]+\]: https?://\S+\s*$",
+    r"^- .+ \[target=(?P<target>browser|ios|android|desktop); reference=[^\]]+; "
+    r"object_key=(?P<object_key>[^\]]+)\]: (?P<artifact_url>[^ \t\r\n]+)\s*$",
     re.MULTILINE,
 )
 _SUPPORTED_DEMO_CAPTURE_TARGETS = frozenset({"browser", "ios", "android", "desktop"})
@@ -396,6 +398,8 @@ def _demo_evidence_present(
     structured_matches = list(_STRUCTURED_DEMO_EVIDENCE_LINE_PATTERN.finditer(section))
     if not structured_matches:
         return False
+    if not all(_structured_demo_evidence_line_is_run_artifact(match) for match in structured_matches):
+        return False
     required_targets = _normalize_required_demo_targets(required_demo_capture_targets)
     embedded_required_targets = _required_demo_targets_from_section(section)
     if embedded_required_targets is not None:
@@ -412,3 +416,14 @@ def _demo_evidence_present(
         return False
     recorded_counts = Counter(structured_match.group("target") for structured_match in structured_matches)
     return all(recorded_counts.get(target, 0) >= count for target, count in embedded_required_counts.items())
+
+
+def _structured_demo_evidence_line_is_run_artifact(match: re.Match[str]) -> bool:
+    artifact_url = str(match.group("artifact_url") or "").strip()
+    parsed_url = urlparse(artifact_url)
+    if parsed_url.scheme not in {"http", "https"} or not parsed_url.netloc:
+        return False
+    object_key = str(match.group("object_key") or "").strip()
+    if not object_key or object_key.startswith("/") or ".." in object_key.split("/"):
+        return False
+    return parsed_url.path.endswith(f"/{object_key}")
