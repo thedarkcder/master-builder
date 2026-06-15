@@ -1208,14 +1208,13 @@ def _validate_qa_scenario_coverage(
         raise RuntimeError("QA demo scenarios do not cover PM demo requirement variants: " + " | ".join(messages))
 
 
-def _validate_reusable_qa_recordings(
+def _validate_reusable_qa_recording_links(
     *,
     settings,  # noqa: ANN001
     storage: DemoArtifactStorageConfig,
     tenant,  # noqa: ANN001
     project,  # noqa: ANN001
     run,  # noqa: ANN001
-    plan: PmPlan,
     recordings: list[QaRecording],
 ) -> None:
     _validate_demo_evidence_recording_metadata(recordings)
@@ -1226,14 +1225,6 @@ def _validate_reusable_qa_recordings(
         tenant=tenant,
         project=project,
         run=run,
-    )
-    _validate_recordings_cover_required_targets(
-        recordings=recordings,
-        required_capture_targets=required_capture_targets(plan),
-    )
-    _validate_recordings_cover_required_counts(
-        recordings=recordings,
-        required_recording_counts=required_recording_counts_by_target(plan),
     )
     for recording in recordings:
         ensure_artifact_url_reachable(
@@ -1531,16 +1522,24 @@ def execute_qa_demo_stage(
         previous_qa_result = _validate_recorded_scenario_proof(previous_qa_result)
     previous_recordings = list(previous_qa_result.recordings if previous_qa_result is not None else [])
     previous_scenarios = list(previous_qa_result.scenarios if previous_qa_result is not None else [])
-    remaining_targets = remaining_capture_targets(plan, previous_recordings)
-    if not remaining_targets:
-        _validate_reusable_qa_recordings(
+    if previous_recordings:
+        _validate_reusable_qa_recording_links(
             settings=settings,
             storage=storage_config_from_settings(settings),
             tenant=tenant,
             project=project,
             run=run,
-            plan=plan,
             recordings=previous_recordings,
+        )
+    remaining_targets = remaining_capture_targets(plan, previous_recordings)
+    if not remaining_targets:
+        _validate_recordings_cover_required_targets(
+            recordings=previous_recordings,
+            required_capture_targets=required_targets,
+        )
+        _validate_recordings_cover_required_counts(
+            recordings=previous_recordings,
+            required_recording_counts=required_recording_counts_by_target(plan),
         )
         return QaResult(
             summary=[f"QA demo recording already has proof for required target(s): {', '.join(required_targets)}."],
