@@ -48,8 +48,11 @@ def main(argv: list[str]) -> int:
     if qa_result is None or not qa_result.scenarios:
         raise RuntimeError("mobile qa recorder requires at least one valid scenario")
 
-    project_path = discover_xcode_project(repo_dir=repo_dir)
-    ui_test_file = discover_xcuitest_file(repo_dir=repo_dir)
+    target_source_paths = _target_source_paths(payload.get("target_source_paths"))
+    project_path, ui_test_file = discover_ios_project_files(
+        repo_dir=repo_dir,
+        target_source_paths=target_source_paths,
+    )
     test_class_name = ui_test_file.stem
     ui_test_target = ui_test_file.parent.name
     scheme = str(os.environ.get("QA_DEMO_IOS_SCHEME") or project_path.stem).strip()
@@ -138,6 +141,62 @@ def main(argv: list[str]) -> int:
 def sanitize_recording_name(name: str) -> str:
     normalized = re.sub(r"[^a-z0-9]+", "-", str(name or "demo").strip().lower()).strip("-")
     return normalized or "demo"
+
+
+def _target_source_paths(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item).strip() for item in value if str(item).strip()]
+
+
+def discover_ios_project_files(
+    *,
+    repo_dir: Path,
+    target_source_paths: list[str] | None = None,
+) -> tuple[Path, Path]:
+    search_roots = _ios_project_search_roots(
+        repo_dir=repo_dir,
+        target_source_paths=target_source_paths,
+    )
+    project_paths = sorted(
+        project_path
+        for search_root in search_roots
+        for project_path in search_root.rglob("*.xcodeproj")
+    )
+    swift_files = sorted(
+        swift_file
+        for search_root in search_roots
+        for swift_file in search_root.rglob("*UITests/*.swift")
+    )
+    return (
+        discover_xcode_project(repo_dir=repo_dir, project_paths=project_paths),
+        discover_xcuitest_file(repo_dir=repo_dir, swift_files=swift_files),
+    )
+
+
+def _ios_project_search_roots(*, repo_dir: Path, target_source_paths: list[str] | None = None) -> list[Path]:
+    configured = str(os.environ.get("QA_DEMO_IOS_PROJECT_DIR") or "").strip()
+    if configured:
+        return [_resolve_repo_relative_source_path(repo_dir=repo_dir, source_path=configured)]
+    roots = [
+        _resolve_repo_relative_source_path(repo_dir=repo_dir, source_path=source_path)
+        for source_path in target_source_paths or []
+    ]
+    return roots or [repo_dir]
+
+
+def _resolve_repo_relative_source_path(*, repo_dir: Path, source_path: str) -> Path:
+    raw_path = Path(str(source_path or "").strip())
+    if raw_path.is_absolute():
+        raise RuntimeError(f"iOS project source path must be repo-relative: {source_path}")
+    candidate = (repo_dir / raw_path).resolve()
+    try:
+        candidate.relative_to(repo_dir.resolve())
+    except ValueError as exc:
+        raise RuntimeError(f"iOS project source path escapes the repository: {source_path}") from exc
+    if not candidate.exists():
+        raise RuntimeError(f"iOS project source path does not exist: {source_path}")
+    return candidate
 
 
 def resolve_bundle_identifier(*, project_path: Path, scheme: str) -> str:
