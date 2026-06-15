@@ -146,11 +146,17 @@ class DockerBuildContractTests(unittest.TestCase):
         )[0]
 
         self.assertIn("ANDROID_SDK_ROOT", android_target)
-        self.assertIn('/opt/android-sdk/build-tools/34.0.0', android_target)
+        self.assertIn('/usr/lib/android-sdk/build-tools/debian', android_target)
+        self.assertIn("adb", android_target)
+        self.assertIn("aapt", android_target)
+        self.assertIn("android-sdk-build-tools", android_target)
+        self.assertIn("android-sdk-platform-tools", android_target)
         self.assertIn("sdkmanager", android_target)
         self.assertIn("default-jdk-headless", android_target)
         self.assertIn("ffmpeg", android_target)
         self.assertIn("maven", android_target)
+        self.assertNotIn('"platform-tools"', android_target)
+        self.assertNotIn('"build-tools;', android_target)
         self.assertNotIn('"emulator"', android_target)
         self.assertNotIn("system-images;", android_target)
 
