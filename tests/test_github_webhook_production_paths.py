@@ -1,14 +1,16 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
 
+from orchestrator.api.webhooks.github_webhook_context import _latest_run_id_for_pr_url
 from orchestrator.core.config import get_settings
 from orchestrator.core.review.pr_review_findings import PrReviewFindingsResult, ReviewFinding
 from orchestrator.core.worker.webhook_job_service import process_next_webhook_job
-from orchestrator.storage.models import Project
+from orchestrator.storage.models import Project, Run, WorkflowExecution
 from tests.production_path_support import (
     load_json_fixture,
     ProductionPathApiTestCase,
@@ -155,6 +157,88 @@ class GitHubWebhookProductionPathTests(ProductionPathApiTestCase):
                 settings=get_settings(),
                 owner_id="worker:test",
             )
+
+    def test_qa_demo_review_runtime_resolves_latest_run_for_pr_url(self) -> None:
+        pr_url = "https://github.com/org/repo/pull/17"
+        now = datetime.now(timezone.utc)
+        with self.session_factory() as session:
+            old_workflow = WorkflowExecution(
+                workflow_id="workflow-old-demo",
+                workflow_type_key="issue_execution",
+                tenant_id="example",
+                project_id="example-default",
+                source_system="jira",
+                source_ref="GP-123",
+                repo_url="https://github.com/org/repo",
+                branch="feature/GP-123",
+                pr_url=pr_url,
+                orchestration_backend="temporal",
+                dedupe_scope="issue_execution",
+                status="completed",
+                created_at=now - timedelta(minutes=10),
+                updated_at=now - timedelta(minutes=10),
+            )
+            latest_workflow = WorkflowExecution(
+                workflow_id="workflow-latest-demo",
+                workflow_type_key="issue_execution",
+                tenant_id="example",
+                project_id="example-default",
+                source_system="jira",
+                source_ref="GP-123",
+                repo_url="https://github.com/org/repo",
+                branch="feature/GP-123",
+                pr_url=pr_url,
+                orchestration_backend="temporal",
+                dedupe_scope="issue_execution",
+                status="completed",
+                created_at=now,
+                updated_at=now,
+            )
+            session.add_all([old_workflow, latest_workflow])
+            session.add_all(
+                [
+                    Run(
+                        run_id="run-old-demo",
+                        workflow_id="workflow-old-demo",
+                        tenant_id="example",
+                        project_id="example-default",
+                        issue_key="GP-123",
+                        repo_url="https://github.com/org/repo",
+                        branch="feature/GP-123",
+                        pr_url=pr_url,
+                        attempt_number=1,
+                        entry_stage="pm",
+                        dedupe_scope="issue_execution",
+                        status="succeeded",
+                        created_at=now - timedelta(minutes=10),
+                    ),
+                    Run(
+                        run_id="run-latest-demo",
+                        workflow_id="workflow-latest-demo",
+                        tenant_id="example",
+                        project_id="example-default",
+                        issue_key="GP-123",
+                        repo_url="https://github.com/org/repo",
+                        branch="feature/GP-123",
+                        pr_url=pr_url,
+                        attempt_number=2,
+                        entry_stage="qa",
+                        dedupe_scope="issue_execution",
+                        status="running",
+                        created_at=now,
+                    ),
+                ]
+            )
+            session.commit()
+
+            resolved = _latest_run_id_for_pr_url(
+                session=session,
+                tenant_id="example",
+                project_id="example-default",
+                pr_url=pr_url,
+            )
+
+        self.assertEqual(resolved, "run-latest-demo")
 
     def test_ignored_event_runs_through_real_route(self) -> None:
         response = self.client.post(

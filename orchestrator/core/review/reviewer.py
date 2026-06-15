@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from collections import Counter
 from dataclasses import dataclass
 import logging
@@ -50,6 +51,7 @@ class ReviewAgentGate:
         required_demo_capture_targets: tuple[str, ...] | list[str] | None = None,
         tenant_id: str | None = None,
         project_id: str | None = None,
+        demo_evidence_run_id_resolver: Callable[[str], str | None] | None = None,
     ):
         self._github_client = github_client
         self._required_workflows = required_workflows
@@ -57,6 +59,7 @@ class ReviewAgentGate:
         self._required_demo_capture_targets = _normalize_required_demo_targets(required_demo_capture_targets)
         self._tenant_id = tenant_id
         self._project_id = project_id
+        self._demo_evidence_run_id_resolver = demo_evidence_run_id_resolver
 
     def evaluate_pr(
         self,
@@ -136,19 +139,26 @@ class ReviewAgentGate:
                 policy_pack=selected_policy_pack_key,
             )
 
-        if self._require_demo_evidence and not _demo_evidence_present(
-            pr.body,
-            required_demo_capture_targets=self._required_demo_capture_targets,
-            tenant_id=self._tenant_id,
-            project_id=self._project_id,
-        ):
-            return ReviewerSignal(
-                ready=False,
-                state="missing_demo_evidence",
-                message="PR blocked: QA demo evidence is required before ready-for-review signaling",
-                readiness=readiness,
-                must_fix_findings=("Attach QA demo evidence links in the PR body.",),
-                policy_pack=selected_policy_pack_key,
+        if self._require_demo_evidence:
+            expected_run_id = (
+                self._demo_evidence_run_id_resolver(str(pr.html_url or "").strip())
+                if self._demo_evidence_run_id_resolver is not None
+                else None
+            )
+            if not _demo_evidence_present(
+                pr.body,
+                required_demo_capture_targets=self._required_demo_capture_targets,
+                tenant_id=self._tenant_id,
+                project_id=self._project_id,
+                run_id=expected_run_id,
+            ):
+                return ReviewerSignal(
+                    ready=False,
+                    state="missing_demo_evidence",
+                    message="PR blocked: QA demo evidence is required before ready-for-review signaling",
+                    readiness=readiness,
+                    must_fix_findings=("Attach QA demo evidence links in the PR body.",),
+                    policy_pack=selected_policy_pack_key,
             )
 
         if readiness.ready:
@@ -389,13 +399,15 @@ def _demo_evidence_present(
     required_demo_capture_targets: tuple[str, ...] | list[str] | None = None,
     tenant_id: str | None = None,
     project_id: str | None = None,
+    run_id: str | None = None,
 ) -> bool:
     normalized_body = str(body or "").strip()
     if not normalized_body:
         return False
     normalized_tenant_id = str(tenant_id or "").strip()
     normalized_project_id = str(project_id or "").strip()
-    if not normalized_tenant_id or not normalized_project_id:
+    normalized_run_id = str(run_id or "").strip()
+    if not normalized_tenant_id or not normalized_project_id or not normalized_run_id:
         return False
     match = _DEMO_EVIDENCE_SECTION_PATTERN.search(normalized_body)
     if match is None:
@@ -411,6 +423,7 @@ def _demo_evidence_present(
             match,
             tenant_id=normalized_tenant_id,
             project_id=normalized_project_id,
+            run_id=normalized_run_id,
         )
         for match in structured_matches
     ):
@@ -435,6 +448,7 @@ def _structured_demo_evidence_line_is_run_artifact(
     *,
     tenant_id: str,
     project_id: str,
+    run_id: str,
 ) -> bool:
     artifact_url = str(match.group("artifact_url") or "").strip()
     parsed_url = urlparse(artifact_url)
@@ -446,6 +460,6 @@ def _structured_demo_evidence_line_is_run_artifact(
     key_parts = object_key.split("/")
     if len(key_parts) < 4 or any(not part for part in key_parts):
         return False
-    if key_parts[0] != tenant_id or key_parts[1] != project_id:
+    if key_parts[0] != tenant_id or key_parts[1] != project_id or key_parts[2] != run_id:
         return False
     return parsed_url.path.endswith(f"/{object_key}")
