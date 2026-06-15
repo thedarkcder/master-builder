@@ -848,11 +848,13 @@ def _validate_local_recording_file(path: Path) -> None:
 def _parse_recorder_output(
     *,
     output_path: Path,
+    output_dir: Path,
     capture_target: DemoCaptureTarget,
 ) -> list[LocalQaRecording]:
     result = json.loads(output_path.read_text(encoding="utf-8"))
     recordings: list[LocalQaRecording] = []
     seen_paths: set[str] = set()
+    resolved_output_dir = output_dir.resolve()
     for item in list(result.get("recordings") or []):
         if not isinstance(item, dict):
             raise RuntimeError("QA demo recorder returned invalid recordings payload")
@@ -865,6 +867,12 @@ def _parse_recorder_output(
         if source_key in seen_paths:
             raise RuntimeError(f"QA demo recorder returned duplicate local recording path: {source}")
         seen_paths.add(source_key)
+        try:
+            source.relative_to(resolved_output_dir)
+        except ValueError as exc:
+            raise RuntimeError(
+                f"QA demo recorder returned recording path outside recorder output directory: {source}"
+            ) from exc
         _validate_local_recording_file(source)
         recordings.append(
             LocalQaRecording(
@@ -892,7 +900,8 @@ def _invoke_json_recorder(
     with TemporaryDirectory(prefix=f"qa-demo-{capture_target.capture_target}-") as tmp_dir:
         input_path = Path(tmp_dir) / "input.json"
         output_path = Path(tmp_dir) / "output.json"
-        payload["output_dir"] = str(Path(tmp_dir) / "videos")
+        output_dir = Path(tmp_dir) / "videos"
+        payload["output_dir"] = str(output_dir)
         input_path.write_text(json.dumps(payload), encoding="utf-8")
         try:
             subprocess.run(
@@ -918,7 +927,11 @@ def _invoke_json_recorder(
             raise RuntimeError(
                 f"QA demo recorder command failed ({exc.returncode}): {' '.join(command)}"
             ) from exc
-        recordings = _parse_recorder_output(output_path=output_path, capture_target=capture_target)
+        recordings = _parse_recorder_output(
+            output_path=output_path,
+            output_dir=output_dir,
+            capture_target=capture_target,
+        )
         return _copy_recordings(recordings, request=request)
 
 
