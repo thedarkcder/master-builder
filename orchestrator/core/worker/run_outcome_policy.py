@@ -386,6 +386,7 @@ class RunOutcomePolicy:
                 settings=self._settings,
                 tenant=prepared.tenant,
                 project=prepared.project,
+                run=prepared.run,
                 workflow_result=workflow_result,
                 qa_result=qa_result,
                 required_capture_targets=required_capture_targets(plan),
