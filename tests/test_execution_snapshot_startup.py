@@ -320,7 +320,7 @@ class ExecutionSnapshotStartupBootstrapTests(unittest.TestCase):
 
         self.assertIsNone(repaired)
 
-    def test_repair_execution_snapshot_payload_does_not_backfill_legacy_empty_demo_variants(self) -> None:
+    def test_repair_execution_snapshot_payload_blocks_legacy_empty_demo_variants_without_backfill(self) -> None:
         payload = {
             "version": 1,
             "context": {"trigger_context": {}, "execution_context": {}},
@@ -356,10 +356,16 @@ class ExecutionSnapshotStartupBootstrapTests(unittest.TestCase):
 
         repaired = _repair_execution_snapshot_payload(payload)
 
-        self.assertIsNone(repaired)
-        self.assertIsNone(ExecutionSnapshot.load(payload))
+        assert repaired is not None
+        pm_stage = repaired["stages"]["pm"]
+        pm_artifact = pm_stage["artifact"]
+        self.assertEqual(pm_stage["status"], "blocked")
+        self.assertEqual(pm_artifact["outcome"], "blocked")
+        self.assertEqual(pm_artifact["demo_requirements"], [])
+        self.assertIn("Legacy PM demo requirements", pm_artifact["blocker_message"])
+        self.assertIsNotNone(ExecutionSnapshot.load(repaired))
 
-    def test_repair_execution_snapshot_payload_does_not_backfill_legacy_missing_demo_capture_target(self) -> None:
+    def test_repair_execution_snapshot_payload_blocks_legacy_missing_demo_capture_target_without_backfill(self) -> None:
         payload = {
             "version": 1,
             "context": {"trigger_context": {}, "execution_context": {}},
@@ -394,8 +400,14 @@ class ExecutionSnapshotStartupBootstrapTests(unittest.TestCase):
 
         repaired = _repair_execution_snapshot_payload(payload)
 
-        self.assertIsNone(repaired)
-        self.assertIsNone(ExecutionSnapshot.load(payload))
+        assert repaired is not None
+        pm_stage = repaired["stages"]["pm"]
+        pm_artifact = pm_stage["artifact"]
+        self.assertEqual(pm_stage["status"], "blocked")
+        self.assertEqual(pm_artifact["outcome"], "blocked")
+        self.assertEqual(pm_artifact["demo_requirements"], [])
+        self.assertIn("Legacy PM demo requirements", pm_artifact["blocker_message"])
+        self.assertIsNotNone(ExecutionSnapshot.load(repaired))
 
     def test_repair_execution_snapshot_payload_blocks_legacy_qa_recordings_without_digests(self) -> None:
         payload = {

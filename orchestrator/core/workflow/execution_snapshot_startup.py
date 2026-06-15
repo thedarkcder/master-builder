@@ -10,6 +10,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
+from orchestrator.core.workflow.checkpoint_codec import decode_pm_plan_payload
 from orchestrator.storage.run_queue_events import is_postgres_database_url
 from orchestrator.storage.models import Run, WorkflowCheckpoint
 
@@ -18,6 +19,9 @@ logger = logging.getLogger(__name__)
 _EXECUTION_SNAPSHOT_MIGRATION_LOCK_KEY = 740_002_611
 _LEGACY_QA_RECORDING_DIGEST_BLOCKER = (
     "Legacy QA demo recordings predate SHA-256 proof and release context metadata and must be regenerated."
+)
+_LEGACY_PM_DEMO_REQUIREMENT_BLOCKER = (
+    "Legacy PM demo requirements do not satisfy the current QA demo proof contract and must be regenerated."
 )
 
 
@@ -226,7 +230,14 @@ def _repair_execution_stage_record(*, stage_name: object, stage_record: object) 
     if not isinstance(stage_record, dict):
         return None
     artifact = stage_record.get("artifact")
-    repaired_artifact = _repair_legacy_test_artifact(artifact) if stage_name == "test" else None
+    repaired_artifact = _repair_legacy_pm_demo_requirements(artifact) if stage_name == "pm" else None
+    test_repaired_artifact = _repair_legacy_test_artifact(artifact) if stage_name == "test" else None
+    if test_repaired_artifact is not None:
+        repaired_artifact = (
+            test_repaired_artifact
+            if repaired_artifact is None
+            else _merge_artifact_repairs(repaired_artifact, test_repaired_artifact)
+        )
     qa_digest_repaired_artifact = (
         _repair_legacy_qa_recordings_without_content_sha256(artifact) if stage_name == "qa" else None
     )
@@ -253,7 +264,91 @@ def _repair_execution_stage_record(*, stage_name: object, stage_record: object) 
         return None
     repaired_stage_record = dict(stage_record)
     repaired_stage_record["artifact"] = repaired_artifact
+    if stage_name == "pm" and repaired_artifact.get("outcome") == "blocked":
+        repaired_stage_record["status"] = "blocked"
+        repaired_stage_record["summary"] = repaired_artifact.get("blocker_message") or _LEGACY_PM_DEMO_REQUIREMENT_BLOCKER
     return repaired_stage_record
+
+
+def _repair_legacy_pm_demo_requirements(artifact: object) -> dict[str, Any] | None:
+    if not isinstance(artifact, dict):
+        return None
+    if decode_pm_plan_payload(artifact) is not None:
+        return None
+    demo_requirements = artifact.get("demo_requirements")
+    if not isinstance(demo_requirements, list) or not demo_requirements:
+        return None
+    if not _pm_plan_core_fields_are_repairable(artifact):
+        return None
+    invalid_titles = _invalid_legacy_demo_requirement_titles(demo_requirements)
+    if not invalid_titles:
+        return None
+
+    repaired_artifact = dict(artifact)
+    repaired_artifact["demo_requirements"] = []
+    repaired_artifact["outcome"] = "blocked"
+    repaired_artifact["blocker_message"] = (
+        _LEGACY_PM_DEMO_REQUIREMENT_BLOCKER
+        + " Invalid requirement(s): "
+        + "; ".join(invalid_titles)
+    )
+    repaired_artifact["requeue_target"] = None
+    repaired_artifact["requeue_reason"] = None
+    return repaired_artifact
+
+
+def _pm_plan_core_fields_are_repairable(artifact: dict[str, Any]) -> bool:
+    if _parse_string_list(artifact.get("plan_steps"), require_non_empty=True) is None:
+        return False
+    if _parse_string_list(artifact.get("acceptance_criteria"), require_non_empty=True) is None:
+        return False
+    if _parse_string_list(artifact.get("risks", []), require_non_empty=False) is None:
+        return False
+    if _parse_string_list(artifact.get("resolved_prerequisites", []), require_non_empty=False) is None:
+        return False
+    if _parse_string_list(artifact.get("unresolved_prerequisites", []), require_non_empty=False) is None:
+        return False
+    if artifact.get("next_stage") not in {"dev", "test"}:
+        return False
+    if artifact.get("execution_worker_capability") not in {"linux", "macos"}:
+        return False
+    return True
+
+
+def _parse_string_list(value: object, *, require_non_empty: bool) -> list[str] | None:
+    if not isinstance(value, list):
+        return None
+    parsed: list[str] = []
+    for item in value:
+        if not isinstance(item, str):
+            return None
+        if not item.strip():
+            return None
+        parsed.append(item)
+    if require_non_empty and not parsed:
+        return None
+    return parsed
+
+
+def _invalid_legacy_demo_requirement_titles(demo_requirements: list[object]) -> list[str]:
+    invalid_titles: list[str] = []
+    for index, requirement in enumerate(demo_requirements, start=1):
+        if not isinstance(requirement, dict):
+            invalid_titles.append(f"requirement {index}")
+            continue
+        title = str(requirement.get("title") or f"requirement {index}").strip() or f"requirement {index}"
+        acceptance_criterion = str(requirement.get("acceptance_criterion") or "").strip()
+        capture_target = str(requirement.get("capture_target") or "").strip()
+        variants = requirement.get("variants")
+        if (
+            not title
+            or not acceptance_criterion
+            or capture_target not in {"browser", "ios", "android", "desktop"}
+            or _parse_string_list(variants, require_non_empty=True) is None
+            or len(variants) < 2
+        ):
+            invalid_titles.append(title)
+    return invalid_titles
 
 
 def _repair_legacy_test_artifact(artifact: object) -> dict[str, Any] | None:
