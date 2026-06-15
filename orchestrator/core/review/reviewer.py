@@ -139,6 +139,8 @@ class ReviewAgentGate:
         if self._require_demo_evidence and not _demo_evidence_present(
             pr.body,
             required_demo_capture_targets=self._required_demo_capture_targets,
+            tenant_id=self._tenant_id,
+            project_id=self._project_id,
         ):
             return ReviewerSignal(
                 ready=False,
@@ -385,9 +387,15 @@ def _demo_evidence_present(
     body: str | None,
     *,
     required_demo_capture_targets: tuple[str, ...] | list[str] | None = None,
+    tenant_id: str | None = None,
+    project_id: str | None = None,
 ) -> bool:
     normalized_body = str(body or "").strip()
     if not normalized_body:
+        return False
+    normalized_tenant_id = str(tenant_id or "").strip()
+    normalized_project_id = str(project_id or "").strip()
+    if not normalized_tenant_id or not normalized_project_id:
         return False
     match = _DEMO_EVIDENCE_SECTION_PATTERN.search(normalized_body)
     if match is None:
@@ -398,7 +406,14 @@ def _demo_evidence_present(
     structured_matches = list(_STRUCTURED_DEMO_EVIDENCE_LINE_PATTERN.finditer(section))
     if not structured_matches:
         return False
-    if not all(_structured_demo_evidence_line_is_run_artifact(match) for match in structured_matches):
+    if not all(
+        _structured_demo_evidence_line_is_run_artifact(
+            match,
+            tenant_id=normalized_tenant_id,
+            project_id=normalized_project_id,
+        )
+        for match in structured_matches
+    ):
         return False
     required_targets = _normalize_required_demo_targets(required_demo_capture_targets)
     embedded_required_targets = _required_demo_targets_from_section(section)
@@ -415,12 +430,22 @@ def _demo_evidence_present(
     return all(recorded_counts.get(target, 0) >= count for target, count in embedded_required_counts.items())
 
 
-def _structured_demo_evidence_line_is_run_artifact(match: re.Match[str]) -> bool:
+def _structured_demo_evidence_line_is_run_artifact(
+    match: re.Match[str],
+    *,
+    tenant_id: str,
+    project_id: str,
+) -> bool:
     artifact_url = str(match.group("artifact_url") or "").strip()
     parsed_url = urlparse(artifact_url)
     if parsed_url.scheme not in {"http", "https"} or not parsed_url.netloc:
         return False
     object_key = str(match.group("object_key") or "").strip()
     if not object_key or object_key.startswith("/") or ".." in object_key.split("/"):
+        return False
+    key_parts = object_key.split("/")
+    if len(key_parts) < 4 or any(not part for part in key_parts):
+        return False
+    if key_parts[0] != tenant_id or key_parts[1] != project_id:
         return False
     return parsed_url.path.endswith(f"/{object_key}")

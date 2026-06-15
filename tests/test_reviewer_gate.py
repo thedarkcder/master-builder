@@ -474,11 +474,11 @@ class ReviewerGateTests(unittest.TestCase):
                     "<!-- master-builder:qa-demo-required-targets browser -->\n"
                     "<!-- master-builder:qa-demo-required-counts browser=2 -->\n"
                     "- Browser happy path [target=browser; reference=https://preview.example; "
-                    "object_key=tenant-1/project-1/run-1/qa-demo-1.webm]: "
-                    "https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-demo-1.webm\n"
+                    "object_key=route25/route25-default/run-1/qa-demo-1.webm]: "
+                    "https://cdn.example/qa-demos/route25/route25-default/run-1/qa-demo-1.webm\n"
                     "- Browser edge case [target=browser; reference=https://preview.example; "
-                    "object_key=tenant-1/project-1/run-1/qa-demo-2.webm]: "
-                    "https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-demo-2.webm\n"
+                    "object_key=route25/route25-default/run-1/qa-demo-2.webm]: "
+                    "https://cdn.example/qa-demos/route25/route25-default/run-1/qa-demo-2.webm\n"
                 ),
             )
         )
@@ -490,6 +490,43 @@ class ReviewerGateTests(unittest.TestCase):
 
         self.assertTrue(signal.ready)
         self.assertEqual(signal.state, "ready")
+
+    def test_reviewer_blocks_structured_demo_evidence_from_another_project_scope(self) -> None:
+        gate = self._gate_with_demo_requirement(
+            _FakeGitHubClient(
+                checks=[
+                    WorkflowCheckSuite(name="CI", status="completed", conclusion="success"),
+                    WorkflowCheckSuite(name="Security", status="completed", conclusion="success"),
+                ],
+                files=[
+                    PullRequestFileChange(filename="orchestrator/core/reviewer.py", patch="+ change"),
+                    PullRequestFileChange(filename="tests/test_reviewer_gate.py", patch="+ test"),
+                ],
+                review_body=(
+                    "Good:\n- implemented\n\n"
+                    "Risks:\n- low\n\n"
+                    "Must-fix:\n- none\n\n"
+                    "Tests:\n- pytest -q\n\n"
+                    "Questions:\n- none\n\n"
+                    "Follow-ups:\n- none\n\n"
+                    "## Demo Evidence\n"
+                    "<!-- master-builder:qa-demo-evidence v1 -->\n"
+                    "<!-- master-builder:qa-demo-required-targets browser -->\n"
+                    "<!-- master-builder:qa-demo-required-counts browser=1 -->\n"
+                    "- Browser happy path [target=browser; reference=https://preview.example; "
+                    "object_key=other-tenant/other-project/run-1/qa-demo-1.webm]: "
+                    "https://cdn.example/qa-demos/other-tenant/other-project/run-1/qa-demo-1.webm\n"
+                ),
+            )
+        )
+
+        signal = gate.evaluate_pr(
+            repo_full_name="example/repo",
+            pr_number=22,
+        )
+
+        self.assertFalse(signal.ready)
+        self.assertEqual(signal.state, "missing_demo_evidence")
 
     def test_reviewer_blocks_when_constructor_required_target_is_missing(self) -> None:
         gate = self._gate_with_demo_requirement(
