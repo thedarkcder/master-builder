@@ -19,6 +19,9 @@ from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 from orchestrator.core.workflow.runner import QaResult, WorkflowStageCheckpoint
 from orchestrator.core.worker.capabilities import worker_label_for_capability
 
+_QA_DEMO_PREVIEW_PENDING_STATUSES = frozenset({"queued", "provisioning", "deploying", "route_activating"})
+_QA_DEMO_PREVIEW_TERMINAL_FAILURE_STATUSES = frozenset({"failed", "rolled_back", "destroyed"})
+
 
 class RunOutcomePolicy:
     def __init__(
@@ -313,6 +316,40 @@ class RunOutcomePolicy:
                 ),
             )
         attempt = max(1, int(workflow_result.attempts or 1))
+        preview_release_status = _preview_release_status(preview_release)
+        if preview_release_status in _QA_DEMO_PREVIEW_PENDING_STATUSES:
+            message = (
+                "QA demo recording is waiting for the run preview deployment/release to become live before "
+                f"recording; current status is {preview_release_status}."
+            )
+            qa_result = QaResult(
+                summary=[message],
+                scenarios=list(previous_qa_result.scenarios if previous_qa_result is not None else []),
+                recordings=list(previous_qa_result.recordings if previous_qa_result is not None else []),
+                outcome="requeue",
+                feedback=message,
+            )
+            self._persist_qa_stage_checkpoint(
+                prepared=prepared,
+                qa_result=qa_result,
+                attempt=attempt,
+                execution_context=execution_context,
+            )
+            return _workflow_result_with_generic_qa_requeue(
+                workflow_result=workflow_result,
+                attempt=attempt,
+                message=message,
+            )
+        if preview_release_status in _QA_DEMO_PREVIEW_TERMINAL_FAILURE_STATUSES:
+            message = (
+                "QA demo recording requires a live run preview deployment/release before recording; "
+                f"preview release is {preview_release_status}."
+            )
+            return _workflow_result_with_qa_blocker(
+                workflow_result=workflow_result,
+                attempt=attempt,
+                message=message,
+            )
         try:
             qa_result = execute_qa_demo_stage(
                 session=self._session,
@@ -672,3 +709,20 @@ def _workflow_result_with_qa_blocker(*, workflow_result, attempt: int, message: 
             _stage_trace_entry(stage="qa", attempt=attempt, status="blocked", summary=message),
         ],
     )
+
+
+def _workflow_result_with_generic_qa_requeue(*, workflow_result, attempt: int, message: str):
+    return replace(
+        workflow_result,
+        outcome="requeue",
+        requeue_target=None,
+        requeue_reason=message,
+        orchestration_stage_trace=[
+            *list(workflow_result.orchestration_stage_trace or []),
+            _stage_trace_entry(stage="qa", attempt=attempt, status="requeue", summary=message),
+        ],
+    )
+
+
+def _preview_release_status(preview_release) -> str:
+    return str(getattr(preview_release, "status", "") or "").strip().lower()
