@@ -24,6 +24,7 @@ from orchestrator.core.node_release_contracts import (
     LEGACY_EXPO_CLI_INSTALL_COMMAND,
     LEGACY_EXPO_WEB_START_COMMAND,
     NODE_INSTALL_WITH_LEGACY_PEERS_COMMAND,
+    STALE_LEGACY_EXPO_WEB_START_COMMAND,
 )
 from orchestrator.core.platform.secret_service import resolve_platform_secret_ref
 from orchestrator.core.platform.secret_manager import normalize_secret_ref, resolve_scoped_secret_ref
@@ -1579,11 +1580,15 @@ def _coolify_ports_exposes(*, project_app: ProjectApp) -> str:
 
 
 def _uses_stale_legacy_expo_contract(*, project_app: ProjectApp, project_deployment: ProjectDeploymentConfigRead) -> bool:
-    return (
-        _normalize_optional_string(project_app.detected_runtime) == "react_native_web"
-        and _normalize_optional_string(project_app.start_command) == "npm run web"
-        and _normalize_optional_string(project_deployment.install_command) == NODE_INSTALL_WITH_LEGACY_PEERS_COMMAND
-    )
+    if _normalize_optional_string(project_app.detected_runtime) != "react_native_web":
+        return False
+    return _normalize_optional_string(project_app.start_command) in {
+        "npm run web",
+        STALE_LEGACY_EXPO_WEB_START_COMMAND,
+    } and _normalize_optional_string(project_deployment.install_command) in {
+        NODE_INSTALL_WITH_LEGACY_PEERS_COMMAND,
+        LEGACY_EXPO_CLI_INSTALL_COMMAND,
+    }
 
 
 def _coolify_start_command(*, project_app: ProjectApp, project_deployment: ProjectDeploymentConfigRead) -> str | None:
