@@ -68,12 +68,12 @@ class WorkflowRequestServiceTests(unittest.TestCase):
         return tenant, run, effective_policy, settings
 
     @staticmethod
-    def _prepared_repo(checkout_dir: Path) -> SimpleNamespace:
+    def _prepared_repo(checkout_dir: Path, *, start_point_ref: str = "origin/main") -> SimpleNamespace:
         return SimpleNamespace(
             prepared_repo=SimpleNamespace(
                 repo_dir=checkout_dir,
                 execution_branch="run/tp-1/run-1",
-                start_point_ref="origin/main",
+                start_point_ref=start_point_ref,
                 start_point_sha="abc123",
                 workspace_key="worker-a",
             ),
@@ -102,7 +102,7 @@ class WorkflowRequestServiceTests(unittest.TestCase):
                 name="Project",
                 github_repository="https://github.com/example/repo",
                 jira_project_key="TP",
-                environment={},
+                environment={"default_branch": "main"},
             )
             checkout_dir = (
                 Path(tmp_dir)
@@ -137,7 +137,7 @@ class WorkflowRequestServiceTests(unittest.TestCase):
                 name="Project",
                 github_repository="https://github.com/example/repo",
                 jira_project_key="TP",
-                environment={},
+                environment={"default_branch": "main"},
             )
             with patch(
                 "orchestrator.core.worker.workflow_request_service.prepare_execution_repo_for_run",
@@ -161,7 +161,7 @@ class WorkflowRequestServiceTests(unittest.TestCase):
                 name="Project",
                 github_repository="https://github.com/example/repo",
                 jira_project_key="TP",
-                environment={},
+                environment={"default_branch": "main"},
             )
             with patch(
                 "orchestrator.core.worker.workflow_request_service.prepare_execution_repo_for_run",
@@ -185,7 +185,7 @@ class WorkflowRequestServiceTests(unittest.TestCase):
                 name="Project",
                 github_repository="https://github.com/example/repo",
                 jira_project_key="TP",
-                environment={},
+                environment={"default_branch": "main"},
             )
             checkout_dir = (
                 Path(tmp_dir)
@@ -225,6 +225,71 @@ class WorkflowRequestServiceTests(unittest.TestCase):
             self.assertTrue(request.allow_pr_creation)
             self.assertEqual(request.integration_branch, "feature/TP-1")
             self.assertEqual(run.branch, "feature/TP-1")
+
+    def test_build_workflow_request_resolves_missing_project_branch_from_github_default(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            tenant, run, effective_policy, settings = self._base_inputs(tmp_dir)
+            tenant.github_config = {"installation_id": "12345"}
+            settings.secrets_encryption_key = ""
+            project = SimpleNamespace(
+                project_id="project-1",
+                name="Project",
+                github_repository="https://github.com/example/repo",
+                jira_project_key="TP",
+                environment={},
+            )
+            checkout_dir = (
+                Path(tmp_dir)
+                / "tenant-1"
+                / "project-1"
+                / "runs"
+                / "run-1"
+                / "workspaces"
+                / "worker-a"
+                / "repo"
+            )
+            checkout_dir.mkdir(parents=True, exist_ok=True)
+
+            class _FakeGitHubClient:
+                def get_repository_default_branch(self, *, repo_full_name: str, github_repository: str) -> str:
+                    self.default_branch_args = (repo_full_name, github_repository)
+                    return "master"
+
+                def list_open_pull_requests(self, *, repo_full_name: str, limit: int = 20):  # noqa: ANN001
+                    self.open_pr_args = (repo_full_name, limit)
+                    return []
+
+            fake_client = _FakeGitHubClient()
+            prepared_base_branches: list[str] = []
+
+            def _prepare_execution_repo_for_run(**kwargs):  # noqa: ANN003, ANN202
+                prepared_base_branches.append(kwargs["base_branch"])
+                return self._prepared_repo(checkout_dir, start_point_ref="origin/master")
+
+            with (
+                patch(
+                    "orchestrator.core.worker.workflow_request_service.github_client_from_tenant_config",
+                    return_value=fake_client,
+                ),
+                patch(
+                    "orchestrator.core.worker.workflow_request_service.prepare_execution_repo_for_run",
+                    side_effect=_prepare_execution_repo_for_run,
+                ),
+            ):
+                request = build_workflow_request_for_run(
+                    session=self._session_with_no_human_inputs(),
+                    tenant=tenant,
+                    run=run,
+                    project=project,
+                    effective_policy=effective_policy,
+                    settings=settings,
+                )
+
+            self.assertEqual(fake_client.default_branch_args, ("example/repo", "https://github.com/example/repo"))
+            self.assertEqual(prepared_base_branches, ["master"])
+            self.assertEqual(request.base_branch, "master")
+            self.assertEqual(request.pr_target_branch, "master")
+            self.assertEqual(request.start_point_ref, "origin/master")
 
     def test_build_workflow_request_reuses_existing_open_pr_branch(self) -> None:
         with TemporaryDirectory() as tmp_dir:
@@ -308,7 +373,7 @@ class WorkflowRequestServiceTests(unittest.TestCase):
                 name="Project",
                 github_repository="https://github.com/example/repo",
                 jira_project_key="TP",
-                environment={},
+                environment={"default_branch": "main"},
             )
             checkout_dir = (
                 Path(tmp_dir)
@@ -366,7 +431,7 @@ class WorkflowRequestServiceTests(unittest.TestCase):
                 name="Project",
                 github_repository="https://github.com/example/repo",
                 jira_project_key="TP",
-                environment={},
+                environment={"default_branch": "main"},
             )
             checkout_dir = (
                 Path(tmp_dir)
@@ -423,7 +488,7 @@ class WorkflowRequestServiceTests(unittest.TestCase):
                 name="Project",
                 github_repository="https://github.com/example/repo",
                 jira_project_key="TP",
-                environment={},
+                environment={"default_branch": "main"},
             )
             checkout_dir = (
                 Path(tmp_dir)
@@ -530,7 +595,7 @@ class WorkflowRequestServiceTests(unittest.TestCase):
                 name="Project",
                 github_repository="https://github.com/example/repo",
                 jira_project_key="TP",
-                environment={},
+                environment={"default_branch": "main"},
             )
             checkout_dir = (
                 Path(tmp_dir)

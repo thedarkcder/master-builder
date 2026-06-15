@@ -16,6 +16,7 @@ from orchestrator.core.runs.human_input_service import answered_human_inputs_for
 from orchestrator.core.platform.tenant_secret_service import resolve_scoped_secret_ref
 from orchestrator.core.worker.workflow_request_branching import (
     normalize_branch,
+    repo_full_name_from_repository,
     resolve_branch_from_open_pull_requests,
     resolve_integration_branch,
 )
@@ -166,6 +167,68 @@ def _project_demo_capture_targets(source_map: dict[QaCaptureTarget, tuple[str, .
     return tuple(target for target in _PROJECT_DEMO_TARGET_ORDER if target in source_map)
 
 
+def _resolve_base_branch(
+    *,
+    session,
+    settings,
+    tenant: Tenant,
+    project,
+    remediation_base_branch: str | None,
+    github_client_from_tenant_config_fn,
+    resolve_scoped_secret_ref_fn,
+    resolve_platform_secret_ref_fn,
+) -> str:  # noqa: ANN001
+    if remediation_base_branch:
+        return remediation_base_branch
+
+    project_environment = getattr(project, "environment", {}) if project is not None else {}
+    configured_default_branch = (
+        project_environment.get("default_branch") if isinstance(project_environment, dict) else None
+    )
+    normalized_configured_default_branch = normalize_branch(configured_default_branch)
+    if normalized_configured_default_branch:
+        return normalized_configured_default_branch
+
+    if project is None:
+        raise ValueError("Run project routing is required before resolving the repository base branch")
+    github_repository = str(getattr(project, "github_repository", "") or "").strip()
+    repo_full_name = repo_full_name_from_repository(github_repository)
+    if repo_full_name is None:
+        raise ValueError("Project GitHub repository must be a GitHub owner/repo URL before resolving base branch")
+    github_config_raw = getattr(tenant, "github_config", {})
+    github_config = github_config_raw if isinstance(github_config_raw, dict) else {}
+    if not github_config:
+        raise ValueError(
+            "Project environment.default_branch is not configured and tenant GitHub credentials are unavailable "
+            "to resolve the repository default branch"
+        )
+
+    github_client = github_client_from_tenant_config_fn(
+        github_config,
+        tenant_secret_lookup=lambda secret_ref: resolve_scoped_secret_ref_fn(
+            session,
+            secret_ref=secret_ref,
+            tenant_id=tenant.tenant_id,
+            project_id=project.project_id,
+            encryption_key=settings.secrets_encryption_key,
+        ),
+        platform_secret_lookup=lambda secret_ref: resolve_platform_secret_ref_fn(
+            session,
+            secret_ref=secret_ref,
+            encryption_key=settings.secrets_encryption_key,
+        ),
+    )
+    resolved_default_branch = normalize_branch(
+        github_client.get_repository_default_branch(
+            repo_full_name=repo_full_name,
+            github_repository=github_repository,
+        )
+    )
+    if not resolved_default_branch:
+        raise ValueError("GitHub repository default_branch resolved empty")
+    return resolved_default_branch
+
+
 def build_workflow_request(
     *,
     session,
@@ -231,10 +294,17 @@ def build_workflow_request(
             checkpoint.payload_json,
             allow_empty=False,
         ).dump()
-    project_environment = getattr(project, "environment", {}) if project is not None else {}
-    default_branch = project_environment.get("default_branch") if isinstance(project_environment, dict) else None
     remediation_base_branch = extract_remediation_base_ref(parsed_trigger_context, normalize_branch)
-    base_branch = remediation_base_branch or normalize_branch(default_branch) or "main"
+    base_branch = _resolve_base_branch(
+        session=session,
+        settings=settings,
+        tenant=tenant,
+        project=project,
+        remediation_base_branch=remediation_base_branch,
+        github_client_from_tenant_config_fn=github_client_from_tenant_config_fn,
+        resolve_scoped_secret_ref_fn=resolve_scoped_secret_ref_fn,
+        resolve_platform_secret_ref_fn=resolve_platform_secret_ref_fn,
+    )
     remediation_head_branch = extract_remediation_head_ref(parsed_trigger_context, normalize_branch)
     integration_branch = resolve_integration_branch(
         session=session,

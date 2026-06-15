@@ -880,6 +880,9 @@ class OrchestratedRunWorkflowExecutor:
             )
 
         try:
+            base_branch = (request.pr_target_branch or request.base_branch or "").strip()
+            if not base_branch:
+                raise ValueError("Workflow request is missing a resolved PR target/base branch")
             push_result = self._execute_tool(
                 request.tenant_id,
                 request.project_id,
@@ -903,7 +906,7 @@ class OrchestratedRunWorkflowExecutor:
                 {
                     "title": _required_pr_title(request),
                     "head_branch": head_branch,
-                    "base_branch": request.pr_target_branch or request.base_branch or "main",
+                    "base_branch": base_branch,
                     "body": _required_pr_body(
                         request=request,
                         plan=plan,

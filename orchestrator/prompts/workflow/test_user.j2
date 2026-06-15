@@ -52,6 +52,9 @@ Required actions:
 2a. When `Requires current-head acceptance evidence` is `true`, you must produce fresh current-head evidence for the PM demo requirements before returning outcome="continue".
    - Prior evidence from earlier attempts is supporting context only; it does not replace current-head acceptance evidence for this run.
    - In that case, set `validation_scope` to `current_head_acceptance` or `full_suite`. Never use `targeted_only`.
+   - Demo requirements define the later QA recording contract, but the test stage only owns validation that the current PR head implements a code/build/user-visible path that can be released.
+   - Do not block solely because a release URL, native release context, S3/MinIO artifact link, or MB-produced QA demo recording does not exist yet; those artifacts are produced after review by the release/QA demo stage.
+   - If current-head acceptance validation passes and only future release/QA proof artifacts remain, return outcome="continue" and state that release/QA must produce the recordings before ready-for-review.
 3. If you cannot identify a targeted test, say that explicitly in `guidance` before escalating to anything broader.
 4. Keep command output lean:
    - Use concise flags/reporters where possible.

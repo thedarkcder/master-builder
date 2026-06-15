@@ -1324,7 +1324,7 @@ def _execute_github_tool(
     )
     repo_full_name = _repo_full_name(github_repository)
     canonical_run_branch = _resolve_canonical_run_branch(session=session, context=context)
-    default_base_branch = _default_project_base_branch(project=context.project)
+    configured_base_branch = _default_project_base_branch(project=context.project)
 
     if tool_name == "github.create_branch":
         summary = str(args.get("summary") or context.issue_key).strip()
@@ -1365,12 +1365,17 @@ def _execute_github_tool(
             branch_name = _run_git(context.repo_dir, ["rev-parse", "--abbrev-ref", "HEAD"]).strip()
         if not push_ref:
             push_ref = branch_name
+        installation_token = github_client.get_installation_token()
         _run_git(
             context.repo_dir,
             ["push", "-u", "origin", push_ref],
-            token=github_client.get_installation_token(),
+            token=installation_token,
         )
         pushed_sha = _run_git(context.repo_dir, ["rev-parse", "HEAD"]).strip()
+        base_branch = configured_base_branch or _resolve_remote_default_branch(
+            context.repo_dir,
+            token=installation_token,
+        )
         if context.run is None:
             raise ValueError("github.push_branch requires an active run context")
         artifact = record_pushed_execution_artifact(
@@ -1380,7 +1385,7 @@ def _execute_github_tool(
             branch=branch_name,
             commit_sha=pushed_sha,
             diff_stat={
-                "base_branch": default_base_branch,
+                "base_branch": base_branch,
                 "head_branch": branch_name,
             },
         )
@@ -1389,7 +1394,12 @@ def _execute_github_tool(
     if tool_name == "github.open_pr":
         title = str(args.get("title") or f"{context.issue_key}: update").strip()
         head_branch = str(args.get("head_branch") or "").strip()
-        base_branch = str(args.get("base_branch") or default_base_branch).strip()
+        base_branch = str(args.get("base_branch") or configured_base_branch or "").strip()
+        if not base_branch:
+            base_branch = _resolve_remote_default_branch(
+                context.repo_dir,
+                token=github_client.get_installation_token(),
+            )
         body = str(args.get("body") or "").strip()
         effective_policy = resolve_effective_policy(
             tenant_policy=context.tenant.policy_config,
@@ -1418,6 +1428,16 @@ def _execute_github_tool(
             limit=100,
         )
         if existing_pr is not None:
+            if draft:
+                existing_pr_details = github_client.get_pull_request_details(
+                    repo_full_name=repo_full_name,
+                    pr_number=existing_pr.number,
+                )
+                if not existing_pr_details.draft:
+                    raise RuntimeError(
+                        "QA demo recording requires the PR to remain draft until MB attaches demo evidence; "
+                        f"existing PR #{existing_pr.number} is already ready for review."
+                    )
             if body:
                 result = github_client.update_pull_request(
                     repo_full_name=repo_full_name,
@@ -1626,11 +1646,11 @@ def _normalize_branch_name(value: object) -> str | None:
     return normalized or None
 
 
-def _default_project_base_branch(*, project: Project) -> str:
+def _default_project_base_branch(*, project: Project) -> str | None:
     environment_raw = getattr(project, "environment", {})
     environment = environment_raw if isinstance(environment_raw, dict) else {}
     configured = environment.get("default_branch") if isinstance(environment, dict) else None
-    return _normalize_branch_name(configured) or "main"
+    return _normalize_branch_name(configured)
 
 
 def _resolve_canonical_run_branch(*, session: Session, context: AgentToolContext) -> str | None:

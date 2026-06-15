@@ -808,6 +808,19 @@ class GitHubAppClient:
         parsed.sort(key=lambda repo: repo.full_name.lower())
         return parsed
 
+    def get_repository_default_branch(self, *, repo_full_name: str, github_repository: str) -> str:
+        enforce_repo_match(f"https://github.com/{repo_full_name}", github_repository)
+        installation_token = self.get_installation_token()
+        response = self._request_json(
+            method="GET",
+            path=f"/repos/{repo_full_name}",
+            bearer_token=installation_token,
+        )
+        default_branch = response.get("default_branch") if isinstance(response, dict) else None
+        if not isinstance(default_branch, str) or not default_branch.strip():
+            raise GitHubApiError("GitHub repository response did not include default_branch")
+        return default_branch.strip()
+
     def list_repository_branches(
         self,
         *,
