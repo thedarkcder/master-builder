@@ -100,13 +100,41 @@ def preferred_adb_device(adb_devices_output: str) -> str:
 
 
 def build_debug_apk(*, repo_dir: Path) -> Path:
-    gradle = repo_dir / "gradlew"
+    android_project_dir = discover_android_project_dir(repo_dir=repo_dir)
+    gradle = android_project_dir / "gradlew"
     command = [str(gradle), "assembleDebug"] if gradle.exists() else ["gradle", "assembleDebug"]
-    _run(command, cwd=repo_dir, capture_output=True)
-    candidates = sorted(repo_dir.glob("**/build/outputs/apk/**/*debug*.apk"))
+    _run(command, cwd=android_project_dir, capture_output=True)
+    candidates = sorted(android_project_dir.glob("**/build/outputs/apk/**/*debug*.apk"))
     if not candidates:
-        raise RuntimeError(f"No debug APK found under {repo_dir}")
+        raise RuntimeError(f"No debug APK found under {android_project_dir}")
     return candidates[-1]
+
+
+def discover_android_project_dir(*, repo_dir: Path) -> Path:
+    configured = str(os.environ.get("QA_DEMO_ANDROID_PROJECT_DIR") or "").strip()
+    if configured:
+        configured_path = Path(configured)
+        android_project_dir = configured_path if configured_path.is_absolute() else repo_dir / configured_path
+        if not android_project_dir.exists():
+            raise RuntimeError(f"Configured Android project directory does not exist: {android_project_dir}")
+        return android_project_dir.resolve()
+    candidates: list[Path] = []
+    for build_file in [*repo_dir.rglob("build.gradle"), *repo_dir.rglob("build.gradle.kts")]:
+        try:
+            source = build_file.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        if _is_android_application_gradle_source(source):
+            candidates.append(build_file.parent)
+    if candidates:
+        return sorted(candidates, key=lambda path: (len(path.relative_to(repo_dir).parts), str(path)))[0]
+    if (repo_dir / "gradlew").exists() or (repo_dir / "settings.gradle").exists() or (repo_dir / "settings.gradle.kts").exists():
+        return repo_dir
+    raise RuntimeError(f"No Android Gradle application project found under {repo_dir}")
+
+
+def _is_android_application_gradle_source(source: str) -> bool:
+    return "com.android.application" in source
 
 
 def resolve_package_name(*, apk_path: Path) -> str:

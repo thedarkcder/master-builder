@@ -4,6 +4,8 @@ import subprocess
 from pathlib import Path
 
 from scripts.qa_demo_android_recorder import dump_ui_elements
+from scripts.qa_demo_android_recorder import build_debug_apk
+from scripts.qa_demo_android_recorder import discover_android_project_dir
 from scripts.qa_demo_android_recorder import execute_scenario
 from scripts.qa_demo_android_recorder import find_element
 from scripts.qa_demo_android_recorder import launch_app
@@ -140,6 +142,39 @@ def test_launch_app_uses_resolved_activity(monkeypatch) -> None:
             "com.example.app/.MainActivity",
         ]
     ]
+
+
+def test_build_debug_apk_discovers_android_app_in_monorepo_subdirectory(monkeypatch, tmp_path) -> None:
+    android_dir = tmp_path / "apps" / "android"
+    android_dir.mkdir(parents=True)
+    (android_dir / "gradlew").write_text("#!/bin/sh\n", encoding="utf-8")
+    (android_dir / "settings.gradle").write_text("pluginManagement {}\n", encoding="utf-8")
+    (android_dir / "build.gradle").write_text("plugins { id 'com.android.application' }\n", encoding="utf-8")
+    built_apk = android_dir / "app" / "build" / "outputs" / "apk" / "debug" / "app-debug.apk"
+    calls: list[tuple[list[str], Path | None]] = []
+
+    def _fake_run(args, *, cwd=None, **_kwargs):  # noqa: ANN001
+        calls.append((list(args), cwd))
+        built_apk.parent.mkdir(parents=True)
+        built_apk.write_bytes(b"apk")
+
+        class _Result:
+            stdout = ""
+
+        return _Result()
+
+    monkeypatch.setattr("scripts.qa_demo_android_recorder._run", _fake_run)
+
+    assert build_debug_apk(repo_dir=tmp_path) == built_apk
+    assert calls == [([str(android_dir / "gradlew"), "assembleDebug"], android_dir)]
+
+
+def test_discover_android_project_dir_honors_relative_override(monkeypatch, tmp_path) -> None:
+    android_dir = tmp_path / "mobile" / "android-app"
+    android_dir.mkdir(parents=True)
+    monkeypatch.setenv("QA_DEMO_ANDROID_PROJECT_DIR", "mobile/android-app")
+
+    assert discover_android_project_dir(repo_dir=tmp_path) == android_dir.resolve()
 
 
 def test_run_bounds_adb_commands_with_actionable_timeout(monkeypatch) -> None:
