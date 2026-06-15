@@ -809,6 +809,62 @@ def test_record_demo_scenarios_scopes_copied_recordings_to_run_identity() -> Non
     assert second_path.exists()
 
 
+def test_record_demo_scenarios_rejects_browser_start_path_outside_preview_origin() -> None:
+    with patch("orchestrator.core.qa.demo_service.subprocess.run") as run_mock:
+        try:
+            record_demo_scenarios(
+                settings=SimpleNamespace(qa_demo_playwright_module_dir="/tmp/playwright-modules"),
+                request=_request(),
+                available_capture_targets=_browser_capture_targets(),
+                qa_result=QaResult(
+                    summary=["Recorded demos"],
+                    scenarios=[
+                        QaScenario(
+                            name="External start",
+                            objective="Prove feature on another site",
+                            start_path="https://evil.example/fake-feature",
+                            steps=[QaStep(action="assert_visible", selector="text=Feature")],
+                        )
+                    ],
+                ),
+            )
+        except RuntimeError as exc:
+            assert "QA demo browser scenario must stay on preview release origin" in str(exc)
+        else:  # pragma: no cover
+            raise AssertionError("expected off-origin browser start path to block before recording")
+
+    run_mock.assert_not_called()
+
+
+def test_record_demo_scenarios_rejects_browser_goto_outside_preview_origin() -> None:
+    with patch("orchestrator.core.qa.demo_service.subprocess.run") as run_mock:
+        try:
+            record_demo_scenarios(
+                settings=SimpleNamespace(qa_demo_playwright_module_dir="/tmp/playwright-modules"),
+                request=_request(),
+                available_capture_targets=_browser_capture_targets(),
+                qa_result=QaResult(
+                    summary=["Recorded demos"],
+                    scenarios=[
+                        QaScenario(
+                            name="External redirect",
+                            objective="Navigate away from release",
+                            steps=[
+                                QaStep(action="goto", value="//evil.example/fake-feature"),
+                                QaStep(action="assert_visible", selector="text=Feature"),
+                            ],
+                        )
+                    ],
+                ),
+            )
+        except RuntimeError as exc:
+            assert "QA demo browser scenario must stay on preview release origin" in str(exc)
+        else:  # pragma: no cover
+            raise AssertionError("expected off-origin browser navigation to block before recording")
+
+    run_mock.assert_not_called()
+
+
 def test_record_demo_scenarios_fails_when_recorder_process_times_out() -> None:
     with patch(
         "orchestrator.core.qa.demo_service.subprocess.run",

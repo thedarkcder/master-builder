@@ -8,6 +8,7 @@ import shlex
 import subprocess
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 from collections import Counter
 from collections.abc import Callable
@@ -1027,6 +1028,49 @@ def _validate_recorded_scenario_proof(qa_result: QaResult) -> QaResult:
     return normalized_result
 
 
+def _validate_browser_scenarios_stay_on_preview_origin(
+    *,
+    scenarios: list[QaScenario],
+    capture_reference: str,
+) -> None:
+    parsed_preview = urllib.parse.urlparse(str(capture_reference or "").strip())
+    if not parsed_preview.scheme or not parsed_preview.netloc:
+        raise RuntimeError("QA demo browser capture reference must be an absolute preview release URL")
+    preview_origin = (parsed_preview.scheme, parsed_preview.netloc)
+    for scenario in scenarios:
+        _validate_browser_url_value(
+            value=scenario.start_path,
+            preview_url=capture_reference,
+            preview_origin=preview_origin,
+            context=f"start_path for scenario '{scenario.name}'",
+        )
+        for step in scenario.steps:
+            if step.action not in {"goto", "wait_for_url"}:
+                continue
+            _validate_browser_url_value(
+                value=step.value,
+                preview_url=capture_reference,
+                preview_origin=preview_origin,
+                context=f"{step.action} in scenario '{scenario.name}'",
+            )
+
+
+def _validate_browser_url_value(
+    *,
+    value: str | None,
+    preview_url: str,
+    preview_origin: tuple[str, str],
+    context: str,
+) -> None:
+    raw = str(value or "/").strip() or "/"
+    parsed = urllib.parse.urlparse(urllib.parse.urljoin(preview_url, raw))
+    if (parsed.scheme, parsed.netloc) != preview_origin:
+        raise RuntimeError(
+            "QA demo browser scenario must stay on preview release origin: "
+            f"{context} resolved to {parsed.scheme}://{parsed.netloc}"
+        )
+
+
 def _validate_recordings_cover_required_targets(
     *,
     recordings: list[QaRecording],
@@ -1316,6 +1360,10 @@ def record_demo_scenarios(
             ],
         }
         if capture_target.capture_target == "browser":
+            _validate_browser_scenarios_stay_on_preview_origin(
+                scenarios=scenarios,
+                capture_reference=capture_target.capture_reference,
+            )
             script_path = Path(__file__).resolve().parents[3] / "scripts" / "qa_demo_recorder.mjs"
             if not script_path.exists():
                 raise RuntimeError(f"QA demo recorder script is missing: {script_path}")
