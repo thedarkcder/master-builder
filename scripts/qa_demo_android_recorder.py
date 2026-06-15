@@ -69,6 +69,7 @@ def main(argv: list[str]) -> int:
         )
     )
     package_name = str(os.environ.get("QA_DEMO_ANDROID_PACKAGE") or "").strip() or resolve_package_name(apk_path=apk_path)
+    launch_extras = qa_demo_launch_extras(payload)
     install_apk(device_id=device_id, apk_path=apk_path)
     launch_activity = resolve_launch_activity(device_id=device_id, package_name=package_name)
 
@@ -77,13 +78,14 @@ def main(argv: list[str]) -> int:
         sanitized_name = sanitize_recording_name(scenario.name)
         local_video_path = output_dir / f"{sanitized_name}.mp4"
         reset_app_state(device_id=device_id, package_name=package_name)
-        launch_app(device_id=device_id, launch_activity=launch_activity)
+        launch_app(device_id=device_id, launch_activity=launch_activity, launch_extras=launch_extras)
         record_live_screen_demo(
             device_id=device_id,
             package_name=package_name,
             launch_activity=launch_activity,
             scenario=scenario,
             output_path=local_video_path,
+            launch_extras=launch_extras,
         )
         recordings.append({"name": scenario.name, "path": str(local_video_path)})
 
@@ -109,6 +111,28 @@ def _target_source_paths(value: object) -> list[str]:
     if not isinstance(value, list):
         return []
     return [str(item).strip() for item in value if str(item).strip()]
+
+
+def qa_demo_launch_extras(payload: dict[str, object]) -> dict[str, str]:
+    release_service_urls = payload.get("release_service_urls")
+    serialized_service_urls = (
+        json.dumps(release_service_urls, sort_keys=True)
+        if isinstance(release_service_urls, list)
+        else ""
+    )
+    candidates = {
+        "MB_QA_DEMO_RELEASE_COMMIT_SHA": payload.get("release_commit_sha"),
+        "MB_QA_DEMO_RELEASE_SERVICE_URLS_JSON": serialized_service_urls,
+        "MB_QA_DEMO_RELEASE_API_BASE_URL": payload.get("release_api_base_url"),
+        "MB_QA_DEMO_RELEASE_BROWSER_URL": payload.get("release_browser_url"),
+        "QA_DEMO_API_BASE_URL": payload.get("release_api_base_url"),
+        "QA_DEMO_BROWSER_URL": payload.get("release_browser_url"),
+    }
+    return {
+        key: str(value).strip()
+        for key, value in candidates.items()
+        if str(value or "").strip()
+    }
 
 
 def build_debug_apk(*, repo_dir: Path, target_source_paths: list[str] | None = None) -> Path:
@@ -210,16 +234,40 @@ def reset_app_state(*, device_id: str, package_name: str) -> None:
     _run(["adb", "-s", device_id, "shell", "pm", "clear", package_name], capture_output=True, check=False)
 
 
-def launch_app(*, device_id: str, launch_activity: str) -> None:
+def launch_app(
+    *,
+    device_id: str,
+    launch_activity: str,
+    launch_extras: dict[str, str] | None = None,
+) -> None:
+    extras_args: list[str] = []
+    for key, value in sorted((launch_extras or {}).items()):
+        normalized_key = str(key or "").strip()
+        normalized_value = str(value or "").strip()
+        if normalized_key and normalized_value:
+            extras_args.extend(["--es", normalized_key, normalized_value])
     _run(
-        ["adb", "-s", device_id, "shell", "am", "start", "-n", launch_activity],
+        ["adb", "-s", device_id, "shell", "am", "start", "-n", launch_activity, *extras_args],
         capture_output=True,
     )
 
 
-def execute_scenario(*, device_id: str, package_name: str, launch_activity: str, scenario: QaScenario) -> None:
+def execute_scenario(
+    *,
+    device_id: str,
+    package_name: str,
+    launch_activity: str,
+    scenario: QaScenario,
+    launch_extras: dict[str, str] | None = None,
+) -> None:
     for step in scenario.steps:
-        execute_step(device_id=device_id, package_name=package_name, launch_activity=launch_activity, step=step)
+        execute_step(
+            device_id=device_id,
+            package_name=package_name,
+            launch_activity=launch_activity,
+            step=step,
+            launch_extras=launch_extras,
+        )
 
 
 def record_live_screen_demo(
@@ -229,6 +277,7 @@ def record_live_screen_demo(
     launch_activity: str,
     scenario: QaScenario,
     output_path: Path,
+    launch_extras: dict[str, str] | None = None,
 ) -> None:
     remote_path = f"/sdcard/Download/master-builder-qa-demo-{sanitize_recording_name(scenario.name)}.mp4"
     _run(["adb", "-s", device_id, "shell", "rm", "-f", remote_path], capture_output=True, check=False)
@@ -246,6 +295,7 @@ def record_live_screen_demo(
             package_name=package_name,
             launch_activity=launch_activity,
             scenario=scenario,
+            launch_extras=launch_extras,
         )
     except Exception as exc:  # noqa: BLE001
         primary_error = exc
@@ -264,12 +314,19 @@ def record_live_screen_demo(
     validate_mp4_recording(output_path)
 
 
-def execute_step(*, device_id: str, package_name: str, launch_activity: str, step: QaStep) -> None:
+def execute_step(
+    *,
+    device_id: str,
+    package_name: str,
+    launch_activity: str,
+    step: QaStep,
+    launch_extras: dict[str, str] | None = None,
+) -> None:
     if step.action == "goto":
         return
     if step.action == "relaunch_app":
         _run(["adb", "-s", device_id, "shell", "am", "force-stop", package_name], capture_output=True)
-        launch_app(device_id=device_id, launch_activity=launch_activity)
+        launch_app(device_id=device_id, launch_activity=launch_activity, launch_extras=launch_extras)
         return
     if step.action == "click":
         element = find_element(device_id=device_id, selector=require_selector(step))

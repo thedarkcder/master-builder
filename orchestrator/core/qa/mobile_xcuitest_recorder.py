@@ -66,15 +66,22 @@ def simulator_test_build_flags() -> list[str]:
     ]
 
 
-def render_xcuitest_source(*, test_class_name: str, scenarios: list[QaScenario]) -> str:
+def render_xcuitest_source(
+    *,
+    test_class_name: str,
+    scenarios: list[QaScenario],
+    launch_environment: dict[str, str] | None = None,
+) -> str:
     if not scenarios:
         raise ValueError("At least one mobile QA scenario is required")
 
     methods = "\n\n".join(_render_scenario_method(scenario) for scenario in scenarios)
+    launch_environment_literal = _swift_dictionary_literal(launch_environment or {})
     return f"""import XCTest
 
 final class {test_class_name}: XCTestCase {{
     private var app: XCUIApplication!
+    private let qaDemoLaunchEnvironment: [String: String] = {launch_environment_literal}
 
     override func setUp() {{
         super.setUp()
@@ -86,6 +93,7 @@ final class {test_class_name}: XCTestCase {{
     private func launchApp(arguments: [String]) {{
         app = XCUIApplication()
         app.launchArguments = arguments
+        app.launchEnvironment = qaDemoLaunchEnvironment
         app.launch()
     }}
 
@@ -296,3 +304,14 @@ def _swift_string(value: str) -> str:
         .replace("\n", "\\n")
     )
     return f'"{escaped}"'
+
+
+def _swift_dictionary_literal(value: dict[str, str]) -> str:
+    items = [
+        f"{_swift_string(key)}: {_swift_string(item)}"
+        for key, item in sorted(value.items())
+        if str(key).strip() and str(item).strip()
+    ]
+    if not items:
+        return "[:]"
+    return "[" + ", ".join(items) + "]"
