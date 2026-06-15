@@ -256,6 +256,31 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             ):
                 agents.pm(request, 1, None, [], None, None, None, self._CAPTURE_TARGET_CONSTRAINTS_JSON)
 
+    def test_pm_rejects_executable_plan_missing_project_demo_targets(self) -> None:
+        runtime = CodexRuntime(
+            model="gpt-5-codex",
+            max_output_tokens=1200,
+            command="override",
+            _request=_RuntimeQueue(
+                [
+                    (
+                        '{"outcome":"continue","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":[],"demo_requirements":'
+                        '[{"title":"Browser demo","acceptance_criterion":"ac1","capture_target":"browser","variants":["Invalid input is rejected"]}],'
+                        '"next_stage":"dev","execution_worker_capability":"linux"}'
+                    ),
+                ]
+            ),
+        )
+        agents = CodexWorkflowAgents(runtime=runtime)
+        request = replace(self._request(), project_demo_capture_targets=("ios", "android"))
+
+        with patch("orchestrator.core.runtime.agents.render_prompt", side_effect=lambda template_name, **_: template_name):
+            with self.assertRaisesRegex(
+                CodexRuntimeError,
+                "missing required demo capture target\\(s\\): android, ios",
+            ):
+                agents.pm(request, 1, None, [], None, None, None, self._CAPTURE_TARGET_CONSTRAINTS_JSON)
+
     def test_pm_rejects_unavailable_desktop_demo_requirements(self) -> None:
         runtime = CodexRuntime(
             model="gpt-5-codex",
@@ -333,6 +358,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             base_branch="main",
             integration_branch="feature/MAB-54",
             pr_target_branch="main",
+            project_demo_capture_targets=("browser",),
         )
         captured: dict[str, object] = {}
 
@@ -352,6 +378,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
         self.assertEqual(captured["execution_branch"], "run/MAB-54/run-1")
         self.assertEqual(captured["integration_branch"], "feature/MAB-54")
         self.assertEqual(captured["allow_pr_creation"], "false")
+        self.assertEqual(captured["project_demo_capture_targets_json"], '["browser"]')
         self.assertEqual(captured["qa_capture_target_constraints_json"], self._CAPTURE_TARGET_CONSTRAINTS_JSON)
         governed_tools = json.loads(str(captured["governed_tools_json"]))
         native_tools = json.loads(str(captured["native_tools_json"]))

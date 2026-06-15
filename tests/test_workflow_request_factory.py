@@ -18,6 +18,13 @@ class WorkflowRequestFactoryTests(unittest.TestCase):
             )
         )
 
+    def _session_with_project_apps(self, apps: list[SimpleNamespace]) -> SimpleNamespace:
+        return SimpleNamespace(
+            execute=lambda *_args, **_kwargs: SimpleNamespace(
+                scalars=lambda: SimpleNamespace(all=lambda: apps)
+            )
+        )
+
     def _base_inputs(self, checkout_base_dir: str) -> tuple[SimpleNamespace, SimpleNamespace, dict, SimpleNamespace]:
         tenant = SimpleNamespace(tenant_id="tenant-1")
         run = SimpleNamespace(
@@ -139,6 +146,61 @@ class WorkflowRequestFactoryTests(unittest.TestCase):
             self.assertTrue(request.allow_pr_creation)
             self.assertEqual(request.integration_branch, "feature/TP-1")
             self.assertEqual(run.branch, "feature/TP-1")
+
+    def test_build_derives_project_demo_capture_targets_from_project_apps(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            tenant, run, effective_policy, settings = self._base_inputs(tmp_dir)
+            project = SimpleNamespace(
+                project_id="project-1",
+                name="Project",
+                github_repository="https://github.com/example/repo",
+                jira_project_key="TP",
+                environment={},
+            )
+            checkout_dir = Path(tmp_dir) / "repo"
+            checkout_dir.mkdir(parents=True, exist_ok=True)
+            apps = [
+                SimpleNamespace(
+                    detected_runtime="nextjs",
+                    detected_language="typescript",
+                    build_strategy="nixpacks",
+                    name="Web app",
+                    source_path="web",
+                    deployment_config={"services": [{"kind": "website"}]},
+                ),
+                SimpleNamespace(
+                    detected_runtime="swiftui",
+                    detected_language="swift",
+                    build_strategy="xcode",
+                    name="example iOS",
+                    source_path="ios",
+                    deployment_config={},
+                ),
+                SimpleNamespace(
+                    detected_runtime="android",
+                    detected_language="kotlin",
+                    build_strategy="gradle",
+                    name="example Android",
+                    source_path="android",
+                    deployment_config={},
+                ),
+            ]
+
+            with patch(
+                "orchestrator.core.worker.workflow_request_factory.prepare_execution_repo_for_run",
+                return_value=self._prepared_repo(checkout_dir),
+            ):
+                request = build_workflow_request(
+                    session=self._session_with_project_apps(apps),
+                    tenant=tenant,
+                    run=run,
+                    project=project,
+                    effective_policy=effective_policy,
+                    settings=settings,
+                    answered_human_inputs_for_attempt_fn=lambda **_: [],
+                )
+
+            self.assertEqual(request.project_demo_capture_targets, ("browser", "ios", "android"))
 
     def test_build_rejects_non_canonical_resume_checkpoint_payload(self) -> None:
         with TemporaryDirectory() as tmp_dir:

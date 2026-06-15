@@ -28,6 +28,7 @@ Last review feedback: {{ last_review_feedback }}
 Last review summary: {{ last_review_summary_json }}
 Current worker capability: {{ current_worker_capability }}
 Available worker capabilities: {{ available_worker_capabilities_json }}
+Project demo capture targets: {{ project_demo_capture_targets_json }}
 QA capture target constraints: {{ qa_capture_target_constraints_json }}
 Answered transient human inputs for this run: {{ human_inputs_json }}
 Allowed governed tools for this stage: {{ governed_tools_json }}
@@ -55,6 +56,7 @@ Required actions:
    - Use `ios` for native iOS app flows, `android` for native Android app flows, `desktop` for installed desktop application flows, and `browser` only for web-delivered UI.
    - Include non-empty, meaningful `variants` for every demo requirement so QA records several walkthroughs, including at least one alternate input, edge case, repeat-action, or attempt to break the feature.
    - Do not leave `demo_requirements` empty when acceptance criteria exist.
+   - Include every capture target listed in `Project demo capture targets` when that list is non-empty; those targets are derived from project app metadata and are mandatory for executable work.
    - Treat `QA capture target constraints` as authoritative for which capture targets are currently supported by the run infrastructure and which worker platform they require.
    - If the ticket requires a capture target whose constraint says `provider_available=false`, do not continue planning as executable work; return `blocked` or `waiting_for_input` with a concrete `blocker_message`.
 4. Surface delivery risks that can block or degrade delivery.

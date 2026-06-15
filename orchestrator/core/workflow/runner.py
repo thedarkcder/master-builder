@@ -33,6 +33,7 @@ class WorkflowRequest:
     jira_project_key: str | None = None
     current_worker_capability: WorkerCapability = WorkerCapability.LINUX
     available_worker_capabilities: tuple[WorkerCapability, ...] = field(default_factory=lambda: (WorkerCapability.LINUX,))
+    project_demo_capture_targets: tuple[QaCaptureTarget, ...] = field(default_factory=tuple)
     base_branch: str | None = None
     integration_branch: str | None = None
     pr_target_branch: str | None = None
