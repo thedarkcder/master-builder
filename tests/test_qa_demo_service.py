@@ -754,6 +754,61 @@ def test_record_demo_scenarios_passes_explicit_playwright_module_dir() -> None:
     assert commands[0][2] == 42.0
 
 
+def test_record_demo_scenarios_scopes_copied_recordings_to_run_identity() -> None:
+    def _run(cmd, **_kwargs):  # noqa: ANN001
+        output_path = Path(cmd[3])
+        input_payload = json.loads(Path(cmd[2]).read_text(encoding="utf-8"))
+        video_dir = Path(input_payload["output_dir"])
+        video_dir.mkdir(parents=True, exist_ok=True)
+        source_path = video_dir / "happy-path.webm"
+        source_path.write_bytes(_fake_webm_payload())
+        output_path.write_text(
+            json.dumps({"recordings": [{"name": "Happy path", "path": str(source_path)}]}),
+            encoding="utf-8",
+        )
+        return SimpleNamespace(stdout="")
+
+    with patch("orchestrator.core.qa.demo_service.subprocess.run", side_effect=_run):
+        first_recordings = record_demo_scenarios(
+            settings=SimpleNamespace(qa_demo_playwright_module_dir="/tmp/playwright-modules"),
+            request=replace(_request(), run_id="run-1"),
+            available_capture_targets=_browser_capture_targets(),
+            qa_result=QaResult(
+                summary=["Recorded demos"],
+                scenarios=[
+                    QaScenario(
+                        name="Happy path",
+                        objective="Show feature works",
+                        steps=[QaStep(action="assert_visible", selector="#feature")],
+                    )
+                ],
+            ),
+        )
+        second_recordings = record_demo_scenarios(
+            settings=SimpleNamespace(qa_demo_playwright_module_dir="/tmp/playwright-modules"),
+            request=replace(_request(), run_id="run-2"),
+            available_capture_targets=_browser_capture_targets(),
+            qa_result=QaResult(
+                summary=["Recorded demos"],
+                scenarios=[
+                    QaScenario(
+                        name="Happy path",
+                        objective="Show feature works",
+                        steps=[QaStep(action="assert_visible", selector="#feature")],
+                    )
+                ],
+            ),
+        )
+
+    first_path = Path(first_recordings[0].path)
+    second_path = Path(second_recordings[0].path)
+    assert first_path != second_path
+    assert "run-1" in first_path.parts
+    assert "run-2" in second_path.parts
+    assert first_path.exists()
+    assert second_path.exists()
+
+
 def test_record_demo_scenarios_fails_when_recorder_process_times_out() -> None:
     with patch(
         "orchestrator.core.qa.demo_service.subprocess.run",
