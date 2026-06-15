@@ -21,7 +21,7 @@ EVENT_KIND_RUNTIME_LOG = "runtime_log"
 EVENT_KIND_AGENT_LIFECYCLE = "agent_lifecycle"
 MAX_LOG_MESSAGE_CHARS = 2000
 SUPPORTED_TURN_COMPLETED_KEYS = ("input_tokens", "output_tokens", "cached_input_tokens")
-_TOKEN_STAGES = {"pm", "dev", "test", "review", "orchestrated_run"}
+_TOKEN_STAGES = {"pm", "dev", "test", "review", "qa", "orchestrated_run"}
 _TURN_USAGE_EVENT_TYPES = {
     "turn.completed",
     "turn.complete",
