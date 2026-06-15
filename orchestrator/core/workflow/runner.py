@@ -141,6 +141,7 @@ class QaRecording:
     object_key: str
     capture_reference: str
     content_sha256: str = ""
+    release_context_sha256: str = ""
     capture_target: QaCaptureTarget = "browser"
 
 

@@ -350,6 +350,7 @@ class CheckpointCodecTests(unittest.TestCase):
                             capture_reference="https://preview.example",
                             capture_target="browser",
                             content_sha256=f"{1:064x}",
+                            release_context_sha256=f"{2:064x}",
                         )
                     ],
                 ),
@@ -362,6 +363,7 @@ class CheckpointCodecTests(unittest.TestCase):
         self.assertEqual(test_artifact["guidance"], ["pytest -q"])
         self.assertEqual(review_artifact["summary"], ["ok"])
         self.assertEqual(qa_artifact["recordings"][0]["object_key"], "demo/happy.webm")
+        self.assertEqual(qa_artifact["recordings"][0]["release_context_sha256"], f"{2:064x}")
 
     def test_encode_stage_checkpoint_artifact_allows_blocked_qa_without_scenarios(self) -> None:
         qa_artifact = encode_stage_checkpoint_artifact(

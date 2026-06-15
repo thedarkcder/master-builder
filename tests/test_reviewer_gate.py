@@ -477,11 +477,13 @@ class ReviewerGateTests(unittest.TestCase):
                     "<!-- master-builder:qa-demo-required-counts browser=2 -->\n"
                     "- Browser happy path [target=browser; reference=https://preview.example; "
                     "object_key=route25/route25-default/run-1/qa-demo-1.webm; "
-                    "sha256=0000000000000000000000000000000000000000000000000000000000000001]: "
+                    "sha256=0000000000000000000000000000000000000000000000000000000000000001; "
+                    "release_context_sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa]: "
                     "https://cdn.example/qa-demos/route25/route25-default/run-1/qa-demo-1.webm\n"
                     "- Browser edge case [target=browser; reference=https://preview.example; "
                     "object_key=route25/route25-default/run-1/qa-demo-2.webm; "
-                    "sha256=0000000000000000000000000000000000000000000000000000000000000002]: "
+                    "sha256=0000000000000000000000000000000000000000000000000000000000000002; "
+                    "release_context_sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa]: "
                     "https://cdn.example/qa-demos/route25/route25-default/run-1/qa-demo-2.webm\n"
                 ),
             )

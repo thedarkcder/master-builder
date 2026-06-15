@@ -18,7 +18,7 @@ logger = logging.getLogger(__name__)
 _EXECUTION_SNAPSHOT_MIGRATION_LOCK_KEY = 740_002_611
 _LEGACY_DEFAULT_DEMO_VARIANT = "legacy-default"
 _LEGACY_QA_RECORDING_DIGEST_BLOCKER = (
-    "Legacy QA demo recordings predate SHA-256 proof metadata and must be regenerated."
+    "Legacy QA demo recordings predate SHA-256 proof and release context metadata and must be regenerated."
 )
 
 
@@ -324,7 +324,11 @@ def _repair_legacy_qa_recordings_without_content_sha256(artifact: object) -> dic
         return None
     if any(not isinstance(recording, dict) for recording in recordings):
         return None
-    if all(_is_valid_content_sha256(recording.get("content_sha256")) for recording in recordings):
+    if all(
+        _is_valid_content_sha256(recording.get("content_sha256"))
+        and _is_valid_content_sha256(recording.get("release_context_sha256"))
+        for recording in recordings
+    ):
         return None
 
     summary = artifact.get("summary")
