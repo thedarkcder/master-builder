@@ -153,12 +153,16 @@ FROM python-common-base AS python-android-base
 ENV ANDROID_SDK_ROOT=/opt/android-sdk
 ENV ANDROID_HOME=/opt/android-sdk
 ENV JAVA_HOME=/usr/lib/jvm/default-java
-ENV PATH="${PATH}:/opt/android-sdk/cmdline-tools/latest/bin:/opt/android-sdk/platform-tools:/opt/android-sdk/build-tools/34.0.0"
+ENV PATH="${PATH}:/opt/android-sdk/cmdline-tools/latest/bin:/usr/lib/android-sdk/platform-tools:/usr/lib/android-sdk/build-tools/debian"
 
 ARG ANDROID_CMDLINE_TOOLS_VERSION=11076708
 
 RUN apt-get update -o Acquire::Retries=3 && \
     apt-get install -y --no-install-recommends \
+      adb \
+      aapt \
+      android-sdk-build-tools \
+      android-sdk-platform-tools \
       default-jdk-headless \
       ffmpeg \
       maven && \
@@ -172,8 +176,6 @@ RUN apt-get update -o Acquire::Retries=3 && \
       --licenses >/dev/null && \
     "${ANDROID_SDK_ROOT}/cmdline-tools/latest/bin/sdkmanager" \
       --sdk_root="${ANDROID_SDK_ROOT}" \
-      "platform-tools" \
-      "build-tools;34.0.0" \
       "platforms;android-34" >/dev/null && \
     rm -rf /var/lib/apt/lists/* /tmp/android-cmdline-tools.zip
 
