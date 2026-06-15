@@ -861,6 +861,54 @@ def test_record_demo_scenarios_uses_configured_desktop_recorder() -> None:
     assert commands[0][2]["capture_reference"] == "desktop://macos-app"
 
 
+def test_record_demo_scenarios_passes_project_source_paths_to_native_recorder() -> None:
+    commands: list[dict[str, object]] = []
+
+    def _run(cmd, **_kwargs):  # noqa: ANN001
+        input_path = Path(cmd[-2])
+        output_path = Path(cmd[-1])
+        input_payload = json.loads(input_path.read_text(encoding="utf-8"))
+        commands.append(input_payload)
+        video_dir = Path(input_payload["output_dir"])
+        video_dir.mkdir(parents=True, exist_ok=True)
+        source_path = video_dir / "android-flow.mp4"
+        source_path.write_bytes(_fake_mp4_payload())
+        output_path.write_text(
+            json.dumps({"recordings": [{"name": "Android flow", "path": str(source_path)}]}),
+            encoding="utf-8",
+        )
+        return SimpleNamespace(stdout="")
+
+    request = replace(_request(), project_demo_capture_target_sources={"android": ("apps/android",)})
+
+    with patch("orchestrator.core.qa.demo_service.subprocess.run", side_effect=_run):
+        recordings = record_demo_scenarios(
+            settings=SimpleNamespace(),
+            request=request,
+            available_capture_targets={
+                "android": DemoCaptureTarget(
+                    capture_target="android",
+                    capture_reference="android-emulator://configured",
+                    recorder_command=("python", "/tmp/android_recorder.py"),
+                )
+            },
+            qa_result=QaResult(
+                summary=["Recorded demos"],
+                scenarios=[
+                    QaScenario(
+                        name="Android flow",
+                        objective="Show Android app works",
+                        capture_target="android",
+                        steps=[QaStep(action="assert_visible", selector="text=Ready")],
+                    )
+                ],
+            ),
+        )
+
+    assert len(recordings) == 1
+    assert commands[0]["target_source_paths"] == ["apps/android"]
+
+
 def test_record_demo_scenarios_rejects_invalid_video_artifact() -> None:
     def _run(cmd, **_kwargs):  # noqa: ANN001
         output_path = Path(cmd[3])

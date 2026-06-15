@@ -201,6 +201,10 @@ class WorkflowRequestFactoryTests(unittest.TestCase):
                 )
 
             self.assertEqual(request.project_demo_capture_targets, ("browser", "ios", "android"))
+            self.assertEqual(
+                request.project_demo_capture_target_sources,
+                {"browser": ("web",), "ios": ("ios",), "android": ("android",)},
+            )
 
     def test_build_rejects_non_canonical_resume_checkpoint_payload(self) -> None:
         with TemporaryDirectory() as tmp_dir:

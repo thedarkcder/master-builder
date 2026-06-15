@@ -61,7 +61,13 @@ def main(argv: list[str]) -> int:
     device_id = str(os.environ.get("QA_DEMO_ANDROID_DEVICE_ID") or "").strip() or preferred_adb_device(
         _run(["adb", "devices"], capture_output=True).stdout
     )
-    apk_path = Path(str(os.environ.get("QA_DEMO_ANDROID_APK") or "").strip() or build_debug_apk(repo_dir=repo_dir))
+    apk_path = Path(
+        str(os.environ.get("QA_DEMO_ANDROID_APK") or "").strip()
+        or build_debug_apk(
+            repo_dir=repo_dir,
+            target_source_paths=_target_source_paths(payload.get("target_source_paths")),
+        )
+    )
     package_name = str(os.environ.get("QA_DEMO_ANDROID_PACKAGE") or "").strip() or resolve_package_name(apk_path=apk_path)
     install_apk(device_id=device_id, apk_path=apk_path)
     launch_activity = resolve_launch_activity(device_id=device_id, package_name=package_name)
@@ -99,8 +105,17 @@ def preferred_adb_device(adb_devices_output: str) -> str:
     return devices[0]
 
 
-def build_debug_apk(*, repo_dir: Path) -> Path:
-    android_project_dir = discover_android_project_dir(repo_dir=repo_dir)
+def _target_source_paths(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item).strip() for item in value if str(item).strip()]
+
+
+def build_debug_apk(*, repo_dir: Path, target_source_paths: list[str] | None = None) -> Path:
+    android_project_dir = discover_android_project_dir(
+        repo_dir=repo_dir,
+        target_source_paths=target_source_paths,
+    )
     gradle = android_project_dir / "gradlew"
     command = [str(gradle), "assembleDebug"] if gradle.exists() else ["gradle", "assembleDebug"]
     _run(command, cwd=android_project_dir, capture_output=True)
@@ -110,7 +125,7 @@ def build_debug_apk(*, repo_dir: Path) -> Path:
     return candidates[-1]
 
 
-def discover_android_project_dir(*, repo_dir: Path) -> Path:
+def discover_android_project_dir(*, repo_dir: Path, target_source_paths: list[str] | None = None) -> Path:
     configured = str(os.environ.get("QA_DEMO_ANDROID_PROJECT_DIR") or "").strip()
     if configured:
         configured_path = Path(configured)
@@ -118,6 +133,10 @@ def discover_android_project_dir(*, repo_dir: Path) -> Path:
         if not android_project_dir.exists():
             raise RuntimeError(f"Configured Android project directory does not exist: {android_project_dir}")
         return android_project_dir.resolve()
+    for source_path in target_source_paths or []:
+        candidate = _resolve_repo_relative_source_path(repo_dir=repo_dir, source_path=source_path)
+        if candidate.exists() and _directory_declares_android_application(candidate):
+            return candidate
     candidates: list[Path] = []
     for build_file in [*repo_dir.rglob("build.gradle"), *repo_dir.rglob("build.gradle.kts")]:
         try:
@@ -131,6 +150,31 @@ def discover_android_project_dir(*, repo_dir: Path) -> Path:
     if (repo_dir / "gradlew").exists() or (repo_dir / "settings.gradle").exists() or (repo_dir / "settings.gradle.kts").exists():
         return repo_dir
     raise RuntimeError(f"No Android Gradle application project found under {repo_dir}")
+
+
+def _resolve_repo_relative_source_path(*, repo_dir: Path, source_path: str) -> Path:
+    raw_path = Path(str(source_path or "").strip())
+    if raw_path.is_absolute():
+        raise RuntimeError(f"Android project source path must be repo-relative: {source_path}")
+    candidate = (repo_dir / raw_path).resolve()
+    try:
+        candidate.relative_to(repo_dir.resolve())
+    except ValueError as exc:
+        raise RuntimeError(f"Android project source path escapes the repository: {source_path}") from exc
+    return candidate
+
+
+def _directory_declares_android_application(path: Path) -> bool:
+    for build_file_name in ("build.gradle", "build.gradle.kts"):
+        build_file = path / build_file_name
+        if not build_file.exists():
+            continue
+        try:
+            if _is_android_application_gradle_source(build_file.read_text(encoding="utf-8")):
+                return True
+        except OSError:
+            continue
+    return False
 
 
 def _is_android_application_gradle_source(source: str) -> bool:

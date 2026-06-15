@@ -82,7 +82,7 @@ def _project_app_declares_website(app: ProjectApp) -> bool:
     return any(isinstance(service, dict) and service.get("kind") == "website" for service in services)
 
 
-def _project_demo_capture_targets(*, session, tenant_id: str, project_id: str) -> tuple[QaCaptureTarget, ...]:  # noqa: ANN001
+def _project_demo_capture_target_sources(*, session, tenant_id: str, project_id: str) -> dict[QaCaptureTarget, tuple[str, ...]]:  # noqa: ANN001
     apps = (
         session.execute(
             select(ProjectApp).where(
@@ -93,16 +93,25 @@ def _project_demo_capture_targets(*, session, tenant_id: str, project_id: str) -
         .scalars()
         .all()
     )
-    targets: set[QaCaptureTarget] = set()
+    sources: dict[QaCaptureTarget, set[str]] = {target: set() for target in _PROJECT_DEMO_TARGET_ORDER}
     for app in apps:
         descriptor = _project_app_descriptor(app)
+        source_path = str(getattr(app, "source_path", "") or "").strip() or "."
         if _project_app_declares_website(app) or any(marker in descriptor for marker in _BROWSER_PROJECT_MARKERS):
-            targets.add("browser")
+            sources["browser"].add(source_path)
         if any(marker in descriptor for marker in _IOS_PROJECT_MARKERS):
-            targets.add("ios")
+            sources["ios"].add(source_path)
         if any(marker in descriptor for marker in _ANDROID_PROJECT_MARKERS):
-            targets.add("android")
-    return tuple(target for target in _PROJECT_DEMO_TARGET_ORDER if target in targets)
+            sources["android"].add(source_path)
+    return {
+        target: tuple(sorted(target_sources))
+        for target, target_sources in sources.items()
+        if target_sources
+    }
+
+
+def _project_demo_capture_targets(source_map: dict[QaCaptureTarget, tuple[str, ...]]) -> tuple[QaCaptureTarget, ...]:
+    return tuple(target for target in _PROJECT_DEMO_TARGET_ORDER if target in source_map)
 
 
 def build_workflow_request(
@@ -209,6 +218,11 @@ def build_workflow_request(
         workflow_id=run.workflow_id,
         consumed_by_run_id=run.run_id,
     )
+    project_demo_capture_target_sources = _project_demo_capture_target_sources(
+        session=session,
+        tenant_id=tenant.tenant_id,
+        project_id=project.project_id if project is not None else run.project_id,
+    )
 
     return WorkflowRequest(
         tenant_id=tenant.tenant_id,
@@ -229,11 +243,8 @@ def build_workflow_request(
         workspace_key=workspace_key,
         current_worker_capability=capability_context.current,
         available_worker_capabilities=capability_context.available,
-        project_demo_capture_targets=_project_demo_capture_targets(
-            session=session,
-            tenant_id=tenant.tenant_id,
-            project_id=project.project_id if project is not None else run.project_id,
-        ),
+        project_demo_capture_targets=_project_demo_capture_targets(project_demo_capture_target_sources),
+        project_demo_capture_target_sources=dict(project_demo_capture_target_sources),
         base_branch=base_branch,
         integration_branch=integration_branch,
         pr_target_branch=base_branch,
