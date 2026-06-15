@@ -54,6 +54,7 @@ class ReviewAgentGate:
         required_demo_capture_targets: tuple[str, ...] | list[str] | None = None,
         tenant_id: str | None = None,
         project_id: str | None = None,
+        demo_artifact_public_base_url: str | None = None,
         demo_evidence_run_id_resolver: Callable[[str], str | None] | None = None,
     ):
         self._github_client = github_client
@@ -62,6 +63,7 @@ class ReviewAgentGate:
         self._required_demo_capture_targets = _normalize_required_demo_targets(required_demo_capture_targets)
         self._tenant_id = tenant_id
         self._project_id = project_id
+        self._demo_artifact_public_base_url = str(demo_artifact_public_base_url or "").strip().rstrip("/")
         self._demo_evidence_run_id_resolver = demo_evidence_run_id_resolver
 
     def evaluate_pr(
@@ -154,6 +156,7 @@ class ReviewAgentGate:
                 tenant_id=self._tenant_id,
                 project_id=self._project_id,
                 run_id=expected_run_id,
+                artifact_public_base_url=self._demo_artifact_public_base_url,
             ):
                 return ReviewerSignal(
                     ready=False,
@@ -403,6 +406,7 @@ def _demo_evidence_present(
     tenant_id: str | None = None,
     project_id: str | None = None,
     run_id: str | None = None,
+    artifact_public_base_url: str | None = None,
 ) -> bool:
     normalized_body = str(body or "").strip()
     if not normalized_body:
@@ -410,7 +414,13 @@ def _demo_evidence_present(
     normalized_tenant_id = str(tenant_id or "").strip()
     normalized_project_id = str(project_id or "").strip()
     normalized_run_id = str(run_id or "").strip()
-    if not normalized_tenant_id or not normalized_project_id or not normalized_run_id:
+    normalized_artifact_public_base_url = str(artifact_public_base_url or "").strip().rstrip("/")
+    if (
+        not normalized_tenant_id
+        or not normalized_project_id
+        or not normalized_run_id
+        or not normalized_artifact_public_base_url
+    ):
         return False
     match = _DEMO_EVIDENCE_SECTION_PATTERN.search(normalized_body)
     if match is None:
@@ -427,6 +437,7 @@ def _demo_evidence_present(
             tenant_id=normalized_tenant_id,
             project_id=normalized_project_id,
             run_id=normalized_run_id,
+            artifact_public_base_url=normalized_artifact_public_base_url,
         )
         for match in structured_matches
     ):
@@ -461,8 +472,12 @@ def _structured_demo_evidence_line_is_run_artifact(
     tenant_id: str,
     project_id: str,
     run_id: str,
+    artifact_public_base_url: str,
 ) -> bool:
     artifact_url = str(match.group("artifact_url") or "").strip()
+    expected_base = artifact_public_base_url.rstrip("/")
+    if not artifact_url.startswith(f"{expected_base}/"):
+        return False
     parsed_url = urlparse(artifact_url)
     if parsed_url.scheme not in {"http", "https"} or not parsed_url.netloc:
         return False

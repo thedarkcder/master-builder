@@ -6,7 +6,7 @@ from unittest.mock import patch
 
 import pytest
 
-from orchestrator.api.webhooks.github_webhook_context import _latest_run_id_for_pr_url
+from orchestrator.api.webhooks.github_webhook_context import _latest_run_id_for_pr_url, build_github_review_runtime
 from orchestrator.core.config import get_settings
 from orchestrator.core.review.pr_review_findings import PrReviewFindingsResult, ReviewFinding
 from orchestrator.core.worker.webhook_job_service import process_next_webhook_job
@@ -157,6 +157,44 @@ class GitHubWebhookProductionPathTests(ProductionPathApiTestCase):
                 settings=get_settings(),
                 owner_id="worker:test",
             )
+
+    def test_qa_demo_review_runtime_passes_artifact_public_base_to_reviewer_gate(self) -> None:
+        fake_client = _FakeGitHubClient()
+        tenant = SimpleNamespace(
+            tenant_id="route25",
+            github_config={},
+            policy_config={"qa_demo_recording_enabled": True},
+        )
+        project = SimpleNamespace(
+            project_id="route25-default",
+            policy_overrides={},
+        )
+        settings = SimpleNamespace(
+            secrets_encryption_key="",
+            codex_model=None,
+            codex_reasoning_effort=None,
+            qa_demo_artifact_public_base_url="https://cdn.example/qa-demos",
+        )
+
+        with (
+            patch(
+                "orchestrator.api.webhooks.github_webhook_context.github_client_from_tenant_config",
+                return_value=fake_client,
+            ),
+            patch("orchestrator.api.webhooks.github_webhook_context.ReviewAgentGate") as gate_cls,
+        ):
+            github_client, _reviewer_gate = build_github_review_runtime(
+                session=SimpleNamespace(),
+                settings=settings,
+                tenant=tenant,
+                project=project,
+            )
+
+        self.assertIs(github_client, fake_client)
+        self.assertEqual(
+            gate_cls.call_args.kwargs["demo_artifact_public_base_url"],
+            "https://cdn.example/qa-demos",
+        )
 
     def test_qa_demo_review_runtime_resolves_latest_run_for_pr_url(self) -> None:
         pr_url = "https://github.com/org/repo/pull/17"
