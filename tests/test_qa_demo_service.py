@@ -26,7 +26,6 @@ from orchestrator.core.qa.demo_service import (
     qa_demo_recorder_process_timeout_seconds,
     record_demo_scenarios,
     remaining_capture_targets,
-    release_context_sha256_for_service_urls,
     release_context_sha256_for_release,
     required_capture_targets,
     required_recording_counts_by_target,
@@ -166,7 +165,10 @@ def _release_context_sha256(*, include_api: bool = False) -> str:
     urls = [{"service_kind": "website", "service_name": website_service_name, "url": "https://preview.example"}]
     if include_api:
         urls.insert(0, {"service_kind": "api", "service_name": "api", "url": "https://api.preview.example"})
-    return release_context_sha256_for_service_urls(urls)
+    return release_context_sha256_for_release(
+        release=SimpleNamespace(commit_sha="b" * 40),
+        release_service_urls=urls,
+    )
 
 
 def _release_context_sha256_with_commit(*, include_api: bool = False, commit_sha: str = "b" * 40) -> str:
@@ -181,7 +183,14 @@ def _release_context_sha256_with_commit(*, include_api: bool = False, commit_sha
 
 
 def _empty_release_context_sha256() -> str:
-    return release_context_sha256_for_service_urls([])
+    return release_context_sha256_for_release(
+        release=SimpleNamespace(commit_sha="b" * 40),
+        release_service_urls=[],
+    )
+
+
+def _preview_release(*, service_urls: list[object] | None = None, commit_sha: str = "b" * 40) -> SimpleNamespace:
+    return SimpleNamespace(commit_sha=commit_sha, service_urls=list(service_urls or []))
 
 
 def test_qa_demo_recording_enabled_reads_effective_policy() -> None:
@@ -370,6 +379,7 @@ def test_upload_recording_rejects_storage_release_context_metadata_digest_mismat
 
 def test_resolve_preview_demo_url_prefers_active_website() -> None:
     release = SimpleNamespace(
+        commit_sha="b" * 40,
         service_urls=[
             SimpleNamespace(service_kind="api", status="active", url="https://api.example"),
             SimpleNamespace(service_kind="website", status="active", url="https://preview.example"),
@@ -380,6 +390,7 @@ def test_resolve_preview_demo_url_prefers_active_website() -> None:
 
 def test_resolve_preview_demo_url_rejects_inactive_website() -> None:
     release = SimpleNamespace(
+        commit_sha="b" * 40,
         service_urls=[
             SimpleNamespace(service_kind="api", status="active", url="https://api.example"),
             SimpleNamespace(service_kind="website", status="pending", url="https://preview.example"),
@@ -508,7 +519,7 @@ def test_resolve_available_capture_targets_includes_configured_native_recorders(
             qa_demo_desktop_capture_reference="desktop://macos-app",
             qa_demo_desktop_worker_platform="macos",
         ),
-        preview_release=SimpleNamespace(service_urls=[]),
+        preview_release=_preview_release(),
     )
 
     assert set(targets) == {"ios", "android", "desktop"}
@@ -525,7 +536,7 @@ def test_resolve_available_capture_targets_allows_configured_android_worker_plat
             qa_demo_android_recorder_command="python /tmp/android_recorder.py",
             qa_demo_android_worker_platform="macos",
         ),
-        preview_release=SimpleNamespace(service_urls=[]),
+        preview_release=_preview_release(),
     )
 
     assert targets["android"].required_worker_platform == "macos"
@@ -538,7 +549,7 @@ def test_resolve_available_capture_targets_rejects_invalid_android_worker_platfo
                 qa_demo_android_recorder_command="python /tmp/android_recorder.py",
                 qa_demo_android_worker_platform="windows",
             ),
-            preview_release=SimpleNamespace(service_urls=[]),
+            preview_release=_preview_release(),
         )
     except RuntimeError as exc:
         assert "android worker platform is invalid" in str(exc)
@@ -553,7 +564,7 @@ def test_resolve_available_capture_targets_rejects_invalid_desktop_worker_platfo
                 qa_demo_desktop_recorder_command="python /tmp/desktop_recorder.py",
                 qa_demo_desktop_worker_platform="windows",
             ),
-            preview_release=SimpleNamespace(service_urls=[]),
+            preview_release=_preview_release(),
         )
     except RuntimeError as exc:
         assert "desktop worker platform is invalid" in str(exc)
@@ -564,7 +575,7 @@ def test_resolve_available_capture_targets_rejects_invalid_desktop_worker_platfo
 def test_resolve_available_capture_targets_includes_builtin_ios_and_android_recorders_when_unconfigured() -> None:
     targets = resolve_available_capture_targets(
         settings=SimpleNamespace(),
-        preview_release=SimpleNamespace(service_urls=[]),
+        preview_release=_preview_release(),
     )
 
     assert "ios" in targets
@@ -658,6 +669,7 @@ def test_ios_builtin_capture_runtime_requires_available_simulator(monkeypatch) -
 
 def test_ensure_release_ready_for_qa_requires_active_urls_for_required_services() -> None:
     release = SimpleNamespace(
+        commit_sha="b" * 40,
         service_urls=[
             SimpleNamespace(service_kind="website", status="active", url="https://preview.example"),
             SimpleNamespace(service_kind="api", status="pending", url="https://api.example"),
@@ -675,6 +687,7 @@ def test_ensure_release_ready_for_qa_requires_active_urls_for_required_services(
 
 def test_ensure_release_ready_for_qa_rejects_unreachable_active_service_url() -> None:
     release = SimpleNamespace(
+        commit_sha="b" * 40,
         service_urls=[
             SimpleNamespace(service_kind="website", status="active", url="https://preview.example"),
             SimpleNamespace(service_kind="api", status="active", url="https://api.example"),
@@ -703,6 +716,7 @@ def test_ensure_release_ready_for_qa_rejects_unreachable_active_service_url() ->
 
 def test_ensure_release_ready_for_qa_rejects_server_error_service_response() -> None:
     release = SimpleNamespace(
+        commit_sha="b" * 40,
         service_urls=[SimpleNamespace(service_kind="website", status="active", url="https://preview.example")]
     )
 
@@ -721,6 +735,7 @@ def test_ensure_release_ready_for_qa_rejects_server_error_service_response() -> 
 
 def test_ensure_release_ready_for_qa_rejects_not_found_service_response() -> None:
     release = SimpleNamespace(
+        commit_sha="b" * 40,
         service_urls=[SimpleNamespace(service_kind="api", status="active", url="https://api.example")]
     )
 
@@ -740,6 +755,7 @@ def test_ensure_release_ready_for_qa_rejects_not_found_service_response() -> Non
 
 def test_ensure_release_ready_for_qa_allows_protected_running_service_response() -> None:
     release = SimpleNamespace(
+        commit_sha="b" * 40,
         service_urls=[SimpleNamespace(service_kind="api", status="active", url="https://api.example")]
     )
 
@@ -784,6 +800,7 @@ def test_required_release_service_kinds_uses_project_deployment_services_before_
         }
     )
     release = SimpleNamespace(
+        commit_sha="b" * 40,
         service_urls=[SimpleNamespace(service_kind="website", status="active", url="https://preview.example")]
     )
 
@@ -1921,6 +1938,7 @@ def test_execute_qa_demo_stage_rejects_unsafe_artifact_scope_before_upload() -> 
     project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo")
     run = SimpleNamespace(run_id="../run-1")
     release = SimpleNamespace(
+        commit_sha="b" * 40,
         service_urls=[SimpleNamespace(service_kind="website", status="active", url="https://preview.example")]
     )
     plan = PmPlan(
@@ -2071,7 +2089,7 @@ def test_execute_qa_demo_stage_includes_project_source_paths_in_qa_prompt_target
             dev_result=DevResult(change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8"),
             test_result=TestResult(guidance=["./gradlew test"]),
             review_result=ReviewResult(summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"),
-            preview_release=SimpleNamespace(service_urls=[]),
+            preview_release=_preview_release(),
         )
 
     available_targets = json.loads(fake_agents.qa.call_args.kwargs["available_capture_targets_json"])
@@ -2092,6 +2110,7 @@ def test_execute_qa_demo_stage_requires_pm_demo_variants_before_qa_agent() -> No
     project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo")
     run = SimpleNamespace(run_id="run-1")
     release = SimpleNamespace(
+        commit_sha="b" * 40,
         service_urls=[SimpleNamespace(service_kind="website", status="active", url="https://preview.example")]
     )
     plan = PmPlan(
@@ -2135,6 +2154,7 @@ def test_execute_qa_demo_stage_requires_pm_demo_targets_to_cover_project_targets
     project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo")
     run = SimpleNamespace(run_id="run-1")
     release = SimpleNamespace(
+        commit_sha="b" * 40,
         service_urls=[SimpleNamespace(service_kind="website", status="active", url="https://preview.example")]
     )
     plan = PmPlan(
@@ -2179,11 +2199,54 @@ def test_execute_qa_demo_stage_requires_pm_demo_targets_to_cover_project_targets
     fake_agents.qa.assert_not_called()
 
 
+def test_execute_qa_demo_stage_requires_release_commit_before_recording() -> None:
+    tenant = SimpleNamespace(tenant_id="tenant-1", github_config={})
+    project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo")
+    run = SimpleNamespace(run_id="run-1")
+    release = SimpleNamespace(
+        service_urls=[SimpleNamespace(service_kind="website", status="active", url="https://preview.example")]
+    )
+    plan = PmPlan(
+        plan_steps=["Implement"],
+        acceptance_criteria=["Feature works"],
+        risks=[],
+        demo_requirements=[_demo_requirement()],
+    )
+    fake_agents = SimpleNamespace(qa=MagicMock())
+
+    with (
+        patch("orchestrator.core.qa.demo_service._default_service_url_probe", return_value=200),
+        patch("orchestrator.core.qa.demo_service.build_codex_runtime"),
+        patch("orchestrator.core.qa.demo_service.CodexWorkflowAgents", return_value=fake_agents),
+    ):
+        try:
+            execute_qa_demo_stage(
+                session=SimpleNamespace(),
+                settings=SimpleNamespace(qa_demo_playwright_module_dir=""),
+                tenant=tenant,
+                project=project,
+                run=run,
+                request=_request(),
+                plan=plan,
+                dev_result=DevResult(change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8"),
+                test_result=TestResult(guidance=["pytest -q"]),
+                review_result=ReviewResult(summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"),
+                preview_release=release,
+            )
+        except RuntimeError as exc:
+            assert "QA demo recording requires a preview release commit SHA" in str(exc)
+        else:  # pragma: no cover
+            raise AssertionError("expected missing release commit to block QA demo recording")
+
+    fake_agents.qa.assert_not_called()
+
+
 def test_execute_qa_demo_stage_blocks_when_qa_scenarios_do_not_cover_pm_variants() -> None:
     tenant = SimpleNamespace(tenant_id="tenant-1", github_config={})
     project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo")
     run = SimpleNamespace(run_id="run-1")
     release = SimpleNamespace(
+        commit_sha="b" * 40,
         service_urls=[SimpleNamespace(service_kind="website", status="active", url="https://preview.example")]
     )
     plan = PmPlan(
@@ -2238,6 +2301,7 @@ def test_execute_qa_demo_stage_blocks_when_qa_scenarios_do_not_name_pm_variant_c
     project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo")
     run = SimpleNamespace(run_id="run-1")
     release = SimpleNamespace(
+        commit_sha="b" * 40,
         service_urls=[SimpleNamespace(service_kind="website", status="active", url="https://preview.example")]
     )
     plan = PmPlan(
@@ -2324,6 +2388,7 @@ def test_execute_qa_demo_stage_blocks_when_qa_scenarios_do_not_name_pm_acceptanc
     project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo")
     run = SimpleNamespace(run_id="run-1")
     release = SimpleNamespace(
+        commit_sha="b" * 40,
         service_urls=[SimpleNamespace(service_kind="website", status="active", url="https://preview.example")]
     )
     plan = PmPlan(
@@ -2410,6 +2475,7 @@ def test_execute_qa_demo_stage_blocks_when_project_api_service_is_missing_from_r
     )
     run = SimpleNamespace(run_id="run-1")
     release = SimpleNamespace(
+        commit_sha="b" * 40,
         service_urls=[SimpleNamespace(service_kind="website", status="active", url="https://preview.example")]
     )
     plan = PmPlan(
@@ -2459,6 +2525,7 @@ def test_execute_qa_demo_stage_retries_when_uploaded_artifact_url_is_unreachable
     project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo")
     run = SimpleNamespace(run_id="run-1")
     release = SimpleNamespace(
+        commit_sha="b" * 40,
         service_urls=[SimpleNamespace(service_kind="website", status="active", url="https://preview.example")]
     )
     plan = PmPlan(
@@ -2617,7 +2684,7 @@ def test_execute_qa_demo_stage_normalizes_native_selectors_before_recording() ->
             dev_result=dev_result,
             test_result=test_result,
             review_result=review_result,
-            preview_release=SimpleNamespace(service_urls=[]),
+            preview_release=_preview_release(),
         )
 
     normalized_result = record_mock.call_args.kwargs["qa_result"]
@@ -2715,7 +2782,7 @@ def test_execute_qa_demo_stage_normalizes_native_wait_for_text_selector_into_val
             dev_result=DevResult(change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8"),
             test_result=TestResult(guidance=["pytest -q"]),
             review_result=ReviewResult(summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"),
-            preview_release=SimpleNamespace(service_urls=[]),
+            preview_release=_preview_release(),
         )
 
     step = record_mock.call_args.kwargs["qa_result"].scenarios[0].steps[0]
@@ -2775,7 +2842,7 @@ def test_execute_qa_demo_stage_rejects_transient_native_splash_assertions() -> N
                 dev_result=dev_result,
                 test_result=test_result,
                 review_result=review_result,
-                preview_release=SimpleNamespace(service_urls=[]),
+                preview_release=_preview_release(),
             )
         except RuntimeError as exc:
             assert "splash_screen" in str(exc)
@@ -2788,6 +2855,7 @@ def test_execute_qa_demo_stage_requeues_when_remaining_target_requires_another_w
     project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo")
     run = SimpleNamespace(run_id="run-1")
     release = SimpleNamespace(
+        commit_sha="b" * 40,
         service_urls=[SimpleNamespace(service_kind="website", status="active", url="https://preview.example")]
     )
     plan = PmPlan(
@@ -2828,6 +2896,7 @@ def test_execute_qa_demo_stage_records_current_worker_targets_then_requeues_for_
     project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo")
     run = SimpleNamespace(run_id="run-1")
     release = SimpleNamespace(
+        commit_sha="b" * 40,
         service_urls=[SimpleNamespace(service_kind="website", status="active", url="https://preview.example")]
     )
     plan = PmPlan(
@@ -2977,6 +3046,7 @@ def test_execute_qa_demo_stage_blocks_when_current_worker_target_proof_is_missin
     project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo")
     run = SimpleNamespace(run_id="run-1")
     release = SimpleNamespace(
+        commit_sha="b" * 40,
         service_urls=[SimpleNamespace(service_kind="website", status="active", url="https://preview.example")]
     )
     plan = PmPlan(
@@ -3238,7 +3308,7 @@ def test_execute_qa_demo_stage_completes_remaining_target_with_previous_recordin
             dev_result=DevResult(change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8"),
             test_result=TestResult(guidance=["pytest -q"]),
             review_result=ReviewResult(summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"),
-            preview_release=SimpleNamespace(service_urls=[]),
+            preview_release=_preview_release(),
             previous_qa_result=previous_qa,
         )
 
@@ -3431,7 +3501,7 @@ def test_execute_qa_demo_stage_revalidates_partial_previous_recording_links_befo
                 dev_result=DevResult(change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8"),
                 test_result=TestResult(guidance=["pytest -q"]),
                 review_result=ReviewResult(summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"),
-                preview_release=SimpleNamespace(service_urls=[]),
+                preview_release=_preview_release(),
                 previous_qa_result=previous_qa,
             )
         except RuntimeError as exc:
@@ -3513,6 +3583,7 @@ def test_execute_qa_demo_stage_revalidates_previous_recording_links_before_short
                 test_result=TestResult(guidance=["pytest -q"]),
                 review_result=ReviewResult(summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"),
                 preview_release=SimpleNamespace(
+                    commit_sha="b" * 40,
                     service_urls=[
                         SimpleNamespace(service_kind="website", status="active", url="https://preview.example")
                     ]
@@ -3751,6 +3822,7 @@ def test_execute_qa_demo_stage_rejects_previous_recording_from_different_release
                 test_result=TestResult(guidance=["pytest -q"]),
                 review_result=ReviewResult(summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"),
                 preview_release=SimpleNamespace(
+                    commit_sha="b" * 40,
                     service_urls=[
                         SimpleNamespace(service_kind="website", service_name="web", status="active", url="https://preview.example")
                     ]
@@ -3801,7 +3873,7 @@ def test_execute_qa_demo_stage_rejects_previous_recording_from_different_release
                 capture_target="browser",
                 capture_reference="https://preview.example",
                 content_sha256=_sha256(53),
-                release_context_sha256=_release_context_sha256(),
+                release_context_sha256=_release_context_sha256_with_commit(commit_sha="a" * 40),
             ),
             QaRecording(
                 name="Repeat action remains safe",
@@ -3810,7 +3882,7 @@ def test_execute_qa_demo_stage_rejects_previous_recording_from_different_release
                 capture_target="browser",
                 capture_reference="https://preview.example",
                 content_sha256=_sha256(54),
-                release_context_sha256=_release_context_sha256(),
+                release_context_sha256=_release_context_sha256_with_commit(commit_sha="a" * 40),
             ),
         ],
     )
@@ -3896,7 +3968,7 @@ def test_execute_qa_demo_stage_rejects_previous_recording_without_matching_scena
                 dev_result=DevResult(change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8"),
                 test_result=TestResult(guidance=["pytest -q"]),
                 review_result=ReviewResult(summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"),
-                preview_release=SimpleNamespace(service_urls=[]),
+                preview_release=_preview_release(),
                 previous_qa_result=previous_qa,
             )
         except RuntimeError as exc:
@@ -4004,7 +4076,7 @@ def test_execute_qa_demo_stage_uses_builtin_ios_capture_on_macos() -> None:
             dev_result=dev_result,
             test_result=test_result,
             review_result=review_result,
-            preview_release=SimpleNamespace(service_urls=[]),
+            preview_release=_preview_release(),
         )
 
     assert result.recordings[0].artifact_url.endswith("qa-demo-1.mp4")
@@ -4111,7 +4183,7 @@ def test_execute_qa_demo_stage_uses_builtin_android_capture_on_linux() -> None:
             dev_result=DevResult(change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8"),
             test_result=TestResult(guidance=["./gradlew test"]),
             review_result=ReviewResult(summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"),
-            preview_release=SimpleNamespace(service_urls=[]),
+            preview_release=_preview_release(),
         )
 
     assert result.recordings[0].capture_target == "android"
@@ -4160,7 +4232,7 @@ def test_execute_qa_demo_stage_requeues_when_desktop_capture_requires_macos_work
         dev_result=DevResult(change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8"),
         test_result=TestResult(guidance=["pytest -q"]),
         review_result=ReviewResult(summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"),
-        preview_release=SimpleNamespace(service_urls=[]),
+        preview_release=_preview_release(),
     )
 
     assert result.outcome == "requeue"
@@ -4212,6 +4284,7 @@ def test_execute_qa_demo_stage_retries_recording_failures() -> None:
     project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo")
     run = SimpleNamespace(run_id="run-1")
     release = SimpleNamespace(
+        commit_sha="b" * 40,
         service_urls=[SimpleNamespace(service_kind="website", status="active", url="https://preview.example")]
     )
     plan = PmPlan(
