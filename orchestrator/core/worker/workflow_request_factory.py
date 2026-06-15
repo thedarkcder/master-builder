@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import logging
+import json
+
+from sqlalchemy import select
 
 from orchestrator.core.guardrails import enforce_safe_command
 from orchestrator.core.platform.secret_service import resolve_platform_secret_ref
@@ -30,14 +33,18 @@ from orchestrator.core.workflow.execution_snapshot import (
     ExecutionSnapshot,
     load_parsed_trigger_context_from_plan,
 )
-from orchestrator.core.workflow.runner import WorkflowRequest
-from orchestrator.storage.models import Run, Tenant
+from orchestrator.core.workflow.runner import QaCaptureTarget, WorkflowRequest
+from orchestrator.storage.models import ProjectApp, Run, Tenant
 from orchestrator.tools.github_app import github_client_from_tenant_config
 
 
 logger = logging.getLogger(__name__)
 _entry_checkpoint = entry_checkpoint
 _resolve_branch_from_open_pull_requests = resolve_branch_from_open_pull_requests
+_PROJECT_DEMO_TARGET_ORDER: tuple[QaCaptureTarget, ...] = ("browser", "ios", "android")
+_IOS_PROJECT_MARKERS = ("ios", "iphone", "ipad", "swiftui", "xcode", "xcuitest")
+_ANDROID_PROJECT_MARKERS = ("android", "espresso", "uiautomator")
+_BROWSER_PROJECT_MARKERS = ("browser", "frontend", "web app", "website", "nextjs", "vite")
 
 
 def _require_positive_policy_int(effective_policy: dict, field_name: str) -> int:
@@ -49,6 +56,53 @@ def _require_positive_policy_int(effective_policy: dict, field_name: str) -> int
     if parsed_value < 1:
         raise ValueError(f"Effective policy field {field_name} must be a positive integer")
     return parsed_value
+
+
+def _project_app_descriptor(app: ProjectApp) -> str:
+    deployment_config = getattr(app, "deployment_config", {}) or {}
+    return " ".join(
+        [
+            str(getattr(app, "detected_runtime", "") or ""),
+            str(getattr(app, "detected_language", "") or ""),
+            str(getattr(app, "build_strategy", "") or ""),
+            str(getattr(app, "name", "") or ""),
+            str(getattr(app, "source_path", "") or ""),
+            json.dumps(deployment_config, sort_keys=True, default=str),
+        ]
+    ).lower()
+
+
+def _project_app_declares_website(app: ProjectApp) -> bool:
+    deployment_config = getattr(app, "deployment_config", {}) or {}
+    if not isinstance(deployment_config, dict):
+        return False
+    services = deployment_config.get("services")
+    if not isinstance(services, list):
+        return False
+    return any(isinstance(service, dict) and service.get("kind") == "website" for service in services)
+
+
+def _project_demo_capture_targets(*, session, tenant_id: str, project_id: str) -> tuple[QaCaptureTarget, ...]:  # noqa: ANN001
+    apps = (
+        session.execute(
+            select(ProjectApp).where(
+                ProjectApp.tenant_id == tenant_id,
+                ProjectApp.project_id == project_id,
+            )
+        )
+        .scalars()
+        .all()
+    )
+    targets: set[QaCaptureTarget] = set()
+    for app in apps:
+        descriptor = _project_app_descriptor(app)
+        if _project_app_declares_website(app) or any(marker in descriptor for marker in _BROWSER_PROJECT_MARKERS):
+            targets.add("browser")
+        if any(marker in descriptor for marker in _IOS_PROJECT_MARKERS):
+            targets.add("ios")
+        if any(marker in descriptor for marker in _ANDROID_PROJECT_MARKERS):
+            targets.add("android")
+    return tuple(target for target in _PROJECT_DEMO_TARGET_ORDER if target in targets)
 
 
 def build_workflow_request(
@@ -175,6 +229,11 @@ def build_workflow_request(
         workspace_key=workspace_key,
         current_worker_capability=capability_context.current,
         available_worker_capabilities=capability_context.available,
+        project_demo_capture_targets=_project_demo_capture_targets(
+            session=session,
+            tenant_id=tenant.tenant_id,
+            project_id=project.project_id if project is not None else run.project_id,
+        ),
         base_branch=base_branch,
         integration_branch=integration_branch,
         pr_target_branch=base_branch,

@@ -515,6 +515,7 @@ class CodexWorkflowAgents:
                 available_worker_capabilities_json=json.dumps(
                     [capability.value for capability in request.available_worker_capabilities]
                 ),
+                project_demo_capture_targets_json=json.dumps(list(request.project_demo_capture_targets)),
                 qa_capture_target_constraints_json=capture_target_constraints_json,
                 human_inputs_json=json.dumps(request.human_inputs),
                 **_stage_prompt_tool_context(
@@ -554,8 +555,13 @@ class CodexWorkflowAgents:
                 request.issue_summary,
                 request.issue_description,
             )
+            required_project_targets = {
+                target for target in request.project_demo_capture_targets if target in _QA_CAPTURE_TARGETS
+            }
             selected_targets = {requirement.capture_target for requirement in demo_requirements}
-            missing_required_targets = sorted(required_issue_targets - selected_targets)
+            missing_required_targets = sorted(
+                (required_issue_targets | required_project_targets) - selected_targets
+            )
             if missing_required_targets:
                 raise CodexRuntimeError(
                     "Codex pm response missing required demo capture target(s): "
