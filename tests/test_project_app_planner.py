@@ -86,6 +86,55 @@ CMD ["python", "app.py"]
     assert frontend_candidate.needs_generated_files is True
 
 
+def test_scan_repo_for_project_apps_detects_native_ios_and_android_candidates() -> None:
+    with TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _write(
+            root / "ios" / "GirlPower.xcodeproj" / "project.pbxproj",
+            """\
+// !$*UTF8*$!
+/* Begin PBXProject section */
+			TargetAttributes = {};
+/* End PBXProject section */
+""",
+        )
+        _write(
+            root / "android" / "settings.gradle",
+            """\
+pluginManagement { repositories { google(); mavenCentral(); gradlePluginPortal() } }
+dependencyResolutionManagement { repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS) }
+rootProject.name = "GirlPower"
+include ':app'
+""",
+        )
+        _write(
+            root / "android" / "app" / "build.gradle",
+            """\
+plugins {
+    id 'com.android.application'
+    id 'org.jetbrains.kotlin.android'
+}
+""",
+        )
+
+        candidates = scan_repo_for_project_apps(checkout_path=str(root), analysis_source="deployment_setup")
+
+    assert {candidate.source_path for candidate in candidates} == {"android", "android/app", "ios"}
+    ios_candidate = next(candidate for candidate in candidates if candidate.source_path == "ios")
+    android_root_candidate = next(candidate for candidate in candidates if candidate.source_path == "android")
+    android_app_candidate = next(candidate for candidate in candidates if candidate.source_path == "android/app")
+    assert ios_candidate.detected_runtime == "ios"
+    assert ios_candidate.detected_language == "swift"
+    assert ios_candidate.deployment_config["mobile_platform"] == "ios"
+    assert ios_candidate.needs_generated_files is False
+    assert android_root_candidate.detected_runtime == "android"
+    assert android_root_candidate.detected_language == "kotlin"
+    assert android_root_candidate.deployment_config["mobile_platform"] == "android"
+    assert android_root_candidate.needs_generated_files is False
+    assert android_app_candidate.detected_runtime == "android"
+    assert android_app_candidate.deployment_config["mobile_platform"] == "android"
+
+
 def test_scan_repo_for_project_apps_extracts_docker_compose_resources() -> None:
     with TemporaryDirectory() as tmp:
         root = Path(tmp)

@@ -20,6 +20,7 @@ from orchestrator.core.qa.demo_service import (
     ensure_capture_target_runtime_ready,
     execute_qa_demo_stage,
     planned_capture_target_constraints_payload,
+    next_required_qa_demo_worker_capability,
     qa_demo_max_attempts,
     qa_demo_recording_enabled,
     qa_demo_recorder_process_timeout_seconds,
@@ -505,6 +506,44 @@ def test_planned_capture_target_constraints_payload_marks_native_targets_availab
     assert by_target["android"]["required_worker_platform"] == "linux"
     assert by_target["desktop"]["provider_available"] is False
     assert "no desktop recorder command is configured" in str(by_target["desktop"]["availability_reason"])
+
+
+def test_planned_capture_target_constraints_payload_uses_configured_android_worker_platform() -> None:
+    payload = planned_capture_target_constraints_payload(
+        settings=SimpleNamespace(
+            qa_demo_android_recorder_command="python /tmp/android_recorder.py",
+            qa_demo_android_worker_platform="macos",
+        )
+    )
+    by_target = {item["capture_target"]: item for item in payload}
+
+    assert by_target["android"]["provider_available"] is True
+    assert by_target["android"]["required_worker_platform"] == "macos"
+    assert "macOS Android worker" in str(by_target["android"]["availability_reason"])
+
+
+def test_next_required_qa_demo_worker_capability_uses_configured_android_worker_platform() -> None:
+    plan = PmPlan(
+        plan_steps=["Implement"],
+        acceptance_criteria=["Android flow works"],
+        risks=[],
+        demo_requirements=[
+            DemoRequirement(
+                title="Android walkthrough",
+                acceptance_criterion="Android flow works",
+                capture_target="android",
+            ),
+        ],
+    )
+
+    assert next_required_qa_demo_worker_capability(
+        settings=SimpleNamespace(
+            qa_demo_android_recorder_command="python /tmp/android_recorder.py",
+            qa_demo_android_worker_platform="macos",
+        ),
+        plan=plan,
+        recordings=[],
+    ) == WorkerCapability.MACOS
 
 
 def test_ios_builtin_capture_runtime_requires_available_simulator(monkeypatch) -> None:
