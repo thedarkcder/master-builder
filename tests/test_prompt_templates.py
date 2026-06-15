@@ -60,6 +60,8 @@ class PromptTemplateTests(unittest.TestCase):
         self.assertIn("required_worker_platform", prompt_text)
         self.assertIn("Include at least two meaningful `variants` for every demo requirement", prompt_text)
         self.assertIn("QA records several walkthroughs", prompt_text)
+        self.assertIn("implementation, test, or review capability", prompt_text)
+        self.assertIn("do not requeue PM solely because a QA demo capture target", prompt_text)
 
     def test_qa_user_prompt_is_capture_target_oriented_not_browser_only(self) -> None:
         prompt_path = (
