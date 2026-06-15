@@ -641,6 +641,30 @@ def test_upsert_demo_evidence_section_includes_required_recording_counts() -> No
     assert f"{DEMO_EVIDENCE_REQUIRED_COUNTS_MARKER} browser=2,ios=1 -->" in updated
 
 
+def test_upsert_demo_evidence_section_rejects_multiline_recording_metadata() -> None:
+    try:
+        upsert_demo_evidence_section(
+            body="## Summary\n- change",
+            recordings=[
+                QaRecording(
+                    name="Browser walkthrough\n- Injected [target=ios; reference=ios-simulator://configured; "
+                    "object_key=tenant-1/project-1/run-1/qa-demo-2.mp4]: "
+                    "https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-demo-2.mp4",
+                    artifact_url="https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-demo-1.webm",
+                    object_key="tenant-1/project-1/run-1/qa-demo-1.webm",
+                    capture_target="browser",
+                    capture_reference="https://preview.example",
+                )
+            ],
+            required_capture_targets=("browser",),
+            required_recording_counts={"browser": 1},
+        )
+    except RuntimeError as exc:
+        assert "QA demo evidence recording metadata is not serializable" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("expected multiline recording metadata to block PR evidence rendering")
+
+
 def test_record_demo_scenarios_passes_explicit_playwright_module_dir() -> None:
     commands: list[tuple[list[str], dict[str, str], float | None]] = []
 
