@@ -54,6 +54,7 @@ _QA_DEMO_RELEASE_CONTEXT_SHA256_METADATA_KEY = "release-context-sha256"
 _QA_DEMO_RELEASE_CONTEXT_SHA256_METADATA_HEADER = f"x-amz-meta-{_QA_DEMO_RELEASE_CONTEXT_SHA256_METADATA_KEY}"
 _QA_DEMO_RELEASE_COMMIT_SHA_METADATA_KEY = "release-commit-sha"
 _QA_DEMO_RELEASE_COMMIT_SHA_METADATA_HEADER = f"x-amz-meta-{_QA_DEMO_RELEASE_COMMIT_SHA_METADATA_KEY}"
+_MIN_DEMO_REQUIREMENT_VARIANTS = 2
 
 
 @dataclass(frozen=True)
@@ -701,15 +702,15 @@ def required_capture_targets(plan: PmPlan) -> tuple[str, ...]:
 def ensure_pm_demo_requirements_are_recordable(plan: PmPlan) -> None:
     if not plan.demo_requirements:
         raise RuntimeError("QA demo recording requires PM demo requirements with explicit capture targets")
-    missing_variants = [
+    insufficient_variants = [
         f"{requirement.capture_target}: {requirement.title}"
         for requirement in plan.demo_requirements
-        if not list(requirement.variants or [])
+        if len(list(requirement.variants or [])) < _MIN_DEMO_REQUIREMENT_VARIANTS
     ]
-    if missing_variants:
+    if insufficient_variants:
         raise RuntimeError(
-            "QA demo recording requires PM demo requirement variants for QA walkthrough coverage: "
-            + "; ".join(missing_variants)
+            "QA demo recording requires at least two PM demo requirement variants for QA walkthrough coverage: "
+            + "; ".join(insufficient_variants)
         )
 
 

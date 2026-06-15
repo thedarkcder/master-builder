@@ -207,9 +207,9 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
                 [
                     (
                         '{"outcome":"continue","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":[],"demo_requirements":'
-                        '[{"title":"Browser demo","acceptance_criterion":"ac1","capture_target":"browser","variants":["Invalid input is rejected"]},'
-                        '{"title":"iOS demo","acceptance_criterion":"ac1","capture_target":"ios","variants":["Repeat action remains safe"]},'
-                        '{"title":"Android demo","acceptance_criterion":"ac1","capture_target":"android","variants":["Offline state is handled"]}],'
+                        '[{"title":"Browser demo","acceptance_criterion":"ac1","capture_target":"browser","variants":["Invalid input is rejected","Repeat action remains safe"]},'
+                        '{"title":"iOS demo","acceptance_criterion":"ac1","capture_target":"ios","variants":["Invalid input is rejected","Repeat action remains safe"]},'
+                        '{"title":"Android demo","acceptance_criterion":"ac1","capture_target":"android","variants":["Offline state is handled","Repeat action remains safe"]}],'
                         '"next_stage":"dev","execution_worker_capability":"linux"}'
                     ),
                 ]
@@ -235,7 +235,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
                 [
                     (
                         '{"outcome":"continue","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":[],"demo_requirements":'
-                        '[{"title":"Browser demo","acceptance_criterion":"ac1","capture_target":"browser","variants":["Invalid input is rejected"]}],'
+                        '[{"title":"Browser demo","acceptance_criterion":"ac1","capture_target":"browser","variants":["Invalid input is rejected","Repeat action remains safe"]}],'
                         '"next_stage":"dev","execution_worker_capability":"linux"}'
                     ),
                 ]
@@ -265,7 +265,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
                 [
                     (
                         '{"outcome":"continue","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":[],"demo_requirements":'
-                        '[{"title":"Browser demo","acceptance_criterion":"ac1","capture_target":"browser","variants":["Invalid input is rejected"]}],'
+                        '[{"title":"Browser demo","acceptance_criterion":"ac1","capture_target":"browser","variants":["Invalid input is rejected","Repeat action remains safe"]}],'
                         '"next_stage":"dev","execution_worker_capability":"linux"}'
                     ),
                 ]
@@ -290,7 +290,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
                 [
                     (
                         '{"outcome":"continue","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":[],"demo_requirements":'
-                        '[{"title":"Desktop demo","acceptance_criterion":"ac1","capture_target":"desktop","variants":["Repeat action remains safe"]}],'
+                        '[{"title":"Desktop demo","acceptance_criterion":"ac1","capture_target":"desktop","variants":["Invalid input is rejected","Repeat action remains safe"]}],'
                         '"next_stage":"dev","execution_worker_capability":"linux"}'
                     ),
                 ]
@@ -315,7 +315,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
                 [
                     (
                         '{"outcome":"continue","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":[],"demo_requirements":'
-                        '[{"title":"Desktop demo","acceptance_criterion":"ac1","capture_target":"desktop","variants":["Repeat action remains safe"]}],'
+                        '[{"title":"Desktop demo","acceptance_criterion":"ac1","capture_target":"desktop","variants":["Invalid input is rejected","Repeat action remains safe"]}],'
                         '"next_stage":"dev","execution_worker_capability":"linux"}'
                     ),
                 ]
@@ -440,6 +440,23 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
 
         with patch("orchestrator.core.runtime.agents.render_prompt", side_effect=lambda template_name, **_: template_name):
             with self.assertRaisesRegex(CodexRuntimeError, "variants"):
+                agents.pm(self._request(), 1, None, [], None, None, None, self._CAPTURE_TARGET_CONSTRAINTS_JSON)
+
+    def test_pm_requires_at_least_two_demo_requirement_variants(self) -> None:
+        runtime = CodexRuntime(
+            model="gpt-5-codex",
+            max_output_tokens=1200,
+            command="override",
+            _request=_RuntimeQueue(
+                [
+                    '{"outcome":"continue","plan_steps":["step1"],"acceptance_criteria":["ac1"],"risks":[],"demo_requirements":[{"title":"Demo step1","acceptance_criterion":"ac1","capture_target":"browser","variants":["Invalid input is rejected"]}],"next_stage":"dev","execution_worker_capability":"linux"}',
+                ]
+            ),
+        )
+        agents = CodexWorkflowAgents(runtime=runtime)
+
+        with patch("orchestrator.core.runtime.agents.render_prompt", side_effect=lambda template_name, **_: template_name):
+            with self.assertRaisesRegex(CodexRuntimeError, "at least two variants"):
                 agents.pm(self._request(), 1, None, [], None, None, None, self._CAPTURE_TARGET_CONSTRAINTS_JSON)
 
     def test_native_selector_catalog_extracts_ids_and_text_anchors(self) -> None:

@@ -100,10 +100,15 @@ def _qa_result() -> QaResult:
                 steps=[QaStep(action="goto", value="/"), QaStep(action="assert_visible", selector="text=Feature")],
             ),
             QaScenario(
+                name="Invalid input is rejected",
+                objective="Show invalid input is rejected",
+                steps=[QaStep(action="goto", value="/"), QaStep(action="assert_visible", selector="text=Feature")],
+            ),
+            QaScenario(
                 name="Repeat action remains safe",
                 objective="Show repeat action remains safe",
                 steps=[QaStep(action="goto", value="/"), QaStep(action="assert_visible", selector="text=Feature")],
-            )
+            ),
         ],
     )
 
@@ -119,7 +124,7 @@ def _demo_requirement(
         title=title,
         acceptance_criterion=acceptance_criterion,
         capture_target=capture_target,  # type: ignore[arg-type]
-        variants=variants or ["Repeat action remains safe"],
+        variants=variants or ["Invalid input is rejected", "Repeat action remains safe"],
     )
 
 
@@ -1942,6 +1947,7 @@ def test_execute_qa_demo_stage_records_and_uploads() -> None:
             "orchestrator.core.qa.demo_service.record_demo_scenarios",
             return_value=[
                 _local_recording(name="Happy path"),
+                _local_recording(name="Invalid input is rejected", path="/tmp/invalid.webm"),
                 _local_recording(name="Repeat action remains safe", path="/tmp/repeat.webm"),
             ],
         ) as record_mock,
@@ -2028,6 +2034,7 @@ def test_execute_qa_demo_stage_rejects_unsafe_artifact_scope_before_upload() -> 
             "orchestrator.core.qa.demo_service.record_demo_scenarios",
             return_value=[
                 _local_recording(name="Happy path"),
+                _local_recording(name="Invalid input is rejected", path="/tmp/invalid.webm"),
                 _local_recording(name="Repeat action remains safe", path="/tmp/repeat.webm"),
             ],
         ),
@@ -2105,6 +2112,12 @@ def test_execute_qa_demo_stage_includes_project_source_paths_in_qa_prompt_target
                         capture_target="android",
                         steps=[QaStep(action="assert_visible", selector="text=Ready")],
                     ),
+                    QaScenario(
+                        name="Android invalid input",
+                        objective="Invalid input is rejected on Android",
+                        capture_target="android",
+                        steps=[QaStep(action="assert_visible", selector="text=Ready")],
+                    ),
                 ],
             )
         )
@@ -2119,6 +2132,13 @@ def test_execute_qa_demo_stage_includes_project_source_paths_in_qa_prompt_target
                 _local_recording(
                     name="Android walkthrough",
                     path="/tmp/android.mp4",
+                    capture_target="android",
+                    capture_reference="android-emulator://configured",
+                    content_type="video/mp4",
+                ),
+                _local_recording(
+                    name="Android invalid input",
+                    path="/tmp/android-invalid.mp4",
                     capture_target="android",
                     capture_reference="android-emulator://configured",
                     content_type="video/mp4",
@@ -2215,9 +2235,58 @@ def test_execute_qa_demo_stage_requires_pm_demo_variants_before_qa_agent() -> No
                 preview_release=release,
             )
         except RuntimeError as exc:
-            assert "requires PM demo requirement variants" in str(exc)
+            assert "requires at least two PM demo requirement variants" in str(exc)
         else:  # pragma: no cover
             raise AssertionError("expected QA demo PM variant contract failure")
+
+    fake_agents.qa.assert_not_called()
+
+
+def test_execute_qa_demo_stage_requires_several_pm_demo_variants_before_qa_agent() -> None:
+    tenant = SimpleNamespace(tenant_id="tenant-1", github_config={})
+    project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo")
+    run = SimpleNamespace(run_id="run-1")
+    release = SimpleNamespace(
+        commit_sha="b" * 40,
+        service_urls=[SimpleNamespace(service_kind="website", status="active", url="https://preview.example")]
+    )
+    plan = PmPlan(
+        plan_steps=["Implement"],
+        acceptance_criteria=["Feature works"],
+        risks=[],
+        demo_requirements=[
+            DemoRequirement(
+                title="Feature walkthrough",
+                acceptance_criterion="Feature works",
+                capture_target="browser",
+                variants=["Repeat action remains safe"],
+            )
+        ],
+    )
+    fake_agents = SimpleNamespace(qa=MagicMock())
+
+    with (
+        patch("orchestrator.core.qa.demo_service.build_codex_runtime"),
+        patch("orchestrator.core.qa.demo_service.CodexWorkflowAgents", return_value=fake_agents),
+    ):
+        try:
+            execute_qa_demo_stage(
+                session=SimpleNamespace(),
+                settings=SimpleNamespace(qa_demo_playwright_module_dir=""),
+                tenant=tenant,
+                project=project,
+                run=run,
+                request=_request(),
+                plan=plan,
+                dev_result=DevResult(change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8"),
+                test_result=TestResult(guidance=["pytest -q"]),
+                review_result=ReviewResult(summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"),
+                preview_release=release,
+            )
+        except RuntimeError as exc:
+            assert "requires at least two PM demo requirement variants" in str(exc)
+        else:  # pragma: no cover
+            raise AssertionError("expected QA demo PM variant count contract failure")
 
     fake_agents.qa.assert_not_called()
 
@@ -2239,7 +2308,7 @@ def test_execute_qa_demo_stage_requires_pm_demo_targets_to_cover_project_targets
                 title="Browser walkthrough",
                 acceptance_criterion="Feature works",
                 capture_target="browser",
-                variants=["Repeat action remains safe"],
+                variants=["Invalid input is rejected", "Repeat action remains safe"],
             )
         ],
     )
@@ -2361,7 +2430,7 @@ def test_execute_qa_demo_stage_blocks_when_qa_scenarios_do_not_cover_pm_variants
                 preview_release=release,
             )
         except RuntimeError as exc:
-            assert "browser: expected at least 3, got 2" in str(exc)
+            assert "missing variant coverage: browser: Bad input shows validation" in str(exc)
             assert "browser: Bad input shows validation" in str(exc)
         else:  # pragma: no cover
             raise AssertionError("expected QA scenario variant coverage failure")
@@ -2469,14 +2538,14 @@ def test_execute_qa_demo_stage_blocks_when_qa_scenarios_do_not_name_pm_acceptanc
         acceptance_criteria=["Cart total recalculates after quantity changes"],
         risks=[],
         demo_requirements=[
-            DemoRequirement(
-                title="Checkout total updates",
-                acceptance_criterion="Cart total recalculates after quantity changes",
-                capture_target="browser",
-                variants=["Repeat quantity change remains safe"],
-            )
-        ],
-    )
+                DemoRequirement(
+                    title="Checkout total updates",
+                    acceptance_criterion="Cart total recalculates after quantity changes",
+                    capture_target="browser",
+                    variants=["Invalid quantity is rejected", "Repeat quantity change remains safe"],
+                )
+            ],
+        )
     fake_agents = SimpleNamespace(
         qa=MagicMock(
             return_value=QaResult(
@@ -2491,10 +2560,19 @@ def test_execute_qa_demo_stage_blocks_when_qa_scenarios_do_not_name_pm_acceptanc
                             QaStep(action="assert_visible", selector="text=Ready"),
                         ],
                     ),
-                    QaScenario(
-                        name="Repeat quantity change remains safe",
-                        objective="Repeat quantity change remains safe",
-                        capture_target="browser",
+                        QaScenario(
+                            name="Invalid quantity is rejected",
+                            objective="Invalid quantity is rejected",
+                            capture_target="browser",
+                            steps=[
+                                QaStep(action="goto", value="/"),
+                                QaStep(action="assert_visible", selector="text=Ready"),
+                            ],
+                        ),
+                        QaScenario(
+                            name="Repeat quantity change remains safe",
+                            objective="Repeat quantity change remains safe",
+                            capture_target="browser",
                         steps=[
                             QaStep(action="goto", value="/"),
                             QaStep(action="assert_visible", selector="text=Ready"),
@@ -2623,6 +2701,7 @@ def test_execute_qa_demo_stage_retries_when_uploaded_artifact_url_is_unreachable
             "orchestrator.core.qa.demo_service.record_demo_scenarios",
             return_value=[
                 _local_recording(name="Happy path"),
+                _local_recording(name="Invalid input is rejected", path="/tmp/invalid.webm"),
                 _local_recording(name="Repeat action remains safe", path="/tmp/repeat.webm"),
             ],
         ),
@@ -2658,7 +2737,7 @@ def test_execute_qa_demo_stage_retries_when_uploaded_artifact_url_is_unreachable
             preview_release=release,
         )
 
-    assert probe_attempts["count"] == 3
+    assert probe_attempts["count"] == 4
     assert result.recordings[0].artifact_url.endswith("qa-demo-1.webm")
 
 
@@ -2700,7 +2779,13 @@ def test_execute_qa_demo_stage_normalizes_native_selectors_before_recording() ->
                         objective="Repeat action remains safe",
                         capture_target="ios",
                         steps=[QaStep(action="assert_visible", selector="Start Free Demo")],
-                    )
+                    ),
+                    QaScenario(
+                        name="Invalid input is rejected",
+                        objective="Invalid input is rejected",
+                        capture_target="ios",
+                        steps=[QaStep(action="assert_visible", selector="Start Free Demo")],
+                    ),
                 ],
             )
         )
@@ -2726,6 +2811,13 @@ def test_execute_qa_demo_stage_normalizes_native_selectors_before_recording() ->
                 _local_recording(
                     name="Mobile flow",
                     path="/tmp/mobile.mp4",
+                    capture_target="ios",
+                    capture_reference="ios-simulator://configured",
+                    content_type="video/mp4",
+                ),
+                _local_recording(
+                    name="Invalid input is rejected",
+                    path="/tmp/mobile-invalid.mp4",
                     capture_target="ios",
                     capture_reference="ios-simulator://configured",
                     content_type="video/mp4",
@@ -2798,7 +2890,13 @@ def test_execute_qa_demo_stage_normalizes_native_wait_for_text_selector_into_val
                         objective="Repeat action remains safe",
                         capture_target="ios",
                         steps=[QaStep(action="assert_visible", selector="text=Next")],
-                    )
+                    ),
+                    QaScenario(
+                        name="Invalid input is rejected",
+                        objective="Invalid input is rejected",
+                        capture_target="ios",
+                        steps=[QaStep(action="assert_visible", selector="text=Next")],
+                    ),
                 ],
             )
         )
@@ -2824,6 +2922,13 @@ def test_execute_qa_demo_stage_normalizes_native_wait_for_text_selector_into_val
                 _local_recording(
                     name="Mobile flow",
                     path="/tmp/mobile.mp4",
+                    capture_target="ios",
+                    capture_reference="ios-simulator://configured",
+                    content_type="video/mp4",
+                ),
+                _local_recording(
+                    name="Invalid input is rejected",
+                    path="/tmp/mobile-invalid.mp4",
                     capture_target="ios",
                     capture_reference="ios-simulator://configured",
                     content_type="video/mp4",
@@ -3006,6 +3111,12 @@ def test_execute_qa_demo_stage_records_current_worker_targets_then_requeues_for_
                         steps=_proof_steps("text=Feature"),
                     ),
                     QaScenario(
+                        name="Browser invalid input",
+                        objective="Invalid input is rejected in browser",
+                        capture_target="browser",
+                        steps=_proof_steps("text=Feature"),
+                    ),
+                    QaScenario(
                         name="Browser repeat action",
                         objective="Repeat action remains safe in browser",
                         capture_target="browser",
@@ -3014,6 +3125,12 @@ def test_execute_qa_demo_stage_records_current_worker_targets_then_requeues_for_
                     QaScenario(
                         name="Android walkthrough",
                         objective="Show Android",
+                        capture_target="android",
+                        steps=_proof_steps("text=Ready"),
+                    ),
+                    QaScenario(
+                        name="Android invalid input",
+                        objective="Invalid input is rejected on Android",
                         capture_target="android",
                         steps=_proof_steps("text=Ready"),
                     ),
@@ -3042,6 +3159,13 @@ def test_execute_qa_demo_stage_records_current_worker_targets_then_requeues_for_
                     content_type="video/webm",
                 ),
                 _local_recording(
+                    name="Browser invalid input",
+                    path="/tmp/browser-invalid.webm",
+                    capture_target="browser",
+                    capture_reference="https://preview.example",
+                    content_type="video/webm",
+                ),
+                _local_recording(
                     name="Browser repeat action",
                     path="/tmp/browser-repeat.webm",
                     capture_target="browser",
@@ -3051,6 +3175,13 @@ def test_execute_qa_demo_stage_records_current_worker_targets_then_requeues_for_
                 _local_recording(
                     name="Android walkthrough",
                     path="/tmp/android.mp4",
+                    capture_target="android",
+                    capture_reference="android-emulator://configured",
+                    content_type="video/mp4",
+                ),
+                _local_recording(
+                    name="Android invalid input",
+                    path="/tmp/android-invalid.mp4",
                     capture_target="android",
                     capture_reference="android-emulator://configured",
                     content_type="video/mp4",
@@ -3080,8 +3211,10 @@ def test_execute_qa_demo_stage_records_current_worker_targets_then_requeues_for_
             side_effect=[
                 "https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-demo-1.webm",
                 "https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-demo-2.webm",
-                "https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-demo-3.mp4",
+                "https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-demo-3.webm",
                 "https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-demo-4.mp4",
+                "https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-demo-5.mp4",
+                "https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-demo-6.mp4",
             ],
         ),
         patch("orchestrator.core.qa.demo_service.ensure_capture_target_runtime_ready"),
@@ -3106,6 +3239,8 @@ def test_execute_qa_demo_stage_records_current_worker_targets_then_requeues_for_
     assert [recording.capture_target for recording in result.recordings] == [
         "browser",
         "browser",
+        "browser",
+        "android",
         "android",
         "android",
     ]
@@ -3205,8 +3340,8 @@ def test_execute_qa_demo_stage_blocks_when_current_worker_target_proof_is_missin
             )
         except RuntimeError as exc:
             assert "insufficient scenario count:" in str(exc)
-            assert "browser: expected at least 2, got 1" in str(exc)
-            assert "android: expected at least 2, got 0" in str(exc)
+            assert "browser: expected at least 3, got 1" in str(exc)
+            assert "android: expected at least 3, got 0" in str(exc)
         else:  # pragma: no cover
             raise AssertionError("expected current-worker missing target proof to block")
 
@@ -3249,6 +3384,12 @@ def test_execute_qa_demo_stage_completes_remaining_target_with_previous_recordin
                 steps=_proof_steps("text=Feature"),
             ),
             QaScenario(
+                name="Browser invalid input",
+                objective="Invalid input is rejected in browser",
+                capture_target="browser",
+                steps=_proof_steps("text=Feature"),
+            ),
+            QaScenario(
                 name="Browser repeat action",
                 objective="Repeat action remains safe in browser",
                 capture_target="browser",
@@ -3257,6 +3398,12 @@ def test_execute_qa_demo_stage_completes_remaining_target_with_previous_recordin
             QaScenario(
                 name="Android walkthrough",
                 objective="Show Android",
+                capture_target="android",
+                steps=_proof_steps("text=Ready"),
+            ),
+            QaScenario(
+                name="Android invalid input",
+                objective="Invalid input is rejected on Android",
                 capture_target="android",
                 steps=_proof_steps("text=Ready"),
             ),
@@ -3278,7 +3425,7 @@ def test_execute_qa_demo_stage_completes_remaining_target_with_previous_recordin
                 release_context_sha256=_empty_release_context_sha256(),
             ),
             QaRecording(
-                name="Browser repeat action",
+                name="Browser invalid input",
                 artifact_url="https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-demo-2.webm",
                 object_key="tenant-1/project-1/run-1/qa-demo-2.webm",
                 capture_target="browser",
@@ -3287,21 +3434,39 @@ def test_execute_qa_demo_stage_completes_remaining_target_with_previous_recordin
                 release_context_sha256=_empty_release_context_sha256(),
             ),
             QaRecording(
-                name="Android walkthrough",
-                artifact_url="https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-demo-3.mp4",
-                object_key="tenant-1/project-1/run-1/qa-demo-3.mp4",
-                capture_target="android",
-                capture_reference="android-emulator://configured",
+                name="Browser repeat action",
+                artifact_url="https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-demo-3.webm",
+                object_key="tenant-1/project-1/run-1/qa-demo-3.webm",
+                capture_target="browser",
+                capture_reference="https://preview.example",
                 content_sha256=_sha256(22),
                 release_context_sha256=_empty_release_context_sha256(),
             ),
             QaRecording(
-                name="Android repeat action",
+                name="Android walkthrough",
                 artifact_url="https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-demo-4.mp4",
                 object_key="tenant-1/project-1/run-1/qa-demo-4.mp4",
                 capture_target="android",
                 capture_reference="android-emulator://configured",
                 content_sha256=_sha256(23),
+                release_context_sha256=_empty_release_context_sha256(),
+            ),
+            QaRecording(
+                name="Android invalid input",
+                artifact_url="https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-demo-5.mp4",
+                object_key="tenant-1/project-1/run-1/qa-demo-5.mp4",
+                capture_target="android",
+                capture_reference="android-emulator://configured",
+                content_sha256=_sha256(24),
+                release_context_sha256=_empty_release_context_sha256(),
+            ),
+            QaRecording(
+                name="Android repeat action",
+                artifact_url="https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-demo-6.mp4",
+                object_key="tenant-1/project-1/run-1/qa-demo-6.mp4",
+                capture_target="android",
+                capture_reference="android-emulator://configured",
+                content_sha256=_sha256(25),
                 release_context_sha256=_empty_release_context_sha256(),
             ),
         ],
@@ -3315,6 +3480,12 @@ def test_execute_qa_demo_stage_completes_remaining_target_with_previous_recordin
                     QaScenario(
                         name="iOS walkthrough",
                         objective="Show iOS",
+                        capture_target="ios",
+                        steps=_proof_steps("text=Ready"),
+                    ),
+                    QaScenario(
+                        name="iOS invalid input",
+                        objective="Invalid input is rejected on iOS",
                         capture_target="ios",
                         steps=_proof_steps("text=Ready"),
                     ),
@@ -3339,6 +3510,13 @@ def test_execute_qa_demo_stage_completes_remaining_target_with_previous_recordin
                 _local_recording(
                     name="iOS walkthrough",
                     path="/tmp/ios.mp4",
+                    capture_target="ios",
+                    capture_reference="ios-simulator://configured",
+                    content_type="video/mp4",
+                ),
+                _local_recording(
+                    name="iOS invalid input",
+                    path="/tmp/ios-invalid.mp4",
                     capture_target="ios",
                     capture_reference="ios-simulator://configured",
                     content_type="video/mp4",
@@ -3389,12 +3567,15 @@ def test_execute_qa_demo_stage_completes_remaining_target_with_previous_recordin
     assert [recording.capture_target for recording in result.recordings] == [
         "browser",
         "browser",
+        "browser",
         "android",
         "android",
+        "android",
+        "ios",
         "ios",
         "ios",
     ]
-    assert upload_mock.call_args.kwargs["object_key"].endswith("qa-demo-6.mp4")
+    assert upload_mock.call_args.kwargs["object_key"].endswith("qa-demo-9.mp4")
     available_targets = json.loads(fake_agents.qa.call_args.kwargs["available_capture_targets_json"])
     assert available_targets == [
         {
@@ -3445,6 +3626,12 @@ def test_execute_qa_demo_stage_revalidates_partial_previous_recording_links_befo
                 steps=_proof_steps("text=Feature"),
             ),
             QaScenario(
+                name="Browser invalid input",
+                objective="Invalid input is rejected in browser",
+                capture_target="browser",
+                steps=_proof_steps("text=Feature"),
+            ),
+            QaScenario(
                 name="Browser repeat action",
                 objective="Repeat action remains safe in browser",
                 capture_target="browser",
@@ -3453,6 +3640,12 @@ def test_execute_qa_demo_stage_revalidates_partial_previous_recording_links_befo
             QaScenario(
                 name="Android walkthrough",
                 objective="Show Android",
+                capture_target="android",
+                steps=_proof_steps("text=Ready"),
+            ),
+            QaScenario(
+                name="Android invalid input",
+                objective="Invalid input is rejected on Android",
                 capture_target="android",
                 steps=_proof_steps("text=Ready"),
             ),
@@ -3474,7 +3667,7 @@ def test_execute_qa_demo_stage_revalidates_partial_previous_recording_links_befo
                 release_context_sha256=_empty_release_context_sha256(),
             ),
             QaRecording(
-                name="Browser repeat action",
+                name="Browser invalid input",
                 artifact_url="https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-demo-2.webm",
                 object_key="tenant-1/project-1/run-1/qa-demo-2.webm",
                 capture_target="browser",
@@ -3483,21 +3676,39 @@ def test_execute_qa_demo_stage_revalidates_partial_previous_recording_links_befo
                 release_context_sha256=_empty_release_context_sha256(),
             ),
             QaRecording(
-                name="Android walkthrough",
-                artifact_url="https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-demo-3.mp4",
-                object_key="tenant-1/project-1/run-1/qa-demo-3.mp4",
-                capture_target="android",
-                capture_reference="android-emulator://configured",
+                name="Browser repeat action",
+                artifact_url="https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-demo-3.webm",
+                object_key="tenant-1/project-1/run-1/qa-demo-3.webm",
+                capture_target="browser",
+                capture_reference="https://preview.example",
                 content_sha256=_sha256(26),
                 release_context_sha256=_empty_release_context_sha256(),
             ),
             QaRecording(
-                name="Android repeat action",
+                name="Android walkthrough",
                 artifact_url="https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-demo-4.mp4",
                 object_key="tenant-1/project-1/run-1/qa-demo-4.mp4",
                 capture_target="android",
                 capture_reference="android-emulator://configured",
                 content_sha256=_sha256(27),
+                release_context_sha256=_empty_release_context_sha256(),
+            ),
+            QaRecording(
+                name="Android invalid input",
+                artifact_url="https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-demo-5.mp4",
+                object_key="tenant-1/project-1/run-1/qa-demo-5.mp4",
+                capture_target="android",
+                capture_reference="android-emulator://configured",
+                content_sha256=_sha256(28),
+                release_context_sha256=_empty_release_context_sha256(),
+            ),
+            QaRecording(
+                name="Android repeat action",
+                artifact_url="https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-demo-6.mp4",
+                object_key="tenant-1/project-1/run-1/qa-demo-6.mp4",
+                capture_target="android",
+                capture_reference="android-emulator://configured",
+                content_sha256=_sha256(29),
                 release_context_sha256=_empty_release_context_sha256(),
             ),
         ],
@@ -3612,6 +3823,12 @@ def test_execute_qa_demo_stage_revalidates_previous_recording_links_before_short
                 steps=_proof_steps("text=Feature"),
             ),
             QaScenario(
+                name="Invalid input is rejected",
+                objective="Invalid input is rejected",
+                capture_target="browser",
+                steps=_proof_steps("text=Feature"),
+            ),
+            QaScenario(
                 name="Repeat action remains safe",
                 objective="Repeat action remains safe",
                 capture_target="browser",
@@ -3629,12 +3846,21 @@ def test_execute_qa_demo_stage_revalidates_previous_recording_links_before_short
                 release_context_sha256=_release_context_sha256(),
             ),
             QaRecording(
-                name="Repeat action remains safe",
+                name="Invalid input is rejected",
                 artifact_url="https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-demo-2.webm",
                 object_key="tenant-1/project-1/run-1/qa-demo-2.webm",
                 capture_target="browser",
                 capture_reference="https://preview.example",
                 content_sha256=_sha256(29),
+                release_context_sha256=_release_context_sha256(),
+            ),
+            QaRecording(
+                name="Repeat action remains safe",
+                artifact_url="https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-demo-3.webm",
+                object_key="tenant-1/project-1/run-1/qa-demo-3.webm",
+                capture_target="browser",
+                capture_reference="https://preview.example",
+                content_sha256=_sha256(30),
                 release_context_sha256=_release_context_sha256(),
             ),
         ],
@@ -3691,6 +3917,12 @@ def test_execute_qa_demo_stage_revalidates_release_readiness_before_previous_rec
                 steps=_proof_steps("text=Feature"),
             ),
             QaScenario(
+                name="Invalid input is rejected",
+                objective="Invalid input is rejected",
+                capture_target="browser",
+                steps=_proof_steps("text=Feature"),
+            ),
+            QaScenario(
                 name="Repeat action remains safe",
                 objective="Repeat action remains safe",
                 capture_target="browser",
@@ -3708,12 +3940,21 @@ def test_execute_qa_demo_stage_revalidates_release_readiness_before_previous_rec
                 release_context_sha256=_release_context_sha256(),
             ),
             QaRecording(
-                name="Repeat action remains safe",
+                name="Invalid input is rejected",
                 artifact_url="https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-demo-2.webm",
                 object_key="tenant-1/project-1/run-1/qa-demo-2.webm",
                 capture_target="browser",
                 capture_reference="https://preview.example",
                 content_sha256=_sha256(51),
+                release_context_sha256=_release_context_sha256(),
+            ),
+            QaRecording(
+                name="Repeat action remains safe",
+                artifact_url="https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-demo-3.webm",
+                object_key="tenant-1/project-1/run-1/qa-demo-3.webm",
+                capture_target="browser",
+                capture_reference="https://preview.example",
+                content_sha256=_sha256(52),
                 release_context_sha256=_release_context_sha256(),
             ),
         ],
@@ -3762,7 +4003,7 @@ def test_execute_qa_demo_stage_rejects_previous_recording_without_current_pm_cov
                 title="New dashboard walkthrough",
                 acceptance_criterion="New dashboard saves settings",
                 capture_target="browser",
-                variants=["Invalid settings show validation"],
+                variants=["Invalid settings show validation", "Repeat settings save remains safe"],
             )
         ],
     )
@@ -3772,6 +4013,12 @@ def test_execute_qa_demo_stage_rejects_previous_recording_without_current_pm_cov
             QaScenario(
                 name="Old profile walkthrough",
                 objective="Show old profile still renders",
+                capture_target="browser",
+                steps=_proof_steps("text=Old profile"),
+            ),
+            QaScenario(
+                name="Old profile invalid input",
+                objective="Invalid input is rejected on the old profile",
                 capture_target="browser",
                 steps=_proof_steps("text=Old profile"),
             ),
@@ -3793,12 +4040,21 @@ def test_execute_qa_demo_stage_rejects_previous_recording_without_current_pm_cov
                 release_context_sha256=_release_context_sha256(),
             ),
             QaRecording(
-                name="Old profile repeat action",
+                name="Old profile invalid input",
                 artifact_url="https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-demo-2.webm",
                 object_key="tenant-1/project-1/run-1/qa-demo-2.webm",
                 capture_target="browser",
                 capture_reference="https://preview.example",
                 content_sha256=_sha256(56),
+                release_context_sha256=_release_context_sha256(),
+            ),
+            QaRecording(
+                name="Old profile repeat action",
+                artifact_url="https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-demo-3.webm",
+                object_key="tenant-1/project-1/run-1/qa-demo-3.webm",
+                capture_target="browser",
+                capture_reference="https://preview.example",
+                content_sha256=_sha256(57),
                 release_context_sha256=_release_context_sha256(),
             ),
         ],
@@ -3955,6 +4211,12 @@ def test_execute_qa_demo_stage_rejects_previous_recording_from_different_release
                 steps=_proof_steps("text=Feature"),
             ),
             QaScenario(
+                name="Invalid input is rejected",
+                objective="Invalid input is rejected",
+                capture_target="browser",
+                steps=_proof_steps("text=Feature"),
+            ),
+            QaScenario(
                 name="Repeat action remains safe",
                 objective="Repeat action remains safe",
                 capture_target="browser",
@@ -3970,7 +4232,25 @@ def test_execute_qa_demo_stage_rejects_previous_recording_from_different_release
                 capture_reference="https://preview.example",
                 content_sha256=_sha256(52),
                 release_context_sha256="f" * 64,
-            )
+            ),
+            QaRecording(
+                name="Invalid input is rejected",
+                artifact_url="https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-demo-2.webm",
+                object_key="tenant-1/project-1/run-1/qa-demo-2.webm",
+                capture_target="browser",
+                capture_reference="https://preview.example",
+                content_sha256=_sha256(53),
+                release_context_sha256="f" * 64,
+            ),
+            QaRecording(
+                name="Repeat action remains safe",
+                artifact_url="https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-demo-3.webm",
+                object_key="tenant-1/project-1/run-1/qa-demo-3.webm",
+                capture_target="browser",
+                capture_reference="https://preview.example",
+                content_sha256=_sha256(54),
+                release_context_sha256="f" * 64,
+            ),
         ],
     )
 
@@ -4029,6 +4309,12 @@ def test_execute_qa_demo_stage_rejects_previous_recording_from_different_release
                 steps=_proof_steps("text=Feature"),
             ),
             QaScenario(
+                name="Invalid input is rejected",
+                objective="Invalid input is rejected",
+                capture_target="browser",
+                steps=_proof_steps("text=Feature"),
+            ),
+            QaScenario(
                 name="Repeat action remains safe",
                 objective="Repeat action remains safe",
                 capture_target="browser",
@@ -4047,12 +4333,22 @@ def test_execute_qa_demo_stage_rejects_previous_recording_from_different_release
                 release_context_sha256=_release_context_sha256_with_commit(commit_sha="a" * 40),
             ),
             QaRecording(
-                name="Repeat action remains safe",
+                name="Invalid input is rejected",
                 artifact_url="https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-demo-2.webm",
                 object_key="tenant-1/project-1/run-1/qa-demo-2.webm",
                 capture_target="browser",
                 capture_reference="https://preview.example",
                 content_sha256=_sha256(54),
+                release_commit_sha="a" * 40,
+                release_context_sha256=_release_context_sha256_with_commit(commit_sha="a" * 40),
+            ),
+            QaRecording(
+                name="Repeat action remains safe",
+                artifact_url="https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-demo-3.webm",
+                object_key="tenant-1/project-1/run-1/qa-demo-3.webm",
+                capture_target="browser",
+                capture_reference="https://preview.example",
+                content_sha256=_sha256(55),
                 release_commit_sha="a" * 40,
                 release_context_sha256=_release_context_sha256_with_commit(commit_sha="a" * 40),
             ),
@@ -4191,7 +4487,13 @@ def test_execute_qa_demo_stage_uses_builtin_ios_capture_on_macos() -> None:
                         objective="Repeat action remains safe on iOS",
                         capture_target="ios",
                         steps=[QaStep(action="assert_visible", selector="text=Ready")],
-                    )
+                    ),
+                    QaScenario(
+                        name="Native invalid input",
+                        objective="Invalid input is rejected on iOS",
+                        capture_target="ios",
+                        steps=[QaStep(action="assert_visible", selector="text=Ready")],
+                    ),
                 ],
             )
         )
@@ -4206,6 +4508,13 @@ def test_execute_qa_demo_stage_uses_builtin_ios_capture_on_macos() -> None:
                 _local_recording(
                     name="Native walkthrough",
                     path="/tmp/native.mp4",
+                    capture_target="ios",
+                    capture_reference="ios-simulator://configured",
+                    content_type="video/mp4",
+                ),
+                _local_recording(
+                    name="Native invalid input",
+                    path="/tmp/native-invalid.mp4",
                     capture_target="ios",
                     capture_reference="ios-simulator://configured",
                     content_type="video/mp4",
@@ -4299,7 +4608,13 @@ def test_execute_qa_demo_stage_uses_builtin_android_capture_on_linux() -> None:
                         objective="Repeat action remains safe on Android",
                         capture_target="android",
                         steps=[QaStep(action="assert_visible", selector="text=Ready")],
-                    )
+                    ),
+                    QaScenario(
+                        name="Android invalid input",
+                        objective="Invalid input is rejected on Android",
+                        capture_target="android",
+                        steps=[QaStep(action="assert_visible", selector="text=Ready")],
+                    ),
                 ],
             )
         )
@@ -4314,6 +4629,13 @@ def test_execute_qa_demo_stage_uses_builtin_android_capture_on_linux() -> None:
                 _local_recording(
                     name="Android walkthrough",
                     path="/tmp/android.mp4",
+                    capture_target="android",
+                    capture_reference="android-emulator://configured",
+                    content_type="video/mp4",
+                ),
+                _local_recording(
+                    name="Android invalid input",
+                    path="/tmp/android-invalid.mp4",
                     capture_target="android",
                     capture_reference="android-emulator://configured",
                     content_type="video/mp4",
@@ -4487,6 +4809,7 @@ def test_execute_qa_demo_stage_retries_recording_failures() -> None:
             "orchestrator.core.qa.demo_service.record_demo_scenarios",
             return_value=[
                 _local_recording(name="Happy path"),
+                _local_recording(name="Invalid input is rejected", path="/tmp/invalid.webm"),
                 _local_recording(name="Repeat action remains safe", path="/tmp/repeat.webm"),
             ],
         ),
@@ -4519,7 +4842,7 @@ def test_execute_qa_demo_stage_retries_recording_failures() -> None:
             preview_release=release,
         )
 
-    assert upload_attempts["count"] == 3
+    assert upload_attempts["count"] == 4
     assert result.recordings[0].artifact_url.endswith("qa-demo-1.webm")
 
 
