@@ -182,7 +182,7 @@ def release_context_sha256_for_service_urls(release_service_urls: list[dict[str,
 def release_context_sha256_for_release(*, release, release_service_urls: list[dict[str, str]]) -> str:  # noqa: ANN001
     commit_sha = str(getattr(release, "commit_sha", "") or "").strip()
     if not commit_sha:
-        return release_context_sha256_for_service_urls(release_service_urls)
+        raise RuntimeError("QA demo recording requires a preview release commit SHA before proof can be recorded")
     payload = {
         "commit_sha": commit_sha,
         "service_urls": release_service_urls,
