@@ -6,6 +6,11 @@ import json
 from sqlalchemy import select
 
 from orchestrator.core.guardrails import enforce_safe_command
+from orchestrator.core.project_app_planner import (
+    ensure_project_app,
+    normalize_project_app_planner_output,
+    scan_repo_for_project_apps,
+)
 from orchestrator.core.platform.secret_service import resolve_platform_secret_ref
 from orchestrator.core.runs.human_input_service import answered_human_inputs_for_attempt
 from orchestrator.core.platform.tenant_secret_service import resolve_scoped_secret_ref
@@ -93,6 +98,10 @@ def _project_demo_capture_target_sources(*, session, tenant_id: str, project_id:
         .scalars()
         .all()
     )
+    return _demo_capture_target_sources_from_apps(apps)
+
+
+def _demo_capture_target_sources_from_apps(apps: list[object] | tuple[object, ...]) -> dict[QaCaptureTarget, tuple[str, ...]]:
     sources: dict[QaCaptureTarget, set[str]] = {target: set() for target in _PROJECT_DEMO_TARGET_ORDER}
     for app in apps:
         descriptor = _project_app_descriptor(app)
@@ -108,6 +117,49 @@ def _project_demo_capture_target_sources(*, session, tenant_id: str, project_id:
         for target, target_sources in sources.items()
         if target_sources
     }
+
+
+def _refresh_project_demo_capture_target_sources_from_checkout(
+    *,
+    session,
+    tenant_id: str,
+    project_id: str,
+    checkout_path: str,
+    run_id: str,
+    scan_repo_for_project_apps_fn=None,
+    normalize_project_app_planner_output_fn=None,
+    ensure_project_app_fn=None,
+) -> dict[QaCaptureTarget, tuple[str, ...]]:  # noqa: ANN001
+    if scan_repo_for_project_apps_fn is None:
+        scan_repo_for_project_apps_fn = scan_repo_for_project_apps
+    if normalize_project_app_planner_output_fn is None:
+        normalize_project_app_planner_output_fn = normalize_project_app_planner_output
+    if ensure_project_app_fn is None:
+        ensure_project_app_fn = ensure_project_app
+
+    analysis_source = f"workflow_request:{run_id}"
+    pre_scan_candidates = scan_repo_for_project_apps_fn(
+        checkout_path=checkout_path,
+        analysis_source=analysis_source,
+    )
+    normalized_candidates = normalize_project_app_planner_output_fn(
+        pre_scan_candidates=pre_scan_candidates,
+        runtime_payload=None,
+        analysis_source=analysis_source,
+    )
+    refreshed_apps = [
+        ensure_project_app_fn(
+            session,
+            tenant_id=tenant_id,
+            project_id=project_id,
+            candidate=candidate,
+        )
+        for candidate in normalized_candidates
+    ]
+    flush = getattr(session, "flush", None)
+    if callable(flush):
+        flush()
+    return _demo_capture_target_sources_from_apps(tuple(refreshed_apps))
 
 
 def _project_demo_capture_targets(source_map: dict[QaCaptureTarget, tuple[str, ...]]) -> tuple[QaCaptureTarget, ...]:
@@ -129,6 +181,9 @@ def build_workflow_request(
     answered_human_inputs_for_attempt_fn=None,
     entry_checkpoint_fn=None,
     resolve_branch_from_open_pull_requests_fn=None,
+    scan_repo_for_project_apps_fn=None,
+    normalize_project_app_planner_output_fn=None,
+    ensure_project_app_fn=None,
 ) -> WorkflowRequest:  # noqa: ANN001
     if prepare_execution_repo_for_run_fn is None:
         prepare_execution_repo_for_run_fn = prepare_execution_repo_for_run
@@ -218,16 +273,29 @@ def build_workflow_request(
         workflow_id=run.workflow_id,
         consumed_by_run_id=run.run_id,
     )
-    project_demo_capture_target_sources = _project_demo_capture_target_sources(
-        session=session,
-        tenant_id=tenant.tenant_id,
-        project_id=project.project_id if project is not None else run.project_id,
-    )
+    project_id = project.project_id if project is not None else run.project_id
+    if bool(effective_policy.get("qa_demo_recording_enabled")) and execution_repo_dir:
+        project_demo_capture_target_sources = _refresh_project_demo_capture_target_sources_from_checkout(
+            session=session,
+            tenant_id=tenant.tenant_id,
+            project_id=project_id,
+            checkout_path=execution_repo_dir,
+            run_id=run.run_id,
+            scan_repo_for_project_apps_fn=scan_repo_for_project_apps_fn,
+            normalize_project_app_planner_output_fn=normalize_project_app_planner_output_fn,
+            ensure_project_app_fn=ensure_project_app_fn,
+        )
+    else:
+        project_demo_capture_target_sources = _project_demo_capture_target_sources(
+            session=session,
+            tenant_id=tenant.tenant_id,
+            project_id=project_id,
+        )
 
     return WorkflowRequest(
         tenant_id=tenant.tenant_id,
         workflow_id=run.workflow_id,
-        project_id=project.project_id if project is not None else run.project_id,
+        project_id=project_id,
         project_name=project.name if project is not None else None,
         github_repository=project.github_repository if project is not None else None,
         jira_project_key=project.jira_project_key if project is not None else None,
