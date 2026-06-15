@@ -161,6 +161,7 @@ class Settings(BaseSettings):
     qa_demo_ios_capture_reference: str = ""
     qa_demo_android_recorder_command: str = ""
     qa_demo_android_capture_reference: str = ""
+    qa_demo_android_worker_platform: str = ""
     qa_demo_desktop_recorder_command: str = ""
     qa_demo_desktop_capture_reference: str = ""
     qa_demo_desktop_worker_platform: str = ""

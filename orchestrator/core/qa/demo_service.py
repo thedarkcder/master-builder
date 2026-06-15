@@ -501,7 +501,13 @@ def resolve_available_capture_targets(*, settings, preview_release) -> dict[str,
                 or "android-emulator://configured"
             ),
             recorder_command=android_recorder_command,
-            required_worker_platform="linux",
+            required_worker_platform=(
+                _configured_worker_platform(
+                    raw_value=getattr(settings, "qa_demo_android_worker_platform", ""),
+                    provider_name="android",
+                )
+                or "linux"
+            ),
         )
 
     desktop_command = str(getattr(settings, "qa_demo_desktop_recorder_command", "") or "").strip()

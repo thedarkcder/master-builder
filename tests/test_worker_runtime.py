@@ -207,6 +207,7 @@ class RuntimeFactoryTests(unittest.TestCase):
         settings.database_url = "sqlite:///test.db"
         settings.qa_demo_ios_recorder_command = ""
         settings.qa_demo_android_recorder_command = ""
+        settings.qa_demo_android_worker_platform = ""
         settings.qa_demo_desktop_recorder_command = ""
         settings.qa_demo_desktop_worker_platform = ""
         with (
