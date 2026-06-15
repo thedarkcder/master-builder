@@ -1316,6 +1316,7 @@ def test_record_demo_scenarios_passes_project_source_paths_and_release_context_t
                     "url": "https://preview.example",
                 },
             ],
+            release_commit_sha="b" * 40,
             qa_result=QaResult(
                 summary=["Recorded demos"],
                 scenarios=[
@@ -1332,6 +1333,7 @@ def test_record_demo_scenarios_passes_project_source_paths_and_release_context_t
     assert len(recordings) == 1
     input_payload, env = commands[0]
     assert input_payload["target_source_paths"] == ["apps/android"]
+    assert input_payload["release_commit_sha"] == "b" * 40
     assert input_payload["release_api_base_url"] == "https://api.preview.example"
     assert input_payload["release_browser_url"] == "https://preview.example"
     assert input_payload["release_service_urls"] == [
@@ -1346,6 +1348,7 @@ def test_record_demo_scenarios_passes_project_source_paths_and_release_context_t
             "url": "https://preview.example",
         },
     ]
+    assert env["MB_QA_DEMO_RELEASE_COMMIT_SHA"] == "b" * 40
     assert env["MB_QA_DEMO_RELEASE_API_BASE_URL"] == "https://api.preview.example"
     assert env["QA_DEMO_API_BASE_URL"] == "https://api.preview.example"
     assert json.loads(env["MB_QA_DEMO_RELEASE_SERVICE_URLS_JSON"])[0]["url"] == "https://api.preview.example"
@@ -1915,6 +1918,7 @@ def test_execute_qa_demo_stage_records_and_uploads() -> None:
     browser_target = next(item for item in available_targets if item["capture_target"] == "browser")
     assert browser_target["capture_reference"] == "https://preview.example"
     assert browser_target["source_paths"] == []
+    assert browser_target["release_commit_sha"] == "b" * 40
     assert browser_target["release_api_base_url"] == "https://api.preview.example"
     assert browser_target["release_browser_url"] == "https://preview.example"
     assert record_mock.call_args.kwargs["release_service_urls"] == [
@@ -1929,6 +1933,7 @@ def test_execute_qa_demo_stage_records_and_uploads() -> None:
             "url": "https://preview.example",
         },
     ]
+    assert record_mock.call_args.kwargs["release_commit_sha"] == "b" * 40
     assert upload_mock.call_args.kwargs["content_type"] == "video/webm"
     assert upload_mock.call_args.kwargs["release_context_sha256"] == _release_context_sha256_with_commit(include_api=True)
 
@@ -2098,6 +2103,7 @@ def test_execute_qa_demo_stage_includes_project_source_paths_in_qa_prompt_target
             "capture_target": "android",
             "capture_reference": "android-emulator://configured",
             "source_paths": ["apps/android"],
+            "release_commit_sha": "b" * 40,
             "release_service_urls": [],
             "release_api_base_url": "",
             "release_browser_url": "",
@@ -3328,6 +3334,7 @@ def test_execute_qa_demo_stage_completes_remaining_target_with_previous_recordin
             "capture_target": "ios",
             "capture_reference": "ios-simulator://configured",
             "source_paths": [],
+            "release_commit_sha": "b" * 40,
             "release_service_urls": [],
             "release_api_base_url": "",
             "release_browser_url": "",
@@ -4087,6 +4094,7 @@ def test_execute_qa_demo_stage_uses_builtin_ios_capture_on_macos() -> None:
             "capture_target": "ios",
             "capture_reference": "ios-simulator://configured",
             "source_paths": [],
+            "release_commit_sha": "b" * 40,
             "release_service_urls": [],
             "release_api_base_url": "",
             "release_browser_url": "",
@@ -4193,6 +4201,7 @@ def test_execute_qa_demo_stage_uses_builtin_android_capture_on_linux() -> None:
             "capture_target": "android",
             "capture_reference": "android-emulator://configured",
             "source_paths": [],
+            "release_commit_sha": "b" * 40,
             "release_service_urls": [],
             "release_api_base_url": "",
             "release_browser_url": "",

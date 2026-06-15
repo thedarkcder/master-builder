@@ -668,15 +668,18 @@ def _available_capture_targets_payload(
     *,
     source_paths_by_target: dict[str, tuple[str, ...]] | None = None,
     release_service_urls: list[dict[str, str]] | None = None,
+    release_commit_sha: str = "",
 ) -> list[dict[str, object]]:
     payload: list[dict[str, object]] = []
     release_service_urls = list(release_service_urls or [])
+    release_commit_sha = str(release_commit_sha or "").strip()
     for target in targets.values():
         payload.append(
             {
                 "capture_target": target.capture_target,
                 "capture_reference": target.capture_reference,
                 "source_paths": list((source_paths_by_target or {}).get(target.capture_target, ())),
+                "release_commit_sha": release_commit_sha,
                 "release_service_urls": release_service_urls,
                 "release_api_base_url": _first_release_service_url(release_service_urls, service_kind="api"),
                 "release_browser_url": _first_release_service_url(release_service_urls, service_kind="website"),
@@ -1474,11 +1477,14 @@ def _recorder_env_with_release_context(
     *,
     base_env: dict[str, str],
     release_service_urls: list[dict[str, str]],
+    release_commit_sha: str = "",
 ) -> dict[str, str]:
     env = dict(base_env)
     serialized_urls = json.dumps(release_service_urls, sort_keys=True)
+    release_commit_sha = str(release_commit_sha or "").strip()
     api_base_url = _first_release_service_url(release_service_urls, service_kind="api")
     browser_url = _first_release_service_url(release_service_urls, service_kind="website")
+    env["MB_QA_DEMO_RELEASE_COMMIT_SHA"] = release_commit_sha
     env["MB_QA_DEMO_RELEASE_SERVICE_URLS_JSON"] = serialized_urls
     env["MB_QA_DEMO_RELEASE_API_BASE_URL"] = api_base_url
     env["MB_QA_DEMO_RELEASE_BROWSER_URL"] = browser_url
@@ -1600,6 +1606,7 @@ def record_demo_scenarios(
     available_capture_targets: dict[str, DemoCaptureTarget],
     qa_result: QaResult,
     release_service_urls: list[dict[str, str]] | None = None,
+    release_commit_sha: str = "",
 ) -> list[LocalQaRecording]:
     if not qa_result.scenarios:
         raise RuntimeError("QA demo recording requires at least one scenario")
@@ -1620,6 +1627,7 @@ def record_demo_scenarios(
 
     all_recordings: list[LocalQaRecording] = []
     release_service_urls = list(release_service_urls or [])
+    release_commit_sha = str(release_commit_sha or "").strip()
     for capture_target_name, scenarios in scenarios_by_target.items():
         _validate_unique_scenario_names(capture_target_name=capture_target_name, scenarios=scenarios)
         capture_target = available_capture_targets[capture_target_name]
@@ -1634,6 +1642,7 @@ def record_demo_scenarios(
             "target_source_paths": list(
                 (request.project_demo_capture_target_sources or {}).get(capture_target_name, ())
             ),
+            "release_commit_sha": release_commit_sha,
             "release_service_urls": release_service_urls,
             "release_api_base_url": _first_release_service_url(release_service_urls, service_kind="api"),
             "release_browser_url": _first_release_service_url(release_service_urls, service_kind="website"),
@@ -1684,6 +1693,7 @@ def record_demo_scenarios(
             env = _recorder_env_with_release_context(
                 base_env=env,
                 release_service_urls=release_service_urls,
+                release_commit_sha=release_commit_sha,
             )
             payload["preview_url"] = capture_target.capture_reference
             recordings = _invoke_json_recorder(
@@ -1701,6 +1711,7 @@ def record_demo_scenarios(
                 env=_recorder_env_with_release_context(
                     base_env=dict(os.environ),
                     release_service_urls=release_service_urls,
+                    release_commit_sha=release_commit_sha,
                 ),
                 capture_target=capture_target,
                 request=request,
@@ -1825,6 +1836,7 @@ def execute_qa_demo_stage(
         release=preview_release,
         release_service_urls=release_service_urls,
     )
+    release_commit_sha = str(getattr(preview_release, "commit_sha", "") or "").strip()
     if previous_recordings:
         _validate_reusable_qa_recording_links(
             settings=settings,
@@ -1924,6 +1936,7 @@ def execute_qa_demo_stage(
                 current_worker_capture_targets,
                 source_paths_by_target=request.project_demo_capture_target_sources,
                 release_service_urls=release_service_urls,
+                release_commit_sha=release_commit_sha,
             )
         ),
         attempt=request.attempt_number,
@@ -1949,6 +1962,7 @@ def execute_qa_demo_stage(
                 available_capture_targets=current_worker_capture_targets,
                 qa_result=qa_result,
                 release_service_urls=release_service_urls,
+                release_commit_sha=release_commit_sha,
             )
             uploaded: list[QaRecording] = []
             for index, recording in enumerate(local_recordings, start=1):
