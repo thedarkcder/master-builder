@@ -226,7 +226,7 @@ class BuildCodexRuntimeDefaultProfileTests(unittest.TestCase):
             codex_stderr_log_mode="all",
             codex_hang_detection_quiet_seconds=300,
             codex_hang_detection_report_interval_seconds=120,
-            codex_runtime_invocation_timeout_seconds=900,
+            codex_runtime_invocation_timeout_seconds=3600,
             runtime_home="",
             agent_id="worker-macos-local",
         )
@@ -251,7 +251,7 @@ class BuildHttpRuntimeTests(unittest.TestCase):
             codex_stderr_log_mode="all",
             codex_hang_detection_quiet_seconds=300,
             codex_hang_detection_report_interval_seconds=120,
-            codex_runtime_invocation_timeout_seconds=900,
+            codex_runtime_invocation_timeout_seconds=3600,
             runtime_home="",
             agent_id="worker-macos-local",
         )
@@ -534,7 +534,7 @@ class BuildCodexRuntimeTests(unittest.TestCase):
             codex_stderr_log_mode="all",
             codex_hang_detection_quiet_seconds=300,
             codex_hang_detection_report_interval_seconds=120,
-            codex_runtime_invocation_timeout_seconds=900,
+            codex_runtime_invocation_timeout_seconds=3600,
             runtime_home="/tmp/master-builder-test-runtime-home",
             agent_id="worker-macos-local",
         )
