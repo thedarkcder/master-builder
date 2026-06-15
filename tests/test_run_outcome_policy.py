@@ -30,7 +30,7 @@ def _demo_requirement(
         title=title,
         acceptance_criterion=acceptance_criterion,
         capture_target=capture_target,  # type: ignore[arg-type]
-        variants=variants or ["Repeat action remains safe"],
+        variants=variants or ["Invalid input is rejected", "Repeat action remains safe"],
     )
 
 
@@ -197,7 +197,8 @@ def test_complete_runs_qa_demo_stage_before_finalization() -> None:
         scenarios=[],
         recordings=[
             _qa_recording(name="Happy path", index=1),
-            _qa_recording(name="Repeat action remains safe", index=2),
+            _qa_recording(name="Invalid input is rejected", index=2),
+            _qa_recording(name="Repeat action remains safe", index=3),
         ],
     )
     finalizer_calls: dict[str, object] = {}
@@ -252,7 +253,7 @@ def test_complete_runs_qa_demo_stage_before_finalization() -> None:
     assert checkpoint.status == "completed"
     assert checkpoint.qa_result == qa_result
     assert update_pr_mock.called
-    assert update_pr_mock.call_args.kwargs["required_recording_counts"] == {"browser": 2}
+    assert update_pr_mock.call_args.kwargs["required_recording_counts"] == {"browser": 3}
     assert finalizer_calls["workflow_result"].orchestration_stage_trace[-1]["stage"] == "qa"
 
 
@@ -835,17 +836,25 @@ def test_complete_attaches_pr_evidence_after_accumulated_qa_demo_recordings_fini
         scenarios=[],
         recordings=[
             _qa_recording(name="Browser walkthrough", index=1),
-            _qa_recording(name="Browser repeat action", index=2),
+            _qa_recording(name="Browser invalid input", index=2),
+            _qa_recording(name="Browser repeat action", index=3),
             _qa_recording(
                 name="Android walkthrough",
-                index=3,
+                index=4,
+                capture_target="android",
+                capture_reference="android-emulator://configured",
+                suffix="mp4",
+            ),
+            _qa_recording(
+                name="Android invalid input",
+                index=5,
                 capture_target="android",
                 capture_reference="android-emulator://configured",
                 suffix="mp4",
             ),
             _qa_recording(
                 name="Android repeat action",
-                index=4,
+                index=6,
                 capture_target="android",
                 capture_reference="android-emulator://configured",
                 suffix="mp4",
@@ -864,14 +873,21 @@ def test_complete_attaches_pr_evidence_after_accumulated_qa_demo_recordings_fini
             *previous_qa.recordings,
             _qa_recording(
                 name="iOS walkthrough",
-                index=5,
+                index=7,
+                capture_target="ios",
+                capture_reference="ios-simulator://configured",
+                suffix="mp4",
+            ),
+            _qa_recording(
+                name="iOS invalid input",
+                index=8,
                 capture_target="ios",
                 capture_reference="ios-simulator://configured",
                 suffix="mp4",
             ),
             _qa_recording(
                 name="iOS repeat action",
-                index=6,
+                index=9,
                 capture_target="ios",
                 capture_reference="ios-simulator://configured",
                 suffix="mp4",
@@ -929,13 +945,16 @@ def test_complete_attaches_pr_evidence_after_accumulated_qa_demo_recordings_fini
     assert [recording.capture_target for recording in update_pr_mock.call_args.kwargs["qa_result"].recordings] == [
         "browser",
         "browser",
+        "browser",
         "android",
         "android",
+        "android",
+        "ios",
         "ios",
         "ios",
     ]
     assert update_pr_mock.call_args.kwargs["required_capture_targets"] == ("browser", "ios", "android")
-    assert update_pr_mock.call_args.kwargs["required_recording_counts"] == {"browser": 2, "ios": 2, "android": 2}
+    assert update_pr_mock.call_args.kwargs["required_recording_counts"] == {"browser": 3, "ios": 3, "android": 3}
     deps.execution.requeue_workflow_result_for_capability_fn.assert_not_called()
     assert finalizer_calls["workflow_result"].orchestration_stage_trace[-1]["status"] == "completed"
 
@@ -950,7 +969,8 @@ def test_complete_persists_blocked_qa_checkpoint_when_pr_evidence_update_fails()
         scenarios=[],
         recordings=[
             _qa_recording(name="Happy path", index=1),
-            _qa_recording(name="Repeat action remains safe", index=2),
+            _qa_recording(name="Invalid input is rejected", index=2),
+            _qa_recording(name="Repeat action remains safe", index=3),
         ],
     )
     finalizer_calls: dict[str, object] = {}
@@ -1070,17 +1090,25 @@ def test_complete_blocks_when_qa_continue_result_is_missing_required_capture_tar
         scenarios=[],
         recordings=[
             _qa_recording(name="Browser walkthrough", index=1),
-            _qa_recording(name="Browser repeat action", index=2),
+            _qa_recording(name="Browser invalid input", index=2),
+            _qa_recording(name="Browser repeat action", index=3),
             _qa_recording(
                 name="Android walkthrough",
-                index=3,
+                index=4,
+                capture_target="android",
+                capture_reference="android-emulator://configured",
+                suffix="mp4",
+            ),
+            _qa_recording(
+                name="Android invalid input",
+                index=5,
                 capture_target="android",
                 capture_reference="android-emulator://configured",
                 suffix="mp4",
             ),
             _qa_recording(
                 name="Android repeat action",
-                index=4,
+                index=6,
                 capture_target="android",
                 capture_reference="android-emulator://configured",
                 suffix="mp4",
