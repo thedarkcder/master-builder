@@ -2597,28 +2597,28 @@ def test_execute_qa_demo_stage_completes_remaining_target_with_previous_recordin
         recordings=[
             QaRecording(
                 name="Browser walkthrough",
-                artifact_url="https://cdn.example/qa-demo-1.webm",
+                artifact_url="https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-demo-1.webm",
                 object_key="tenant-1/project-1/run-1/qa-demo-1.webm",
                 capture_target="browser",
                 capture_reference="https://preview.example",
             ),
             QaRecording(
                 name="Browser repeat action",
-                artifact_url="https://cdn.example/qa-demo-2.mp4",
+                artifact_url="https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-demo-2.webm",
                 object_key="tenant-1/project-1/run-1/qa-demo-2.webm",
                 capture_target="browser",
                 capture_reference="https://preview.example",
             ),
             QaRecording(
                 name="Android walkthrough",
-                artifact_url="https://cdn.example/qa-demo-3.mp4",
+                artifact_url="https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-demo-3.mp4",
                 object_key="tenant-1/project-1/run-1/qa-demo-3.mp4",
                 capture_target="android",
                 capture_reference="android-emulator://configured",
             ),
             QaRecording(
                 name="Android repeat action",
-                artifact_url="https://cdn.example/qa-demo-4.mp4",
+                artifact_url="https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-demo-4.mp4",
                 object_key="tenant-1/project-1/run-1/qa-demo-4.mp4",
                 capture_target="android",
                 capture_reference="android-emulator://configured",
@@ -2722,6 +2722,182 @@ def test_execute_qa_demo_stage_completes_remaining_target_with_previous_recordin
             "source_paths": [],
         }
     ]
+
+
+def test_execute_qa_demo_stage_revalidates_partial_previous_recording_links_before_reuse() -> None:
+    tenant = SimpleNamespace(tenant_id="tenant-1", github_config={})
+    project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo")
+    run = SimpleNamespace(run_id="run-1")
+    plan = PmPlan(
+        plan_steps=["Implement"],
+        acceptance_criteria=["Feature works everywhere"],
+        risks=[],
+        demo_requirements=[
+            _demo_requirement(
+                title="Browser walkthrough",
+                acceptance_criterion="Feature works everywhere",
+                capture_target="browser",
+            ),
+            _demo_requirement(
+                title="iOS walkthrough",
+                acceptance_criterion="Feature works everywhere",
+                capture_target="ios",
+            ),
+            _demo_requirement(
+                title="Android walkthrough",
+                acceptance_criterion="Feature works everywhere",
+                capture_target="android",
+            ),
+        ],
+    )
+    previous_qa = QaResult(
+        summary=["Recorded Linux demos"],
+        scenarios=[
+            QaScenario(
+                name="Browser walkthrough",
+                objective="Show browser",
+                capture_target="browser",
+                steps=_proof_steps("text=Feature"),
+            ),
+            QaScenario(
+                name="Browser repeat action",
+                objective="Repeat action remains safe in browser",
+                capture_target="browser",
+                steps=_proof_steps("text=Feature"),
+            ),
+            QaScenario(
+                name="Android walkthrough",
+                objective="Show Android",
+                capture_target="android",
+                steps=_proof_steps("text=Ready"),
+            ),
+            QaScenario(
+                name="Android repeat action",
+                objective="Repeat action remains safe on Android",
+                capture_target="android",
+                steps=_proof_steps("text=Ready"),
+            ),
+        ],
+        recordings=[
+            QaRecording(
+                name="Browser walkthrough",
+                artifact_url="https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-demo-1.webm",
+                object_key="tenant-1/project-1/run-1/qa-demo-1.webm",
+                capture_target="browser",
+                capture_reference="https://preview.example",
+            ),
+            QaRecording(
+                name="Browser repeat action",
+                artifact_url="https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-demo-2.webm",
+                object_key="tenant-1/project-1/run-1/qa-demo-2.webm",
+                capture_target="browser",
+                capture_reference="https://preview.example",
+            ),
+            QaRecording(
+                name="Android walkthrough",
+                artifact_url="https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-demo-3.mp4",
+                object_key="tenant-1/project-1/run-1/qa-demo-3.mp4",
+                capture_target="android",
+                capture_reference="android-emulator://configured",
+            ),
+            QaRecording(
+                name="Android repeat action",
+                artifact_url="https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-demo-4.mp4",
+                object_key="tenant-1/project-1/run-1/qa-demo-4.mp4",
+                capture_target="android",
+                capture_reference="android-emulator://configured",
+            ),
+        ],
+        outcome="requeue",
+    )
+    fake_agents = SimpleNamespace(
+        qa=MagicMock(
+            return_value=QaResult(
+                summary=["Recorded iOS demo"],
+                scenarios=[
+                    QaScenario(
+                        name="iOS walkthrough",
+                        objective="Show iOS",
+                        capture_target="ios",
+                        steps=_proof_steps("text=Ready"),
+                    ),
+                    QaScenario(
+                        name="iOS repeat action",
+                        objective="Repeat action remains safe on iOS",
+                        capture_target="ios",
+                        steps=_proof_steps("text=Ready"),
+                    ),
+                ],
+            )
+        )
+    )
+    request = replace(_request(), current_worker_capability=WorkerCapability.MACOS)
+
+    def _probe_artifact_url(url: str, **_kwargs: object) -> int:
+        if "qa-demo-1.webm" in url:
+            raise RuntimeError("object expired")
+        return 200
+
+    with (
+        patch("orchestrator.core.qa.demo_service.build_codex_runtime") as runtime_mock,
+        patch("orchestrator.core.qa.demo_service.CodexWorkflowAgents", return_value=fake_agents) as agents_mock,
+        patch(
+            "orchestrator.core.qa.demo_service.record_demo_scenarios",
+            return_value=[
+                _local_recording(
+                    name="iOS walkthrough",
+                    path="/tmp/ios.mp4",
+                    capture_target="ios",
+                    capture_reference="ios-simulator://configured",
+                    content_type="video/mp4",
+                ),
+                _local_recording(
+                    name="iOS repeat action",
+                    path="/tmp/ios-repeat.mp4",
+                    capture_target="ios",
+                    capture_reference="ios-simulator://configured",
+                    content_type="video/mp4",
+                ),
+            ],
+        ) as record_mock,
+        patch(
+            "orchestrator.core.qa.demo_service.upload_recording",
+            side_effect=[
+                "https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-demo-5.mp4",
+                "https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-demo-6.mp4",
+            ],
+        ) as upload_mock,
+        patch("orchestrator.core.qa.demo_service.ensure_capture_target_runtime_ready") as runtime_ready_mock,
+        patch("orchestrator.core.qa.demo_service._default_artifact_url_probe", side_effect=_probe_artifact_url),
+    ):
+        try:
+            execute_qa_demo_stage(
+                session=SimpleNamespace(),
+                settings=_qa_artifact_settings(qa_demo_playwright_module_dir=""),
+                tenant=tenant,
+                project=project,
+                run=run,
+                request=request,
+                plan=plan,
+                dev_result=DevResult(change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8"),
+                test_result=TestResult(guidance=["pytest -q"]),
+                review_result=ReviewResult(summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"),
+                preview_release=SimpleNamespace(service_urls=[]),
+                previous_qa_result=previous_qa,
+            )
+        except RuntimeError as exc:
+            assert "QA demo artifact URL is not reachable" in str(exc)
+            assert "object expired" in str(exc)
+        else:  # pragma: no cover
+            raise AssertionError("expected stale partial previous QA demo artifact URL to block reuse")
+
+    runtime_mock.assert_not_called()
+    agents_mock.assert_not_called()
+    fake_agents.qa.assert_not_called()
+    runtime_ready_mock.assert_not_called()
+    record_mock.assert_not_called()
+    upload_mock.assert_not_called()
+
 
 def test_execute_qa_demo_stage_revalidates_previous_recording_links_before_short_circuit() -> None:
     tenant = SimpleNamespace(tenant_id="tenant-1", github_config={})
