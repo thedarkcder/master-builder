@@ -156,6 +156,24 @@ class RunOutcomePolicy:
                         "before creating the run preview release."
                     ),
                 )
+            missing_plan_targets = (
+                _qa_demo_missing_project_capture_targets(
+                    qa_plan=qa_plan,
+                    workflow_request=getattr(prepared, "workflow_request", None),
+                )
+                if demo_recording_required and workflow_result.outcome == "success" and qa_plan is not None
+                else ()
+            )
+            if missing_plan_targets:
+                workflow_result = _workflow_result_with_qa_blocker(
+                    workflow_result=workflow_result,
+                    attempt=max(1, int(workflow_result.attempts or 1)),
+                    message=(
+                        "QA demo recording PM requirements are missing required project demo capture target(s) "
+                        "before creating the run preview release: "
+                        + ", ".join(missing_plan_targets)
+                    ),
+                )
             try:
                 if workflow_result.outcome == "success" and (not demo_recording_required or qa_plan is not None):
                     preview_result = create_run_preview_deployment(
@@ -719,6 +737,14 @@ def _qa_demo_project_capture_targets(workflow_request) -> tuple[str, ...]:  # no
         for target in targets
         if str(target or "").strip() in {"browser", "ios", "android"}
     )
+
+
+def _qa_demo_missing_project_capture_targets(*, qa_plan, workflow_request) -> tuple[str, ...]:  # noqa: ANN001
+    project_targets = _qa_demo_project_capture_targets(workflow_request)
+    if not project_targets:
+        return ()
+    selected_targets = set(required_capture_targets(qa_plan))
+    return tuple(target for target in project_targets if target not in selected_targets)
 
 
 def _workflow_result_with_qa_blocker(*, workflow_result, attempt: int, message: str):

@@ -616,6 +616,60 @@ def test_complete_blocks_demo_required_success_without_project_demo_targets() ->
     )
 
 
+def test_complete_blocks_demo_required_success_when_pm_plan_omits_project_demo_target_before_preview() -> None:
+    session = SimpleNamespace(refresh=lambda _run: None)
+    deps = _deps()
+    prepared = _prepared(_build_snapshot(), effective_policy={"qa_demo_recording_enabled": True})
+    prepared.workflow_request.project_demo_capture_targets = ("browser", "ios")
+    workflow_result = _workflow_result()
+    finalizer_calls: dict[str, object] = {}
+
+    class _Finalizer:
+        def __init__(self, **_kwargs):
+            pass
+
+        def finalize(self, **kwargs):
+            finalizer_calls.update(kwargs)
+            return SimpleNamespace(
+                run=prepared.run,
+                workflow_result=kwargs["workflow_result"],
+                persisted_status="blocked",
+                last_error=kwargs["workflow_result"].blocker_message,
+                persisted_plan=prepared.run.plan,
+                event_types=(),
+                tail_steps=(),
+            )
+
+    with (
+        patch("orchestrator.core.worker.run_outcome_policy.create_run_preview_deployment") as preview_mock,
+        patch("orchestrator.core.worker.run_outcome_policy.execute_qa_demo_stage") as qa_mock,
+        patch("orchestrator.core.worker.run_outcome_policy.update_pull_request_with_demo_evidence") as update_pr_mock,
+        patch("orchestrator.core.worker.run_outcome_policy.WorkflowFinalizer", _Finalizer),
+        patch("orchestrator.core.worker.run_outcome_policy.CompletionTailExecutor") as tail_executor_cls,
+    ):
+        tail_executor_cls.return_value.execute.return_value = None
+        RunOutcomePolicy(
+            session=session,
+            settings=SimpleNamespace(project_repo_checkout_base_dir="/tmp/workdirs"),
+            deps=deps,
+            cleanup_run_workspaces_safe_fn=MagicMock(),
+        ).complete(
+            prepared=prepared,
+            workflow_result=workflow_result,
+            execution_context={"execution_branch": "run/MAB-400/run-1"},
+        )
+
+    preview_mock.assert_not_called()
+    qa_mock.assert_not_called()
+    update_pr_mock.assert_not_called()
+    deps.execution.persist_stage_checkpoint_fn.assert_not_called()
+    assert finalizer_calls["workflow_result"].outcome == "blocked"
+    assert "PM requirements are missing required project demo capture target(s)" in str(
+        finalizer_calls["workflow_result"].blocker_message
+    )
+    assert "ios" in str(finalizer_calls["workflow_result"].blocker_message)
+
+
 def test_complete_requeues_when_qa_demo_stage_needs_remaining_worker_platform() -> None:
     session = SimpleNamespace(refresh=lambda _run: None)
     deps = _deps()
@@ -1202,6 +1256,7 @@ def test_complete_creates_preview_release_for_ios_only_demo_requirements() -> No
     session = SimpleNamespace(refresh=lambda _run: None)
     deps = _deps()
     prepared = _prepared(_build_snapshot(), effective_policy={"qa_demo_recording_enabled": True})
+    prepared.workflow_request.project_demo_capture_targets = ("ios",)
     workflow_result = replace(
         _workflow_result(),
         plan=PmPlan(
