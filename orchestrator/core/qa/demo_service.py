@@ -1208,6 +1208,40 @@ def _validate_qa_scenario_coverage(
         raise RuntimeError("QA demo scenarios do not cover PM demo requirement variants: " + " | ".join(messages))
 
 
+def _validate_reusable_qa_recordings(
+    *,
+    settings,  # noqa: ANN001
+    storage: DemoArtifactStorageConfig,
+    tenant,  # noqa: ANN001
+    project,  # noqa: ANN001
+    run,  # noqa: ANN001
+    plan: PmPlan,
+    recordings: list[QaRecording],
+) -> None:
+    _validate_demo_evidence_recording_metadata(recordings)
+    _validate_distinct_demo_recording_artifacts(recordings)
+    _validate_recordings_use_configured_storage(
+        recordings=recordings,
+        storage=storage,
+        tenant=tenant,
+        project=project,
+        run=run,
+    )
+    _validate_recordings_cover_required_targets(
+        recordings=recordings,
+        required_capture_targets=required_capture_targets(plan),
+    )
+    _validate_recordings_cover_required_counts(
+        recordings=recordings,
+        required_recording_counts=required_recording_counts_by_target(plan),
+    )
+    for recording in recordings:
+        ensure_artifact_url_reachable(
+            recording.artifact_url,
+            timeout_seconds=qa_demo_artifact_url_timeout_seconds(settings),
+        )
+
+
 def _normalized_demo_text(value: str) -> str:
     return " ".join(str(value or "").casefold().split())
 
@@ -1499,6 +1533,15 @@ def execute_qa_demo_stage(
     previous_scenarios = list(previous_qa_result.scenarios if previous_qa_result is not None else [])
     remaining_targets = remaining_capture_targets(plan, previous_recordings)
     if not remaining_targets:
+        _validate_reusable_qa_recordings(
+            settings=settings,
+            storage=storage_config_from_settings(settings),
+            tenant=tenant,
+            project=project,
+            run=run,
+            plan=plan,
+            recordings=previous_recordings,
+        )
         return QaResult(
             summary=[f"QA demo recording already has proof for required target(s): {', '.join(required_targets)}."],
             scenarios=previous_scenarios,
