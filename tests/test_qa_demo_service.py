@@ -1106,6 +1106,58 @@ def test_record_demo_scenarios_rejects_duplicate_local_recording_paths() -> None
             raise AssertionError("expected duplicate local recording path to block")
 
 
+def test_record_demo_scenarios_rejects_duplicate_recording_content_before_upload() -> None:
+    def _run(cmd, **_kwargs):  # noqa: ANN001
+        output_path = Path(cmd[3])
+        input_payload = json.loads(Path(cmd[2]).read_text(encoding="utf-8"))
+        video_dir = Path(input_payload["output_dir"])
+        video_dir.mkdir(parents=True, exist_ok=True)
+        first_path = video_dir / "happy-path.webm"
+        second_path = video_dir / "bad-input.webm"
+        duplicate_payload = _fake_webm_payload()
+        first_path.write_bytes(duplicate_payload)
+        second_path.write_bytes(duplicate_payload)
+        output_path.write_text(
+            json.dumps(
+                {
+                    "recordings": [
+                        {"name": "Happy path", "path": str(first_path)},
+                        {"name": "Bad input shows validation", "path": str(second_path)},
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        return SimpleNamespace(stdout="")
+
+    with patch("orchestrator.core.qa.demo_service.subprocess.run", side_effect=_run):
+        try:
+            record_demo_scenarios(
+                settings=SimpleNamespace(qa_demo_playwright_module_dir="/tmp/playwright-modules"),
+                request=_request(),
+                available_capture_targets=_browser_capture_targets(),
+                qa_result=QaResult(
+                    summary=["Recorded demos"],
+                    scenarios=[
+                        QaScenario(
+                            name="Happy path",
+                            objective="Show feature works",
+                            steps=[QaStep(action="assert_visible", selector="#feature")],
+                        ),
+                        QaScenario(
+                            name="Bad input shows validation",
+                            objective="Show validation works",
+                            steps=[QaStep(action="assert_visible", selector="#validation")],
+                        ),
+                    ],
+                ),
+            )
+        except RuntimeError as exc:
+            assert "QA demo recorder produced duplicate recording content" in str(exc)
+        else:  # pragma: no cover
+            raise AssertionError("expected duplicate recording content to block")
+
+
 def test_record_demo_scenarios_rejects_recording_path_outside_recorder_output_dir() -> None:
     def _run(cmd, **_kwargs):  # noqa: ANN001
         output_path = Path(cmd[3])

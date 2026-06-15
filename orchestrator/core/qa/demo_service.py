@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import os
 import re
@@ -1363,6 +1364,29 @@ def _validate_recordings_cover_scenarios(
         )
 
 
+def _validate_distinct_local_recording_content(
+    *,
+    capture_target_name: str,
+    recordings: list[LocalQaRecording],
+) -> None:
+    seen_content: dict[str, str] = {}
+    duplicate_recording_names: list[str] = []
+    for recording in recordings:
+        digest = hashlib.sha256(Path(recording.path).read_bytes()).hexdigest()
+        recording_name = str(recording.name or "").strip() or "<unnamed>"
+        previous_name = seen_content.get(digest)
+        if previous_name is not None:
+            duplicate_recording_names.extend([previous_name, recording_name])
+            continue
+        seen_content[digest] = recording_name
+    if duplicate_recording_names:
+        duplicates = list(dict.fromkeys(duplicate_recording_names))
+        raise RuntimeError(
+            f"QA demo recorder produced duplicate recording content for {capture_target_name} scenario(s): "
+            + ", ".join(duplicates)
+        )
+
+
 def _validate_unique_scenario_names(*, capture_target_name: str, scenarios: list[QaScenario]) -> None:
     seen: set[str] = set()
     duplicates: list[str] = []
@@ -1481,6 +1505,10 @@ def record_demo_scenarios(
         _validate_recordings_cover_scenarios(
             capture_target_name=capture_target_name,
             scenarios=scenarios,
+            recordings=recordings,
+        )
+        _validate_distinct_local_recording_content(
+            capture_target_name=capture_target_name,
             recordings=recordings,
         )
         all_recordings.extend(recordings)
