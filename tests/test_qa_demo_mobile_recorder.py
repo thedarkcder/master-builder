@@ -7,6 +7,7 @@ import pytest
 
 from scripts.qa_demo_mobile_recorder import _ios_command_timeout_seconds
 from scripts.qa_demo_mobile_recorder import _combined_recording_failure
+from scripts.qa_demo_mobile_recorder import _build_for_testing
 from scripts.qa_demo_mobile_recorder import _reboot_simulator
 from scripts.qa_demo_mobile_recorder import _run
 from scripts.qa_demo_mobile_recorder import discover_ios_project_files
@@ -131,3 +132,47 @@ def test_discover_ios_project_files_honors_relative_override(monkeypatch: pytest
 
     assert project_path == ios_dir / "Demo.xcodeproj"
     assert discovered_test_file == ui_test_file
+
+
+def test_discover_ios_project_files_prefers_workspace_when_present(tmp_path: Path) -> None:
+    ios_dir = tmp_path / "clients" / "ios"
+    (ios_dir / "example.xcodeproj").mkdir(parents=True)
+    (ios_dir / "example.xcworkspace").mkdir()
+    ui_test_file = ios_dir / "exampleUITests" / "exampleUITests.swift"
+    ui_test_file.parent.mkdir(parents=True)
+    ui_test_file.write_text("import XCTest\n", encoding="utf-8")
+
+    project_path, discovered_test_file = discover_ios_project_files(
+        repo_dir=tmp_path,
+        target_source_paths=["clients/ios"],
+    )
+
+    assert project_path == ios_dir / "example.xcworkspace"
+    assert discovered_test_file == ui_test_file
+
+
+def test_build_for_testing_uses_workspace_flag_for_workspace(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    captured: dict[str, object] = {}
+    workspace_path = tmp_path / "example.xcworkspace"
+    workspace_path.mkdir()
+
+    def _fake_run(args, *, cwd=None, **_kwargs):  # noqa: ANN001
+        captured["args"] = args
+        captured["cwd"] = cwd
+
+        class _Result:
+            stdout = ""
+
+        return _Result()
+
+    monkeypatch.setattr("scripts.qa_demo_mobile_recorder._run", _fake_run)
+
+    _build_for_testing(
+        project_path=workspace_path,
+        scheme="example",
+        simulator_udid="SIM-123",
+        derived_data_dir=tmp_path / "DerivedData",
+    )
+
+    assert captured["args"][:3] == ["xcodebuild", "-workspace", str(workspace_path)]
+    assert captured["cwd"] == workspace_path.parent
