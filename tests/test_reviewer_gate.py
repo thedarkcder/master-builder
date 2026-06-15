@@ -269,7 +269,7 @@ class ReviewerGateTests(unittest.TestCase):
         self.assertFalse(signal.ready)
         self.assertEqual(signal.state, "missing_demo_evidence")
 
-    def test_reviewer_accepts_structured_master_builder_demo_evidence(self) -> None:
+    def test_reviewer_blocks_structured_demo_evidence_without_required_target_and_count_markers(self) -> None:
         gate = self._gate_with_demo_requirement(
             _FakeGitHubClient(
                 checks=[
@@ -301,8 +301,8 @@ class ReviewerGateTests(unittest.TestCase):
             pr_number=17,
         )
 
-        self.assertTrue(signal.ready)
-        self.assertEqual(signal.state, "ready")
+        self.assertFalse(signal.ready)
+        self.assertEqual(signal.state, "missing_demo_evidence")
 
     def test_reviewer_blocks_structured_demo_evidence_when_url_does_not_match_object_key(self) -> None:
         gate = self._gate_with_demo_requirement(
@@ -373,7 +373,7 @@ class ReviewerGateTests(unittest.TestCase):
         self.assertFalse(signal.ready)
         self.assertEqual(signal.state, "missing_demo_evidence")
 
-    def test_reviewer_accepts_structured_demo_evidence_covering_required_target_marker(self) -> None:
+    def test_reviewer_blocks_structured_demo_evidence_missing_required_count_marker(self) -> None:
         gate = self._gate_with_demo_requirement(
             _FakeGitHubClient(
                 checks=[
@@ -412,8 +412,8 @@ class ReviewerGateTests(unittest.TestCase):
             pr_number=19,
         )
 
-        self.assertTrue(signal.ready)
-        self.assertEqual(signal.state, "ready")
+        self.assertFalse(signal.ready)
+        self.assertEqual(signal.state, "missing_demo_evidence")
 
     def test_reviewer_blocks_structured_demo_evidence_missing_required_recording_count_marker(self) -> None:
         gate = self._gate_with_demo_requirement(
