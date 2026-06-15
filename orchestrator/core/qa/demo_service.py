@@ -132,11 +132,6 @@ def resolve_preview_demo_url(release) -> str:  # noqa: ANN001
             url = str(getattr(service_url, "url", "") or "").strip()
             if url:
                 return url
-    for service_url in urls:
-        if str(getattr(service_url, "service_kind", "") or "").strip() == "website":
-            url = str(getattr(service_url, "url", "") or "").strip()
-            if url:
-                return url
     raise RuntimeError("QA demo recording requires an active preview website URL")
 
 
