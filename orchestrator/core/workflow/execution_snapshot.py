@@ -402,6 +402,8 @@ def _decode_stage_record(*, stage: StageName, raw: object) -> ExecutionStageReco
             return None
         if stage == StageName.REVIEW and decode_review_result_payload(artifact) is None:
             return None
+        if stage == StageName.QA and decode_qa_result_payload(artifact) is None:
+            return None
         normalized_artifact = dict(artifact)
     return ExecutionStageRecord(
         attempt=attempt,

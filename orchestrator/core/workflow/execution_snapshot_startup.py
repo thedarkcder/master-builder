@@ -16,6 +16,10 @@ from orchestrator.storage.models import Run, WorkflowCheckpoint
 logger = logging.getLogger(__name__)
 
 _EXECUTION_SNAPSHOT_MIGRATION_LOCK_KEY = 740_002_611
+_LEGACY_DEFAULT_DEMO_VARIANT = "legacy-default"
+_LEGACY_QA_RECORDING_DIGEST_BLOCKER = (
+    "Legacy QA demo recordings predate SHA-256 proof metadata and must be regenerated."
+)
 
 
 @dataclass(frozen=True)
@@ -81,15 +85,15 @@ def run_execution_snapshot_startup_bootstrap(
         )
         return report
 
-        logger.info(
-            "execution_snapshot_startup_bootstrap_valid actor=%s scanned_runs=%s scanned_checkpoints=%s "
-            "repaired_runs=%s repaired_checkpoints=%s",
-            actor,
-            report.scanned_runs,
-            report.scanned_checkpoints,
-            report.repaired_runs,
-            report.repaired_checkpoints,
-        )
+    logger.info(
+        "execution_snapshot_startup_bootstrap_valid actor=%s scanned_runs=%s scanned_checkpoints=%s "
+        "repaired_runs=%s repaired_checkpoints=%s",
+        actor,
+        report.scanned_runs,
+        report.scanned_checkpoints,
+        report.repaired_runs,
+        report.repaired_checkpoints,
+    )
     return report
 
 
@@ -224,6 +228,31 @@ def _repair_execution_stage_record(*, stage_name: object, stage_record: object) 
         return None
     artifact = stage_record.get("artifact")
     repaired_artifact = _repair_legacy_test_artifact(artifact) if stage_name == "test" else None
+    demo_requirement_repaired_artifact = (
+        _repair_legacy_demo_requirements(artifact) if stage_name == "pm" else None
+    )
+    if demo_requirement_repaired_artifact is not None:
+        repaired_artifact = (
+            demo_requirement_repaired_artifact
+            if repaired_artifact is None
+            else _merge_artifact_repairs(repaired_artifact, demo_requirement_repaired_artifact)
+        )
+    qa_digest_repaired_artifact = (
+        _repair_legacy_qa_recordings_without_content_sha256(artifact) if stage_name == "qa" else None
+    )
+    if qa_digest_repaired_artifact is not None:
+        repaired_artifact = (
+            qa_digest_repaired_artifact
+            if repaired_artifact is None
+            else _merge_artifact_repairs(repaired_artifact, qa_digest_repaired_artifact)
+        )
+    qa_scenario_repaired_artifact = _repair_legacy_qa_scenario_capture_targets(artifact) if stage_name == "qa" else None
+    if qa_scenario_repaired_artifact is not None:
+        repaired_artifact = (
+            qa_scenario_repaired_artifact
+            if repaired_artifact is None
+            else _merge_artifact_repairs(repaired_artifact, qa_scenario_repaired_artifact)
+        )
     capture_target_repaired_artifact = _repair_legacy_mobile_capture_targets(artifact)
     if capture_target_repaired_artifact is not None:
         repaired_artifact = capture_target_repaired_artifact if repaired_artifact is None else _merge_artifact_repairs(
@@ -258,6 +287,89 @@ def _merge_artifact_repairs(primary: dict[str, Any], secondary: dict[str, Any]) 
     for key, value in secondary.items():
         merged[key] = value
     return merged
+
+
+def _repair_legacy_demo_requirements(artifact: object) -> dict[str, Any] | None:
+    if not isinstance(artifact, dict):
+        return None
+    demo_requirements = artifact.get("demo_requirements")
+    if not isinstance(demo_requirements, list):
+        return None
+    repaired_requirements: list[Any] = []
+    changed = False
+    for requirement in demo_requirements:
+        if not isinstance(requirement, dict):
+            return None
+        repaired_requirement = dict(requirement)
+        variants = requirement.get("variants")
+        if isinstance(variants, list) and not variants:
+            repaired_requirement["variants"] = [_LEGACY_DEFAULT_DEMO_VARIANT]
+            changed = True
+        if "capture_target" not in repaired_requirement:
+            repaired_requirement["capture_target"] = "browser"
+            changed = True
+        repaired_requirements.append(repaired_requirement)
+    if not changed:
+        return None
+    repaired_artifact = dict(artifact)
+    repaired_artifact["demo_requirements"] = repaired_requirements
+    return repaired_artifact
+
+
+def _repair_legacy_qa_recordings_without_content_sha256(artifact: object) -> dict[str, Any] | None:
+    if not isinstance(artifact, dict):
+        return None
+    recordings = artifact.get("recordings")
+    if not isinstance(recordings, list) or not recordings:
+        return None
+    if any(not isinstance(recording, dict) for recording in recordings):
+        return None
+    if all(_is_valid_content_sha256(recording.get("content_sha256")) for recording in recordings):
+        return None
+
+    summary = artifact.get("summary")
+    if not isinstance(summary, list) or not all(isinstance(item, str) and item.strip() for item in summary):
+        return None
+    repaired_summary = list(summary)
+    if _LEGACY_QA_RECORDING_DIGEST_BLOCKER not in repaired_summary:
+        repaired_summary.append(_LEGACY_QA_RECORDING_DIGEST_BLOCKER)
+
+    repaired_artifact = dict(artifact)
+    repaired_artifact["summary"] = repaired_summary
+    repaired_artifact["recordings"] = []
+    repaired_artifact["outcome"] = "blocked"
+    repaired_artifact["blocker_message"] = _LEGACY_QA_RECORDING_DIGEST_BLOCKER
+    return repaired_artifact
+
+
+def _repair_legacy_qa_scenario_capture_targets(artifact: object) -> dict[str, Any] | None:
+    if not isinstance(artifact, dict):
+        return None
+    scenarios = artifact.get("scenarios")
+    if not isinstance(scenarios, list):
+        return None
+    repaired_scenarios: list[Any] = []
+    changed = False
+    for scenario in scenarios:
+        if not isinstance(scenario, dict):
+            return None
+        repaired_scenario = dict(scenario)
+        if "capture_target" not in repaired_scenario:
+            repaired_scenario["capture_target"] = "browser"
+            changed = True
+        repaired_scenarios.append(repaired_scenario)
+    if not changed:
+        return None
+    repaired_artifact = dict(artifact)
+    repaired_artifact["scenarios"] = repaired_scenarios
+    return repaired_artifact
+
+
+def _is_valid_content_sha256(value: object) -> bool:
+    if not isinstance(value, str):
+        return False
+    normalized = value.strip().lower()
+    return len(normalized) == 64 and all(char in "0123456789abcdef" for char in normalized)
 
 
 def _repair_legacy_mobile_capture_targets(artifact: object) -> dict[str, Any] | None:

@@ -11,6 +11,7 @@ from orchestrator.core.workflow.execution_snapshot_startup import (
     ensure_execution_snapshot_startup_bootstrap,
     run_execution_snapshot_startup_bootstrap,
 )
+from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 
 
 @dataclass
@@ -315,6 +316,205 @@ class ExecutionSnapshotStartupBootstrapTests(unittest.TestCase):
         repaired = _repair_execution_snapshot_payload(payload)
 
         self.assertIsNone(repaired)
+
+    def test_repair_execution_snapshot_payload_backfills_legacy_empty_demo_variants(self) -> None:
+        payload = {
+            "version": 1,
+            "context": {"trigger_context": {}, "execution_context": {}},
+            "workflow": {"outcome": None, "attempts": 0, "summary": [], "blocker_message": None, "requeue_target": None, "requeue_reason": None},
+            "events": {"stage_updates": [], "live_stage_updates": [], "stage_trace": [], "workstream_trace": []},
+            "stages": {
+                "pm": {
+                    "attempt": 1,
+                    "status": "completed",
+                    "summary": "planned",
+                    "completed_at": "2026-06-02T00:00:00+00:00",
+                    "artifact": {
+                        "plan_steps": ["step"],
+                        "acceptance_criteria": ["browser workflow works"],
+                        "risks": [],
+                        "resolved_prerequisites": [],
+                        "unresolved_prerequisites": [],
+                        "demo_requirements": [
+                            {
+                                "title": "Browser walkthrough",
+                                "acceptance_criterion": "browser workflow works",
+                                "capture_target": "browser",
+                                "variants": [],
+                            }
+                        ],
+                        "outcome": "continue",
+                        "next_stage": "dev",
+                        "execution_worker_capability": "linux",
+                    },
+                }
+            },
+        }
+
+        repaired = _repair_execution_snapshot_payload(payload)
+
+        assert repaired is not None
+        variants = repaired["stages"]["pm"]["artifact"]["demo_requirements"][0]["variants"]
+        self.assertEqual(variants, ["legacy-default"])
+        self.assertIsNotNone(ExecutionSnapshot.load(repaired))
+
+    def test_repair_execution_snapshot_payload_backfills_legacy_missing_demo_capture_target(self) -> None:
+        payload = {
+            "version": 1,
+            "context": {"trigger_context": {}, "execution_context": {}},
+            "workflow": {"outcome": None, "attempts": 0, "summary": [], "blocker_message": None, "requeue_target": None, "requeue_reason": None},
+            "events": {"stage_updates": [], "live_stage_updates": [], "stage_trace": [], "workstream_trace": []},
+            "stages": {
+                "pm": {
+                    "attempt": 1,
+                    "status": "completed",
+                    "summary": "planned",
+                    "completed_at": "2026-06-02T00:00:00+00:00",
+                    "artifact": {
+                        "plan_steps": ["step"],
+                        "acceptance_criteria": ["browser workflow works"],
+                        "risks": [],
+                        "resolved_prerequisites": [],
+                        "unresolved_prerequisites": [],
+                        "demo_requirements": [
+                            {
+                                "title": "Browser walkthrough",
+                                "acceptance_criterion": "browser workflow works",
+                                "variants": ["happy path"],
+                            }
+                        ],
+                        "outcome": "continue",
+                        "next_stage": "dev",
+                        "execution_worker_capability": "linux",
+                    },
+                }
+            },
+        }
+
+        repaired = _repair_execution_snapshot_payload(payload)
+
+        assert repaired is not None
+        capture_target = repaired["stages"]["pm"]["artifact"]["demo_requirements"][0]["capture_target"]
+        self.assertEqual(capture_target, "browser")
+        self.assertIsNotNone(ExecutionSnapshot.load(repaired))
+
+    def test_repair_execution_snapshot_payload_blocks_legacy_qa_recordings_without_digests(self) -> None:
+        payload = {
+            "version": 1,
+            "context": {"trigger_context": {}, "execution_context": {}},
+            "workflow": {"outcome": None, "attempts": 0, "summary": [], "blocker_message": None, "requeue_target": None, "requeue_reason": None},
+            "events": {"stage_updates": [], "live_stage_updates": [], "stage_trace": [], "workstream_trace": []},
+            "stages": {
+                "qa": {
+                    "attempt": 1,
+                    "status": "completed",
+                    "summary": "recorded",
+                    "completed_at": "2026-06-02T00:00:00+00:00",
+                    "artifact": {
+                        "summary": ["recorded"],
+                        "scenarios": [
+                            {
+                                "name": "Browser walkthrough",
+                                "objective": "show app",
+                                "capture_target": "browser",
+                                "start_path": "/",
+                                "expected_outcomes": ["Ready"],
+                                "steps": [{"action": "assert_visible", "selector": "text=Ready", "value": None}],
+                            }
+                        ],
+                        "recordings": [
+                            {
+                                "name": "Browser walkthrough",
+                                "artifact_url": "https://cdn.example/demo.webm",
+                                "object_key": "tenant/project/run/demo.webm",
+                                "capture_reference": "https://preview.example",
+                                "capture_target": "browser",
+                            }
+                        ],
+                        "outcome": "continue",
+                    },
+                }
+            },
+        }
+
+        repaired = _repair_execution_snapshot_payload(payload)
+
+        assert repaired is not None
+        qa_artifact = repaired["stages"]["qa"]["artifact"]
+        self.assertEqual(qa_artifact["outcome"], "blocked")
+        self.assertEqual(qa_artifact["recordings"], [])
+        self.assertIn("Legacy QA demo recordings predate SHA-256 proof metadata", qa_artifact["blocker_message"])
+        self.assertIsNotNone(ExecutionSnapshot.load(repaired))
+
+    def test_repair_execution_snapshot_payload_backfills_legacy_qa_scenario_capture_targets(self) -> None:
+        payload = {
+            "version": 1,
+            "context": {"trigger_context": {}, "execution_context": {}},
+            "workflow": {"outcome": None, "attempts": 0, "summary": [], "blocker_message": None, "requeue_target": None, "requeue_reason": None},
+            "events": {"stage_updates": [], "live_stage_updates": [], "stage_trace": [], "workstream_trace": []},
+            "stages": {
+                "qa": {
+                    "attempt": 1,
+                    "status": "completed",
+                    "summary": "recorded",
+                    "completed_at": "2026-06-02T00:00:00+00:00",
+                    "artifact": {
+                        "summary": ["recorded"],
+                        "scenarios": [
+                            {
+                                "name": "Browser walkthrough",
+                                "objective": "show app",
+                                "start_path": "/",
+                                "expected_outcomes": ["Ready"],
+                                "steps": [{"action": "assert_visible", "selector": "text=Ready", "value": None}],
+                            }
+                        ],
+                        "recordings": [],
+                        "outcome": "blocked",
+                        "blocker_message": "Recording failed",
+                    },
+                }
+            },
+        }
+
+        repaired = _repair_execution_snapshot_payload(payload)
+
+        assert repaired is not None
+        scenario = repaired["stages"]["qa"]["artifact"]["scenarios"][0]
+        self.assertEqual(scenario["capture_target"], "browser")
+        self.assertIsNotNone(ExecutionSnapshot.load(repaired))
+
+    def test_execution_snapshot_load_rejects_invalid_qa_stage_artifact(self) -> None:
+        payload = {
+            "version": 1,
+            "context": {"trigger_context": {}, "execution_context": {}},
+            "workflow": {"outcome": None, "attempts": 0, "summary": [], "blocker_message": None, "requeue_target": None, "requeue_reason": None},
+            "events": {"stage_updates": [], "live_stage_updates": [], "stage_trace": [], "workstream_trace": []},
+            "stages": {
+                "qa": {
+                    "attempt": 1,
+                    "status": "completed",
+                    "summary": "recorded",
+                    "completed_at": "2026-06-02T00:00:00+00:00",
+                    "artifact": {
+                        "summary": ["recorded"],
+                        "scenarios": [],
+                        "recordings": [
+                            {
+                                "name": "Browser walkthrough",
+                                "artifact_url": "https://cdn.example/demo.webm",
+                                "object_key": "tenant/project/run/demo.webm",
+                                "capture_reference": "https://preview.example",
+                                "capture_target": "browser",
+                            }
+                        ],
+                        "outcome": "continue",
+                    },
+                }
+            },
+        }
+
+        self.assertIsNone(ExecutionSnapshot.load(payload))
 
 if __name__ == "__main__":
     unittest.main()
