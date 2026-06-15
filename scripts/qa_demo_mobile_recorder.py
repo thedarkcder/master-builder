@@ -73,7 +73,11 @@ def main(argv: list[str]) -> int:
     output_dir.mkdir(parents=True, exist_ok=True)
     derived_data_dir = output_dir / "DerivedData"
     original_test_source = ui_test_file.read_text(encoding="utf-8")
-    generated_source = render_xcuitest_source(test_class_name=test_class_name, scenarios=qa_result.scenarios)
+    generated_source = render_xcuitest_source(
+        test_class_name=test_class_name,
+        scenarios=qa_result.scenarios,
+        launch_environment=qa_demo_launch_environment(payload),
+    )
     ui_test_file.write_text(generated_source, encoding="utf-8")
 
     try:
@@ -146,6 +150,28 @@ def _target_source_paths(value: object) -> list[str]:
     if not isinstance(value, list):
         return []
     return [str(item).strip() for item in value if str(item).strip()]
+
+
+def qa_demo_launch_environment(payload: dict[str, object]) -> dict[str, str]:
+    release_service_urls = payload.get("release_service_urls")
+    serialized_service_urls = (
+        json.dumps(release_service_urls, sort_keys=True)
+        if isinstance(release_service_urls, list)
+        else ""
+    )
+    candidates = {
+        "MB_QA_DEMO_RELEASE_COMMIT_SHA": payload.get("release_commit_sha"),
+        "MB_QA_DEMO_RELEASE_SERVICE_URLS_JSON": serialized_service_urls,
+        "MB_QA_DEMO_RELEASE_API_BASE_URL": payload.get("release_api_base_url"),
+        "MB_QA_DEMO_RELEASE_BROWSER_URL": payload.get("release_browser_url"),
+        "QA_DEMO_API_BASE_URL": payload.get("release_api_base_url"),
+        "QA_DEMO_BROWSER_URL": payload.get("release_browser_url"),
+    }
+    return {
+        key: str(value).strip()
+        for key, value in candidates.items()
+        if str(value or "").strip()
+    }
 
 
 def discover_ios_project_files(

@@ -11,6 +11,9 @@ from scripts.qa_demo_mobile_recorder import _build_for_testing
 from scripts.qa_demo_mobile_recorder import _reboot_simulator
 from scripts.qa_demo_mobile_recorder import _run
 from scripts.qa_demo_mobile_recorder import discover_ios_project_files
+from scripts.qa_demo_mobile_recorder import qa_demo_launch_environment
+from orchestrator.core.qa.mobile_xcuitest_recorder import render_xcuitest_source
+from orchestrator.core.workflow.runner import QaScenario, QaStep
 
 
 def test_combined_recording_failure_prefers_primary_error() -> None:
@@ -97,6 +100,43 @@ def test_run_surfaces_timeout_as_runtime_error(monkeypatch: pytest.MonkeyPatch) 
 
     with pytest.raises(RuntimeError, match="timed out after 123 seconds"):
         _run(["xcodebuild", "-version"], capture_output=True)
+
+
+def test_qa_demo_launch_environment_maps_release_context() -> None:
+    launch_environment = qa_demo_launch_environment(
+        {
+            "release_commit_sha": "b" * 40,
+            "release_api_base_url": "https://api.preview.example",
+            "release_browser_url": "https://web.preview.example",
+            "release_service_urls": [
+                {"service_kind": "api", "url": "https://api.preview.example"},
+            ],
+        }
+    )
+
+    assert launch_environment["MB_QA_DEMO_RELEASE_COMMIT_SHA"] == "b" * 40
+    assert launch_environment["MB_QA_DEMO_RELEASE_API_BASE_URL"] == "https://api.preview.example"
+    assert launch_environment["QA_DEMO_API_BASE_URL"] == "https://api.preview.example"
+    assert launch_environment["QA_DEMO_BROWSER_URL"] == "https://web.preview.example"
+    assert '"service_kind": "api"' in launch_environment["MB_QA_DEMO_RELEASE_SERVICE_URLS_JSON"]
+
+
+def test_render_xcuitest_source_injects_release_context_launch_environment() -> None:
+    source = render_xcuitest_source(
+        test_class_name="exampleUITests",
+        scenarios=[
+            QaScenario(
+                name="API-backed flow",
+                objective="Prove app uses preview API",
+                capture_target="ios",
+                steps=[QaStep(action="assert_visible", selector="text=Ready")],
+            )
+        ],
+        launch_environment={"QA_DEMO_API_BASE_URL": "https://api.preview.example"},
+    )
+
+    assert 'private let qaDemoLaunchEnvironment: [String: String] = ["QA_DEMO_API_BASE_URL": "https://api.preview.example"]' in source
+    assert "app.launchEnvironment = qaDemoLaunchEnvironment" in source
 
 
 def test_discover_ios_project_files_prefers_payload_source_paths(tmp_path: Path) -> None:

@@ -11,6 +11,7 @@ from scripts.qa_demo_android_recorder import find_element
 from scripts.qa_demo_android_recorder import launch_app
 from scripts.qa_demo_android_recorder import parse_bounds
 from scripts.qa_demo_android_recorder import preferred_adb_device
+from scripts.qa_demo_android_recorder import qa_demo_launch_extras
 from scripts.qa_demo_android_recorder import record_live_screen_demo
 from scripts.qa_demo_android_recorder import resolve_launch_activity
 from scripts.qa_demo_android_recorder import validate_mp4_recording
@@ -98,6 +99,50 @@ def test_execute_scenario_relaunches_android_app_with_existing_state(monkeypatch
     ]
 
 
+def test_execute_scenario_relaunches_android_app_with_release_context_extras(monkeypatch) -> None:
+    calls: list[list[str]] = []
+
+    def _fake_run(args, **_kwargs):  # noqa: ANN001
+        calls.append(list(args))
+
+        class _Result:
+            stdout = ""
+
+        return _Result()
+
+    monkeypatch.setattr("scripts.qa_demo_android_recorder._run", _fake_run)
+
+    execute_scenario(
+        device_id="device-1",
+        package_name="com.example.app",
+        launch_activity="com.example.app/.MainActivity",
+        scenario=QaScenario(
+            name="Relaunch",
+            objective="Prove release context survives relaunch",
+            capture_target="android",
+            steps=[QaStep(action="relaunch_app", value="preserve")],
+        ),
+        launch_extras={"QA_DEMO_API_BASE_URL": "https://api.preview.example"},
+    )
+
+    assert calls == [
+        ["adb", "-s", "device-1", "shell", "am", "force-stop", "com.example.app"],
+        [
+            "adb",
+            "-s",
+            "device-1",
+            "shell",
+            "am",
+            "start",
+            "-n",
+            "com.example.app/.MainActivity",
+            "--es",
+            "QA_DEMO_API_BASE_URL",
+            "https://api.preview.example",
+        ],
+    ]
+
+
 def test_resolve_launch_activity_uses_package_manager_brief_output(monkeypatch) -> None:
     def _fake_run(_args, **_kwargs):  # noqa: ANN001
         class _Result:
@@ -142,6 +187,67 @@ def test_launch_app_uses_resolved_activity(monkeypatch) -> None:
             "com.example.app/.MainActivity",
         ]
     ]
+
+
+def test_launch_app_injects_release_context_extras(monkeypatch) -> None:
+    calls: list[list[str]] = []
+
+    def _fake_run(args, **_kwargs):  # noqa: ANN001
+        calls.append(list(args))
+
+        class _Result:
+            stdout = ""
+
+        return _Result()
+
+    monkeypatch.setattr("scripts.qa_demo_android_recorder._run", _fake_run)
+
+    launch_app(
+        device_id="device-1",
+        launch_activity="com.example.app/.MainActivity",
+        launch_extras={
+            "QA_DEMO_API_BASE_URL": "https://api.preview.example",
+            "MB_QA_DEMO_RELEASE_COMMIT_SHA": "b" * 40,
+        },
+    )
+
+    assert calls == [
+        [
+            "adb",
+            "-s",
+            "device-1",
+            "shell",
+            "am",
+            "start",
+            "-n",
+            "com.example.app/.MainActivity",
+            "--es",
+            "MB_QA_DEMO_RELEASE_COMMIT_SHA",
+            "b" * 40,
+            "--es",
+            "QA_DEMO_API_BASE_URL",
+            "https://api.preview.example",
+        ]
+    ]
+
+
+def test_qa_demo_launch_extras_maps_release_context() -> None:
+    launch_extras = qa_demo_launch_extras(
+        {
+            "release_commit_sha": "b" * 40,
+            "release_api_base_url": "https://api.preview.example",
+            "release_browser_url": "https://web.preview.example",
+            "release_service_urls": [
+                {"service_kind": "api", "url": "https://api.preview.example"},
+            ],
+        }
+    )
+
+    assert launch_extras["MB_QA_DEMO_RELEASE_COMMIT_SHA"] == "b" * 40
+    assert launch_extras["MB_QA_DEMO_RELEASE_API_BASE_URL"] == "https://api.preview.example"
+    assert launch_extras["QA_DEMO_API_BASE_URL"] == "https://api.preview.example"
+    assert launch_extras["QA_DEMO_BROWSER_URL"] == "https://web.preview.example"
+    assert '"service_kind": "api"' in launch_extras["MB_QA_DEMO_RELEASE_SERVICE_URLS_JSON"]
 
 
 def test_build_debug_apk_discovers_android_app_in_monorepo_subdirectory(monkeypatch, tmp_path) -> None:
