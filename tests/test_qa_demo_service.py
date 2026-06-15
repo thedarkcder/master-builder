@@ -1195,6 +1195,53 @@ def test_record_demo_scenarios_rejects_unplanned_recording_before_upload() -> No
             raise AssertionError("expected unplanned recorder output to block")
 
 
+def test_record_demo_scenarios_rejects_duplicate_recording_name_before_upload() -> None:
+    def _run(cmd, **_kwargs):  # noqa: ANN001
+        output_path = Path(cmd[3])
+        input_payload = json.loads(Path(cmd[2]).read_text(encoding="utf-8"))
+        video_dir = Path(input_payload["output_dir"])
+        video_dir.mkdir(parents=True, exist_ok=True)
+        first_path = video_dir / "happy-path-1.webm"
+        second_path = video_dir / "happy-path-2.webm"
+        first_path.write_bytes(_fake_webm_payload())
+        second_path.write_bytes(_fake_webm_payload())
+        output_path.write_text(
+            json.dumps(
+                {
+                    "recordings": [
+                        {"name": "Happy path", "path": str(first_path)},
+                        {"name": "Happy path", "path": str(second_path)},
+                    ]
+                }
+            ),
+            encoding="utf-8",
+        )
+        return SimpleNamespace(stdout="")
+
+    with patch("orchestrator.core.qa.demo_service.subprocess.run", side_effect=_run):
+        try:
+            record_demo_scenarios(
+                settings=SimpleNamespace(qa_demo_playwright_module_dir="/tmp/playwright-modules"),
+                request=_request(),
+                available_capture_targets=_browser_capture_targets(),
+                qa_result=QaResult(
+                    summary=["Recorded demos"],
+                    scenarios=[
+                        QaScenario(
+                            name="Happy path",
+                            objective="Show feature works",
+                            steps=[QaStep(action="assert_visible", selector="#feature")],
+                        )
+                    ],
+                ),
+            )
+        except RuntimeError as exc:
+            assert "QA demo recorder produced duplicate recording(s) for browser scenario(s)" in str(exc)
+            assert "Happy path" in str(exc)
+        else:  # pragma: no cover
+            raise AssertionError("expected duplicate recorder output to block")
+
+
 def test_record_demo_scenarios_rejects_duplicate_scenario_names_before_recording() -> None:
     with patch("orchestrator.core.qa.demo_service.subprocess.run") as run_mock:
         try:
