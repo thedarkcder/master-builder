@@ -1179,6 +1179,83 @@ def test_execute_qa_demo_stage_blocks_when_qa_scenarios_do_not_name_pm_variant_c
     record_mock.assert_not_called()
 
 
+def test_execute_qa_demo_stage_blocks_when_qa_scenarios_do_not_name_pm_acceptance_criterion() -> None:
+    tenant = SimpleNamespace(tenant_id="tenant-1", github_config={})
+    project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo")
+    run = SimpleNamespace(run_id="run-1")
+    release = SimpleNamespace(
+        service_urls=[SimpleNamespace(service_kind="website", status="active", url="https://preview.example")]
+    )
+    plan = PmPlan(
+        plan_steps=["Implement"],
+        acceptance_criteria=["Cart total recalculates after quantity changes"],
+        risks=[],
+        demo_requirements=[
+            DemoRequirement(
+                title="Checkout total updates",
+                acceptance_criterion="Cart total recalculates after quantity changes",
+                capture_target="browser",
+                variants=["Repeat quantity change remains safe"],
+            )
+        ],
+    )
+    fake_agents = SimpleNamespace(
+        qa=MagicMock(
+            return_value=QaResult(
+                summary=["Planned demos"],
+                scenarios=[
+                    QaScenario(
+                        name="Generic happy path",
+                        objective="Show the feature works",
+                        capture_target="browser",
+                        steps=[
+                            QaStep(action="goto", value="/"),
+                            QaStep(action="assert_visible", selector="text=Ready"),
+                        ],
+                    ),
+                    QaScenario(
+                        name="Repeat quantity change remains safe",
+                        objective="Repeat quantity change remains safe",
+                        capture_target="browser",
+                        steps=[
+                            QaStep(action="goto", value="/"),
+                            QaStep(action="assert_visible", selector="text=Ready"),
+                        ],
+                    ),
+                ],
+            )
+        )
+    )
+
+    with (
+        patch("orchestrator.core.qa.demo_service.build_codex_runtime"),
+        patch("orchestrator.core.qa.demo_service.CodexWorkflowAgents", return_value=fake_agents),
+        patch("orchestrator.core.qa.demo_service.record_demo_scenarios") as record_mock,
+        patch("orchestrator.core.qa.demo_service._default_service_url_probe", return_value=200),
+    ):
+        try:
+            execute_qa_demo_stage(
+                session=SimpleNamespace(),
+                settings=SimpleNamespace(qa_demo_playwright_module_dir=""),
+                tenant=tenant,
+                project=project,
+                run=run,
+                request=_request(),
+                plan=plan,
+                dev_result=DevResult(change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8"),
+                test_result=TestResult(guidance=["pytest -q"]),
+                review_result=ReviewResult(summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"),
+                preview_release=release,
+            )
+        except RuntimeError as exc:
+            assert "missing requirement coverage: browser: Checkout total updates" in str(exc)
+            assert "Cart total recalculates after quantity changes" in str(exc)
+        else:  # pragma: no cover
+            raise AssertionError("expected QA scenario acceptance-criterion traceability failure")
+
+    record_mock.assert_not_called()
+
+
 def test_execute_qa_demo_stage_blocks_when_project_api_service_is_missing_from_release() -> None:
     tenant = SimpleNamespace(tenant_id="tenant-1", github_config={})
     project = SimpleNamespace(
