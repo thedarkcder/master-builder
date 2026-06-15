@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from dataclasses import replace
+import json
 from pathlib import Path
 import subprocess
 from typing import Any
@@ -263,6 +265,11 @@ class OrchestratedRunWorkflowExecutor:
                     attempts=1,
                     message=f"PM stage failed: {exc}",
                 )
+            plan = _normalize_mixed_demo_target_pm_requeue(
+                plan=plan,
+                current_worker_capability=request.current_worker_capability,
+                capture_target_constraints_json=self._pm_capture_target_constraints_json,
+            )
             stage_trace.append(
                 _stage_trace_entry(
                     stage="pm",
@@ -1049,6 +1056,53 @@ def _capability_mismatch_message(*, request: WorkflowRequest, plan: PmPlan) -> s
 
 def _required_worker_capability(plan: PmPlan) -> WorkerCapability | None:
     return parse_worker_capability(plan.execution_worker_capability)
+
+
+def _normalize_mixed_demo_target_pm_requeue(
+    *,
+    plan: PmPlan,
+    current_worker_capability: WorkerCapability,
+    capture_target_constraints_json: str,
+) -> PmPlan:
+    if plan.outcome != "requeue" or not plan.demo_requirements:
+        return plan
+    target = parse_worker_capability(plan.requeue_target) or _required_worker_capability(plan)
+    if target is None:
+        return plan
+    required_platforms_by_target = _capture_target_required_platforms(capture_target_constraints_json)
+    demo_platforms: set[str | None] = set()
+    for requirement in plan.demo_requirements:
+        demo_platforms.add(required_platforms_by_target.get(str(requirement.capture_target), None))
+    if len(demo_platforms) <= 1 or target.value not in demo_platforms:
+        return plan
+    return replace(
+        plan,
+        outcome="continue",
+        execution_worker_capability=current_worker_capability.value,
+        blocker_message=None,
+        requeue_target=None,
+        requeue_reason=None,
+    )
+
+
+def _capture_target_required_platforms(capture_target_constraints_json: str) -> dict[str, str | None]:
+    try:
+        constraints = json.loads(str(capture_target_constraints_json or "[]"))
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(constraints, list):
+        return {}
+    platforms: dict[str, str | None] = {}
+    for constraint in constraints:
+        if not isinstance(constraint, dict):
+            continue
+        capture_target = str(constraint.get("capture_target") or "").strip()
+        if not capture_target:
+            continue
+        raw_platform = constraint.get("required_worker_platform")
+        platform = str(raw_platform).strip() if raw_platform is not None else None
+        platforms[capture_target] = platform or None
+    return platforms
 
 
 def _tracked_worktree_change_paths(repo_dir: str | None) -> tuple[str, ...]:
