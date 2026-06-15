@@ -347,9 +347,11 @@ def _qa_demo_recordings_for_run(
         return None
     return tuple(
         {
+            "name": recording.name,
             "artifact_url": recording.artifact_url,
             "object_key": recording.object_key,
             "capture_target": recording.capture_target,
+            "capture_reference": recording.capture_reference,
             "content_sha256": recording.content_sha256,
             "release_commit_sha": recording.release_commit_sha,
             "release_context_sha256": recording.release_context_sha256,
