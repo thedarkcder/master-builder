@@ -455,8 +455,16 @@ def _configured_worker_platform(*, raw_value: object, provider_name: str) -> str
     if parsed is None:
         raise RuntimeError(
             f"QA demo {provider_name} worker platform is invalid: {normalized}. Allowed values: linux, macos"
-        )
+    )
     return parsed.value
+
+
+def _qa_demo_worker_platform_label(platform: str | None) -> str:
+    if platform == "macos":
+        return "macOS"
+    if platform == "linux":
+        return "Linux"
+    return str(platform or "").strip() or "configured"
 
 
 def resolve_available_capture_targets(*, settings, preview_release) -> dict[str, DemoCaptureTarget]:  # noqa: ANN001
@@ -558,12 +566,22 @@ def planned_capture_target_constraints(*, settings) -> dict[str, PlannedCaptureT
         if configured_android_command
         else _default_android_recorder_command()
     )
+    android_worker_platform = (
+        _configured_worker_platform(
+            raw_value=getattr(settings, "qa_demo_android_worker_platform", ""),
+            provider_name="android",
+        )
+        or "linux"
+        if android_recorder_command is not None
+        else None
+    )
     constraints["android"] = PlannedCaptureTargetConstraint(
         capture_target="android",
         provider_available=android_recorder_command is not None,
-        required_worker_platform="linux" if android_recorder_command is not None else None,
+        required_worker_platform=android_worker_platform,
         availability_reason=(
-            "Android capture requires the built-in or configured native recorder on a Linux Android worker. Runtime readiness is verified on the selected worker before recording."
+            "Android capture requires the built-in or configured native recorder on a "
+            f"{_qa_demo_worker_platform_label(android_worker_platform)} Android worker. Runtime readiness is verified on the selected worker before recording."
             if android_recorder_command is not None
             else "Android capture provider is unavailable because no native Android recorder command exists."
         ),

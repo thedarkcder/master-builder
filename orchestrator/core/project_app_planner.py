@@ -31,6 +31,7 @@ _IGNORE_DIR_NAMES = {
     "vendor",
 }
 _COMPOSE_FILENAMES = {"docker-compose.yml", "docker-compose.yaml", "compose.yml", "compose.yaml"}
+_ANDROID_GRADLE_FILENAMES = {"build.gradle", "build.gradle.kts", "settings.gradle", "settings.gradle.kts"}
 _PYTHON_DEFAULT_PORTS = {
     "django": 8000,
     "fastapi": 8000,
@@ -812,6 +813,31 @@ def _build_candidate_from_directory(*, repo_root: Path, directory: Path, evidenc
             start_command = default_start
         detection_confidence = max(detection_confidence, confidence)
 
+    if evidence.get("ios_project") is True:
+        has_deployable_evidence = True
+        detected_runtime = "ios"
+        detected_language = "swift"
+        build_strategy = "nixpacks"
+        needs_generated_files = False
+        detection_confidence = max(detection_confidence, 0.9)
+        deployment_config = {
+            **deployment_config,
+            "mobile_platform": "ios",
+            "capture_target": "ios",
+        }
+    if evidence.get("android_project") is True:
+        has_deployable_evidence = True
+        detected_runtime = "android"
+        detected_language = str(evidence.get("android_language") or "kotlin")
+        build_strategy = "nixpacks"
+        needs_generated_files = False
+        detection_confidence = max(detection_confidence, 0.9)
+        deployment_config = {
+            **deployment_config,
+            "mobile_platform": "android",
+            "capture_target": "android",
+        }
+
     env_example_text = evidence.get("env_example_text")
     if isinstance(env_example_text, str):
         env_schema_json = _merge_schema(env_schema_json, _build_env_schema_from_env_file(env_example_text))
@@ -894,12 +920,31 @@ def _build_secret_schema_from_env_file(content: str) -> dict[str, object]:
     return schema
 
 
+def _evidence_for_directory(
+    evidence_by_dir: dict[str, dict[str, object]],
+    *,
+    repo_root: Path,
+    directory: Path,
+) -> dict[str, object]:
+    rel_dir = directory.relative_to(repo_root).as_posix() if directory != repo_root else "."
+    rel_dir = _normalize_repo_relative_path(rel_dir)
+    return evidence_by_dir.setdefault(rel_dir, {})
+
+
+def _android_manifest_source_dir(*, repo_root: Path, file_path: Path) -> Path:
+    try:
+        relative_parts = file_path.relative_to(repo_root).parts
+    except ValueError:
+        return file_path.parent
+    if len(relative_parts) >= 4 and relative_parts[-3:] == ("src", "main", "AndroidManifest.xml"):
+        return repo_root.joinpath(*relative_parts[:-3])
+    return file_path.parent
+
+
 def _scan_repo_for_evidence(repo_root: Path) -> dict[str, dict[str, object]]:
     evidence_by_dir: dict[str, dict[str, object]] = {}
     for file_path in _iter_repo_files(repo_root):
-        rel_dir = file_path.parent.relative_to(repo_root).as_posix() if file_path.parent != repo_root else "."
-        rel_dir = _normalize_repo_relative_path(rel_dir)
-        evidence = evidence_by_dir.setdefault(rel_dir, {})
+        evidence = _evidence_for_directory(evidence_by_dir, repo_root=repo_root, directory=file_path.parent)
         filename = file_path.name
         lowered = filename.lower()
         try:
@@ -907,7 +952,40 @@ def _scan_repo_for_evidence(repo_root: Path) -> dict[str, dict[str, object]]:
         except (OSError, UnicodeDecodeError):
             content = ""
 
-        if lowered == "dockerfile":
+        if lowered == "project.pbxproj" and file_path.parent.suffix.lower() == ".xcodeproj":
+            ios_evidence = _evidence_for_directory(
+                evidence_by_dir,
+                repo_root=repo_root,
+                directory=file_path.parent.parent,
+            )
+            ios_evidence["ios_project"] = True
+            ios_evidence["name"] = ios_evidence.get("name") or file_path.parent.stem
+        elif lowered in _ANDROID_GRADLE_FILENAMES:
+            lowered_content = content.lower()
+            if (
+                "com.android.application" in lowered_content
+                or "com.android.library" in lowered_content
+                or "com.android.test" in lowered_content
+                or (lowered.startswith("settings.gradle") and "include ':app'" in lowered_content)
+            ):
+                evidence["android_project"] = True
+                if "kotlin" in lowered_content or "org.jetbrains.kotlin.android" in lowered_content:
+                    evidence["android_language"] = "kotlin"
+                elif "com.android" in lowered_content:
+                    evidence["android_language"] = evidence.get("android_language") or "java"
+                if not evidence.get("name"):
+                    evidence["name"] = file_path.parent.name or repo_root.name
+        elif lowered == "androidmanifest.xml":
+            android_evidence = _evidence_for_directory(
+                evidence_by_dir,
+                repo_root=repo_root,
+                directory=_android_manifest_source_dir(repo_root=repo_root, file_path=file_path),
+            )
+            android_evidence["android_project"] = True
+            android_evidence["android_language"] = android_evidence.get("android_language") or "kotlin"
+            if not android_evidence.get("name"):
+                android_evidence["name"] = file_path.parent.parent.parent.name if len(file_path.parts) >= 4 else file_path.parent.name
+        elif lowered == "dockerfile":
             evidence["dockerfile_text"] = content
             if not evidence.get("name"):
                 evidence["name"] = file_path.parent.name or repo_root.name
