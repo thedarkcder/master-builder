@@ -1202,6 +1202,71 @@ def test_execute_qa_demo_stage_records_and_uploads() -> None:
     assert upload_mock.call_args.kwargs["content_type"] == "video/webm"
 
 
+def test_execute_qa_demo_stage_rejects_unsafe_artifact_scope_before_upload() -> None:
+    tenant = SimpleNamespace(tenant_id="tenant-1", github_config={})
+    project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo")
+    run = SimpleNamespace(run_id="../run-1")
+    release = SimpleNamespace(
+        service_urls=[SimpleNamespace(service_kind="website", status="active", url="https://preview.example")]
+    )
+    plan = PmPlan(
+        plan_steps=["Implement"],
+        acceptance_criteria=["Feature works"],
+        risks=[],
+        demo_requirements=[_demo_requirement()],
+    )
+    fake_agents = SimpleNamespace(qa=MagicMock(return_value=_qa_result()))
+
+    with (
+        patch("orchestrator.core.qa.demo_service.build_codex_runtime"),
+        patch("orchestrator.core.qa.demo_service.CodexWorkflowAgents", return_value=fake_agents),
+        patch(
+            "orchestrator.core.qa.demo_service.record_demo_scenarios",
+            return_value=[
+                _local_recording(name="Happy path"),
+                _local_recording(name="Repeat action remains safe", path="/tmp/repeat.webm"),
+            ],
+        ),
+        patch(
+            "orchestrator.core.qa.demo_service.storage_config_from_settings",
+            return_value=SimpleNamespace(
+                endpoint="minio:9000",
+                access_key="key",
+                secret_key="secret",
+                bucket="qa-demos",
+                public_base_url="https://cdn.example/qa-demos",
+                secure=False,
+            ),
+        ),
+        patch(
+            "orchestrator.core.qa.demo_service.upload_recording",
+            return_value="https://cdn.example/qa-demos/tenant-1/project-1/../run-1/qa-demo-1.webm",
+        ) as upload_mock,
+        patch("orchestrator.core.qa.demo_service._default_service_url_probe", return_value=200),
+        patch("orchestrator.core.qa.demo_service._default_artifact_url_probe", return_value=200),
+    ):
+        try:
+            execute_qa_demo_stage(
+                session=SimpleNamespace(),
+                settings=SimpleNamespace(qa_demo_playwright_module_dir="", qa_demo_max_attempts=1),
+                tenant=tenant,
+                project=project,
+                run=run,
+                request=replace(_request(), run_id="../run-1"),
+                plan=plan,
+                dev_result=DevResult(change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8"),
+                test_result=TestResult(guidance=["pytest -q"]),
+                review_result=ReviewResult(summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"),
+                preview_release=release,
+            )
+        except RuntimeError as exc:
+            assert "QA demo artifact object key scope has unsafe run_id" in str(exc)
+        else:  # pragma: no cover
+            raise AssertionError("expected unsafe run scope to block before upload")
+
+    upload_mock.assert_not_called()
+
+
 def test_execute_qa_demo_stage_includes_project_source_paths_in_qa_prompt_targets() -> None:
     tenant = SimpleNamespace(tenant_id="tenant-1", github_config={})
     project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo")
