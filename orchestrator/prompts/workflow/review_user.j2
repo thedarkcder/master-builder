@@ -52,6 +52,10 @@ Required actions:
     - In that case, do not require a broader/full-suite rerun solely because unrelated repo-wide tests are known to fail.
     - Only treat additional failing tests as release blockers when you can tie them to the current published diff paths, the current acceptance criteria, or a concrete cross-cutting regression risk grounded in the changed files.
     - When broader validation outside the published diff is red but the current-head acceptance evidence is green, summarize that debt as non-blocking background repo risk unless the evidence shows the current candidate caused it.
+4b. Demo requirements define the downstream QA recording contract; review does not produce release URLs, native release contexts, S3/MinIO artifact links, or MB-owned QA demo recordings.
+    - Do not return outcome="failed" solely because browser/iOS/Android demo recordings or PR demo links do not exist yet when the Test stage has accepted the current PR head.
+    - If implementation/test evidence is acceptable and only downstream release/QA demo proof remains, return outcome="continue" and state that release/QA must produce the recordings before ready-for-review.
+    - Return outcome="failed" only when the implementation, validation evidence, PR publication, or reviewable code itself is deficient in a way Dev can remediate before release/QA runs.
 5. If a one-time transient human input can unblock the remaining verification, request it with `run.request_human_input` before returning outcome="waiting_for_input".
 6. If PR creation required by policy is `true`, you must not approve the run unless a PR exists and `pr_url` is set.
 6a. Treat the Integration branch as the canonical PR head branch. A PR opened from the Execution branch (`run/...`) does not satisfy the contract unless the Integration branch itself is the remediation head branch.
