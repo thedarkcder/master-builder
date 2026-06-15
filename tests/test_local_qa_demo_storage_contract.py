@@ -36,10 +36,16 @@ def test_docker_compose_provisions_local_qa_demo_artifact_storage() -> None:
     ]
     assert services["minio-init"]["depends_on"]["minio"]["condition"] == "service_healthy"
     assert services["run-worker"]["depends_on"]["minio-init"]["condition"] == "service_completed_successfully"
-    environment = services["run-worker"]["environment"]
-    assert environment["ORCHESTRATOR_QA_DEMO_ARTIFACT_ENDPOINT"] == "${ORCHESTRATOR_QA_DEMO_ARTIFACT_ENDPOINT_INTERNAL:-minio:9000}"
-    assert environment["ORCHESTRATOR_QA_DEMO_ARTIFACT_BUCKET"] == "${ORCHESTRATOR_QA_DEMO_ARTIFACT_BUCKET:-qa-demos}"
-    assert environment["ORCHESTRATOR_QA_DEMO_ARTIFACT_PUBLIC_BASE_URL"] == "${ORCHESTRATOR_QA_DEMO_ARTIFACT_PUBLIC_BASE_URL:-http://127.0.0.1:60015/qa-demos}"
-    assert environment["ORCHESTRATOR_QA_DEMO_RECORDER_PROCESS_TIMEOUT_SECONDS"] == "${ORCHESTRATOR_QA_DEMO_RECORDER_PROCESS_TIMEOUT_SECONDS:-900}"
-    assert environment["ORCHESTRATOR_QA_DEMO_IOS_RECORDER_COMMAND"] == "${ORCHESTRATOR_QA_DEMO_IOS_RECORDER_COMMAND:-}"
-    assert environment["ORCHESTRATOR_QA_DEMO_ANDROID_RECORDER_COMMAND"] == "${ORCHESTRATOR_QA_DEMO_ANDROID_RECORDER_COMMAND:-}"
+    assert (
+        services["temporal-orchestrator"]["depends_on"]["minio-init"]["condition"]
+        == "service_completed_successfully"
+    )
+
+    for service_name in ("run-worker", "temporal-orchestrator"):
+        environment = services[service_name]["environment"]
+        assert environment["ORCHESTRATOR_QA_DEMO_ARTIFACT_ENDPOINT"] == "${ORCHESTRATOR_QA_DEMO_ARTIFACT_ENDPOINT_INTERNAL:-minio:9000}"
+        assert environment["ORCHESTRATOR_QA_DEMO_ARTIFACT_BUCKET"] == "${ORCHESTRATOR_QA_DEMO_ARTIFACT_BUCKET:-qa-demos}"
+        assert environment["ORCHESTRATOR_QA_DEMO_ARTIFACT_PUBLIC_BASE_URL"] == "${ORCHESTRATOR_QA_DEMO_ARTIFACT_PUBLIC_BASE_URL:-http://127.0.0.1:60015/qa-demos}"
+        assert environment["ORCHESTRATOR_QA_DEMO_RECORDER_PROCESS_TIMEOUT_SECONDS"] == "${ORCHESTRATOR_QA_DEMO_RECORDER_PROCESS_TIMEOUT_SECONDS:-900}"
+        assert environment["ORCHESTRATOR_QA_DEMO_IOS_RECORDER_COMMAND"] == "${ORCHESTRATOR_QA_DEMO_IOS_RECORDER_COMMAND:-}"
+        assert environment["ORCHESTRATOR_QA_DEMO_ANDROID_RECORDER_COMMAND"] == "${ORCHESTRATOR_QA_DEMO_ANDROID_RECORDER_COMMAND:-}"
