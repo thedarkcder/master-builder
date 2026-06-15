@@ -14,7 +14,6 @@ if str(REPO_ROOT) not in sys.path:
     sys.path.insert(0, str(REPO_ROOT))
 
 from orchestrator.core.qa.mobile_xcuitest_recorder import (  # noqa: E402
-    discover_xcode_project,
     discover_xcuitest_file,
     generated_test_method_name,
     preferred_simulator_udid,
@@ -163,15 +162,29 @@ def discover_ios_project_files(
         for search_root in search_roots
         for project_path in search_root.rglob("*.xcodeproj")
     )
+    workspace_paths = sorted(
+        workspace_path
+        for search_root in search_roots
+        for workspace_path in search_root.rglob("*.xcworkspace")
+    )
     swift_files = sorted(
         swift_file
         for search_root in search_roots
         for swift_file in search_root.rglob("*UITests/*.swift")
     )
     return (
-        discover_xcode_project(repo_dir=repo_dir, project_paths=project_paths),
+        _discover_xcode_container(repo_dir=repo_dir, workspace_paths=workspace_paths, project_paths=project_paths),
         discover_xcuitest_file(repo_dir=repo_dir, swift_files=swift_files),
     )
+
+
+def _discover_xcode_container(*, repo_dir: Path, workspace_paths: list[Path], project_paths: list[Path]) -> Path:
+    candidates = list(workspace_paths or project_paths)
+    if not candidates:
+        raise ValueError(f"No Xcode project or workspace found under {repo_dir}")
+    root_candidates = [path for path in candidates if path.parent == repo_dir]
+    preferred = root_candidates or candidates
+    return sorted(preferred, key=lambda path: (len(path.parts), str(path)))[0]
 
 
 def _ios_project_search_roots(*, repo_dir: Path, target_source_paths: list[str] | None = None) -> list[Path]:
@@ -201,7 +214,7 @@ def _resolve_repo_relative_source_path(*, repo_dir: Path, source_path: str) -> P
 
 def resolve_bundle_identifier(*, project_path: Path, scheme: str) -> str:
     result = _run(
-        ["xcodebuild", "-project", str(project_path), "-scheme", scheme, "-showBuildSettings"],
+        ["xcodebuild", *_xcode_container_args(project_path), "-scheme", scheme, "-showBuildSettings"],
         capture_output=True,
     )
     match = re.search(r"PRODUCT_BUNDLE_IDENTIFIER = ([^\s]+)", result.stdout)
@@ -224,8 +237,7 @@ def _build_for_testing(*, project_path: Path, scheme: str, simulator_udid: str, 
     _run(
         [
             "xcodebuild",
-            "-project",
-            str(project_path),
+            *_xcode_container_args(project_path),
             "-scheme",
             scheme,
             "-destination",
@@ -238,6 +250,15 @@ def _build_for_testing(*, project_path: Path, scheme: str, simulator_udid: str, 
         cwd=project_path.parent,
         capture_output=True,
     )
+
+
+def _xcode_container_args(project_path: Path) -> list[str]:
+    suffix = project_path.suffix.lower()
+    if suffix == ".xcworkspace":
+        return ["-workspace", str(project_path)]
+    if suffix == ".xcodeproj":
+        return ["-project", str(project_path)]
+    raise RuntimeError(f"Unsupported Xcode container type: {project_path}")
 
 
 def _discover_xctestrun_path(derived_data_dir: Path) -> Path:
