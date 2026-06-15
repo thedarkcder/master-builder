@@ -132,6 +132,21 @@ class PromptTemplateTests(unittest.TestCase):
         self.assertIn("Never emit top-level `questions`", prompt_text)
         self.assertIn('use `request_type="decision_gate_clarification"`', prompt_text)
 
+    def test_pm_user_prompt_does_not_require_project_installs_for_builtin_demo_infrastructure(self) -> None:
+        prompt_path = (
+            Path(__file__).resolve().parents[1]
+            / "orchestrator"
+            / "prompts"
+            / "workflow"
+            / "pm_user.j2"
+        )
+        prompt_text = prompt_path.read_text(encoding="utf-8")
+        self.assertIn("MB-owned preview release orchestration", prompt_text)
+        self.assertIn("QA demo artifact upload", prompt_text)
+        self.assertIn("not project installs", prompt_text)
+        self.assertIn("Do not block merely because `project.list_installs` is empty", prompt_text)
+        self.assertIn("let later release/QA stages fail closed", prompt_text)
+
     def test_pm_prompts_require_plain_language_install_approval_contract(self) -> None:
         prompts_dir = Path(__file__).resolve().parents[1] / "orchestrator" / "prompts" / "workflow"
         pm_system = (prompts_dir / "pm_system.j2").read_text(encoding="utf-8")
