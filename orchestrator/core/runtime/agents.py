@@ -516,6 +516,13 @@ class CodexWorkflowAgents:
                     [capability.value for capability in request.available_worker_capabilities]
                 ),
                 project_demo_capture_targets_json=json.dumps(list(request.project_demo_capture_targets)),
+                project_demo_capture_target_sources_json=json.dumps(
+                    {
+                        target: list(source_paths)
+                        for target, source_paths in request.project_demo_capture_target_sources.items()
+                    },
+                    sort_keys=True,
+                ),
                 qa_capture_target_constraints_json=capture_target_constraints_json,
                 human_inputs_json=json.dumps(request.human_inputs),
                 **_stage_prompt_tool_context(

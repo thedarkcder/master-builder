@@ -34,6 +34,7 @@ class WorkflowRequest:
     current_worker_capability: WorkerCapability = WorkerCapability.LINUX
     available_worker_capabilities: tuple[WorkerCapability, ...] = field(default_factory=lambda: (WorkerCapability.LINUX,))
     project_demo_capture_targets: tuple[QaCaptureTarget, ...] = field(default_factory=tuple)
+    project_demo_capture_target_sources: dict[str, tuple[str, ...]] = field(default_factory=dict)
     base_branch: str | None = None
     integration_branch: str | None = None
     pr_target_branch: str | None = None

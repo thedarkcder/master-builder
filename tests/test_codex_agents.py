@@ -359,6 +359,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             integration_branch="feature/MAB-54",
             pr_target_branch="main",
             project_demo_capture_targets=("browser",),
+            project_demo_capture_target_sources={"browser": ("web",)},
         )
         captured: dict[str, object] = {}
 
@@ -379,6 +380,7 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
         self.assertEqual(captured["integration_branch"], "feature/MAB-54")
         self.assertEqual(captured["allow_pr_creation"], "false")
         self.assertEqual(captured["project_demo_capture_targets_json"], '["browser"]')
+        self.assertEqual(captured["project_demo_capture_target_sources_json"], '{"browser": ["web"]}')
         self.assertEqual(captured["qa_capture_target_constraints_json"], self._CAPTURE_TARGET_CONSTRAINTS_JSON)
         governed_tools = json.loads(str(captured["governed_tools_json"]))
         native_tools = json.loads(str(captured["native_tools_json"]))

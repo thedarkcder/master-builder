@@ -1244,6 +1244,9 @@ def record_demo_scenarios(
             "run_id": request.run_id,
             "issue_key": request.issue_key,
             "execution_repo_dir": request.execution_repo_dir or "",
+            "target_source_paths": list(
+                (request.project_demo_capture_target_sources or {}).get(capture_target_name, ())
+            ),
             "scenarios": [
                 {
                     "name": scenario.name,

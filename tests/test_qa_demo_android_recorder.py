@@ -177,6 +177,17 @@ def test_discover_android_project_dir_honors_relative_override(monkeypatch, tmp_
     assert discover_android_project_dir(repo_dir=tmp_path) == android_dir.resolve()
 
 
+def test_discover_android_project_dir_prefers_payload_source_paths(tmp_path) -> None:
+    android_dir = tmp_path / "clients" / "android"
+    android_dir.mkdir(parents=True)
+    (android_dir / "build.gradle").write_text("plugins { id 'com.android.application' }\n", encoding="utf-8")
+    other_dir = tmp_path / "samples" / "android"
+    other_dir.mkdir(parents=True)
+    (other_dir / "build.gradle").write_text("plugins { id 'com.android.application' }\n", encoding="utf-8")
+
+    assert discover_android_project_dir(repo_dir=tmp_path, target_source_paths=["clients/android"]) == android_dir.resolve()
+
+
 def test_run_bounds_adb_commands_with_actionable_timeout(monkeypatch) -> None:
     def _fake_run(*_args, **_kwargs):  # noqa: ANN001
         raise subprocess.TimeoutExpired(cmd=["adb", "shell", "uiautomator"], timeout=60, output="", stderr="")
