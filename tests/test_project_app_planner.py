@@ -14,6 +14,7 @@ import yaml
 from orchestrator.core.project_app_analysis_runtime import run_project_app_analysis
 from orchestrator.core.deployment_setup.planner import DeploymentPlannerResponse, run_project_deployment_planning
 from orchestrator.core.project_app_planner import (
+    ensure_project_app,
     ProjectAppNormalizedCandidate,
     ProjectAppPreScanCandidate,
     persist_project_app_analysis_result,
@@ -80,10 +81,12 @@ CMD ["python", "app.py"]
     assert root_candidate.build_strategy == "dockerfile"
     assert root_candidate.exposed_port == 8000
     assert root_candidate.needs_generated_files is False
+    assert root_candidate.deployment_config["source_strategy"] == "dockerfile"
     assert frontend_candidate.build_strategy == "nixpacks"
     assert frontend_candidate.detected_runtime == "nextjs"
     assert frontend_candidate.exposed_port == 3000
     assert frontend_candidate.needs_generated_files is True
+    assert frontend_candidate.deployment_config["source_strategy"] == "nixpacks"
 
 
 def test_scan_repo_for_project_apps_detects_native_ios_and_android_candidates() -> None:
@@ -125,14 +128,20 @@ plugins {
     android_app_candidate = next(candidate for candidate in candidates if candidate.source_path == "android/app")
     assert ios_candidate.detected_runtime == "ios"
     assert ios_candidate.detected_language == "swift"
-    assert ios_candidate.deployment_config["mobile_platform"] == "ios"
+    assert ios_candidate.deployment_config["source_strategy"] == "nixpacks"
+    assert "mobile_platform" not in ios_candidate.deployment_config
+    assert "capture_target" not in ios_candidate.deployment_config
     assert ios_candidate.needs_generated_files is False
     assert android_root_candidate.detected_runtime == "android"
     assert android_root_candidate.detected_language == "kotlin"
-    assert android_root_candidate.deployment_config["mobile_platform"] == "android"
+    assert android_root_candidate.deployment_config["source_strategy"] == "nixpacks"
+    assert "mobile_platform" not in android_root_candidate.deployment_config
+    assert "capture_target" not in android_root_candidate.deployment_config
     assert android_root_candidate.needs_generated_files is False
     assert android_app_candidate.detected_runtime == "android"
-    assert android_app_candidate.deployment_config["mobile_platform"] == "android"
+    assert android_app_candidate.deployment_config["source_strategy"] == "nixpacks"
+    assert "mobile_platform" not in android_app_candidate.deployment_config
+    assert "capture_target" not in android_app_candidate.deployment_config
 
 
 def test_scan_repo_for_project_apps_detects_react_native_web_browser_target() -> None:
@@ -172,7 +181,8 @@ plugins {
     assert root_candidate.detected_runtime == "react_native_web"
     assert root_candidate.exposed_port == 19006
     assert root_candidate.start_command == "npm run web"
-    assert root_candidate.deployment_config["capture_target"] == "browser"
+    assert root_candidate.deployment_config["source_strategy"] == "nixpacks"
+    assert "capture_target" not in root_candidate.deployment_config
     assert {"android/app", "ios"}.issubset({candidate.source_path for candidate in candidates})
 
 
@@ -2476,4 +2486,106 @@ def test_analysis_persistence_does_not_downgrade_live_app_status() -> None:
         assert app.slug == "align"
         assert app.status == "live"
         assert app.exposed_port == 9159
+        reset_db_engine_cache()
+
+
+def test_ensure_project_app_preserves_release_owned_deployment_config_fields() -> None:
+    with TemporaryDirectory() as tmp:
+        database_url = f"sqlite:///{tmp}/project_app_planner.db"
+        os.environ["ORCHESTRATOR_DATABASE_URL"] = database_url
+        reset_db_engine_cache()
+        run_migrations(database_url=database_url)
+        session_factory = create_session_factory(database_url=database_url)
+        now = datetime.now(timezone.utc)
+
+        with session_factory() as session:
+            session.add(
+                Tenant(
+                    tenant_id="tenant-1",
+                    name="Tenant 1",
+                    is_enabled=True,
+                    jira_config={},
+                    github_config={},
+                    repos_config={},
+                    policy_config={},
+                    discord_config=None,
+                    deployment_plane_config={},
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            session.add(
+                Project(
+                    project_id="project-1",
+                    tenant_id="tenant-1",
+                    name="Project 1",
+                    github_repository="https://github.com/example/repo",
+                    jira_project_key="TP",
+                    policy_overrides={},
+                    environment={},
+                    secret_refs={},
+                    discord_config={},
+                    is_archived=False,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            existing_app = ProjectApp(
+                app_id=ProjectAppNormalizedCandidate._app_id(
+                    tenant_id="tenant-1",
+                    project_id="project-1",
+                    source_path=".",
+                ),
+                tenant_id="tenant-1",
+                project_id="project-1",
+                name="Consumer app",
+                slug="consumer-app",
+                source_path=".",
+                detection_confidence=0.7,
+                detected_runtime="react_native_web",
+                detected_language="javascript",
+                analysis_source="manual",
+                build_strategy="nixpacks",
+                exposed_port=19006,
+                healthcheck=None,
+                start_command="npm run web",
+                env_schema_json={},
+                secret_schema_json={},
+                deployment_config={"environment_name": "production", "source_strategy": "dockerfile"},
+                status="draft",
+                created_at=now,
+                updated_at=now,
+            )
+            session.add(existing_app)
+            session.commit()
+
+            candidate = ProjectAppNormalizedCandidate(
+                name="consumer-app",
+                slug="consumer-app",
+                source_path=".",
+                build_strategy="nixpacks",
+                detected_runtime="react_native_web",
+                detected_language="javascript",
+                detection_confidence=0.95,
+                exposed_port=19006,
+                healthcheck=None,
+                start_command="npm run web",
+                env_schema_json={},
+                secret_schema_json={},
+                deployment_config={"source_strategy": "nixpacks"},
+                analysis_source="workflow_request:run-1",
+                needs_generated_files=True,
+            )
+
+            updated_app = ensure_project_app(
+                session,
+                tenant_id="tenant-1",
+                project_id="project-1",
+                candidate=candidate,
+            )
+
+        assert updated_app.deployment_config == {
+            "environment_name": "production",
+            "source_strategy": "nixpacks",
+        }
         reset_db_engine_cache()

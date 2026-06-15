@@ -34,7 +34,7 @@ def latest_checkpoint_for_kind(*, session, workflow_id: str, checkpoint_kind: st
             WorkflowCheckpoint.workflow_id == workflow_id,
             WorkflowCheckpoint.checkpoint_kind.in_(accepted_kinds),
         )
-        .order_by(desc(WorkflowCheckpoint.created_at))
+        .order_by(desc(WorkflowCheckpoint.updated_at), desc(WorkflowCheckpoint.created_at))
         .limit(1)
     ).scalar_one_or_none()
 
@@ -184,7 +184,7 @@ def latest_resumable_checkpoint(*, session, workflow_id: str) -> WorkflowCheckpo
             WorkflowCheckpoint.workflow_id == workflow_id,
             WorkflowCheckpoint.checkpoint_kind.in_(("pm", "execution", "orchestrated")),
         )
-        .order_by(desc(WorkflowCheckpoint.created_at))
+        .order_by(desc(WorkflowCheckpoint.updated_at), desc(WorkflowCheckpoint.created_at))
         .limit(1)
     ).scalar_one_or_none()
 

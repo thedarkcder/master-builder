@@ -126,7 +126,7 @@ type SecretReferenceDraft = {
 
 type DeploymentFormState = {
   environment_name: string;
-  source_strategy: "dockerfile" | "docker_compose" | "";
+  source_strategy: "dockerfile" | "docker_compose" | "nixpacks" | "";
   build_strategy: "dockerfile" | "docker_compose" | "nixpacks" | "";
   exposed_port: string;
   start_command: string;
@@ -865,6 +865,7 @@ function sourceStrategyLabel(strategy: string | null | undefined): string {
   const normalized = String(strategy || "").trim().toLowerCase();
   if (normalized === "docker_compose") return "Docker Compose";
   if (normalized === "dockerfile") return "Dockerfile";
+  if (normalized === "nixpacks") return "Nixpacks";
   return normalized || "—";
 }
 
@@ -935,7 +936,7 @@ function toDeploymentForm(record: ProjectAppDeploymentConfigRecord | null, app: 
     return emptyDeploymentForm();
   }
   const sourceStrategy =
-    record.source_strategy === "dockerfile" || record.source_strategy === "docker_compose" ? record.source_strategy : "";
+    record.source_strategy === "dockerfile" || record.source_strategy === "docker_compose" || record.source_strategy === "nixpacks" ? record.source_strategy : "";
   const appBuildStrategy = app?.build_strategy ?? record.build_strategy;
   const buildStrategy =
     appBuildStrategy === "dockerfile" || appBuildStrategy === "docker_compose" || appBuildStrategy === "nixpacks"
@@ -2562,6 +2563,7 @@ export function ProjectAppAdminPage({
                             }
                             disabled={savingConfig || deploying}
                           >
+                            <option value="nixpacks">Nixpacks</option>
                             <option value="dockerfile">Dockerfile</option>
                             <option value="docker_compose">Docker Compose</option>
                           </select>

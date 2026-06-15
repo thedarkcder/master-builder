@@ -84,7 +84,7 @@ class WorkflowRequestFactoryTests(unittest.TestCase):
                 name="Project",
                 github_repository="https://github.com/example/repo",
                 jira_project_key="TP",
-                environment={},
+                environment={"default_branch": "main"},
             )
             with self.assertRaisesRegex(
                 ValueError,
@@ -107,7 +107,7 @@ class WorkflowRequestFactoryTests(unittest.TestCase):
                 name="Project",
                 github_repository="https://github.com/example/repo",
                 jira_project_key="TP",
-                environment={},
+                environment={"default_branch": "main"},
             )
             checkout_dir = (
                 Path(tmp_dir)
@@ -156,7 +156,7 @@ class WorkflowRequestFactoryTests(unittest.TestCase):
                 name="Project",
                 github_repository="https://github.com/example/repo",
                 jira_project_key="TP",
-                environment={},
+                environment={"default_branch": "main"},
             )
             checkout_dir = Path(tmp_dir) / "repo"
             checkout_dir.mkdir(parents=True, exist_ok=True)
@@ -216,7 +216,7 @@ class WorkflowRequestFactoryTests(unittest.TestCase):
                 name="Project",
                 github_repository="https://github.com/example/repo",
                 jira_project_key="TP",
-                environment={},
+                environment={"default_branch": "main"},
             )
             checkout_dir = Path(tmp_dir) / "repo"
             checkout_dir.mkdir(parents=True, exist_ok=True)
@@ -232,12 +232,12 @@ class WorkflowRequestFactoryTests(unittest.TestCase):
             ]
             refreshed_candidates = (
                 SimpleNamespace(
-                    detected_runtime="nextjs",
+                    detected_runtime="react_native_web",
                     detected_language="typescript",
                     build_strategy="nixpacks",
-                    name="Web app",
-                    source_path="web",
-                    deployment_config={"services": [{"kind": "website"}]},
+                    name="Consumer app",
+                    source_path=".",
+                    deployment_config={},
                 ),
                 SimpleNamespace(
                     detected_runtime="ios",
@@ -245,7 +245,7 @@ class WorkflowRequestFactoryTests(unittest.TestCase):
                     build_strategy="xcode",
                     name="iOS app",
                     source_path="ios",
-                    deployment_config={"capture_target": "ios"},
+                    deployment_config={},
                 ),
                 SimpleNamespace(
                     detected_runtime="android",
@@ -253,7 +253,7 @@ class WorkflowRequestFactoryTests(unittest.TestCase):
                     build_strategy="gradle",
                     name="Android app",
                     source_path="android",
-                    deployment_config={"capture_target": "android"},
+                    deployment_config={},
                 ),
             )
             persisted: list[object] = []
@@ -282,10 +282,13 @@ class WorkflowRequestFactoryTests(unittest.TestCase):
                 )
 
             self.assertEqual(tuple(persisted), refreshed_candidates)
+            for candidate in persisted:
+                self.assertNotIn("capture_target", candidate.deployment_config)
+                self.assertNotIn("mobile_platform", candidate.deployment_config)
             self.assertEqual(request.project_demo_capture_targets, ("browser", "ios", "android"))
             self.assertEqual(
                 request.project_demo_capture_target_sources,
-                {"browser": ("web",), "ios": ("ios",), "android": ("android",)},
+                {"browser": (".",), "ios": ("ios",), "android": ("android",)},
             )
 
     def test_build_rejects_non_canonical_resume_checkpoint_payload(self) -> None:

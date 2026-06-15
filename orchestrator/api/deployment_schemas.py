@@ -757,7 +757,7 @@ class ProjectDeploymentConfigWrite(BaseModel):
 
     enabled: Literal[True] = True
     environment_name: str | None = None
-    source_strategy: Literal["dockerfile", "docker_compose"] | None = None
+    source_strategy: Literal["dockerfile", "docker_compose", "nixpacks"] | None = None
     source_branch: str | None = None
     source_commit_sha: str | None = None
     deployment_branch: str | None = None
@@ -785,8 +785,8 @@ class ProjectDeploymentConfigWrite(BaseModel):
         if normalized is None:
             return None
         lowered = normalized.lower()
-        if lowered not in {"dockerfile", "docker_compose"}:
-            raise ValueError("source_strategy must be dockerfile or docker_compose")
+        if lowered not in {"dockerfile", "docker_compose", "nixpacks"}:
+            raise ValueError("source_strategy must be dockerfile, docker_compose, or nixpacks")
         return lowered
 
     @field_validator("source_branch", "deployment_branch", "deployment_compose_path")
@@ -1047,7 +1047,7 @@ class ProjectDeploymentConfigRead(BaseModel):
 
     enabled: Literal[True] = True
     environment_name: str | None = None
-    source_strategy: Literal["dockerfile", "docker_compose"] | None = None
+    source_strategy: Literal["dockerfile", "docker_compose", "nixpacks"] | None = None
     source_branch: str | None = None
     source_commit_sha: str | None = None
     deployment_branch: str | None = None

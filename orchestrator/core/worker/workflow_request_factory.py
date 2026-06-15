@@ -50,7 +50,17 @@ _resolve_branch_from_open_pull_requests = resolve_branch_from_open_pull_requests
 _PROJECT_DEMO_TARGET_ORDER: tuple[QaCaptureTarget, ...] = ("browser", "ios", "android")
 _IOS_PROJECT_MARKERS = ("ios", "iphone", "ipad", "swiftui", "xcode", "xcuitest")
 _ANDROID_PROJECT_MARKERS = ("android", "espresso", "uiautomator")
-_BROWSER_PROJECT_MARKERS = ("browser", "frontend", "web app", "website", "nextjs", "vite")
+_BROWSER_PROJECT_MARKERS = (
+    "browser",
+    "frontend",
+    "web app",
+    "website",
+    "nextjs",
+    "vite",
+    "react_native_web",
+    "react-native-web",
+    "expo",
+)
 
 
 def _require_positive_policy_int(effective_policy: dict, field_name: str) -> int:

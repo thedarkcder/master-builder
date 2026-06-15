@@ -342,6 +342,18 @@ def _normalize_stage_updates(
     return payloads
 
 
+def _non_stale_requeue_resume_stage(*, workflow_result: WorkflowResult) -> str | None:
+    for item in reversed(list(workflow_result.orchestration_stage_trace or [])):
+        if not isinstance(item, dict):
+            continue
+        if str(item.get("status") or "").strip().lower() != "requeue":
+            continue
+        stage = str(item.get("stage") or "").strip().lower()
+        if stage:
+            return stage
+    return None
+
+
 def finalize_cancelled_run(
     session: Session,
     *,
@@ -510,7 +522,25 @@ def requeue_workflow_result_for_stale_snapshot(
     snapshot.workflow.requeue_target = None
     snapshot.workflow.requeue_reason = error
     run.plan = snapshot.dump()
-    run.pr_url = None
+    if mark_stale_snapshot:
+        run.pr_url = None
+    else:
+        run.pr_url = workflow_result.pr_url or run.pr_url
+        workflow = _workflow_for_run(session, run=run)
+        if workflow is not None and str(run.pr_url or "").strip():
+            workflow.pr_url = run.pr_url
+        resume_stage = _non_stale_requeue_resume_stage(workflow_result=workflow_result)
+        checkpoint_kind = checkpoint_kind_for_stage(resume_stage)
+        if checkpoint_kind is not None:
+            upsert_workflow_checkpoint(
+                session,
+                workflow_id=run.workflow_id,
+                run_id=run.run_id,
+                checkpoint_kind=checkpoint_kind,
+                stage=resume_stage,
+                payload=snapshot.dump(),
+                now=datetime.now(timezone.utc),
+            )
     transitions.reset_for_new_attempt(run=run, now=datetime.now(timezone.utc))
     session.commit()
     session.refresh(run)

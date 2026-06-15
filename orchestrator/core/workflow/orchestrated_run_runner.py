@@ -140,6 +140,7 @@ class OrchestratedRunWorkflowExecutor:
         resume_from_dev = _should_resume_from_dev(request)
         resume_from_test = _should_resume_from_test(request)
         resume_from_review = _should_resume_from_review(request)
+        resume_from_qa = _should_resume_from_qa(request)
         resume_snapshot = ExecutionSnapshot.load(request.checkpoint_payload) if resume_mode else None
         resumed_from_persisted_pm = False
 
@@ -214,7 +215,7 @@ class OrchestratedRunWorkflowExecutor:
                         summary="Resumed from persisted PM plan.",
                     )
                 )
-        elif resume_from_review:
+        elif resume_from_review or resume_from_qa:
             plan = resume_snapshot.plan() if resume_snapshot is not None else None
             if plan is None:
                 return self._failure_result(
@@ -228,9 +229,13 @@ class OrchestratedRunWorkflowExecutor:
                         review_feedback=None,
                         test_guidance=test_guidance,
                     ),
-                    stage="review",
+                    stage="qa" if resume_from_qa else "review",
                     attempts=1,
-                    message="Cannot resume review stage because no valid persisted PM plan is available.",
+                    message=(
+                        "Cannot resume QA stage because no valid persisted PM plan is available."
+                        if resume_from_qa
+                        else "Cannot resume review stage because no valid persisted PM plan is available."
+                    ),
                 )
             stage_trace.extend(
                 [
@@ -316,6 +321,52 @@ class OrchestratedRunWorkflowExecutor:
             )
             if checkpoint_failure is not None:
                 return checkpoint_failure
+
+        if _should_resume_from_qa(request):
+            resumed_dev_result = resume_snapshot.dev_result() if resume_snapshot is not None else None
+            resumed_test_result = resume_snapshot.test_result() if resume_snapshot is not None else None
+            resumed_review_result = resume_snapshot.review_result() if resume_snapshot is not None else None
+            if resumed_dev_result is None or resumed_test_result is None or resumed_review_result is None:
+                return self._failure_result(
+                    request=request,
+                    state=state,
+                    stage="qa",
+                    attempts=1,
+                    message="Cannot resume QA stage because valid persisted dev/test/review artifacts are required.",
+                )
+            state.dev_rationale[:] = list(resumed_dev_result.change_summary)
+            state.test_guidance[:] = list(resumed_test_result.guidance or state.test_guidance)
+            state.review_summary[:] = list(resumed_review_result.summary)
+            state.review_feedback = resumed_review_result.feedback
+            stage_trace.extend(
+                [
+                    _stage_trace_entry(stage="dev", status="completed", attempt=1, summary="Resumed from persisted dev result."),
+                    _stage_trace_entry(stage="test", status="completed", attempt=1, summary="Resumed from persisted passing test result."),
+                    _stage_trace_entry(stage="review", status="completed", attempt=1, summary="Resumed from persisted review result."),
+                ]
+            )
+            for checkpoint in (
+                WorkflowStageCheckpoint(stage="pm", attempt=1, status="completed", summary="Resumed from persisted PM plan.", plan=plan),
+                WorkflowStageCheckpoint(stage="dev", attempt=1, status="completed", summary="Resumed from persisted dev result.", dev_result=resumed_dev_result),
+                WorkflowStageCheckpoint(stage="test", attempt=1, status="completed", summary="Resumed from persisted passing test result.", test_result=resumed_test_result),
+                WorkflowStageCheckpoint(stage="review", attempt=1, status="completed", summary="Resumed from persisted review result.", review_result=resumed_review_result),
+            ):
+                checkpoint_failure = _persist_stage_checkpoint(checkpoint)
+                if checkpoint_failure is not None:
+                    return checkpoint_failure
+            return WorkflowResult(
+                outcome="success",
+                plan=plan,
+                pr_url=resumed_review_result.pr_url,
+                summary=list(resumed_review_result.summary or resumed_dev_result.change_summary or ["Workflow completed"]),
+                test_guidance=list(state.test_guidance),
+                attempts=1,
+                dev_rationale=list(state.dev_rationale),
+                review_summary=list(state.review_summary),
+                review_feedback=None,
+                orchestration_stage_trace=list(stage_trace),
+                orchestration_workstream_trace=[],
+            )
 
         if _should_resume_from_review(request):
             resumed_dev_result = resume_snapshot.dev_result() if resume_snapshot is not None else None
@@ -1026,6 +1077,14 @@ def _should_resume_from_review(request: WorkflowRequest) -> bool:
         str(request.entry_mode or "").strip().lower() == "resume"
         and str(request.checkpoint_kind or "").strip().lower() == "execution"
         and str(request.entry_stage or "").strip().lower() == "review"
+    )
+
+
+def _should_resume_from_qa(request: WorkflowRequest) -> bool:
+    return (
+        str(request.entry_mode or "").strip().lower() == "resume"
+        and str(request.checkpoint_kind or "").strip().lower() == "execution"
+        and str(request.entry_stage or "").strip().lower() == "qa"
     )
 
 

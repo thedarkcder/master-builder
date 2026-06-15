@@ -16,8 +16,10 @@ from sqlalchemy import select
 
 from orchestrator.api.admin.project_service import AdminProjectService
 from orchestrator.api.admin.deployment_release_service import (
+    _coolify_build_pack,
     _coolify_docker_compose_routes,
     _fetch_route_activation,
+    _normalize_local_coolify_api_base_url,
     _release_service_urls,
     build_deployment_environment_values,
     create_project_deployment_release,
@@ -50,6 +52,7 @@ from orchestrator.core.deployment_previews import (
 )
 from orchestrator.core.deployment_runtime import (
     CoolifyDeploymentObservation,
+    _coolify_api_base_url as _runtime_coolify_api_base_url,
     _coolify_observation_for_release,
     _resolve_release_observation_transition,
     _select_release_for_event,
@@ -620,6 +623,79 @@ class DeploymentContractTests(unittest.TestCase):
         self.assertEqual(result.reason, "existing")
         self.assertEqual(result.release.release_id, "release-existing")
         create_release.assert_not_called()
+
+    def test_run_preview_generation_reuses_inflight_preview_with_pending_provider_route(self) -> None:
+        now = datetime.now(timezone.utc)
+        with self.session_factory() as session:
+            tenant, project, run = self._seed_preview_run(session=session, now=now, commit_sha="a" * 40)
+            tenant.deployment_plane_config = {"base_domain": "192-168-0-118.sslip.io:8088"}
+            existing = ProjectDeploymentRelease(
+                release_id="release-existing",
+                tenant_id=tenant.tenant_id,
+                project_id=project.project_id,
+                app_id="app-1",
+                provider="internal_coolify",
+                release_kind="run_preview",
+                status="provisioning",
+                environment_name="production",
+                source_strategy="nixpacks",
+                git_ref="feature/CAP-8",
+                commit_sha="a" * 40,
+                source_run_id=run.run_id,
+                pr_number=12,
+                requested_by_user_id=None,
+                deployment_snapshot={},
+                provider_context={
+                    "base_domain": "192-168-0-118.sslip.io:8088",
+                    "application_uuid": "app-existing",
+                    "deployment_uuid": "deployment-existing",
+                    "route_bindings": [
+                        {
+                            "service_key": "repo",
+                            "service_name": "repo",
+                            "service_kind": "website",
+                            "scheme": "http",
+                            "host": "app-existing.master-builder-coolify-ssh-host.sslip.io",
+                            "url_kind": "generated",
+                            "status": "pending",
+                        }
+                    ],
+                },
+                delivery_metadata={},
+                last_error=None,
+                requested_at=now,
+                started_at=now,
+                completed_at=None,
+                destroyed_at=None,
+                created_at=now,
+                updated_at=now,
+            )
+            session.add(existing)
+            session.commit()
+
+            def fake_reconcile(*, session, release):  # noqa: ANN001
+                session.add(release)
+                return False
+
+            with (
+                patch("orchestrator.core.deployment_previews.reconcile_deployment_release", side_effect=fake_reconcile),
+                patch("orchestrator.core.deployment_previews.create_project_deployment_release") as create_release,
+                patch("orchestrator.core.deployment_previews.destroy_project_deployment_preview_release") as destroy_release,
+            ):
+                result = create_run_preview_deployment(
+                    session=session,
+                    tenant=tenant,
+                    project=project,
+                    run=run,
+                    settings=SimpleNamespace(project_repo_checkout_base_dir="/tmp/unused", secrets_encryption_key="unused"),
+                    pr_url="https://github.com/example/repo/pull/12",
+                )
+
+        self.assertFalse(result.created)
+        self.assertEqual(result.reason, "existing")
+        self.assertEqual(result.release.release_id, "release-existing")
+        create_release.assert_not_called()
+        destroy_release.assert_not_called()
 
     def test_run_preview_generation_recreates_when_existing_base_domain_is_stale(self) -> None:
         now = datetime.now(timezone.utc)
@@ -1274,6 +1350,61 @@ class DeploymentContractTests(unittest.TestCase):
         self.assertTrue(result.created)
         self.assertEqual(result.release.release_id, "release-new")
 
+    def test_run_preview_generation_stops_after_failed_preview_retry_limit(self) -> None:
+        now = datetime.now(timezone.utc)
+        with self.session_factory() as session:
+            tenant, project, run = self._seed_preview_run(session=session, now=now, commit_sha="a" * 40)
+            for index in range(2):
+                session.add(
+                    ProjectDeploymentRelease(
+                        release_id=f"release-failed-{index}",
+                        tenant_id=tenant.tenant_id,
+                        project_id=project.project_id,
+                        app_id="app-1",
+                        provider="internal_coolify",
+                        release_kind="run_preview",
+                        status="failed",
+                        environment_name="production",
+                        source_strategy="dockerfile",
+                        git_ref="run/ap-123/run-1",
+                        commit_sha="a" * 40,
+                        source_run_id=run.run_id,
+                        pr_number=12,
+                        requested_by_user_id=None,
+                        deployment_snapshot={},
+                        provider_context={},
+                        delivery_metadata={},
+                        last_error="Coolify deployment failed",
+                        requested_at=now + timedelta(seconds=index),
+                        started_at=now + timedelta(seconds=index),
+                        completed_at=now + timedelta(seconds=index),
+                        destroyed_at=None,
+                        created_at=now + timedelta(seconds=index),
+                        updated_at=now + timedelta(seconds=index),
+                    )
+                )
+            session.commit()
+
+            with patch("orchestrator.core.deployment_previews.create_project_deployment_release") as create_release:
+                result = create_run_preview_deployment(
+                    session=session,
+                    tenant=tenant,
+                    project=project,
+                    run=run,
+                    settings=SimpleNamespace(
+                        project_repo_checkout_base_dir="/tmp/unused",
+                        secrets_encryption_key="unused",
+                        qa_demo_max_attempts=2,
+                    ),
+                    pr_url="https://github.com/example/repo/pull/12",
+                )
+
+        create_release.assert_not_called()
+        self.assertFalse(result.created)
+        self.assertEqual(result.reason, "preview_failed_retry_limit_reached")
+        self.assertEqual(result.release.release_id, "release-failed-1")
+        self.assertEqual(result.release.status, "failed")
+
     def test_run_preview_generation_reconciles_inflight_preview_before_reuse(self) -> None:
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
@@ -1686,6 +1817,52 @@ class DeploymentContractTests(unittest.TestCase):
         self.assertEqual(config.source_branch, "main")
         self.assertEqual(config.deployment_branch, "mb/deploy/project/main-1d9c38525261")
         self.assertEqual(config.deployment_compose_path, ".master-builder/deployments/docker-compose.yml")
+
+    def test_nixpacks_deployment_config_maps_to_coolify_build_pack(self) -> None:
+        config = ProjectDeploymentConfigWrite.model_validate(
+            {
+                "environment_name": "production",
+                "source_strategy": "nixpacks",
+            }
+        )
+
+        self.assertEqual(config.source_strategy, "nixpacks")
+        self.assertEqual(ProjectDeploymentConfigRead.model_validate(config.model_dump()).source_strategy, "nixpacks")
+        self.assertEqual(_coolify_build_pack(config.source_strategy), "nixpacks")
+
+    def test_host_worker_rewrites_local_coolify_api_url(self) -> None:
+        with patch("orchestrator.api.admin.deployment_release_service.Path.exists", return_value=False):
+            self.assertEqual(
+                _normalize_local_coolify_api_base_url("http://host.docker.internal:8000/api/v1"),
+                "http://localhost:8000/api/v1",
+            )
+
+        with patch("orchestrator.api.admin.deployment_release_service.Path.exists", return_value=True):
+            self.assertEqual(
+                _normalize_local_coolify_api_base_url("http://host.docker.internal:8000/api/v1"),
+                "http://host.docker.internal:8000/api/v1",
+            )
+
+    def test_deployment_reconciliation_rewrites_local_coolify_api_url(self) -> None:
+        tenant_plane = TenantDeploymentPlaneRead.model_validate(
+            {
+                "provider": "internal_coolify",
+                "state": "active",
+                "api_base_url": "http://host.docker.internal:8000/api/v1",
+            }
+        )
+
+        with patch("orchestrator.api.admin.deployment_release_service.Path.exists", return_value=False):
+            self.assertEqual(
+                _runtime_coolify_api_base_url(tenant_plane=tenant_plane),
+                "http://localhost:8000/api/v1",
+            )
+
+        with patch("orchestrator.api.admin.deployment_release_service.Path.exists", return_value=True):
+            self.assertEqual(
+                _runtime_coolify_api_base_url(tenant_plane=tenant_plane),
+                "http://host.docker.internal:8000/api/v1",
+            )
 
     def test_deployment_volume_migration_splits_legacy_resource_volumes(self) -> None:
         migration_path = (
@@ -3136,6 +3313,235 @@ class DeploymentContractTests(unittest.TestCase):
         )
         self.assertNotIn("docker_compose_raw", fake_client.application_payload)
         self.assertEqual(fake_client.started_application_uuid, "application-1")
+
+    def test_internal_coolify_release_submits_nixpacks_app_with_required_ports(self) -> None:
+        class FakeCoolifyClient:
+            def __init__(self) -> None:
+                self.application_payload: dict[str, object] | None = None
+                self.started_application_uuid: str | None = None
+
+            def create_private_github_app_application(self, *, payload: dict[str, object]) -> str:
+                self.application_payload = payload
+                return "application-1"
+
+            def bulk_update_application_envs(self, *, application_uuid: str, payload: dict[str, object]) -> dict[str, object]:
+                return {"application_uuid": application_uuid, **payload}
+
+            def start_application(self, *, application_uuid: str) -> str:
+                self.started_application_uuid = application_uuid
+                return "deployment-1"
+
+            def get_application(self, *, application_uuid: str) -> dict[str, object]:
+                return {"uuid": application_uuid}
+
+        now = datetime.now(timezone.utc)
+        tenant = Tenant(
+            tenant_id="tenant-1",
+            name="Tenant 1",
+            is_enabled=True,
+            jira_config={},
+            github_config={},
+            repos_config={},
+            policy_config={},
+            discord_config=None,
+            created_at=now,
+            updated_at=now,
+        )
+        project = Project(
+            project_id="project-1",
+            tenant_id="tenant-1",
+            name="Project 1",
+            github_repository="https://github.com/example/repo",
+            jira_project_key="TP",
+            policy_overrides={},
+            environment={},
+            secret_refs={},
+            discord_config=None,
+            is_archived=False,
+            created_at=now,
+            updated_at=now,
+        )
+        project_app = ProjectApp(
+            app_id="app-1",
+            tenant_id="tenant-1",
+            project_id="project-1",
+            name="Web",
+            slug="web",
+            source_path=".",
+            detection_confidence=1.0,
+            detected_runtime="react_native_web",
+            detected_language="typescript",
+            analysis_source="test",
+            build_strategy="nixpacks",
+            exposed_port=19006,
+            healthcheck=None,
+            start_command="npm run web",
+            env_schema_json={},
+            secret_schema_json={},
+            deployment_config={},
+            status="ready",
+            created_at=now,
+            updated_at=now,
+        )
+        tenant_plane = TenantDeploymentPlaneRead.model_validate(
+            {
+                "provider": "internal_coolify",
+                "infrastructure_provider": "hetzner",
+                "region": "eu-west",
+                "base_domain": "apps.example.com",
+                "platform_subdomain": "builder",
+                "api_base_url": "https://builder.apps.example.com/api/v1",
+                "coolify_project_uuid": "coolify-project-1",
+                "coolify_environment_name": "production",
+                "coolify_server_uuid": "server-1",
+                "coolify_destination_uuid": "destination-1",
+                "coolify_github_app_uuid": "github-app-1",
+                "secret_refs": {"coolify_api_token": "platform/COOLIFY_API_TOKEN"},
+                "state": "active",
+            }
+        )
+        project_deployment = ProjectDeploymentConfigRead.model_validate(
+            {
+                "enabled": True,
+                "environment_name": "production",
+                "source_strategy": "nixpacks",
+                "deployment_branch": "main",
+                "deployment_commit_sha": "abcdef1",
+                "domains": [],
+                "services": [],
+                "resources": [],
+                "backup_policies": [],
+            }
+        )
+        fake_client = FakeCoolifyClient()
+
+        with (
+            self.session_factory() as session,
+            patch("orchestrator.api.admin.deployment_release_service._resolve_secret_value", return_value="token"),
+            patch("orchestrator.api.admin.deployment_release_service.CoolifyApiClient", return_value=fake_client),
+        ):
+            result = submit_internal_coolify_release(
+                session=session,
+                tenant=tenant,
+                project=project,
+                project_app=project_app,
+                tenant_plane=tenant_plane,
+                project_deployment=project_deployment,
+                payload=ProjectDeploymentReleaseCreate(git_ref="main", commit_sha="abcdef1", release_kind="run_preview"),
+                existing_application_uuid=None,
+                existing_service_uuid=None,
+            )
+
+        self.assertEqual(result["application_uuid"], "application-1")
+        self.assertEqual(result["deployment_uuid"], "deployment-1")
+        self.assertEqual(fake_client.started_application_uuid, "application-1")
+        assert fake_client.application_payload is not None
+        self.assertEqual(fake_client.application_payload["build_pack"], "nixpacks")
+        self.assertEqual(fake_client.application_payload["ports_exposes"], "19006")
+        self.assertEqual(fake_client.application_payload["base_directory"], "/")
+        self.assertEqual(fake_client.application_payload["start_command"], "npm run web")
+        self.assertNotIn("dockerfile_location", fake_client.application_payload)
+
+    def test_internal_coolify_nixpacks_release_requires_exposed_port(self) -> None:
+        now = datetime.now(timezone.utc)
+        tenant = Tenant(
+            tenant_id="tenant-1",
+            name="Tenant 1",
+            is_enabled=True,
+            jira_config={},
+            github_config={},
+            repos_config={},
+            policy_config={},
+            discord_config=None,
+            created_at=now,
+            updated_at=now,
+        )
+        project = Project(
+            project_id="project-1",
+            tenant_id="tenant-1",
+            name="Project 1",
+            github_repository="https://github.com/example/repo",
+            jira_project_key="TP",
+            policy_overrides={},
+            environment={},
+            secret_refs={},
+            discord_config=None,
+            is_archived=False,
+            created_at=now,
+            updated_at=now,
+        )
+        project_app = ProjectApp(
+            app_id="app-1",
+            tenant_id="tenant-1",
+            project_id="project-1",
+            name="Web",
+            slug="web",
+            source_path=".",
+            detection_confidence=1.0,
+            detected_runtime="react_native_web",
+            detected_language="typescript",
+            analysis_source="test",
+            build_strategy="nixpacks",
+            exposed_port=None,
+            healthcheck=None,
+            start_command=None,
+            env_schema_json={},
+            secret_schema_json={},
+            deployment_config={},
+            status="ready",
+            created_at=now,
+            updated_at=now,
+        )
+        tenant_plane = TenantDeploymentPlaneRead.model_validate(
+            {
+                "provider": "internal_coolify",
+                "infrastructure_provider": "hetzner",
+                "region": "eu-west",
+                "base_domain": "apps.example.com",
+                "platform_subdomain": "builder",
+                "api_base_url": "https://builder.apps.example.com/api/v1",
+                "coolify_project_uuid": "coolify-project-1",
+                "coolify_environment_name": "production",
+                "coolify_server_uuid": "server-1",
+                "coolify_destination_uuid": "destination-1",
+                "coolify_github_app_uuid": "github-app-1",
+                "secret_refs": {"coolify_api_token": "platform/COOLIFY_API_TOKEN"},
+                "state": "active",
+            }
+        )
+        project_deployment = ProjectDeploymentConfigRead.model_validate(
+            {
+                "enabled": True,
+                "environment_name": "production",
+                "source_strategy": "nixpacks",
+                "deployment_branch": "main",
+                "deployment_commit_sha": "abcdef1",
+                "domains": [],
+                "services": [],
+                "resources": [],
+                "backup_policies": [],
+            }
+        )
+
+        with (
+            self.session_factory() as session,
+            patch("orchestrator.api.admin.deployment_release_service._resolve_secret_value", return_value="token"),
+        ):
+            with self.assertRaises(HTTPException) as raised:
+                submit_internal_coolify_release(
+                    session=session,
+                    tenant=tenant,
+                    project=project,
+                    project_app=project_app,
+                    tenant_plane=tenant_plane,
+                    project_deployment=project_deployment,
+                    payload=ProjectDeploymentReleaseCreate(git_ref="main", commit_sha="abcdef1", release_kind="run_preview"),
+                    existing_application_uuid=None,
+                    existing_service_uuid=None,
+                )
+
+        self.assertEqual(raised.exception.status_code, status.HTTP_409_CONFLICT)
+        self.assertIn("Project app must define exposed_port", str(raised.exception.detail))
 
     def test_release_read_derives_generated_service_url_from_route_binding(self) -> None:
         now = datetime.now(timezone.utc)

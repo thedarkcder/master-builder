@@ -43,6 +43,7 @@ class PreviewCleanupResult:
 
 _REUSABLE_PREVIEW_RELEASE_STATUSES = {"queued", "provisioning", "deploying", "route_activating", "live"}
 _RECONCILE_BEFORE_REUSE_STATUSES = {"provisioning", "deploying", "route_activating"}
+_FAILED_PREVIEW_RELEASE_STATUSES = {"failed", "rolled_back"}
 
 
 def create_run_preview_deployment(
@@ -74,6 +75,19 @@ def create_run_preview_deployment(
                 created=False,
                 reason="existing",
                 release=project_deployment_release_to_schema(existing_release),
+            )
+        failed_release = _latest_failed_preview_release_after_retry_limit(
+            session=session,
+            tenant_id=tenant.tenant_id,
+            project_id=project.project_id,
+            run_id=run.run_id,
+            retry_limit=_preview_failure_retry_limit(settings),
+        )
+        if failed_release is not None:
+            return RunPreviewDeploymentResult(
+                created=False,
+                reason="preview_failed_retry_limit_reached",
+                release=project_deployment_release_to_schema(failed_release),
             )
 
     _destroy_active_preview_releases_for_run(
@@ -176,28 +190,63 @@ def _reusable_existing_preview_release(
     ).scalars().first()
     if existing_release is None:
         return None
+    if str(existing_release.status or "").strip() in _RECONCILE_BEFORE_REUSE_STATUSES:
+        reconcile_deployment_release(session=session, release=existing_release)
+        session.flush()
+        session.refresh(existing_release)
+    existing_status = str(existing_release.status or "").strip()
+    if existing_status not in _REUSABLE_PREVIEW_RELEASE_STATUSES:
+        return None
     if current_base_domain is not None:
         provider_context = existing_release.provider_context if isinstance(existing_release.provider_context, dict) else {}
-        if _normalize_optional_string(provider_context.get("base_domain")) != current_base_domain:
+        provider_base_domain = _normalize_optional_string(provider_context.get("base_domain"))
+        if provider_base_domain is not None and provider_base_domain != current_base_domain:
             return None
-        if not deployment_release_routes_match_base_domain(
+        if existing_status == "live" and not deployment_release_routes_match_base_domain(
             provider_context=provider_context,
             base_domain=current_base_domain,
             require_preview_wildcard_shape=True,
         ):
             return None
-    if str(existing_release.status or "").strip() in _RECONCILE_BEFORE_REUSE_STATUSES:
-        reconcile_deployment_release(session=session, release=existing_release)
-        session.flush()
-        session.refresh(existing_release)
-    if str(existing_release.status or "").strip() not in _REUSABLE_PREVIEW_RELEASE_STATUSES:
-        return None
     return existing_release
 
 
 def _normalize_optional_string(value: object) -> str | None:
     normalized = str(value or "").strip()
     return normalized or None
+
+
+def _preview_failure_retry_limit(settings) -> int:  # noqa: ANN001
+    try:
+        raw_value = getattr(settings, "qa_demo_max_attempts", 3)
+        return max(1, int(raw_value or 3))
+    except (TypeError, ValueError):
+        return 3
+
+
+def _latest_failed_preview_release_after_retry_limit(
+    *,
+    session: Session,
+    tenant_id: str,
+    project_id: str,
+    run_id: str,
+    retry_limit: int,
+) -> ProjectDeploymentRelease | None:
+    failed_releases = session.execute(
+        select(ProjectDeploymentRelease)
+        .where(
+            ProjectDeploymentRelease.tenant_id == tenant_id,
+            ProjectDeploymentRelease.project_id == project_id,
+            ProjectDeploymentRelease.release_kind == "run_preview",
+            ProjectDeploymentRelease.source_run_id == run_id,
+            ProjectDeploymentRelease.status.in_(_FAILED_PREVIEW_RELEASE_STATUSES),
+            ProjectDeploymentRelease.destroyed_at.is_(None),
+        )
+        .order_by(ProjectDeploymentRelease.created_at.desc(), ProjectDeploymentRelease.release_id.desc())
+    ).scalars().all()
+    if len(failed_releases) < retry_limit:
+        return None
+    return failed_releases[0]
 
 
 def _destroy_active_preview_releases_for_run(

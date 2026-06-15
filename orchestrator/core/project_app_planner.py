@@ -52,20 +52,22 @@ _NODE_HINTS = (
     ("vite", "vite", "javascript", 4173, "npm run preview"),
     ("@sveltejs/kit", "sveltekit", "javascript", 3000, "npm run start"),
 )
-_BROWSER_CAPTURE_RUNTIMES = frozenset(
-    {
-        "remix",
-        "nextjs",
-        "nuxt",
-        "react_native_web",
-        "react",
-        "astro",
-        "vite",
-        "sveltekit",
-    }
-)
 _JAVA_DEFAULT_PORT = 8080
+_DEPLOYMENT_SOURCE_STRATEGIES = frozenset({"dockerfile", "docker_compose", "nixpacks"})
 _DEPLOYMENT_OWNED_APP_STATUSES = frozenset({"deploying", "live", "failed"})
+
+
+def _deployment_config_with_source_strategy(
+    deployment_config: dict[str, object],
+    *,
+    build_strategy: str,
+) -> dict[str, object]:
+    normalized = dict(deployment_config or {})
+    source_strategy = str(build_strategy or "").strip().lower()
+    if source_strategy not in _DEPLOYMENT_SOURCE_STRATEGIES:
+        raise ValueError("build_strategy must be dockerfile, docker_compose, or nixpacks")
+    normalized.setdefault("source_strategy", source_strategy)
+    return normalized
 
 
 class ProjectAppPlannerRuntimeApp(BaseModel):
@@ -754,11 +756,6 @@ def _build_candidate_from_directory(*, repo_root: Path, directory: Path, evidenc
             name = package_name
         if runtime is not None:
             detected_runtime = runtime
-            if runtime in _BROWSER_CAPTURE_RUNTIMES:
-                deployment_config = {
-                    **deployment_config,
-                    "capture_target": "browser",
-                }
         if language is not None:
             detected_language = language
         if default_port is not None and exposed_port is None:
@@ -840,11 +837,6 @@ def _build_candidate_from_directory(*, repo_root: Path, directory: Path, evidenc
         build_strategy = "nixpacks"
         needs_generated_files = False
         detection_confidence = max(detection_confidence, 0.9)
-        deployment_config = {
-            **deployment_config,
-            "mobile_platform": "ios",
-            "capture_target": "ios",
-        }
     if evidence.get("android_project") is True:
         has_deployable_evidence = True
         detected_runtime = "android"
@@ -852,11 +844,6 @@ def _build_candidate_from_directory(*, repo_root: Path, directory: Path, evidenc
         build_strategy = "nixpacks"
         needs_generated_files = False
         detection_confidence = max(detection_confidence, 0.9)
-        deployment_config = {
-            **deployment_config,
-            "mobile_platform": "android",
-            "capture_target": "android",
-        }
 
     env_example_text = evidence.get("env_example_text")
     if isinstance(env_example_text, str):
@@ -879,7 +866,10 @@ def _build_candidate_from_directory(*, repo_root: Path, directory: Path, evidenc
         start_command=start_command,
         env_schema_json=env_schema_json,
         secret_schema_json=secret_schema_json,
-        deployment_config=deployment_config,
+        deployment_config=_deployment_config_with_source_strategy(
+            deployment_config,
+            build_strategy=build_strategy,
+        ),
         analysis_source=_normalize_optional_string(evidence.get("analysis_source")),
         needs_generated_files=needs_generated_files,
         services_json=services_json,
@@ -1091,7 +1081,7 @@ def scan_repo_for_project_apps(
                 start_command=None,
                 env_schema_json={},
                 secret_schema_json={},
-                deployment_config={},
+                deployment_config={"source_strategy": "nixpacks"},
                 analysis_source=analysis_source,
                 needs_generated_files=True,
                 resources_json=(),
@@ -1127,6 +1117,10 @@ def normalize_project_app_planner_output(
             continue
         candidate_data = dict(candidate.__dict__)
         candidate_data["analysis_source"] = analysis_source or candidate.analysis_source
+        candidate_data["deployment_config"] = _deployment_config_with_source_strategy(
+            dict(candidate.deployment_config or {}),
+            build_strategy=candidate.build_strategy,
+        )
         candidate_data["slug"] = ""
         merged[candidate.source_path] = ProjectAppNormalizedCandidate(
             **candidate_data,
@@ -1240,7 +1234,10 @@ def _merge_candidate(
         start_command=start_command,
         env_schema_json=env_schema_json,
         secret_schema_json=secret_schema_json,
-        deployment_config=deployment_config,
+        deployment_config=_deployment_config_with_source_strategy(
+            deployment_config,
+            build_strategy=str(build_strategy),
+        ),
         analysis_source=analysis_source or (pre_scan.analysis_source if pre_scan is not None else None),
         needs_generated_files=needs_generated_files,
         services_json=services_json,
@@ -1314,7 +1311,10 @@ def ensure_project_app(session: Session, *, tenant_id: str, project_id: str, can
     existing.env_schema_json = dict(candidate.env_schema_json or {})
     existing.secret_schema_json = dict(candidate.secret_schema_json or {})
     if candidate.deployment_config:
-        existing.deployment_config = dict(candidate.deployment_config)
+        existing.deployment_config = {
+            **_coerce_dict(existing.deployment_config),
+            **dict(candidate.deployment_config),
+        }
     if str(existing.status or "").strip().lower() not in _DEPLOYMENT_OWNED_APP_STATUSES:
         existing.status = candidate.status
     existing.updated_at = now

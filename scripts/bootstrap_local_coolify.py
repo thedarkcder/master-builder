@@ -97,6 +97,9 @@ def main() -> int:
             plane["coolify_server_uuid"] = server_uuid
             plane["coolify_destination_uuid"] = destination_uuid
             plane["coolify_github_app_uuid"] = app_uuid_by_tenant[tenant.tenant_id]
+            secret_refs = dict(plane.get("secret_refs") or {})
+            secret_refs["coolify_api_token"] = _coolify_token_ref(tenant)
+            plane["secret_refs"] = secret_refs
             _update_tenant_deployment_plane(connection, tenant.tenant_id, plane)
 
     print("Local Coolify ready for Master Builder previews.")
@@ -365,6 +368,9 @@ def _coolify_token(
         token_ref = _coolify_token_ref(tenant)
         existing = _managed_secret(connection, encryption_key, token_ref)
         if existing and _coolify_token_works(existing, coolify_local_api_base_url):
+            for target_tenant in tenants:
+                if not _managed_secret(connection, encryption_key, _coolify_token_ref(target_tenant)):
+                    _upsert_managed_secret(connection, encryption_key, _coolify_token_ref(target_tenant), existing)
             return existing
 
     token = _create_coolify_token(coolify_container_name)
@@ -556,6 +562,7 @@ def _ensure_project_and_environment(token: str, tenant: TenantPlane, coolify_loc
     project_uuid = configured_uuid or _coolify_uuid()
     project_name = _safe_name(tenant.name or tenant.tenant_id)
     environment_name = str(tenant.deployment_plane_config.get("coolify_environment_name") or "production")
+    environment_uuid = _coolify_uuid()
     _run_coolify_db_sql(
         f"""
         insert into projects (uuid, name, description, team_id, created_at, updated_at)
@@ -566,7 +573,7 @@ def _ensure_project_and_environment(token: str, tenant: TenantPlane, coolify_loc
     _run_coolify_db_sql(
         f"""
         insert into environments (uuid, name, project_id, description, created_at, updated_at)
-        select {_sql(environment_name)}, {_sql(environment_name)}, p.id, 'Master Builder local previews', now(), now()
+        select {_sql(environment_uuid)}, {_sql(environment_name)}, p.id, 'Master Builder local previews', now(), now()
         from projects p
         where p.uuid = {_sql(project_uuid)}
         on conflict (name, project_id) do update set updated_at=excluded.updated_at;

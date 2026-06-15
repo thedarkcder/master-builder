@@ -18,7 +18,13 @@ from orchestrator.core.runs.service import (
     mark_run_running,
     mark_run_terminal,
 )
-from orchestrator.core.worker.run_lifecycle import finalize_workflow_result, persist_stage_checkpoint
+from orchestrator.api.admin.workflows.queries import latest_resumable_checkpoint
+from orchestrator.core.worker.run_lifecycle import (
+    finalize_workflow_result,
+    persist_stage_checkpoint,
+    requeue_workflow_result_for_stale_snapshot,
+)
+from orchestrator.core.workflow.checkpoints import upsert_workflow_checkpoint
 from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 from orchestrator.core.workflow.runner import QaRecording, QaResult, QaScenario, WorkflowResult, WorkflowStageCheckpoint
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
@@ -570,6 +576,130 @@ class RunLifecycleTests(unittest.TestCase):
             self.assertEqual(checkpoint.stage, "qa")
             self.assertEqual(workflow.latest_checkpoint_id, checkpoint.checkpoint_id)
             self.assertEqual(workflow.pr_url, "https://github.com/example/repo/pull/15")
+
+    def test_latest_resumable_checkpoint_uses_updated_stage_state(self) -> None:
+        with self.session_factory() as session:
+            first = enqueue_run(
+                session,
+                tenant_id="tenant-runs",
+                project_id=None,
+                issue_key="TP-917",
+                precheck_outcome="ready_for_agent",
+            )
+            mark_run_terminal(
+                session,
+                run_id=first.run.run_id,
+                terminal_status=RUN_STATUS_FAILED,
+                last_error="first attempt failed",
+            )
+            workflow = self._get_workflow(session, issue_key="TP-917")
+            assert workflow is not None
+            second = enqueue_attempt_for_workflow_uncommitted(
+                session,
+                workflow_id=workflow.workflow_id,
+                bootstrap=RunBootstrap(
+                    workflow_id=workflow.workflow_id,
+                    parent_run_id=first.run.run_id,
+                    entry_mode="resume",
+                    entry_stage="test",
+                    plan=ExecutionSnapshot.empty().dump(),
+                    precheck_outcome="ready_for_agent",
+                ),
+            )
+            self.assertTrue(second.enqueued)
+            session.commit()
+
+            old_time = datetime(2026, 1, 1, tzinfo=timezone.utc)
+            middle_time = datetime(2026, 1, 2, tzinfo=timezone.utc)
+            latest_time = datetime(2026, 1, 3, tzinfo=timezone.utc)
+            upsert_workflow_checkpoint(
+                session,
+                workflow_id=workflow.workflow_id,
+                run_id=first.run.run_id,
+                checkpoint_kind="execution",
+                stage="test",
+                payload=ExecutionSnapshot.empty().dump(),
+                now=old_time,
+            )
+            session.flush()
+            upsert_workflow_checkpoint(
+                session,
+                workflow_id=workflow.workflow_id,
+                run_id=second.run.run_id,
+                checkpoint_kind="execution",
+                stage="test",
+                payload=ExecutionSnapshot.empty().dump(),
+                now=middle_time,
+            )
+            session.flush()
+            upsert_workflow_checkpoint(
+                session,
+                workflow_id=workflow.workflow_id,
+                run_id=first.run.run_id,
+                checkpoint_kind="execution",
+                stage="qa",
+                payload=ExecutionSnapshot.empty().dump(),
+                now=latest_time,
+            )
+            session.commit()
+
+            checkpoint = latest_resumable_checkpoint(session=session, workflow_id=workflow.workflow_id)
+
+            assert checkpoint is not None
+            self.assertEqual(checkpoint.run_id, first.run.run_id)
+            self.assertEqual(checkpoint.stage, "qa")
+
+    def test_non_stale_requeue_preserves_pr_url_for_qa_resume(self) -> None:
+        with self.session_factory() as session:
+            enqueue = enqueue_run(
+                session,
+                tenant_id="tenant-runs",
+                project_id=None,
+                issue_key="TP-918",
+                precheck_outcome="ready_for_agent",
+            )
+            running = mark_run_running(session, run_id=enqueue.run.run_id)
+            running.worker_service_instance_id = self._WORKER_ID
+            running.claim_id = self._CLAIM_ID
+            running.pr_url = "https://github.com/example/repo/pull/18"
+            session.commit()
+
+            requeued = requeue_workflow_result_for_stale_snapshot(
+                session,
+                run=running,
+                workflow_result=WorkflowResult(
+                    outcome="requeue",
+                    plan=None,
+                    pr_url=None,
+                    summary=["qa release still provisioning"],
+                    test_guidance=[],
+                    attempts=1,
+                    orchestration_stage_trace=[
+                        {
+                            "stage": "qa",
+                            "attempt": 1,
+                            "status": "requeue",
+                            "summary": "QA release still provisioning",
+                        }
+                    ],
+                    requeue_reason="QA release still provisioning",
+                ),
+                stage_updates=[],
+                error="QA release still provisioning",
+                expected_worker_service_instance_id=self._WORKER_ID,
+                expected_claim_id=self._CLAIM_ID,
+                mark_stale_snapshot=False,
+            )
+
+            workflow = self._get_workflow(session, issue_key="TP-918")
+            assert workflow is not None
+            checkpoint = session.query(WorkflowCheckpoint).filter_by(
+                run_id=running.run_id,
+                checkpoint_kind="execution",
+            ).one()
+            self.assertEqual(requeued.pr_url, "https://github.com/example/repo/pull/18")
+            self.assertEqual(workflow.pr_url, "https://github.com/example/repo/pull/18")
+            self.assertEqual(checkpoint.stage, "qa")
 
     def test_finalize_workflow_result_preserves_existing_pr_url_when_result_omits_it(self) -> None:
         with self.session_factory() as session:

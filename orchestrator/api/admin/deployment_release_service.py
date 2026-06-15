@@ -3,9 +3,10 @@ from __future__ import annotations
 import hashlib
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 from uuid import uuid4
 from urllib.error import HTTPError, URLError
-from urllib.parse import urlparse, urlsplit
+from urllib.parse import urlparse, urlsplit, urlunsplit
 from urllib.request import Request, urlopen
 
 from fastapi import HTTPException, status
@@ -1047,11 +1048,15 @@ def submit_internal_coolify_release(
             "git_repository": coolify_git_repository,
             "git_branch": git_branch,
             "build_pack": _coolify_build_pack(project_deployment.source_strategy),
-            "ports_exposes": "",
+            "ports_exposes": _coolify_ports_exposes(project_app=project_app),
             "autogenerate_domain": False,
             "base_directory": base_directory,
         }
-        application_payload["dockerfile_location"] = "Dockerfile"
+        start_command = _normalize_optional_string(project_app.start_command)
+        if start_command is not None:
+            application_payload["start_command"] = start_command
+        if project_deployment.source_strategy == "dockerfile":
+            application_payload["dockerfile_location"] = "/Dockerfile"
         domains = "" if payload.release_kind == "run_preview" else ",".join(_domain_url(domain) for domain in project_deployment.domains)
         application_payload["domains"] = domains
         application_payload["autogenerate_domain"] = not bool(domains)
@@ -1541,10 +1546,21 @@ def _coolify_build_pack(source_strategy: str | None) -> str:
         return "dockercompose"
     if source_strategy == "dockerfile":
         return "dockerfile"
+    if source_strategy == "nixpacks":
+        return "nixpacks"
     raise HTTPException(
         status_code=status.HTTP_409_CONFLICT,
-        detail="Project deployment config source_strategy must be dockerfile or docker_compose",
+        detail="Project deployment config source_strategy must be dockerfile, docker_compose, or nixpacks",
     )
+
+
+def _coolify_ports_exposes(*, project_app: ProjectApp) -> str:
+    if project_app.exposed_port is None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Project app must define exposed_port before Coolify deployment",
+        )
+    return str(int(project_app.exposed_port))
 
 
 def _coolify_application_name(*, project_app: ProjectApp, payload: ProjectDeploymentReleaseCreate) -> str:
@@ -1569,13 +1585,23 @@ def _required_plane_value(value: str | None, field_name: str) -> str:
 def _coolify_api_base_url(*, tenant_plane: TenantDeploymentPlaneRead) -> str:
     configured = _normalize_optional_string(tenant_plane.api_base_url)
     if configured is not None:
-        return configured.rstrip("/")
+        return _normalize_local_coolify_api_base_url(configured.rstrip("/"))
     if tenant_plane.platform_subdomain and tenant_plane.base_domain:
         return f"https://{tenant_plane.platform_subdomain}.{tenant_plane.base_domain}/api/v1"
     raise HTTPException(
         status_code=status.HTTP_409_CONFLICT,
         detail="Tenant deployment plane is missing api_base_url or platform domain metadata",
     )
+
+
+def _normalize_local_coolify_api_base_url(configured: str) -> str:
+    parsed = urlsplit(configured)
+    if parsed.hostname != "host.docker.internal" or Path("/.dockerenv").exists():
+        return configured
+    netloc = "localhost"
+    if parsed.port is not None:
+        netloc = f"{netloc}:{parsed.port}"
+    return urlunsplit((parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment))
 
 
 def _normalize_git_branch(git_ref: str | None) -> str:
