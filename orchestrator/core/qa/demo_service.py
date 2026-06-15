@@ -151,6 +151,27 @@ def _release_service_kinds(release) -> tuple[str, ...]:  # noqa: ANN001
     return tuple(ordered)
 
 
+def _release_service_urls_payload(release) -> list[dict[str, str]]:  # noqa: ANN001
+    urls = list(getattr(release, "service_urls", []) or []) if release is not None else []
+    payload: list[dict[str, str]] = []
+    for service_url in urls:
+        status = str(getattr(service_url, "status", "") or "").strip()
+        url = str(getattr(service_url, "url", "") or "").strip()
+        service_kind = str(getattr(service_url, "service_kind", "") or "").strip()
+        if status != "active" or not url or service_kind not in {"website", "api"}:
+            continue
+        item = {
+            "service_kind": service_kind,
+            "service_name": str(getattr(service_url, "service_name", "") or "").strip(),
+            "url": url,
+        }
+        service_key = str(getattr(service_url, "service_key", "") or "").strip()
+        if service_key:
+            item["service_key"] = service_key
+        payload.append(item)
+    return payload
+
+
 def _service_kind_from_item(item: object) -> str | None:
     if isinstance(item, dict):
         kind = str(item.get("kind") or item.get("service_kind") or "").strip()
@@ -627,14 +648,19 @@ def _available_capture_targets_payload(
     targets: dict[str, DemoCaptureTarget],
     *,
     source_paths_by_target: dict[str, tuple[str, ...]] | None = None,
+    release_service_urls: list[dict[str, str]] | None = None,
 ) -> list[dict[str, object]]:
     payload: list[dict[str, object]] = []
+    release_service_urls = list(release_service_urls or [])
     for target in targets.values():
         payload.append(
             {
                 "capture_target": target.capture_target,
                 "capture_reference": target.capture_reference,
                 "source_paths": list((source_paths_by_target or {}).get(target.capture_target, ())),
+                "release_service_urls": release_service_urls,
+                "release_api_base_url": _first_release_service_url(release_service_urls, service_kind="api"),
+                "release_browser_url": _first_release_service_url(release_service_urls, service_kind="website"),
             }
         )
     return payload
@@ -1345,6 +1371,32 @@ def _copy_recordings(recordings: list[LocalQaRecording], *, request: WorkflowReq
     return copied
 
 
+def _first_release_service_url(release_service_urls: list[dict[str, str]], *, service_kind: str) -> str:
+    for service_url in release_service_urls:
+        if service_url.get("service_kind") == service_kind:
+            return str(service_url.get("url") or "").strip()
+    return ""
+
+
+def _recorder_env_with_release_context(
+    *,
+    base_env: dict[str, str],
+    release_service_urls: list[dict[str, str]],
+) -> dict[str, str]:
+    env = dict(base_env)
+    serialized_urls = json.dumps(release_service_urls, sort_keys=True)
+    api_base_url = _first_release_service_url(release_service_urls, service_kind="api")
+    browser_url = _first_release_service_url(release_service_urls, service_kind="website")
+    env["MB_QA_DEMO_RELEASE_SERVICE_URLS_JSON"] = serialized_urls
+    env["MB_QA_DEMO_RELEASE_API_BASE_URL"] = api_base_url
+    env["MB_QA_DEMO_RELEASE_BROWSER_URL"] = browser_url
+    if api_base_url:
+        env["QA_DEMO_API_BASE_URL"] = api_base_url
+    if browser_url:
+        env["QA_DEMO_BROWSER_URL"] = browser_url
+    return env
+
+
 def _require_safe_recording_scope_segment(value: str | None, *, field_name: str, scope_name: str) -> str:
     raw = str(value or "").strip()
     if not raw:
@@ -1455,6 +1507,7 @@ def record_demo_scenarios(
     request: WorkflowRequest,
     available_capture_targets: dict[str, DemoCaptureTarget],
     qa_result: QaResult,
+    release_service_urls: list[dict[str, str]] | None = None,
 ) -> list[LocalQaRecording]:
     if not qa_result.scenarios:
         raise RuntimeError("QA demo recording requires at least one scenario")
@@ -1474,6 +1527,7 @@ def record_demo_scenarios(
         scenarios_by_target.setdefault(scenario.capture_target, []).append(scenario)
 
     all_recordings: list[LocalQaRecording] = []
+    release_service_urls = list(release_service_urls or [])
     for capture_target_name, scenarios in scenarios_by_target.items():
         _validate_unique_scenario_names(capture_target_name=capture_target_name, scenarios=scenarios)
         capture_target = available_capture_targets[capture_target_name]
@@ -1488,6 +1542,9 @@ def record_demo_scenarios(
             "target_source_paths": list(
                 (request.project_demo_capture_target_sources or {}).get(capture_target_name, ())
             ),
+            "release_service_urls": release_service_urls,
+            "release_api_base_url": _first_release_service_url(release_service_urls, service_kind="api"),
+            "release_browser_url": _first_release_service_url(release_service_urls, service_kind="website"),
             "scenarios": [
                 {
                     "name": scenario.name,
@@ -1532,6 +1589,10 @@ def record_demo_scenarios(
             env = dict(os.environ)
             env["NODE_PATH"] = playwright_module_dir
             env["QA_DEMO_PLAYWRIGHT_MODULE_DIR"] = playwright_module_dir
+            env = _recorder_env_with_release_context(
+                base_env=env,
+                release_service_urls=release_service_urls,
+            )
             payload["preview_url"] = capture_target.capture_reference
             recordings = _invoke_json_recorder(
                 command=["node", str(script_path)],
@@ -1545,7 +1606,10 @@ def record_demo_scenarios(
             recordings = _invoke_json_recorder(
                 command=list(capture_target.recorder_command or ()),
                 payload=payload,
-                env=dict(os.environ),
+                env=_recorder_env_with_release_context(
+                    base_env=dict(os.environ),
+                    release_service_urls=release_service_urls,
+                ),
                 capture_target=capture_target,
                 request=request,
                 timeout_seconds=recorder_timeout_seconds,
@@ -1654,6 +1718,7 @@ def execute_qa_demo_stage(
         service_url_probe=_default_service_url_probe,
         timeout_seconds=qa_demo_release_health_timeout_seconds(settings),
     )
+    release_service_urls = _release_service_urls_payload(preview_release)
     if not remaining_targets:
         _validate_recordings_cover_required_targets(
             recordings=previous_recordings,
@@ -1741,6 +1806,7 @@ def execute_qa_demo_stage(
             _available_capture_targets_payload(
                 current_worker_capture_targets,
                 source_paths_by_target=request.project_demo_capture_target_sources,
+                release_service_urls=release_service_urls,
             )
         ),
         attempt=request.attempt_number,
@@ -1765,6 +1831,7 @@ def execute_qa_demo_stage(
                 request=request,
                 available_capture_targets=current_worker_capture_targets,
                 qa_result=qa_result,
+                release_service_urls=release_service_urls,
             )
             uploaded: list[QaRecording] = []
             for index, recording in enumerate(local_recordings, start=1):

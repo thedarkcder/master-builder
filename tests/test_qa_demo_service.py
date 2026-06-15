@@ -1158,14 +1158,14 @@ def test_record_demo_scenarios_uses_configured_desktop_recorder() -> None:
     assert commands[0][2]["capture_reference"] == "desktop://macos-app"
 
 
-def test_record_demo_scenarios_passes_project_source_paths_to_native_recorder() -> None:
-    commands: list[dict[str, object]] = []
+def test_record_demo_scenarios_passes_project_source_paths_and_release_context_to_native_recorder() -> None:
+    commands: list[tuple[dict[str, object], dict[str, str]]] = []
 
-    def _run(cmd, **_kwargs):  # noqa: ANN001
+    def _run(cmd, **kwargs):  # noqa: ANN001
         input_path = Path(cmd[-2])
         output_path = Path(cmd[-1])
         input_payload = json.loads(input_path.read_text(encoding="utf-8"))
-        commands.append(input_payload)
+        commands.append((input_payload, dict(kwargs.get("env") or {})))
         video_dir = Path(input_payload["output_dir"])
         video_dir.mkdir(parents=True, exist_ok=True)
         source_path = video_dir / "android-flow.mp4"
@@ -1189,6 +1189,18 @@ def test_record_demo_scenarios_passes_project_source_paths_to_native_recorder() 
                     recorder_command=("python", "/tmp/android_recorder.py"),
                 )
             },
+            release_service_urls=[
+                {
+                    "service_kind": "api",
+                    "service_name": "api",
+                    "url": "https://api.preview.example",
+                },
+                {
+                    "service_kind": "website",
+                    "service_name": "web",
+                    "url": "https://preview.example",
+                },
+            ],
             qa_result=QaResult(
                 summary=["Recorded demos"],
                 scenarios=[
@@ -1203,7 +1215,25 @@ def test_record_demo_scenarios_passes_project_source_paths_to_native_recorder() 
         )
 
     assert len(recordings) == 1
-    assert commands[0]["target_source_paths"] == ["apps/android"]
+    input_payload, env = commands[0]
+    assert input_payload["target_source_paths"] == ["apps/android"]
+    assert input_payload["release_api_base_url"] == "https://api.preview.example"
+    assert input_payload["release_browser_url"] == "https://preview.example"
+    assert input_payload["release_service_urls"] == [
+        {
+            "service_kind": "api",
+            "service_name": "api",
+            "url": "https://api.preview.example",
+        },
+        {
+            "service_kind": "website",
+            "service_name": "web",
+            "url": "https://preview.example",
+        },
+    ]
+    assert env["MB_QA_DEMO_RELEASE_API_BASE_URL"] == "https://api.preview.example"
+    assert env["QA_DEMO_API_BASE_URL"] == "https://api.preview.example"
+    assert json.loads(env["MB_QA_DEMO_RELEASE_SERVICE_URLS_JSON"])[0]["url"] == "https://api.preview.example"
 
 
 def test_record_demo_scenarios_rejects_invalid_video_artifact() -> None:
@@ -1702,7 +1732,10 @@ def test_execute_qa_demo_stage_records_and_uploads() -> None:
     project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo")
     run = SimpleNamespace(run_id="run-1")
     release = SimpleNamespace(
-        service_urls=[SimpleNamespace(service_kind="website", status="active", url="https://preview.example")]
+        service_urls=[
+            SimpleNamespace(service_kind="api", service_name="api", status="active", url="https://api.preview.example"),
+            SimpleNamespace(service_kind="website", service_name="web", status="active", url="https://preview.example"),
+        ]
     )
     plan = PmPlan(
         plan_steps=["Implement"],
@@ -1725,7 +1758,7 @@ def test_execute_qa_demo_stage_records_and_uploads() -> None:
                 _local_recording(name="Happy path"),
                 _local_recording(name="Repeat action remains safe", path="/tmp/repeat.webm"),
             ],
-        ),
+        ) as record_mock,
         patch(
             "orchestrator.core.qa.demo_service.storage_config_from_settings",
             return_value=SimpleNamespace(
@@ -1762,11 +1795,23 @@ def test_execute_qa_demo_stage_records_and_uploads() -> None:
     assert result.recordings[0].capture_target == "browser"
     assert result.recordings[0].capture_reference == "https://preview.example"
     available_targets = json.loads(fake_agents.qa.call_args.kwargs["available_capture_targets_json"])
-    assert {
-        "capture_target": "browser",
-        "capture_reference": "https://preview.example",
-        "source_paths": [],
-    } in available_targets
+    browser_target = next(item for item in available_targets if item["capture_target"] == "browser")
+    assert browser_target["capture_reference"] == "https://preview.example"
+    assert browser_target["source_paths"] == []
+    assert browser_target["release_api_base_url"] == "https://api.preview.example"
+    assert browser_target["release_browser_url"] == "https://preview.example"
+    assert record_mock.call_args.kwargs["release_service_urls"] == [
+        {
+            "service_kind": "api",
+            "service_name": "api",
+            "url": "https://api.preview.example",
+        },
+        {
+            "service_kind": "website",
+            "service_name": "web",
+            "url": "https://preview.example",
+        },
+    ]
     assert upload_mock.call_args.kwargs["content_type"] == "video/webm"
 
 
@@ -1934,6 +1979,9 @@ def test_execute_qa_demo_stage_includes_project_source_paths_in_qa_prompt_target
             "capture_target": "android",
             "capture_reference": "android-emulator://configured",
             "source_paths": ["apps/android"],
+            "release_service_urls": [],
+            "release_api_base_url": "",
+            "release_browser_url": "",
         }
     ]
 
@@ -3056,6 +3104,9 @@ def test_execute_qa_demo_stage_completes_remaining_target_with_previous_recordin
             "capture_target": "ios",
             "capture_reference": "ios-simulator://configured",
             "source_paths": [],
+            "release_service_urls": [],
+            "release_api_base_url": "",
+            "release_browser_url": "",
         }
     ]
 
@@ -3549,9 +3600,17 @@ def test_execute_qa_demo_stage_uses_builtin_ios_capture_on_macos() -> None:
 
     assert result.recordings[0].artifact_url.endswith("qa-demo-1.mp4")
     assert result.recordings[0].capture_target == "ios"
-    assert fake_agents.qa.call_args.kwargs["available_capture_targets_json"] == (
-        '[{"capture_target": "ios", "capture_reference": "ios-simulator://configured", "source_paths": []}]'
-    )
+    available_targets = json.loads(fake_agents.qa.call_args.kwargs["available_capture_targets_json"])
+    assert available_targets == [
+        {
+            "capture_target": "ios",
+            "capture_reference": "ios-simulator://configured",
+            "source_paths": [],
+            "release_service_urls": [],
+            "release_api_base_url": "",
+            "release_browser_url": "",
+        }
+    ]
 
 
 def test_execute_qa_demo_stage_uses_builtin_android_capture_on_linux() -> None:
@@ -3647,9 +3706,17 @@ def test_execute_qa_demo_stage_uses_builtin_android_capture_on_linux() -> None:
         )
 
     assert result.recordings[0].capture_target == "android"
-    assert fake_agents.qa.call_args.kwargs["available_capture_targets_json"] == (
-        '[{"capture_target": "android", "capture_reference": "android-emulator://configured", "source_paths": []}]'
-    )
+    available_targets = json.loads(fake_agents.qa.call_args.kwargs["available_capture_targets_json"])
+    assert available_targets == [
+        {
+            "capture_target": "android",
+            "capture_reference": "android-emulator://configured",
+            "source_paths": [],
+            "release_service_urls": [],
+            "release_api_base_url": "",
+            "release_browser_url": "",
+        }
+    ]
 
 
 def test_execute_qa_demo_stage_requeues_when_desktop_capture_requires_macos_worker() -> None:
