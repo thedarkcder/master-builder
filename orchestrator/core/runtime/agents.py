@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import re
 import subprocess
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
 from pathlib import Path
 from typing import Any
 
@@ -135,15 +135,16 @@ def _required_demo_capture_targets_from_issue_text(*values: str | None) -> set[s
     return required_targets
 
 
-def _native_selector_catalog(repo_dir: str | None) -> dict[str, list[str]]:
+def _native_selector_catalog(repo_dir: str | None, source_paths: Iterable[str] | None = None) -> dict[str, list[str]]:
     resolved_repo_dir = Path(str(repo_dir or "").strip())
     if not resolved_repo_dir.exists():
         return {"accessibility_ids": [], "text_anchors": [], "ui_test_selectors": []}
+    roots = _native_selector_catalog_roots(repo_dir=resolved_repo_dir, source_paths=source_paths)
 
     accessibility_ids: set[str] = set()
     text_anchors: set[str] = set()
     ui_test_selectors: set[str] = set()
-    for swift_file in resolved_repo_dir.rglob("*.swift"):
+    for swift_file in _catalog_files(roots=roots, patterns=("*.swift",)):
         try:
             source = swift_file.read_text(encoding="utf-8")
         except OSError:
@@ -155,11 +156,7 @@ def _native_selector_catalog(repo_dir: str | None) -> dict[str, list[str]]:
         for selector in list(ui_test_selectors):
             if selector.startswith("text="):
                 text_anchors.add(selector[5:])
-    for native_file in [
-        *resolved_repo_dir.rglob("*.kt"),
-        *resolved_repo_dir.rglob("*.java"),
-        *resolved_repo_dir.rglob("*.xml"),
-    ]:
+    for native_file in _catalog_files(roots=roots, patterns=("*.kt", "*.java", "*.xml")):
         try:
             source = native_file.read_text(encoding="utf-8")
         except OSError:
@@ -173,6 +170,71 @@ def _native_selector_catalog(repo_dir: str | None) -> dict[str, list[str]]:
         "text_anchors": sorted(text_anchors),
         "ui_test_selectors": sorted(ui_test_selectors),
     }
+
+
+def _native_selector_catalog_roots(*, repo_dir: Path, source_paths: Iterable[str] | None) -> tuple[Path, ...]:
+    raw_source_paths = [str(path or "").strip() for path in source_paths or () if str(path or "").strip()]
+    if not raw_source_paths:
+        return (repo_dir,)
+    repo_root = repo_dir.resolve()
+    roots: list[Path] = []
+    for raw_path in raw_source_paths:
+        if Path(raw_path).is_absolute():
+            raise CodexRuntimeError(f"QA native selector source path must be repository-relative: {raw_path}")
+        candidate = (repo_root / raw_path).resolve()
+        if candidate != repo_root and repo_root not in candidate.parents:
+            raise CodexRuntimeError(f"QA native selector source path escapes repository: {raw_path}")
+        if not candidate.exists() or not candidate.is_dir():
+            raise CodexRuntimeError(f"QA native selector source path is missing: {raw_path}")
+        roots.append(candidate)
+    return tuple(dict.fromkeys(roots))
+
+
+def _catalog_files(*, roots: Iterable[Path], patterns: tuple[str, ...]) -> list[Path]:
+    files: list[Path] = []
+    for root in roots:
+        for pattern in patterns:
+            files.extend(root.rglob(pattern))
+    return files
+
+
+def _capture_target_source_paths_from_available_targets(value: str | None) -> dict[str, tuple[str, ...]]:
+    raw = str(value or "").strip()
+    if not raw:
+        return {}
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    if not isinstance(parsed, list):
+        return {}
+    source_paths_by_target: dict[str, tuple[str, ...]] = {}
+    for item in parsed:
+        if not isinstance(item, dict):
+            continue
+        capture_target = _optional_string(item.get("capture_target"))
+        if capture_target not in _QA_CAPTURE_TARGETS:
+            continue
+        raw_source_paths = item.get("source_paths")
+        if not isinstance(raw_source_paths, list):
+            continue
+        source_paths = tuple(
+            str(source_path).strip()
+            for source_path in raw_source_paths
+            if isinstance(source_path, str) and str(source_path).strip()
+        )
+        if source_paths:
+            source_paths_by_target[capture_target] = source_paths
+    return source_paths_by_target
+
+
+def _merged_source_paths(source_paths_by_target: dict[str, tuple[str, ...]]) -> tuple[str, ...]:
+    ordered: list[str] = []
+    for source_paths in source_paths_by_target.values():
+        for source_path in source_paths:
+            if source_path not in ordered:
+                ordered.append(source_path)
+    return tuple(ordered)
 
 
 def _current_head_diff_paths(repo_dir: str | None, base_branch: str | None) -> list[str]:
@@ -218,24 +280,37 @@ def _requires_current_head_acceptance_evidence(
     return any(_path_requires_current_head_acceptance(path) for path in current_head_diff_paths), current_head_diff_paths
 
 
-def _validate_native_qa_scenarios(*, scenarios: list[QaScenario], repo_dir: str | None) -> list[QaScenario]:
-    catalog = _native_selector_catalog(repo_dir)
-    valid_ids = set(catalog["accessibility_ids"])
-    valid_texts = set(catalog["text_anchors"])
+def _validate_native_qa_scenarios(
+    *,
+    scenarios: list[QaScenario],
+    repo_dir: str | None,
+    source_paths_by_target: dict[str, tuple[str, ...]] | None = None,
+) -> list[QaScenario]:
+    repo_catalog = _native_selector_catalog(repo_dir)
+    repo_valid_ids = set(repo_catalog["accessibility_ids"])
+    repo_valid_texts = set(repo_catalog["text_anchors"])
+    target_catalogs = {
+        target: _native_selector_catalog(repo_dir, source_paths=source_paths)
+        for target, source_paths in (source_paths_by_target or {}).items()
+    }
     for scenario in scenarios:
         if scenario.capture_target == "browser":
             continue
+        catalog = target_catalogs.get(scenario.capture_target)
+        scoped_catalog = catalog is not None
+        valid_ids = set((catalog or {}).get("accessibility_ids", ())) if scoped_catalog else repo_valid_ids
+        valid_texts = set((catalog or {}).get("text_anchors", ())) if scoped_catalog else repo_valid_texts
         for step in scenario.steps:
             selector = str(step.selector or "").strip()
             if selector.startswith("id="):
                 native_id = selector[3:]
-                if valid_ids and native_id not in valid_ids:
+                if (scoped_catalog or valid_ids) and native_id not in valid_ids:
                     raise CodexRuntimeError(
                         f"Codex qa response invented native accessibility identifier: {native_id}"
                     )
             elif selector.startswith("text="):
                 text_value = selector[5:]
-                if valid_texts and text_value not in valid_texts:
+                if (scoped_catalog or valid_texts) and text_value not in valid_texts:
                     raise CodexRuntimeError(f"Codex qa response invented native text anchor: {text_value}")
             if step.action == "fill":
                 if not selector.startswith("id="):
@@ -845,7 +920,13 @@ class CodexWorkflowAgents:
     ) -> QaResult:
         runtime = self._runtime_for_stage(stage="qa", request=request)
         runtime_command = str(getattr(runtime, "command", "") or "")
-        native_selector_catalog_json = json.dumps(_native_selector_catalog(request.execution_repo_dir))
+        source_paths_by_target = _capture_target_source_paths_from_available_targets(available_capture_targets_json)
+        native_selector_catalog_json = json.dumps(
+            _native_selector_catalog(
+                request.execution_repo_dir,
+                source_paths=_merged_source_paths(source_paths_by_target),
+            )
+        )
         payload = self._invoke_stage_payload(
             request=request,
             stage="qa",
@@ -894,6 +975,7 @@ class CodexWorkflowAgents:
             scenarios=_validate_native_qa_scenarios(
                 scenarios=_required_qa_scenarios(payload.get("scenarios")),
                 repo_dir=request.execution_repo_dir,
+                source_paths_by_target=source_paths_by_target,
             ),
             recordings=_qa_recordings(payload.get("recordings")),
             outcome=outcome,
