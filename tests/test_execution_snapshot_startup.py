@@ -275,6 +275,7 @@ class ExecutionSnapshotStartupBootstrapTests(unittest.TestCase):
                                 "capture_reference": "mobile://configured",
                                 "capture_target": "mobile",
                                 "content_sha256": f"{1:064x}",
+                                "release_commit_sha": "b" * 40,
                                 "release_context_sha256": f"{2:064x}",
                             }
                         ],

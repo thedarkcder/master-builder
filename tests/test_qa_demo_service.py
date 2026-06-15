@@ -41,7 +41,7 @@ from orchestrator.core.workflow.runner import (
     DemoRequirement,
     DevResult,
     PmPlan,
-    QaRecording,
+    QaRecording as RunnerQaRecording,
     QaResult,
     QaScenario,
     QaStep,
@@ -49,6 +49,13 @@ from orchestrator.core.workflow.runner import (
     TestResult,
     WorkflowRequest,
 )
+
+_RELEASE_COMMIT_SHA = "b" * 40
+
+
+def QaRecording(*args: object, **kwargs: object) -> RunnerQaRecording:  # noqa: N802
+    kwargs.setdefault("release_commit_sha", _RELEASE_COMMIT_SHA)
+    return RunnerQaRecording(*args, **kwargs)
 
 
 def _request() -> WorkflowRequest:
@@ -166,7 +173,7 @@ def _release_context_sha256(*, include_api: bool = False) -> str:
     if include_api:
         urls.insert(0, {"service_kind": "api", "service_name": "api", "url": "https://api.preview.example"})
     return release_context_sha256_for_release(
-        release=SimpleNamespace(commit_sha="b" * 40),
+        release=SimpleNamespace(commit_sha=_RELEASE_COMMIT_SHA),
         release_service_urls=urls,
     )
 
@@ -184,12 +191,12 @@ def _release_context_sha256_with_commit(*, include_api: bool = False, commit_sha
 
 def _empty_release_context_sha256() -> str:
     return release_context_sha256_for_release(
-        release=SimpleNamespace(commit_sha="b" * 40),
+        release=SimpleNamespace(commit_sha=_RELEASE_COMMIT_SHA),
         release_service_urls=[],
     )
 
 
-def _preview_release(*, service_urls: list[object] | None = None, commit_sha: str = "b" * 40) -> SimpleNamespace:
+def _preview_release(*, service_urls: list[object] | None = None, commit_sha: str = _RELEASE_COMMIT_SHA) -> SimpleNamespace:
     return SimpleNamespace(commit_sha=commit_sha, service_urls=list(service_urls or []))
 
 
@@ -260,6 +267,7 @@ def test_upload_recording_persists_and_verifies_content_sha256_metadata(monkeypa
             return SimpleNamespace(
                 metadata={
                     "X-Amz-Meta-Content-Sha256": expected_digest,
+                    "X-Amz-Meta-Release-Commit-Sha": _RELEASE_COMMIT_SHA,
                     "X-Amz-Meta-Release-Context-Sha256": expected_release_context_digest,
                 }
             )
@@ -272,6 +280,7 @@ def test_upload_recording_persists_and_verifies_content_sha256_metadata(monkeypa
         object_key="tenant-1/project-1/run-1/qa-demo-1.webm",
         content_type="video/webm",
         content_sha256=expected_digest,
+        release_commit_sha=_RELEASE_COMMIT_SHA,
         release_context_sha256=expected_release_context_digest,
     )
 
@@ -283,6 +292,7 @@ def test_upload_recording_persists_and_verifies_content_sha256_metadata(monkeypa
         "content_type": "video/webm",
         "metadata": {
             "content-sha256": expected_digest,
+            "release-commit-sha": _RELEASE_COMMIT_SHA,
             "release-context-sha256": expected_release_context_digest,
         },
     }
@@ -312,7 +322,13 @@ def test_upload_recording_rejects_storage_metadata_digest_mismatch(monkeypatch) 
             pass
 
         def stat_object(self, bucket: str, object_key: str) -> SimpleNamespace:
-            return SimpleNamespace(metadata={"X-Amz-Meta-Content-Sha256": _sha256(49)})
+            return SimpleNamespace(
+                metadata={
+                    "X-Amz-Meta-Content-Sha256": _sha256(49),
+                    "X-Amz-Meta-Release-Commit-Sha": _RELEASE_COMMIT_SHA,
+                    "X-Amz-Meta-Release-Context-Sha256": _release_context_sha256(),
+                }
+            )
 
     monkeypatch.setitem(sys.modules, "minio", SimpleNamespace(Minio=FakeMinio))
 
@@ -323,12 +339,61 @@ def test_upload_recording_rejects_storage_metadata_digest_mismatch(monkeypatch) 
             object_key="tenant-1/project-1/run-1/qa-demo-1.webm",
             content_type="video/webm",
             content_sha256=_sha256(48),
+            release_commit_sha=_RELEASE_COMMIT_SHA,
             release_context_sha256=_release_context_sha256(),
         )
     except RuntimeError as exc:
         assert "QA demo artifact metadata sha256 mismatch after upload" in str(exc)
     else:  # pragma: no cover
         raise AssertionError("expected storage metadata digest mismatch to block upload")
+
+
+def test_upload_recording_rejects_storage_release_commit_metadata_mismatch(monkeypatch) -> None:
+    expected_digest = _sha256(48)
+
+    class FakeMinio:
+        def __init__(self, endpoint: str, *, access_key: str, secret_key: str, secure: bool) -> None:
+            pass
+
+        def bucket_exists(self, bucket: str) -> bool:
+            return True
+
+        def fput_object(
+            self,
+            bucket: str,
+            object_key: str,
+            local_path: str,
+            *,
+            content_type: str,
+            metadata: dict[str, str],
+        ) -> None:
+            pass
+
+        def stat_object(self, bucket: str, object_key: str) -> SimpleNamespace:
+            return SimpleNamespace(
+                metadata={
+                    "X-Amz-Meta-Content-Sha256": expected_digest,
+                    "X-Amz-Meta-Release-Commit-Sha": "a" * 40,
+                    "X-Amz-Meta-Release-Context-Sha256": _release_context_sha256(),
+                }
+            )
+
+    monkeypatch.setitem(sys.modules, "minio", SimpleNamespace(Minio=FakeMinio))
+
+    try:
+        upload_recording(
+            storage=storage_config_from_settings(_qa_artifact_settings()),
+            local_path="/tmp/demo.webm",
+            object_key="tenant-1/project-1/run-1/qa-demo-1.webm",
+            content_type="video/webm",
+            content_sha256=expected_digest,
+            release_commit_sha=_RELEASE_COMMIT_SHA,
+            release_context_sha256=_release_context_sha256(),
+        )
+    except RuntimeError as exc:
+        assert "QA demo artifact metadata release commit sha mismatch after upload" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("expected storage release commit metadata mismatch to block upload")
 
 
 def test_upload_recording_rejects_storage_release_context_metadata_digest_mismatch(monkeypatch) -> None:
@@ -356,6 +421,7 @@ def test_upload_recording_rejects_storage_release_context_metadata_digest_mismat
             return SimpleNamespace(
                 metadata={
                     "X-Amz-Meta-Content-Sha256": expected_digest,
+                    "X-Amz-Meta-Release-Commit-Sha": _RELEASE_COMMIT_SHA,
                     "X-Amz-Meta-Release-Context-Sha256": _sha256(49),
                 }
             )
@@ -369,6 +435,7 @@ def test_upload_recording_rejects_storage_release_context_metadata_digest_mismat
             object_key="tenant-1/project-1/run-1/qa-demo-1.webm",
             content_type="video/webm",
             content_sha256=expected_digest,
+            release_commit_sha=_RELEASE_COMMIT_SHA,
             release_context_sha256=_release_context_sha256(),
         )
     except RuntimeError as exc:
@@ -3880,6 +3947,7 @@ def test_execute_qa_demo_stage_rejects_previous_recording_from_different_release
                 capture_target="browser",
                 capture_reference="https://preview.example",
                 content_sha256=_sha256(53),
+                release_commit_sha="a" * 40,
                 release_context_sha256=_release_context_sha256_with_commit(commit_sha="a" * 40),
             ),
             QaRecording(
@@ -3889,6 +3957,7 @@ def test_execute_qa_demo_stage_rejects_previous_recording_from_different_release
                 capture_target="browser",
                 capture_reference="https://preview.example",
                 content_sha256=_sha256(54),
+                release_commit_sha="a" * 40,
                 release_context_sha256=_release_context_sha256_with_commit(commit_sha="a" * 40),
             ),
         ],
@@ -3920,7 +3989,7 @@ def test_execute_qa_demo_stage_rejects_previous_recording_from_different_release
                 previous_qa_result=previous_qa,
             )
         except RuntimeError as exc:
-            assert "release context does not match current release before reuse" in str(exc)
+            assert "release commit does not match current release before reuse" in str(exc)
             assert "Happy path" in str(exc)
         else:  # pragma: no cover
             raise AssertionError("expected stale release-commit proof to block previous QA demo proof reuse")
@@ -4500,6 +4569,7 @@ def test_update_pull_request_with_demo_evidence_rejects_missing_release_context_
                             capture_target="browser",
                             capture_reference="https://preview.example",
                             content_sha256=_sha256(47),
+                            release_commit_sha=_RELEASE_COMMIT_SHA,
                         )
                     ],
                 ),
@@ -4509,6 +4579,52 @@ def test_update_pull_request_with_demo_evidence_rejects_missing_release_context_
             assert "QA demo recording release context sha256 is required before PR evidence" in str(exc)
         else:  # pragma: no cover
             raise AssertionError("expected missing release context metadata to block PR evidence update")
+
+    url_probe.assert_not_called()
+    github_client_mock.assert_not_called()
+
+
+def test_update_pull_request_with_demo_evidence_rejects_missing_release_commit_before_url_probe() -> None:
+    with (
+        patch("orchestrator.core.qa.demo_service.github_client_from_tenant_config") as github_client_mock,
+        patch("orchestrator.core.qa.demo_service._default_artifact_url_probe") as url_probe,
+    ):
+        try:
+            update_pull_request_with_demo_evidence(
+                session=SimpleNamespace(),
+                settings=_qa_artifact_settings(),
+                tenant=SimpleNamespace(tenant_id="tenant-1", github_config={}),
+                project=SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo"),
+                run=SimpleNamespace(run_id="run-1"),
+                workflow_result=SimpleNamespace(pr_url="https://github.com/acme/repo/pull/8"),
+                qa_result=QaResult(
+                    summary=["Recorded demos"],
+                    scenarios=[
+                        QaScenario(
+                            name="Browser walkthrough",
+                            objective="Show browser",
+                            capture_target="browser",
+                            steps=_proof_steps("text=Feature"),
+                        )
+                    ],
+                    recordings=[
+                        SimpleNamespace(
+                            name="Browser walkthrough",
+                            artifact_url="https://cdn.example/qa-demos/tenant-1/project-1/run-1/browser.webm",
+                            object_key="tenant-1/project-1/run-1/browser.webm",
+                            capture_target="browser",
+                            capture_reference="https://preview.example",
+                            content_sha256=_sha256(47),
+                            release_context_sha256=_release_context_sha256(),
+                        )
+                    ],
+                ),
+                required_capture_targets=("browser",),
+            )
+        except RuntimeError as exc:
+            assert "QA demo recording release commit sha is required before PR evidence" in str(exc)
+        else:  # pragma: no cover
+            raise AssertionError("expected missing release commit proof to block PR evidence update")
 
     url_probe.assert_not_called()
     github_client_mock.assert_not_called()
@@ -5124,6 +5240,7 @@ def test_update_pull_request_with_demo_evidence_rejects_duplicate_content_sha256
             capture_target="browser",
             capture_reference="https://preview.example",
             content_sha256=duplicated_digest,
+            release_commit_sha=_RELEASE_COMMIT_SHA,
             release_context_sha256=_release_context_sha256(),
         ),
         SimpleNamespace(
@@ -5133,6 +5250,7 @@ def test_update_pull_request_with_demo_evidence_rejects_duplicate_content_sha256
             capture_target="browser",
             capture_reference="https://preview.example",
             content_sha256=duplicated_digest,
+            release_commit_sha=_RELEASE_COMMIT_SHA,
             release_context_sha256=_release_context_sha256(),
         ),
     ]

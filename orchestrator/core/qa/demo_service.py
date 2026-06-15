@@ -52,6 +52,8 @@ _QA_DEMO_CONTENT_SHA256_METADATA_KEY = "content-sha256"
 _QA_DEMO_CONTENT_SHA256_METADATA_HEADER = f"x-amz-meta-{_QA_DEMO_CONTENT_SHA256_METADATA_KEY}"
 _QA_DEMO_RELEASE_CONTEXT_SHA256_METADATA_KEY = "release-context-sha256"
 _QA_DEMO_RELEASE_CONTEXT_SHA256_METADATA_HEADER = f"x-amz-meta-{_QA_DEMO_RELEASE_CONTEXT_SHA256_METADATA_KEY}"
+_QA_DEMO_RELEASE_COMMIT_SHA_METADATA_KEY = "release-commit-sha"
+_QA_DEMO_RELEASE_COMMIT_SHA_METADATA_HEADER = f"x-amz-meta-{_QA_DEMO_RELEASE_COMMIT_SHA_METADATA_KEY}"
 
 
 @dataclass(frozen=True)
@@ -804,6 +806,7 @@ def _validate_demo_evidence_recording_metadata(recordings: list[QaRecording]) ->
         _require_demo_evidence_line_field(recording.capture_reference, field="capture_reference")
         _require_demo_evidence_line_field(recording.object_key, field="object_key")
         _require_demo_evidence_content_sha256(recording)
+        _require_demo_evidence_release_commit_sha(recording)
         _require_demo_evidence_release_context_sha256(recording)
         _require_demo_evidence_field(recording.artifact_url, field="artifact_url")
     _validate_recordings_share_release_context(recordings)
@@ -823,6 +826,13 @@ def _require_demo_evidence_release_context_sha256(recording: object) -> str:
     return value
 
 
+def _require_demo_evidence_release_commit_sha(recording: object) -> str:
+    value = str(getattr(recording, "release_commit_sha", "") or "").strip().lower()
+    if not re.fullmatch(r"[0-9a-f]{7,64}", value):
+        raise RuntimeError("QA demo recording release commit sha is required before PR evidence")
+    return value
+
+
 def _validate_recordings_share_release_context(recordings: list[QaRecording]) -> None:
     release_contexts = {
         str(getattr(recording, "release_context_sha256", "") or "").strip().lower()
@@ -830,6 +840,12 @@ def _validate_recordings_share_release_context(recordings: list[QaRecording]) ->
     }
     if len(release_contexts) > 1:
         raise RuntimeError("QA demo recordings must all prove the same release context before PR evidence")
+    release_commits = {
+        str(getattr(recording, "release_commit_sha", "") or "").strip().lower()
+        for recording in recordings
+    }
+    if len(release_commits) > 1:
+        raise RuntimeError("QA demo recordings must all prove the same release commit before PR evidence")
 
 
 def _validate_recordings_match_release_context(
@@ -846,6 +862,24 @@ def _validate_recordings_match_release_context(
     if mismatched:
         raise RuntimeError(
             "QA demo recording release context does not match current release before reuse: "
+            + ", ".join(mismatched)
+        )
+
+
+def _validate_recordings_match_release_commit(
+    *,
+    recordings: list[QaRecording],
+    expected_release_commit_sha: str,
+) -> None:
+    expected = _require_release_commit_sha_value(expected_release_commit_sha)
+    mismatched = [
+        str(getattr(recording, "name", "") or "").strip() or "<unnamed>"
+        for recording in recordings
+        if str(getattr(recording, "release_commit_sha", "") or "").strip().lower() != expected
+    ]
+    if mismatched:
+        raise RuntimeError(
+            "QA demo recording release commit does not match current release before reuse: "
             + ", ".join(mismatched)
         )
 
@@ -930,12 +964,14 @@ def build_demo_evidence_section(
         capture_reference = _require_demo_evidence_line_field(recording.capture_reference, field="capture_reference")
         object_key = _require_demo_evidence_line_field(recording.object_key, field="object_key")
         content_sha256 = _require_demo_evidence_content_sha256(recording)
+        release_commit_sha = _require_demo_evidence_release_commit_sha(recording)
         release_context_sha256 = _require_demo_evidence_release_context_sha256(recording)
         artifact_url = _require_demo_evidence_field(recording.artifact_url, field="artifact_url")
         lines.append(
             f"- {name} "
             f"[target={capture_target}; reference={capture_reference}; object_key={object_key}; "
-            f"sha256={content_sha256}; release_context_sha256={release_context_sha256}]: "
+            f"sha256={content_sha256}; release_commit_sha={release_commit_sha}; "
+            f"release_context_sha256={release_context_sha256}]: "
             f"{artifact_url}"
         )
     return "\n".join(lines).strip()
@@ -1392,9 +1428,14 @@ def _validate_reusable_qa_recording_links(
     project,  # noqa: ANN001
     run,  # noqa: ANN001
     recordings: list[QaRecording],
+    expected_release_commit_sha: str,
     expected_release_context_sha256: str,
 ) -> None:
     _validate_demo_evidence_recording_metadata(recordings)
+    _validate_recordings_match_release_commit(
+        recordings=recordings,
+        expected_release_commit_sha=expected_release_commit_sha,
+    )
     _validate_recordings_match_release_context(
         recordings=recordings,
         expected_release_context_sha256=expected_release_context_sha256,
@@ -1737,11 +1778,13 @@ def upload_recording(
     object_key: str,
     content_type: str,
     content_sha256: str,
+    release_commit_sha: str,
     release_context_sha256: str,
 ) -> str:
     from minio import Minio
 
     digest = _require_content_sha256_value(content_sha256)
+    release_commit = _require_release_commit_sha_value(release_commit_sha)
     release_context_digest = _require_content_sha256_value(release_context_sha256)
     client = Minio(
         storage.endpoint,
@@ -1758,6 +1801,7 @@ def upload_recording(
         content_type=content_type,
         metadata={
             _QA_DEMO_CONTENT_SHA256_METADATA_KEY: digest,
+            _QA_DEMO_RELEASE_COMMIT_SHA_METADATA_KEY: release_commit,
             _QA_DEMO_RELEASE_CONTEXT_SHA256_METADATA_KEY: release_context_digest,
         },
     )
@@ -1770,6 +1814,15 @@ def upload_recording(
         raise RuntimeError(
             "QA demo artifact metadata sha256 mismatch after upload: "
             f"{object_key} expected {digest}, got {stored_digest or '<missing>'}"
+        )
+    stored_release_commit = _metadata_sha256(
+        getattr(object_stat, "metadata", None),
+        keys=(_QA_DEMO_RELEASE_COMMIT_SHA_METADATA_KEY, _QA_DEMO_RELEASE_COMMIT_SHA_METADATA_HEADER),
+    )
+    if stored_release_commit != release_commit:
+        raise RuntimeError(
+            "QA demo artifact metadata release commit sha mismatch after upload: "
+            f"{object_key} expected {release_commit}, got {stored_release_commit or '<missing>'}"
         )
     stored_release_context_digest = _metadata_sha256(
         getattr(object_stat, "metadata", None),
@@ -1788,6 +1841,13 @@ def _require_content_sha256_value(value: object) -> str:
     if not re.fullmatch(r"[0-9a-f]{64}", digest):
         raise RuntimeError("QA demo recording content sha256 is required before artifact upload")
     return digest
+
+
+def _require_release_commit_sha_value(value: object) -> str:
+    commit_sha = str(value or "").strip().lower()
+    if not re.fullmatch(r"[0-9a-f]{7,64}", commit_sha):
+        raise RuntimeError("QA demo recording release commit sha is required before artifact upload")
+    return commit_sha
 
 
 def _metadata_sha256(metadata: object, *, keys: tuple[str, str]) -> str:
@@ -1845,6 +1905,7 @@ def execute_qa_demo_stage(
             project=project,
             run=run,
             recordings=previous_recordings,
+            expected_release_commit_sha=release_commit_sha,
             expected_release_context_sha256=release_context_sha256,
         )
     remaining_targets = remaining_capture_targets(plan, previous_recordings)
@@ -1980,6 +2041,7 @@ def execute_qa_demo_stage(
                     object_key=object_key,
                     content_type=recording.content_type,
                     content_sha256=recording.content_sha256,
+                    release_commit_sha=release_commit_sha,
                     release_context_sha256=release_context_sha256,
                 )
                 ensure_artifact_url_reachable(
@@ -1994,6 +2056,7 @@ def execute_qa_demo_stage(
                         capture_target=recording.capture_target,
                         capture_reference=recording.capture_reference,
                         content_sha256=recording.content_sha256,
+                        release_commit_sha=release_commit_sha,
                         release_context_sha256=release_context_sha256,
                     )
                 )
