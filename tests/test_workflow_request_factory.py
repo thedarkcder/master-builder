@@ -22,7 +22,8 @@ class WorkflowRequestFactoryTests(unittest.TestCase):
         return SimpleNamespace(
             execute=lambda *_args, **_kwargs: SimpleNamespace(
                 scalars=lambda: SimpleNamespace(all=lambda: apps)
-            )
+            ),
+            flush=lambda: None,
         )
 
     def _base_inputs(self, checkout_base_dir: str) -> tuple[SimpleNamespace, SimpleNamespace, dict, SimpleNamespace]:
@@ -200,6 +201,87 @@ class WorkflowRequestFactoryTests(unittest.TestCase):
                     answered_human_inputs_for_attempt_fn=lambda **_: [],
                 )
 
+            self.assertEqual(request.project_demo_capture_targets, ("browser", "ios", "android"))
+            self.assertEqual(
+                request.project_demo_capture_target_sources,
+                {"browser": ("web",), "ios": ("ios",), "android": ("android",)},
+            )
+
+    def test_qa_enabled_build_refreshes_demo_targets_from_current_checkout(self) -> None:
+        with TemporaryDirectory() as tmp_dir:
+            tenant, run, effective_policy, settings = self._base_inputs(tmp_dir)
+            effective_policy = {**effective_policy, "qa_demo_recording_enabled": True}
+            project = SimpleNamespace(
+                project_id="project-1",
+                name="Project",
+                github_repository="https://github.com/example/repo",
+                jira_project_key="TP",
+                environment={},
+            )
+            checkout_dir = Path(tmp_dir) / "repo"
+            checkout_dir.mkdir(parents=True, exist_ok=True)
+            stale_apps = [
+                SimpleNamespace(
+                    detected_runtime=None,
+                    detected_language=None,
+                    build_strategy=None,
+                    name="Legacy app",
+                    source_path=".",
+                    deployment_config={},
+                )
+            ]
+            refreshed_candidates = (
+                SimpleNamespace(
+                    detected_runtime="nextjs",
+                    detected_language="typescript",
+                    build_strategy="nixpacks",
+                    name="Web app",
+                    source_path="web",
+                    deployment_config={"services": [{"kind": "website"}]},
+                ),
+                SimpleNamespace(
+                    detected_runtime="ios",
+                    detected_language="swift",
+                    build_strategy="xcode",
+                    name="iOS app",
+                    source_path="ios",
+                    deployment_config={"capture_target": "ios"},
+                ),
+                SimpleNamespace(
+                    detected_runtime="android",
+                    detected_language="kotlin",
+                    build_strategy="gradle",
+                    name="Android app",
+                    source_path="android",
+                    deployment_config={"capture_target": "android"},
+                ),
+            )
+            persisted: list[object] = []
+
+            def _ensure_project_app(_session, *, tenant_id, project_id, candidate):
+                self.assertEqual(tenant_id, "tenant-1")
+                self.assertEqual(project_id, "project-1")
+                persisted.append(candidate)
+                return candidate
+
+            with patch(
+                "orchestrator.core.worker.workflow_request_factory.prepare_execution_repo_for_run",
+                return_value=self._prepared_repo(checkout_dir),
+            ):
+                request = build_workflow_request(
+                    session=self._session_with_project_apps(stale_apps),
+                    tenant=tenant,
+                    run=run,
+                    project=project,
+                    effective_policy=effective_policy,
+                    settings=settings,
+                    answered_human_inputs_for_attempt_fn=lambda **_: [],
+                    scan_repo_for_project_apps_fn=lambda **_: ("pre-scan",),
+                    normalize_project_app_planner_output_fn=lambda **_: refreshed_candidates,
+                    ensure_project_app_fn=_ensure_project_app,
+                )
+
+            self.assertEqual(tuple(persisted), refreshed_candidates)
             self.assertEqual(request.project_demo_capture_targets, ("browser", "ios", "android"))
             self.assertEqual(
                 request.project_demo_capture_target_sources,
