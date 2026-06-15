@@ -6,6 +6,7 @@ import json
 import logging
 from pathlib import Path
 from queue import Empty, Full, Queue
+import shlex
 import threading
 import time
 from typing import Callable
@@ -83,6 +84,10 @@ class ToolBridgeExhaustedError(RuntimeInvocationError):
 
 class NativeToolPolicyError(RuntimeInvocationError):
     """Raised when a runtime uses a native tool outside the stage allowlist."""
+
+
+class GovernedToolShellPolicyError(RuntimeInvocationError):
+    """Raised when shell commands bypass governed tools for side-effecting actions."""
 
 
 @dataclass(frozen=True)
@@ -1139,6 +1144,13 @@ def _invoke_runtime_json_once(
                 f"{native_tool_policy_violations}. "
                 "Native runtime tools must be enabled through the stage tool allowlist."
             )
+        governed_shell_policy_violations = str(sink_state.get("governed_shell_policy_violations") or "").strip()
+        if governed_shell_policy_violations:
+            raise GovernedToolShellPolicyError(
+                "Runtime used shell command(s) that bypass governed GitHub tools: "
+                f"{governed_shell_policy_violations}. "
+                "Use github.push_branch, github.open_pr, or github.get_pr_details instead."
+            )
         _emit_runtime_response_event(
             context=invocation_context,
             payload=payload,
@@ -1514,6 +1526,120 @@ def _record_native_tool_policy_observations(
     sink_state["native_tool_policy_violations"] = ", ".join(sorted(existing))
 
 
+def _command_tokens(command: str) -> list[str]:
+    try:
+        return shlex.split(command)
+    except ValueError:
+        return []
+
+
+def _strip_shell_env_prefix(tokens: list[str]) -> list[str]:
+    remaining = list(tokens)
+    while remaining and "=" in remaining[0] and not remaining[0].startswith("-"):
+        remaining.pop(0)
+    if remaining and Path(remaining[0]).name == "env":
+        remaining.pop(0)
+        while remaining and "=" in remaining[0] and not remaining[0].startswith("-"):
+            remaining.pop(0)
+    if remaining and Path(remaining[0]).name == "command":
+        remaining.pop(0)
+    return remaining
+
+
+def _governed_github_shell_policy_violation(command: str, *, depth: int = 0) -> str | None:
+    normalized = str(command or "").strip()
+    if not normalized or depth > 3:
+        return None
+    for separator in ("&&", "||", ";"):
+        if separator in normalized:
+            for segment in normalized.split(separator):
+                violation = _governed_github_shell_policy_violation(segment, depth=depth + 1)
+                if violation:
+                    return violation
+            return None
+    tokens = _strip_shell_env_prefix(_command_tokens(normalized))
+    if not tokens:
+        return None
+    executable = Path(tokens[0]).name
+    if executable in {"bash", "sh", "zsh"}:
+        for idx, token in enumerate(tokens[:-1]):
+            if token in {"-c", "-lc"}:
+                return _governed_github_shell_policy_violation(tokens[idx + 1], depth=depth + 1)
+        return None
+    if executable == "git" and len(tokens) >= 2 and tokens[1] == "push":
+        return f"raw git push: {redact_sensitive_text(normalized)}"
+    if executable == "gh" and len(tokens) >= 2 and tokens[1] == "pr":
+        return f"raw gh pr command: {redact_sensitive_text(normalized)}"
+    return None
+
+
+def _extract_command_from_exec_payload(payload: object) -> str | None:
+    if isinstance(payload, str):
+        normalized = payload.strip()
+        if not normalized:
+            return None
+        try:
+            parsed = json.loads(normalized)
+        except json.JSONDecodeError:
+            return None
+        return _extract_command_from_exec_payload(parsed)
+    if not isinstance(payload, dict):
+        return None
+    command_value = payload.get("cmd", payload.get("command"))
+    if isinstance(command_value, str) and command_value.strip():
+        return command_value
+    return None
+
+
+def _governed_shell_policy_violations_from_log_payload(payload: object, *, depth: int = 0) -> set[str]:
+    violations: set[str] = set()
+    if depth > 5:
+        return violations
+    if isinstance(payload, str):
+        normalized = payload.strip()
+        if normalized.startswith("{") or normalized.startswith("["):
+            try:
+                parsed = json.loads(normalized)
+            except json.JSONDecodeError:
+                return violations
+            return _governed_shell_policy_violations_from_log_payload(parsed, depth=depth + 1)
+        return violations
+    if isinstance(payload, dict):
+        name = str(payload.get("name") or payload.get("tool_name") or "").strip()
+        if name in {"exec_command", "functions.exec_command"}:
+            command = _extract_command_from_exec_payload(payload.get("arguments") or payload.get("tool_args"))
+            violation = _governed_github_shell_policy_violation(command or "")
+            if violation:
+                violations.add(violation)
+        for value in payload.values():
+            violations.update(_governed_shell_policy_violations_from_log_payload(value, depth=depth + 1))
+    elif isinstance(payload, list):
+        for item in payload:
+            violations.update(_governed_shell_policy_violations_from_log_payload(item, depth=depth + 1))
+    return violations
+
+
+def _record_governed_shell_policy_observations(
+    *,
+    sink_state: dict[str, int | bool | str],
+    message_text: str,
+) -> None:
+    try:
+        payload = json.loads(message_text)
+    except json.JSONDecodeError:
+        return
+    observed = _governed_shell_policy_violations_from_log_payload(payload)
+    if not observed:
+        return
+    existing = {
+        item.strip()
+        for item in str(sink_state.get("governed_shell_policy_violations") or "").split("\n")
+        if item.strip()
+    }
+    existing.update(observed)
+    sink_state["governed_shell_policy_violations"] = "\n".join(sorted(existing))
+
+
 def _combined_log_sink(
     *,
     context: AgentInvocationContext,
@@ -1543,6 +1669,10 @@ def _combined_log_sink(
             sink_state=sink_state,
             message_text=message_text,
             allowed_native_tools=allowed_native_tools,
+        )
+        _record_governed_shell_policy_observations(
+            sink_state=sink_state,
+            message_text=message_text,
         )
         sanitized_message = redact_sensitive_text(message_text)
         parsed_usage = extract_turn_completed_usage(message_text)

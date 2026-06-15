@@ -725,6 +725,38 @@ class GitHubAppClientTests(unittest.TestCase):
             ],
         )
 
+    def test_get_repository_default_branch_reads_repository_contract(self) -> None:
+        config = GitHubAppConfig(app_id="12345", installation_id="999", private_key_pem="unused")
+        client = GitHubAppClient(config)
+        with (
+            patch.object(client, "get_installation_token", return_value="token"),
+            patch.object(client, "_request_json", return_value={"default_branch": "master"}) as request_mock,
+        ):
+            default_branch = client.get_repository_default_branch(
+                repo_full_name="example/repo",
+                github_repository="https://github.com/example/repo",
+            )
+
+        self.assertEqual(default_branch, "master")
+        request_mock.assert_called_once_with(
+            method="GET",
+            path="/repos/example/repo",
+            bearer_token="token",
+        )
+
+    def test_get_repository_default_branch_rejects_missing_provider_value(self) -> None:
+        config = GitHubAppConfig(app_id="12345", installation_id="999", private_key_pem="unused")
+        client = GitHubAppClient(config)
+        with (
+            patch.object(client, "get_installation_token", return_value="token"),
+            patch.object(client, "_request_json", return_value={"default_branch": ""}),
+        ):
+            with self.assertRaisesRegex(GitHubApiError, "default_branch"):
+                client.get_repository_default_branch(
+                    repo_full_name="example/repo",
+                    github_repository="https://github.com/example/repo",
+                )
+
     def test_list_repository_branches_parses_branch_names(self) -> None:
         config = GitHubAppConfig(app_id="12345", installation_id="999", private_key_pem="unused")
         client = GitHubAppClient(config)

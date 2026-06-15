@@ -21,6 +21,25 @@ def test_env_example_declares_local_qa_demo_artifact_settings() -> None:
     assert "ORCHESTRATOR_QA_DEMO_RECORDER_PROCESS_TIMEOUT_SECONDS=900" in text
     assert "ORCHESTRATOR_QA_DEMO_IOS_RECORDER_COMMAND=" in text
     assert "ORCHESTRATOR_QA_DEMO_ANDROID_RECORDER_COMMAND=" in text
+    assert "ORCHESTRATOR_QA_DEMO_ANDROID_WORKER_PLATFORM=macos" in text
+
+
+def test_hybrid_worker_exports_local_qa_demo_artifact_settings() -> None:
+    script_path = Path(__file__).resolve().parents[1] / "scripts" / "run_hybrid_workers.sh"
+    text = script_path.read_text()
+
+    assert (
+        'export ORCHESTRATOR_QA_DEMO_ARTIFACT_ENDPOINT="${ORCHESTRATOR_QA_DEMO_ARTIFACT_ENDPOINT:-127.0.0.1:${MASTER_BUILDER_MINIO_API_PORT}}"'
+        in text
+    )
+    assert (
+        'export ORCHESTRATOR_QA_DEMO_ARTIFACT_PUBLIC_BASE_URL="${ORCHESTRATOR_QA_DEMO_ARTIFACT_PUBLIC_BASE_URL:-http://127.0.0.1:${MASTER_BUILDER_MINIO_API_PORT}/qa-demos}"'
+        in text
+    )
+    assert (
+        'export ORCHESTRATOR_QA_DEMO_ANDROID_WORKER_PLATFORM="${ORCHESTRATOR_QA_DEMO_ANDROID_WORKER_PLATFORM:-macos}"'
+        in text
+    )
 
 
 def test_docker_compose_provisions_local_qa_demo_artifact_storage() -> None:
@@ -49,6 +68,7 @@ def test_docker_compose_provisions_local_qa_demo_artifact_storage() -> None:
         assert environment["ORCHESTRATOR_QA_DEMO_RECORDER_PROCESS_TIMEOUT_SECONDS"] == "${ORCHESTRATOR_QA_DEMO_RECORDER_PROCESS_TIMEOUT_SECONDS:-900}"
         assert environment["ORCHESTRATOR_QA_DEMO_IOS_RECORDER_COMMAND"] == "${ORCHESTRATOR_QA_DEMO_IOS_RECORDER_COMMAND:-}"
         assert environment["ORCHESTRATOR_QA_DEMO_ANDROID_RECORDER_COMMAND"] == "${ORCHESTRATOR_QA_DEMO_ANDROID_RECORDER_COMMAND:-}"
+        assert environment["ORCHESTRATOR_QA_DEMO_ANDROID_WORKER_PLATFORM"] == "${ORCHESTRATOR_QA_DEMO_ANDROID_WORKER_PLATFORM:-macos}"
 
     for service_name in ("api", "webhook-worker"):
         environment = services[service_name]["environment"]

@@ -421,6 +421,48 @@ class OrchestratedRunRunnerTests(unittest.TestCase):
         self.assertEqual(tool_calls[1][2]["head_branch"], "feature/MAB-100")
         self.assertEqual(tool_calls[1][2]["base_branch"], "main")
 
+    def test_review_approved_without_pr_blocks_when_required_pr_base_branch_is_unresolved(self) -> None:
+        stage_agents = _StubStageAgents(
+            plan=PmPlan(plan_steps=["plan"], acceptance_criteria=["ac1"], risks=[]),
+            dev_results=[DevResult(change_summary=["implemented attempt 1"], pr_url=None)],
+            test_results=[TestResult(guidance=["pytest -q"])],
+            review_results=[
+                ReviewResult(
+                    outcome="continue",
+                    summary=["Looks good"],
+                    feedback=None,
+                    pr_url=None,
+                ),
+            ],
+        )
+        tool_calls: list[tuple[str, str, dict[str, object]]] = []
+
+        def _execute_tool(
+            _tenant_id,  # noqa: ANN001
+            _project_id,  # noqa: ANN001
+            _run_id,  # noqa: ANN001
+            _issue_key,  # noqa: ANN001
+            stage,  # noqa: ANN001
+            tool_name,  # noqa: ANN001
+            tool_args,  # noqa: ANN001
+            _worker_platform,  # noqa: ANN001
+        ):
+            tool_calls.append((stage, tool_name, dict(tool_args)))
+            raise AssertionError("PR publication tools should not run without a resolved base branch")
+
+        result = self._executor(stage_agents, execute_tool=_execute_tool).execute(
+            replace(
+                self._request(),
+                allow_pr_creation=True,
+                base_branch=None,
+                pr_target_branch=None,
+            )
+        )
+
+        self.assertEqual(result.outcome, "blocked")
+        self.assertIn("missing a resolved PR target/base branch", result.blocker_message or "")
+        self.assertEqual(tool_calls, [])
+
     def test_review_approved_without_pr_blocks_when_pr_creation_required_and_tool_executor_missing(self) -> None:
         stage_agents = _StubStageAgents(
             plan=PmPlan(plan_steps=["plan"], acceptance_criteria=["ac1"], risks=[]),

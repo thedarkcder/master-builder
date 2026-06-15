@@ -557,7 +557,7 @@ def resolve_available_capture_targets(*, settings, preview_release) -> dict[str,
                     raw_value=getattr(settings, "qa_demo_android_worker_platform", ""),
                     provider_name="android",
                 )
-                or "linux"
+                or "macos"
             ),
         )
 
@@ -614,7 +614,7 @@ def planned_capture_target_constraints(*, settings) -> dict[str, PlannedCaptureT
             raw_value=getattr(settings, "qa_demo_android_worker_platform", ""),
             provider_name="android",
         )
-        or "linux"
+        or "macos"
         if android_recorder_command is not None
         else None
     )
@@ -2184,12 +2184,15 @@ def update_pull_request_with_demo_evidence(
         required_capture_targets=required_capture_targets,
         required_recording_counts=required_recording_counts,
     )
+    base_branch = str(pr_details.base_ref or "").strip()
+    if not base_branch:
+        raise RuntimeError("QA demo evidence PR update requires PR details to include a base branch")
     github_client.update_pull_request(
         repo_full_name=repo_full_name,
         github_repository=project.github_repository,
         pr_number=pr_number,
         title=pr_details.title,
-        base_branch=pr_details.base_ref or "main",
+        base_branch=base_branch,
         body=body,
     )
     updated_pr_details = github_client.get_pull_request_details(repo_full_name=repo_full_name, pr_number=pr_number)

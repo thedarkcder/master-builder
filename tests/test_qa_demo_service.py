@@ -8,6 +8,8 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from orchestrator.core.worker.capability_normalization import WorkerCapability
 from orchestrator.core.qa.demo_service import (
     DEMO_EVIDENCE_HEADING,
@@ -596,7 +598,7 @@ def test_resolve_available_capture_targets_includes_configured_native_recorders(
 
     assert set(targets) == {"ios", "android", "desktop"}
     assert targets["ios"].required_worker_platform == "macos"
-    assert targets["android"].required_worker_platform == "linux"
+    assert targets["android"].required_worker_platform == "macos"
     assert targets["android"].recorder_command == ("python", "/tmp/android_recorder.py")
     assert targets["desktop"].recorder_command == ("python", "/tmp/desktop_recorder.py")
     assert targets["desktop"].required_worker_platform == "macos"
@@ -659,7 +661,7 @@ def test_resolve_available_capture_targets_includes_builtin_ios_and_android_reco
     assert targets["android"].recorder_command is not None
     assert targets["android"].recorder_command[0] == sys.executable
     assert targets["android"].recorder_command[-1].endswith("scripts/qa_demo_android_recorder.py")
-    assert targets["android"].required_worker_platform == "linux"
+    assert targets["android"].required_worker_platform == "macos"
 
 
 def test_planned_capture_target_constraints_payload_marks_native_targets_available_from_provider_metadata(monkeypatch) -> None:
@@ -674,7 +676,7 @@ def test_planned_capture_target_constraints_payload_marks_native_targets_availab
     assert by_target["ios"]["provider_available"] is True
     assert by_target["ios"]["required_worker_platform"] == "macos"
     assert by_target["android"]["provider_available"] is True
-    assert by_target["android"]["required_worker_platform"] == "linux"
+    assert by_target["android"]["required_worker_platform"] == "macos"
     assert by_target["desktop"]["provider_available"] is False
     assert "no desktop recorder command is configured" in str(by_target["desktop"]["availability_reason"])
 
@@ -712,6 +714,27 @@ def test_next_required_qa_demo_worker_capability_uses_configured_android_worker_
             qa_demo_android_recorder_command="python /tmp/android_recorder.py",
             qa_demo_android_worker_platform="macos",
         ),
+        plan=plan,
+        recordings=[],
+    ) == WorkerCapability.MACOS
+
+
+def test_next_required_qa_demo_worker_capability_defaults_builtin_android_to_macos() -> None:
+    plan = PmPlan(
+        plan_steps=["Implement"],
+        acceptance_criteria=["Android flow works"],
+        risks=[],
+        demo_requirements=[
+            DemoRequirement(
+                title="Android walkthrough",
+                acceptance_criterion="Android flow works",
+                capture_target="android",
+            ),
+        ],
+    )
+
+    assert next_required_qa_demo_worker_capability(
+        settings=SimpleNamespace(),
         plan=plan,
         recordings=[],
     ) == WorkerCapability.MACOS
@@ -1107,7 +1130,7 @@ def test_record_demo_scenarios_passes_explicit_playwright_module_dir() -> None:
                 qa_demo_playwright_module_dir="/tmp/playwright-modules",
                 qa_demo_recorder_process_timeout_seconds=42,
             ),
-            request=_request(),
+            request=replace(_request(), current_worker_capability=WorkerCapability.MACOS),
             available_capture_targets=_browser_capture_targets(),
             qa_result=QaResult(
                 summary=["Recorded demos"],
@@ -1368,7 +1391,7 @@ def test_record_demo_scenarios_passes_project_source_paths_and_release_context_t
     with patch("orchestrator.core.qa.demo_service.subprocess.run", side_effect=_run):
         recordings = record_demo_scenarios(
             settings=SimpleNamespace(),
-            request=request,
+            request=replace(request, current_worker_capability=WorkerCapability.MACOS),
             available_capture_targets={
                 "android": DemoCaptureTarget(
                     capture_target="android",
@@ -1971,7 +1994,7 @@ def test_execute_qa_demo_stage_records_and_uploads() -> None:
     ):
         result = execute_qa_demo_stage(
             session=SimpleNamespace(),
-            settings=SimpleNamespace(qa_demo_playwright_module_dir=""),
+            settings=SimpleNamespace(qa_demo_playwright_module_dir="", qa_demo_android_worker_platform="linux"),
             tenant=tenant,
             project=project,
             run=run,
@@ -2176,7 +2199,7 @@ def test_execute_qa_demo_stage_includes_project_source_paths_in_qa_prompt_target
             tenant=tenant,
             project=project,
             run=run,
-            request=request,
+            request=replace(request, current_worker_capability=WorkerCapability.MACOS),
             plan=plan,
             dev_result=DevResult(change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8"),
             test_result=TestResult(guidance=["./gradlew test"]),
@@ -2227,7 +2250,7 @@ def test_execute_qa_demo_stage_requires_pm_demo_variants_before_qa_agent() -> No
                 tenant=tenant,
                 project=project,
                 run=run,
-                request=_request(),
+                request=replace(_request(), current_worker_capability=WorkerCapability.MACOS),
                 plan=plan,
                 dev_result=DevResult(change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8"),
                 test_result=TestResult(guidance=["pytest -q"]),
@@ -2729,7 +2752,7 @@ def test_execute_qa_demo_stage_retries_when_uploaded_artifact_url_is_unreachable
             tenant=tenant,
             project=project,
             run=run,
-            request=_request(),
+            request=replace(_request(), current_worker_capability=WorkerCapability.MACOS),
             plan=plan,
             dev_result=DevResult(change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8"),
             test_result=TestResult(guidance=["pytest -q"]),
@@ -3052,7 +3075,7 @@ def test_execute_qa_demo_stage_requeues_when_remaining_target_requires_another_w
     with patch("orchestrator.core.qa.demo_service._default_service_url_probe", return_value=200):
         result = execute_qa_demo_stage(
             session=SimpleNamespace(),
-            settings=SimpleNamespace(qa_demo_playwright_module_dir=""),
+            settings=SimpleNamespace(qa_demo_playwright_module_dir="", qa_demo_android_worker_platform="linux"),
             tenant=tenant,
             project=project,
             run=run,
@@ -3223,7 +3246,7 @@ def test_execute_qa_demo_stage_records_current_worker_targets_then_requeues_for_
     ):
         result = execute_qa_demo_stage(
             session=SimpleNamespace(),
-            settings=SimpleNamespace(qa_demo_playwright_module_dir=""),
+            settings=SimpleNamespace(qa_demo_playwright_module_dir="", qa_demo_android_worker_platform="linux"),
             tenant=tenant,
             project=project,
             run=run,
@@ -3331,7 +3354,7 @@ def test_execute_qa_demo_stage_blocks_when_current_worker_target_proof_is_missin
                 tenant=tenant,
                 project=project,
                 run=run,
-                request=_request(),
+                request=replace(_request(), current_worker_capability=WorkerCapability.MACOS),
                 plan=plan,
                 dev_result=DevResult(change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8"),
                 test_result=TestResult(guidance=["pytest -q"]),
@@ -4576,7 +4599,7 @@ def test_execute_qa_demo_stage_uses_builtin_ios_capture_on_macos() -> None:
     ]
 
 
-def test_execute_qa_demo_stage_uses_builtin_android_capture_on_linux() -> None:
+def test_execute_qa_demo_stage_uses_builtin_android_capture_on_linux_when_configured() -> None:
     tenant = SimpleNamespace(tenant_id="tenant-1", github_config={})
     project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo")
     run = SimpleNamespace(run_id="run-1")
@@ -4669,7 +4692,7 @@ def test_execute_qa_demo_stage_uses_builtin_android_capture_on_linux() -> None:
     ):
         result = execute_qa_demo_stage(
             session=SimpleNamespace(),
-            settings=SimpleNamespace(qa_demo_playwright_module_dir=""),
+            settings=SimpleNamespace(qa_demo_playwright_module_dir="", qa_demo_android_worker_platform="linux"),
             tenant=tenant,
             project=project,
             run=run,
@@ -4965,6 +4988,58 @@ def test_update_pull_request_with_demo_evidence_verifies_pr_readback_after_updat
 
     assert github_client.update_pull_request.called
     assert github_client.get_pull_request_details.call_count == 2
+    github_client.mark_pull_request_ready_for_review.assert_not_called()
+
+
+def test_update_pull_request_with_demo_evidence_rejects_missing_pr_base_branch() -> None:
+    github_client = SimpleNamespace(
+        get_pull_request_details=MagicMock(
+            return_value=SimpleNamespace(
+                title="MAB-400: Add QA demos",
+                body="## Summary\n- change",
+                base_ref="",
+            )
+        ),
+        update_pull_request=MagicMock(),
+        mark_pull_request_ready_for_review=MagicMock(),
+    )
+
+    with (
+        patch("orchestrator.core.qa.demo_service.github_client_from_tenant_config", return_value=github_client),
+        patch("orchestrator.core.qa.demo_service._default_artifact_url_probe", return_value=200),
+        pytest.raises(RuntimeError, match="requires PR details to include a base branch"),
+    ):
+        update_pull_request_with_demo_evidence(
+            session=SimpleNamespace(),
+            settings=_qa_artifact_settings(),
+            tenant=SimpleNamespace(tenant_id="tenant-1", github_config={}),
+            project=SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo"),
+            run=SimpleNamespace(run_id="run-1"),
+            workflow_result=SimpleNamespace(pr_url="https://github.com/acme/repo/pull/8"),
+            qa_result=QaResult(
+                summary=["Recorded demos"],
+                scenarios=[
+                    QaScenario(
+                        name="Happy path",
+                        objective="Show feature works",
+                        steps=_proof_steps("text=Feature"),
+                    )
+                ],
+                recordings=[
+                    QaRecording(
+                        name="Happy path",
+                        artifact_url="https://cdn.example/qa-demos/tenant-1/project-1/run-1/happy.webm",
+                        object_key="tenant-1/project-1/run-1/happy.webm",
+                        capture_reference="https://preview.example",
+                        content_sha256=_sha256(47),
+                        release_context_sha256=_release_context_sha256(),
+                    )
+                ],
+            ),
+            required_capture_targets=("browser",),
+        )
+
+    github_client.update_pull_request.assert_not_called()
     github_client.mark_pull_request_ready_for_review.assert_not_called()
 
 
