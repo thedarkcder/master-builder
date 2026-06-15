@@ -4109,6 +4109,72 @@ class DeploymentContractTests(unittest.TestCase):
             self.assertEqual(release.status, "failed")
             self.assertEqual(release.last_error, "Local preview route sync failed: proxy write failed")
 
+    def test_reconcile_fails_release_when_provider_progress_is_stale(self) -> None:
+        self._seed_tenant_project_app()
+        now = datetime.now(timezone.utc)
+        stale_at = now - timedelta(seconds=900)
+        with self.session_factory() as session:
+            release = ProjectDeploymentRelease(
+                release_id="release-stale-provider",
+                tenant_id="tenant-1",
+                project_id="project-1",
+                app_id="app-1",
+                provider="internal_coolify",
+                status="deploying",
+                environment_name="production",
+                source_strategy="dockerfile",
+                git_ref="main",
+                commit_sha="abcdef1",
+                requested_by_user_id=None,
+                deployment_snapshot={},
+                provider_context={
+                    "application_uuid": "app-uuid-1",
+                    "deployment_uuid": "deployment-stale",
+                    "route_bindings": [],
+                },
+                last_error=None,
+                requested_at=stale_at,
+                started_at=stale_at,
+                completed_at=None,
+                created_at=stale_at,
+                updated_at=stale_at,
+                release_kind="run_preview",
+                source_run_id="run-1",
+                pr_number=None,
+                delivery_metadata={},
+                destroyed_at=None,
+            )
+            session.add(release)
+            session.commit()
+
+            class _FakeClient:
+                pass
+
+            with (
+                patch("orchestrator.core.deployment_runtime._coolify_client_for_tenant", return_value=_FakeClient()),
+                patch(
+                    "orchestrator.core.deployment_runtime._settings_from_session",
+                    return_value=SimpleNamespace(deployment_release_stale_timeout_seconds=300),
+                ),
+                patch(
+                    "orchestrator.core.deployment_runtime._coolify_observation_for_release",
+                    return_value=CoolifyDeploymentObservation(
+                        deployment_uuid="deployment-stale",
+                        application_uuid="app-uuid-1",
+                        status="queued",
+                        application_status=None,
+                        provider_updated_at=stale_at,
+                        last_error=None,
+                    ),
+                ),
+            ):
+                updated = reconcile_deployment_release(session=session, release=release)
+
+            self.assertTrue(updated)
+            session.refresh(release)
+            self.assertEqual(release.status, "failed")
+            self.assertIn("remained in progress status 'queued'", release.last_error or "")
+
     def test_docker_compose_generated_routes_require_explicit_public_service(self) -> None:
         now = datetime.now(timezone.utc)
         tenant = Tenant(

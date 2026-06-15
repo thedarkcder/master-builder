@@ -4,6 +4,7 @@ import asyncio
 import logging
 import secrets
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 
 from fastapi import HTTPException, status
 from sqlalchemy import select
@@ -42,6 +43,7 @@ class CoolifyDeploymentObservation:
     application_uuid: str | None
     status: str
     application_status: str | None = None
+    provider_updated_at: datetime | None = None
     last_error: str | None = None
 
 
@@ -54,6 +56,59 @@ def _coerce_dict(value: object) -> dict[str, object]:
 def _normalize_optional_string(value: object) -> str | None:
     normalized = str(value or "").strip()
     return normalized or None
+
+
+def _parse_provider_datetime(value: object) -> datetime | None:
+    normalized = _normalize_optional_string(value)
+    if normalized is None:
+        return None
+    candidate = normalized.replace("Z", "+00:00")
+    try:
+        parsed = datetime.fromisoformat(candidate)
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _release_activity_anchor(
+    *,
+    release: ProjectDeploymentRelease,
+    observation: CoolifyDeploymentObservation,
+) -> datetime | None:
+    for candidate in (observation.provider_updated_at, release.started_at, release.requested_at, release.created_at):
+        if candidate is None:
+            continue
+        if candidate.tzinfo is None:
+            return candidate.replace(tzinfo=timezone.utc)
+        return candidate.astimezone(timezone.utc)
+    return None
+
+
+def _stale_active_release_error(
+    *,
+    release: ProjectDeploymentRelease,
+    observation: CoolifyDeploymentObservation,
+    settings: Settings,
+    now: datetime,
+) -> str | None:
+    current = _normalize_release_status(release.status)
+    observed = _normalize_release_status(observation.status)
+    if current not in DEPLOYMENT_RELEASE_ACTIVE_STATUSES:
+        return None
+    if observed not in _DEPLOYMENT_PROGRESS_STATUSES and "deploy" not in (observed or "") and "progress" not in (
+        observed or ""
+    ):
+        return None
+    timeout_seconds = max(60, int(settings.deployment_release_stale_timeout_seconds))
+    anchor = _release_activity_anchor(release=release, observation=observation)
+    if anchor is None or now.astimezone(timezone.utc) - anchor <= timedelta(seconds=timeout_seconds):
+        return None
+    return (
+        f"Deployment provider remained in progress status '{observation.status}' for more than "
+        f"{timeout_seconds} seconds without reaching a terminal release state."
+    )
 
 
 def _required_plane_value(value: str | None, field_name: str) -> str:
@@ -207,6 +262,7 @@ def _coolify_observation_for_release(
         application_uuid=observed_application_uuid,
         status=observed_status,
         application_status=application_status,
+        provider_updated_at=_parse_provider_datetime(payload.get("updated_at") or payload.get("created_at")),
         last_error=last_error,
     )
 
@@ -246,6 +302,36 @@ def reconcile_deployment_release(
         return False
 
     current_status = str(release.status or "").strip()
+    stale_error = _stale_active_release_error(
+        release=release,
+        observation=observation,
+        settings=_settings_from_session(session=session),
+        now=datetime.now(timezone.utc),
+    )
+    if stale_error is not None:
+        updated = update_project_deployment_release_status(
+            session=session,
+            tenant_id=release.tenant_id,
+            project_id=release.project_id,
+            release_id=release.release_id,
+            app_id=release.app_id,
+            payload=ProjectDeploymentReleaseStatusUpdate(
+                status="failed",
+                last_error=stale_error,
+                deployment_uuid=observation.deployment_uuid,
+            ),
+        )
+        logger.warning(
+            "deployment_reconcile_stale_provider_progress tenant_id=%s project_id=%s release_id=%s from_status=%s to_status=%s observed_status=%s",
+            release.tenant_id,
+            release.project_id,
+            release.release_id,
+            current_status,
+            updated.status,
+            observation.status,
+        )
+        return True
+
     next_status = _resolve_release_observation_transition(
         current_status=current_status,
         observed_status=observation.status,
