@@ -1001,6 +1001,31 @@ def _validate_recordings_cover_required_counts(
         )
 
 
+def _validate_recordings_use_configured_storage(
+    *,
+    recordings: list[QaRecording],
+    storage: DemoArtifactStorageConfig,
+    tenant,
+    project,
+    run,
+) -> None:
+    public_base_url = storage.public_base_url.rstrip("/")
+    expected_key_prefix = f"{tenant.tenant_id}/{project.project_id}/{run.run_id}/"
+    for recording in recordings:
+        artifact_url = str(recording.artifact_url or "").strip()
+        if not artifact_url.startswith(f"{public_base_url}/"):
+            raise RuntimeError(
+                "QA demo recording must use configured artifact storage URL before PR evidence update: "
+                f"{recording.capture_target}: {recording.name}"
+            )
+        object_key = str(recording.object_key or "").strip()
+        if not object_key.startswith(expected_key_prefix):
+            raise RuntimeError(
+                "QA demo recording object key must be scoped to this run before PR evidence update: "
+                f"{recording.capture_target}: {recording.name}"
+            )
+
+
 def _validate_qa_scenario_coverage(
     *,
     plan: PmPlan,
@@ -1442,6 +1467,7 @@ def update_pull_request_with_demo_evidence(
     settings,
     tenant,
     project,
+    run,
     workflow_result,
     qa_result: QaResult,
     required_capture_targets: list[str] | tuple[str, ...] | None = None,
@@ -1457,6 +1483,14 @@ def update_pull_request_with_demo_evidence(
     _validate_recordings_cover_required_counts(
         recordings=qa_result.recordings,
         required_recording_counts=required_recording_counts,
+    )
+    storage = storage_config_from_settings(settings)
+    _validate_recordings_use_configured_storage(
+        recordings=qa_result.recordings,
+        storage=storage,
+        tenant=tenant,
+        project=project,
+        run=run,
     )
     for recording in qa_result.recordings:
         ensure_artifact_url_reachable(

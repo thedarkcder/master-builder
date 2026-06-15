@@ -65,6 +65,21 @@ def _request() -> WorkflowRequest:
     )
 
 
+def _qa_artifact_settings(**overrides: object) -> SimpleNamespace:
+    values: dict[str, object] = {
+        "secrets_encryption_key": "",
+        "qa_demo_artifact_endpoint": "127.0.0.1:9000",
+        "qa_demo_artifact_access_key": "minio",
+        "qa_demo_artifact_secret_key": "minio-secret",
+        "qa_demo_artifact_bucket": "qa-demos",
+        "qa_demo_artifact_public_base_url": "https://cdn.example/qa-demos",
+        "qa_demo_artifact_secure": False,
+        "qa_demo_artifact_url_timeout_seconds": 1,
+    }
+    values.update(overrides)
+    return SimpleNamespace(**values)
+
+
 def _qa_result() -> QaResult:
     return QaResult(
         summary=["Recorded demos"],
@@ -2547,9 +2562,10 @@ def test_update_pull_request_with_demo_evidence_refreshes_pr_body() -> None:
     ):
         updated_body = update_pull_request_with_demo_evidence(
             session=SimpleNamespace(),
-            settings=SimpleNamespace(secrets_encryption_key=""),
+            settings=_qa_artifact_settings(),
             tenant=SimpleNamespace(tenant_id="tenant-1", github_config={}),
             project=SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo"),
+            run=SimpleNamespace(run_id="run-1"),
             workflow_result=SimpleNamespace(pr_url="https://github.com/acme/repo/pull/8"),
             qa_result=QaResult(
                 summary=["Recorded demos"],
@@ -2563,8 +2579,8 @@ def test_update_pull_request_with_demo_evidence_refreshes_pr_body() -> None:
                 recordings=[
                     QaRecording(
                         name="Happy path",
-                        artifact_url="https://demo.example/happy.webm",
-                        object_key="qa/happy.webm",
+                        artifact_url="https://cdn.example/qa-demos/tenant-1/project-1/run-1/happy.webm",
+                        object_key="tenant-1/project-1/run-1/happy.webm",
                         capture_reference="https://preview.example",
                     )
                 ],
@@ -2574,7 +2590,95 @@ def test_update_pull_request_with_demo_evidence_refreshes_pr_body() -> None:
 
     assert DEMO_EVIDENCE_HEADING in updated_body
     assert f"{DEMO_EVIDENCE_REQUIRED_TARGETS_MARKER} browser -->" in updated_body
-    assert "https://demo.example/happy.webm" in updated_body
+    assert "https://cdn.example/qa-demos/tenant-1/project-1/run-1/happy.webm" in updated_body
+
+
+def test_update_pull_request_with_demo_evidence_rejects_external_recording_before_url_probe() -> None:
+    with (
+        patch("orchestrator.core.qa.demo_service.github_client_from_tenant_config") as github_client_mock,
+        patch("orchestrator.core.qa.demo_service._default_artifact_url_probe") as url_probe,
+    ):
+        try:
+            update_pull_request_with_demo_evidence(
+                session=SimpleNamespace(),
+                settings=_qa_artifact_settings(),
+                tenant=SimpleNamespace(tenant_id="tenant-1", github_config={}),
+                project=SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo"),
+                run=SimpleNamespace(run_id="run-1"),
+                workflow_result=SimpleNamespace(pr_url="https://github.com/acme/repo/pull/8"),
+                qa_result=QaResult(
+                    summary=["Recorded demos"],
+                    scenarios=[
+                        QaScenario(
+                            name="Browser walkthrough",
+                            objective="Show browser",
+                            capture_target="browser",
+                            steps=_proof_steps("text=Feature"),
+                        )
+                    ],
+                    recordings=[
+                        QaRecording(
+                            name="Browser walkthrough",
+                            artifact_url="https://manual.example/browser.webm",
+                            object_key="tenant-1/project-1/run-1/browser.webm",
+                            capture_target="browser",
+                            capture_reference="https://preview.example",
+                        )
+                    ],
+                ),
+                required_capture_targets=("browser",),
+            )
+        except RuntimeError as exc:
+            assert "QA demo recording must use configured artifact storage URL" in str(exc)
+        else:  # pragma: no cover
+            raise AssertionError("expected external recording URL to block PR evidence update")
+
+    url_probe.assert_not_called()
+    github_client_mock.assert_not_called()
+
+
+def test_update_pull_request_with_demo_evidence_rejects_out_of_scope_recording_key_before_url_probe() -> None:
+    with (
+        patch("orchestrator.core.qa.demo_service.github_client_from_tenant_config") as github_client_mock,
+        patch("orchestrator.core.qa.demo_service._default_artifact_url_probe") as url_probe,
+    ):
+        try:
+            update_pull_request_with_demo_evidence(
+                session=SimpleNamespace(),
+                settings=_qa_artifact_settings(),
+                tenant=SimpleNamespace(tenant_id="tenant-1", github_config={}),
+                project=SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo"),
+                run=SimpleNamespace(run_id="run-1"),
+                workflow_result=SimpleNamespace(pr_url="https://github.com/acme/repo/pull/8"),
+                qa_result=QaResult(
+                    summary=["Recorded demos"],
+                    scenarios=[
+                        QaScenario(
+                            name="Browser walkthrough",
+                            objective="Show browser",
+                            capture_target="browser",
+                            steps=_proof_steps("text=Feature"),
+                        )
+                    ],
+                    recordings=[
+                        QaRecording(
+                            name="Browser walkthrough",
+                            artifact_url="https://cdn.example/qa-demos/tenant-2/project-2/run-2/browser.webm",
+                            object_key="tenant-2/project-2/run-2/browser.webm",
+                            capture_target="browser",
+                            capture_reference="https://preview.example",
+                        )
+                    ],
+                ),
+                required_capture_targets=("browser",),
+            )
+        except RuntimeError as exc:
+            assert "QA demo recording object key must be scoped to this run" in str(exc)
+        else:  # pragma: no cover
+            raise AssertionError("expected out-of-scope recording key to block PR evidence update")
+
+    url_probe.assert_not_called()
+    github_client_mock.assert_not_called()
 
 
 def test_update_pull_request_with_demo_evidence_rejects_missing_required_capture_target_before_url_probe() -> None:
@@ -2588,6 +2692,7 @@ def test_update_pull_request_with_demo_evidence_rejects_missing_required_capture
                 settings=SimpleNamespace(secrets_encryption_key="", qa_demo_artifact_url_timeout_seconds=1),
                 tenant=SimpleNamespace(tenant_id="tenant-1", github_config={}),
                 project=SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo"),
+                run=SimpleNamespace(run_id="run-1"),
                 workflow_result=SimpleNamespace(pr_url="https://github.com/acme/repo/pull/8"),
                 qa_result=QaResult(
                     summary=["Recorded demos"],
@@ -2631,6 +2736,7 @@ def test_update_pull_request_with_demo_evidence_rejects_missing_required_recordi
                 settings=SimpleNamespace(secrets_encryption_key="", qa_demo_artifact_url_timeout_seconds=1),
                 tenant=SimpleNamespace(tenant_id="tenant-1", github_config={}),
                 project=SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo"),
+                run=SimpleNamespace(run_id="run-1"),
                 workflow_result=SimpleNamespace(pr_url="https://github.com/acme/repo/pull/8"),
                 qa_result=QaResult(
                     summary=["Recorded demos"],
@@ -2672,9 +2778,10 @@ def test_update_pull_request_with_demo_evidence_rejects_unreachable_accumulated_
         try:
             update_pull_request_with_demo_evidence(
                 session=SimpleNamespace(),
-                settings=SimpleNamespace(secrets_encryption_key="", qa_demo_artifact_url_timeout_seconds=1),
+                settings=_qa_artifact_settings(),
                 tenant=SimpleNamespace(tenant_id="tenant-1", github_config={}),
                 project=SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo"),
+                run=SimpleNamespace(run_id="run-1"),
                 workflow_result=SimpleNamespace(pr_url="https://github.com/acme/repo/pull/8"),
                 qa_result=QaResult(
                     summary=["Recorded demos"],
@@ -2695,14 +2802,14 @@ def test_update_pull_request_with_demo_evidence_rejects_unreachable_accumulated_
                     recordings=[
                         QaRecording(
                             name="Browser walkthrough",
-                            artifact_url="https://demo.example/browser.webm",
-                            object_key="qa/browser.webm",
+                            artifact_url="https://cdn.example/qa-demos/tenant-1/project-1/run-1/browser.webm",
+                            object_key="tenant-1/project-1/run-1/browser.webm",
                             capture_reference="https://preview.example",
                         ),
                         QaRecording(
                             name="iOS walkthrough",
-                            artifact_url="https://demo.example/ios.mp4",
-                            object_key="qa/ios.mp4",
+                            artifact_url="https://cdn.example/qa-demos/tenant-1/project-1/run-1/ios.mp4",
+                            object_key="tenant-1/project-1/run-1/ios.mp4",
                             capture_target="ios",
                             capture_reference="ios-simulator://configured",
                         ),
@@ -2723,6 +2830,7 @@ def test_update_pull_request_with_demo_evidence_rejects_recording_without_matchi
                 settings=SimpleNamespace(secrets_encryption_key="", qa_demo_artifact_url_timeout_seconds=1),
                 tenant=SimpleNamespace(tenant_id="tenant-1", github_config={}),
                 project=SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo"),
+                run=SimpleNamespace(run_id="run-1"),
                 workflow_result=SimpleNamespace(pr_url="https://github.com/acme/repo/pull/8"),
                 qa_result=QaResult(
                     summary=["Recorded demos"],
@@ -2754,6 +2862,7 @@ def test_update_pull_request_with_demo_evidence_rejects_duplicate_accumulated_re
                 settings=SimpleNamespace(secrets_encryption_key="", qa_demo_artifact_url_timeout_seconds=1),
                 tenant=SimpleNamespace(tenant_id="tenant-1", github_config={}),
                 project=SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo"),
+                run=SimpleNamespace(run_id="run-1"),
                 workflow_result=SimpleNamespace(pr_url="https://github.com/acme/repo/pull/8"),
                 qa_result=QaResult(
                     summary=["Recorded demos"],
