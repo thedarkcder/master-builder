@@ -1019,6 +1019,7 @@ def _validate_qa_scenario_coverage(
         if target in target_names
     }
     scenarios_by_target: dict[str, list[QaScenario]] = {}
+    missing_requirements: list[str] = []
     missing_variants: list[str] = []
     for scenario in qa_result.scenarios:
         if scenario.capture_target in target_names:
@@ -1027,6 +1028,16 @@ def _validate_qa_scenario_coverage(
         if requirement.capture_target not in target_names:
             continue
         target_scenarios = scenarios_by_target.get(requirement.capture_target, [])
+        normalized_title = _normalized_demo_text(requirement.title)
+        normalized_acceptance_criterion = _normalized_demo_text(requirement.acceptance_criterion)
+        if not any(
+            normalized_title in _normalized_scenario_text(scenario)
+            or normalized_acceptance_criterion in _normalized_scenario_text(scenario)
+            for scenario in target_scenarios
+        ):
+            missing_requirements.append(
+                f"{requirement.capture_target}: {requirement.title} ({requirement.acceptance_criterion})"
+            )
         for variant in requirement.variants or []:
             normalized_variant = _normalized_demo_text(variant)
             if not any(normalized_variant in _normalized_scenario_text(scenario) for scenario in target_scenarios):
@@ -1039,6 +1050,8 @@ def _validate_qa_scenario_coverage(
     messages: list[str] = []
     if missing:
         messages.append("insufficient scenario count: " + "; ".join(missing))
+    if missing_requirements:
+        messages.append("missing requirement coverage: " + "; ".join(missing_requirements))
     if missing_variants:
         messages.append("missing variant coverage: " + "; ".join(missing_variants))
     if messages:
