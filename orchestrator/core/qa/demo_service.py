@@ -862,6 +862,18 @@ def _parse_recorder_output(
         path = str(item.get("path") or "").strip()
         if not name or not path:
             raise RuntimeError("QA demo recorder returned incomplete recording metadata")
+        reported_capture_target = str(item.get("capture_target") or "").strip()
+        if reported_capture_target and reported_capture_target != capture_target.capture_target:
+            raise RuntimeError(
+                "QA demo recorder returned capture target outside planned target: "
+                f"{reported_capture_target} != {capture_target.capture_target}"
+            )
+        reported_capture_reference = str(item.get("capture_reference") or "").strip()
+        if reported_capture_reference and reported_capture_reference != capture_target.capture_reference:
+            raise RuntimeError(
+                "QA demo recorder returned capture reference outside planned target: "
+                f"{reported_capture_reference} != {capture_target.capture_reference}"
+            )
         source = Path(path).resolve()
         source_key = str(source)
         if source_key in seen_paths:
