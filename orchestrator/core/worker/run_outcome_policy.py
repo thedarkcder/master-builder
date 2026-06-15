@@ -125,8 +125,14 @@ class RunOutcomePolicy:
         qa_plan = _workflow_plan_for_qa(workflow_result=workflow_result, persisted_plan=getattr(run, "plan", None))
         if workflow_result.outcome == "success":
             preview_release = None
+            if demo_recording_required and not str(workflow_result.pr_url or "").strip():
+                workflow_result = _workflow_result_with_qa_blocker(
+                    workflow_result=workflow_result,
+                    attempt=max(1, int(workflow_result.attempts or 1)),
+                    message="QA demo recording requires a PR URL before creating the run preview release.",
+                )
             try:
-                if not demo_recording_required or qa_plan is not None:
+                if workflow_result.outcome == "success" and (not demo_recording_required or qa_plan is not None):
                     preview_result = create_run_preview_deployment(
                         session=self._session,
                         tenant=prepared.tenant,

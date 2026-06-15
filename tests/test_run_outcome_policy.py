@@ -353,6 +353,56 @@ def test_complete_blocks_demo_required_success_when_preview_release_is_not_creat
     deps.execution.persist_stage_checkpoint_fn.assert_not_called()
 
 
+def test_complete_blocks_demo_required_success_without_pr_url_before_preview_release() -> None:
+    session = SimpleNamespace(refresh=lambda _run: None)
+    deps = _deps()
+    prepared = _prepared(_build_snapshot(), effective_policy={"qa_demo_recording_enabled": True})
+    workflow_result = replace(_workflow_result(), pr_url=None)
+    finalizer_calls: dict[str, object] = {}
+
+    class _Finalizer:
+        def __init__(self, **_kwargs):
+            pass
+
+        def finalize(self, **kwargs):
+            finalizer_calls.update(kwargs)
+            return SimpleNamespace(
+                run=prepared.run,
+                workflow_result=kwargs["workflow_result"],
+                persisted_status="blocked",
+                last_error=kwargs["workflow_result"].blocker_message,
+                persisted_plan=prepared.run.plan,
+                event_types=(),
+                tail_steps=(),
+            )
+
+    with (
+        patch("orchestrator.core.worker.run_outcome_policy.create_run_preview_deployment") as preview_mock,
+        patch("orchestrator.core.worker.run_outcome_policy.execute_qa_demo_stage") as qa_mock,
+        patch("orchestrator.core.worker.run_outcome_policy.update_pull_request_with_demo_evidence") as update_pr_mock,
+        patch("orchestrator.core.worker.run_outcome_policy.WorkflowFinalizer", _Finalizer),
+        patch("orchestrator.core.worker.run_outcome_policy.CompletionTailExecutor") as tail_executor_cls,
+    ):
+        tail_executor_cls.return_value.execute.return_value = None
+        RunOutcomePolicy(
+            session=session,
+            settings=SimpleNamespace(project_repo_checkout_base_dir="/tmp/workdirs"),
+            deps=deps,
+            cleanup_run_workspaces_safe_fn=MagicMock(),
+        ).complete(
+            prepared=prepared,
+            workflow_result=workflow_result,
+            execution_context={"execution_branch": "run/MAB-400/run-1"},
+        )
+
+    preview_mock.assert_not_called()
+    qa_mock.assert_not_called()
+    update_pr_mock.assert_not_called()
+    deps.execution.persist_stage_checkpoint_fn.assert_not_called()
+    assert finalizer_calls["workflow_result"].outcome == "blocked"
+    assert "requires a PR URL before creating the run preview release" in finalizer_calls["workflow_result"].blocker_message
+
+
 def test_complete_requeues_when_qa_demo_stage_needs_remaining_worker_platform() -> None:
     session = SimpleNamespace(refresh=lambda _run: None)
     deps = _deps()
