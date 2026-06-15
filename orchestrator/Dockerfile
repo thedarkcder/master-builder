@@ -164,7 +164,6 @@ RUN apt-get update -o Acquire::Retries=3 && \
       android-sdk-build-tools \
       android-sdk-platform-tools \
       default-jdk-headless \
-      ffmpeg \
       maven && \
     mkdir -p "${ANDROID_SDK_ROOT}/cmdline-tools" && \
     curl -fsSL "https://dl.google.com/android/repository/commandlinetools-linux-${ANDROID_CMDLINE_TOOLS_VERSION}_latest.zip" \

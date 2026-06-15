@@ -153,7 +153,6 @@ class DockerBuildContractTests(unittest.TestCase):
         self.assertIn("android-sdk-platform-tools", android_target)
         self.assertIn("sdkmanager", android_target)
         self.assertIn("default-jdk-headless", android_target)
-        self.assertIn("ffmpeg", android_target)
         self.assertIn("maven", android_target)
         self.assertNotIn('"platform-tools"', android_target)
         self.assertNotIn('"build-tools;', android_target)

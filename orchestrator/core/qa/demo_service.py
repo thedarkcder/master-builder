@@ -354,7 +354,6 @@ def _ensure_builtin_android_runtime_ready() -> None:
     for tool in (
         _required_android_recorder_tool(env_var=None, default="adb"),
         _required_android_recorder_tool(env_var="QA_DEMO_ANDROID_AAPT", default="aapt"),
-        _required_android_recorder_tool(env_var="QA_DEMO_FFMPEG", default="ffmpeg"),
     ):
         _ensure_worker_tool_available(command=tool, purpose="Android QA demo recording")
     try:
