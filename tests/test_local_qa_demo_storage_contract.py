@@ -49,3 +49,14 @@ def test_docker_compose_provisions_local_qa_demo_artifact_storage() -> None:
         assert environment["ORCHESTRATOR_QA_DEMO_RECORDER_PROCESS_TIMEOUT_SECONDS"] == "${ORCHESTRATOR_QA_DEMO_RECORDER_PROCESS_TIMEOUT_SECONDS:-900}"
         assert environment["ORCHESTRATOR_QA_DEMO_IOS_RECORDER_COMMAND"] == "${ORCHESTRATOR_QA_DEMO_IOS_RECORDER_COMMAND:-}"
         assert environment["ORCHESTRATOR_QA_DEMO_ANDROID_RECORDER_COMMAND"] == "${ORCHESTRATOR_QA_DEMO_ANDROID_RECORDER_COMMAND:-}"
+
+    for service_name in ("api", "webhook-worker"):
+        environment = services[service_name]["environment"]
+        assert (
+            environment["ORCHESTRATOR_QA_DEMO_ARTIFACT_PUBLIC_BASE_URL"]
+            == "${ORCHESTRATOR_QA_DEMO_ARTIFACT_PUBLIC_BASE_URL:-http://127.0.0.1:60015/qa-demos}"
+        )
+        assert (
+            environment["ORCHESTRATOR_QA_DEMO_ARTIFACT_URL_TIMEOUT_SECONDS"]
+            == "${ORCHESTRATOR_QA_DEMO_ARTIFACT_URL_TIMEOUT_SECONDS:-10}"
+        )
