@@ -1405,6 +1405,63 @@ class DeploymentContractTests(unittest.TestCase):
         self.assertEqual(result.release.release_id, "release-failed-1")
         self.assertEqual(result.release.status, "failed")
 
+    def test_run_preview_generation_force_bypasses_failed_preview_retry_limit(self) -> None:
+        now = datetime.now(timezone.utc)
+        with self.session_factory() as session:
+            tenant, project, run = self._seed_preview_run(session=session, now=now, commit_sha="a" * 40)
+            for index in range(2):
+                session.add(
+                    ProjectDeploymentRelease(
+                        release_id=f"release-failed-force-{index}",
+                        tenant_id=tenant.tenant_id,
+                        project_id=project.project_id,
+                        app_id="app-1",
+                        provider="internal_coolify",
+                        release_kind="run_preview",
+                        status="failed",
+                        environment_name="production",
+                        source_strategy="dockerfile",
+                        git_ref="run/ap-123/run-1",
+                        commit_sha="a" * 40,
+                        source_run_id=run.run_id,
+                        pr_number=12,
+                        requested_by_user_id=None,
+                        deployment_snapshot={},
+                        provider_context={},
+                        delivery_metadata={},
+                        last_error="Coolify deployment failed",
+                        requested_at=now + timedelta(seconds=index),
+                        started_at=now + timedelta(seconds=index),
+                        completed_at=now + timedelta(seconds=index),
+                        destroyed_at=None,
+                        created_at=now + timedelta(seconds=index),
+                        updated_at=now + timedelta(seconds=index),
+                    )
+                )
+            session.commit()
+
+            with patch(
+                "orchestrator.core.deployment_previews.create_project_deployment_release",
+                return_value=SimpleNamespace(release_id="release-new-after-force"),
+            ) as create_release:
+                result = create_run_preview_deployment(
+                    session=session,
+                    tenant=tenant,
+                    project=project,
+                    run=run,
+                    settings=SimpleNamespace(
+                        project_repo_checkout_base_dir="/tmp/unused",
+                        secrets_encryption_key="unused",
+                        qa_demo_max_attempts=2,
+                    ),
+                    pr_url="https://github.com/example/repo/pull/12",
+                    force=True,
+                )
+
+        create_release.assert_called_once()
+        self.assertTrue(result.created)
+        self.assertEqual(result.release.release_id, "release-new-after-force")
+
     def test_run_preview_generation_reconciles_inflight_preview_before_reuse(self) -> None:
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
@@ -3172,7 +3229,10 @@ class DeploymentContractTests(unittest.TestCase):
                 return "deployment-1"
 
             def get_application(self, *, application_uuid: str) -> dict[str, object]:
-                return {"uuid": application_uuid}
+                return {
+                    "uuid": application_uuid,
+                    "fqdn": "https://web.project-1.apps.example.com",
+                }
 
         fake_client = FakeCoolifyClient()
         now = datetime.now(timezone.utc)
@@ -3332,7 +3392,7 @@ class DeploymentContractTests(unittest.TestCase):
                 return "deployment-1"
 
             def get_application(self, *, application_uuid: str) -> dict[str, object]:
-                return {"uuid": application_uuid}
+                return {"uuid": application_uuid, "fqdn": "https://web.project-1.apps.example.com"}
 
         now = datetime.now(timezone.utc)
         tenant = Tenant(
@@ -3407,6 +3467,8 @@ class DeploymentContractTests(unittest.TestCase):
                 "source_strategy": "nixpacks",
                 "deployment_branch": "main",
                 "deployment_commit_sha": "abcdef1",
+                "install_command": "npm install --package-lock=false --legacy-peer-deps --production=false",
+                "build_command": "npm run build:web",
                 "domains": [],
                 "services": [],
                 "resources": [],
@@ -3439,8 +3501,20 @@ class DeploymentContractTests(unittest.TestCase):
         self.assertEqual(fake_client.application_payload["build_pack"], "nixpacks")
         self.assertEqual(fake_client.application_payload["ports_exposes"], "19006")
         self.assertEqual(fake_client.application_payload["base_directory"], "/")
-        self.assertEqual(fake_client.application_payload["start_command"], "npm run web")
+        self.assertEqual(
+            fake_client.application_payload["start_command"],
+            "npx expo-cli start --web --non-interactive --host 0.0.0.0 --port 19006",
+        )
+        self.assertEqual(
+            fake_client.application_payload["install_command"],
+            "npm install --package-lock=false --legacy-peer-deps --production=false && "
+            "npm install --no-save --legacy-peer-deps expo-cli@3.28.6",
+        )
+        self.assertEqual(fake_client.application_payload["build_command"], "npm run build:web")
         self.assertNotIn("dockerfile_location", fake_client.application_payload)
+        self.assertEqual(result["route_bindings"][0]["service_key"], "web")
+        self.assertEqual(result["route_bindings"][0]["port"], "19006")
+        self.assertEqual(result["route_bindings"][0]["proxy_port"], "19006")
 
     def test_internal_coolify_nixpacks_release_requires_exposed_port(self) -> None:
         now = datetime.now(timezone.utc)
@@ -4745,7 +4819,7 @@ class DeploymentContractTests(unittest.TestCase):
         self.assertEqual(observation.status, "finished")
         self.assertIsNone(observation.last_error)
 
-    def test_release_reconciliation_does_not_mark_in_progress_coolify_release_live(self) -> None:
+    def test_release_reconciliation_does_not_fail_in_progress_release_from_stale_application_status(self) -> None:
         next_status = _resolve_release_observation_transition(
             current_status="deploying",
             observed_status="in_progress",

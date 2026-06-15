@@ -180,10 +180,83 @@ plugins {
     root_candidate = next(candidate for candidate in candidates if candidate.source_path == ".")
     assert root_candidate.detected_runtime == "react_native_web"
     assert root_candidate.exposed_port == 19006
-    assert root_candidate.start_command == "npm run web"
+    assert root_candidate.start_command == "npx expo-cli start --web --non-interactive --host 0.0.0.0 --port 19006"
     assert root_candidate.deployment_config["source_strategy"] == "nixpacks"
     assert "capture_target" not in root_candidate.deployment_config
+    assert root_candidate.deployment_config["install_command"] == (
+        "npm install --package-lock=false --legacy-peer-deps --production=false && "
+        "npm install --no-save --legacy-peer-deps expo-cli@3.28.6"
+    )
     assert {"android/app", "ios"}.issubset({candidate.source_path for candidate in candidates})
+
+
+def test_scan_repo_for_project_apps_sets_npm_install_for_react_native_web_with_stale_taobao_yarn_lock() -> None:
+    with TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _write(
+            root / "package.json",
+            """\
+{
+  "name": "consumer-app",
+  "scripts": {
+    "start": "react-native start",
+    "web": "expo start --web"
+  },
+  "dependencies": {
+    "expo": "^37.0.0",
+    "react-native": "~0.61.5",
+    "react-native-web": "~0.11.7"
+  }
+}
+""",
+        )
+        _write(
+            root / "yarn.lock",
+            """\
+"@babel/core@^7.8.4":
+  version "7.8.4"
+  resolved "https://registry.npm.taobao.org/@babel/core/download/@babel/core-7.8.4.tgz#abc123"
+""",
+        )
+
+        candidates = scan_repo_for_project_apps(checkout_path=str(root), analysis_source="deployment_setup")
+
+    root_candidate = next(candidate for candidate in candidates if candidate.source_path == ".")
+    assert root_candidate.detected_runtime == "react_native_web"
+    assert root_candidate.start_command == "npx expo-cli start --web --non-interactive --host 0.0.0.0 --port 19006"
+    assert root_candidate.deployment_config["source_strategy"] == "nixpacks"
+    assert root_candidate.deployment_config["install_command"] == (
+        "npm install --package-lock=false --legacy-peer-deps --production=false && "
+        "npm install --no-save --legacy-peer-deps expo-cli@3.28.6"
+    )
+
+
+def test_scan_repo_for_project_apps_keeps_modern_expo_web_script_without_legacy_cli() -> None:
+    with TemporaryDirectory() as tmp:
+        root = Path(tmp)
+        _write(
+            root / "package.json",
+            """\
+{
+  "name": "modern-app",
+  "scripts": {
+    "web": "expo start --web"
+  },
+  "dependencies": {
+    "expo": "^51.0.0",
+    "react-native": "0.74.0",
+    "react-native-web": "^0.19.12"
+  }
+}
+""",
+        )
+
+        candidates = scan_repo_for_project_apps(checkout_path=str(root), analysis_source="deployment_setup")
+
+    root_candidate = next(candidate for candidate in candidates if candidate.source_path == ".")
+    assert root_candidate.detected_runtime == "react_native_web"
+    assert root_candidate.start_command == "npm run web"
+    assert "install_command" not in root_candidate.deployment_config
 
 
 def test_scan_repo_for_project_apps_extracts_docker_compose_resources() -> None:

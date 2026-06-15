@@ -4,6 +4,7 @@ from datetime import datetime, timedelta, timezone
 from tempfile import TemporaryDirectory
 from unittest.mock import patch
 
+from orchestrator.core.worker.capability_normalization import WorkerCapability
 from orchestrator.core.worker.queue_selector import (
     QueueClaimabilityReason,
     claim_next_queued_run,
@@ -15,7 +16,7 @@ from orchestrator.core.runs.service import resolve_required_worker_capability_fr
 from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.migrations import run_migrations
-from orchestrator.storage.models import Project, Tenant, TenantRunClaim
+from orchestrator.storage.models import Project, ProjectDeploymentRelease, Tenant, TenantRunClaim
 from tests.workflow_test_support import add_run_with_workflow, make_run
 
 
@@ -35,6 +36,14 @@ def _plan_for_capability(required_worker_capability: str) -> dict:
     snapshot.workflow.outcome = "requeue"
     snapshot.workflow.requeue_target = required_worker_capability
     snapshot.workflow.requeue_reason = "Capability-specific worker required"
+    return snapshot.dump()
+
+
+def _plan_waiting_for_qa_demo_release(release_id: str) -> dict:
+    snapshot = ExecutionSnapshot.empty()
+    snapshot.workflow.outcome = "requeue"
+    snapshot.workflow.requeue_reason = "QA release still deploying"
+    snapshot.context.execution_context["qa_demo_waiting_release_id"] = release_id
     return snapshot.dump()
 
 
@@ -92,6 +101,118 @@ class WorkerQueueSelectorTests(unittest.TestCase):
             self.assertEqual(result.terminal_run.status, "failed")
             self.assertEqual(result.terminal_run.last_error, "Tenant not found for queued run")
             self.assertIsNotNone(result.terminal_run.finished_at)
+
+    def test_claim_next_queued_run_skips_qa_demo_release_wait_until_release_leaves_pending_state(self) -> None:
+        now = datetime.now(timezone.utc)
+        with self.session_factory() as session:
+            session.add(
+                Tenant(
+                    tenant_id="tenant-a",
+                    name="Tenant A",
+                    is_enabled=True,
+                    jira_config={},
+                    github_config={},
+                    repos_config={"github_repository": "https://github.com/example/a"},
+                    policy_config={"max_concurrent_runs": 1},
+                    discord_config=None,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            session.add(
+                Project(
+                    project_id="project-a",
+                    tenant_id="tenant-a",
+                    name="Project A",
+                    github_repository="https://github.com/example/a",
+                    jira_project_key="MAB",
+                    policy_overrides={},
+                    environment={},
+                    secret_refs={},
+                    discord_config={},
+                    is_archived=False,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            _add_run(
+                session,
+                now=now,
+                run_id="run-waiting-release",
+                tenant_id="tenant-a",
+                project_id="project-a",
+                issue_key="MAB-903",
+                issue_summary="QA demo release wait",
+                issue_description="queued",
+                repo_url="https://github.com/example/a",
+                branch=None,
+                pr_url="https://github.com/example/a/pull/3",
+                status="queued",
+                plan=_plan_waiting_for_qa_demo_release("release-waiting"),
+                started_at=None,
+                finished_at=None,
+            )
+            session.add(
+                ProjectDeploymentRelease(
+                    release_id="release-waiting",
+                    tenant_id="tenant-a",
+                    project_id="project-a",
+                    provider="internal_coolify",
+                    release_kind="run_preview",
+                    status="deploying",
+                    environment_name="preview",
+                    source_strategy="nixpacks",
+                    git_ref="feature/MAB-903",
+                    commit_sha="a" * 40,
+                    source_run_id="run-waiting-release",
+                    pr_number=3,
+                    deployment_snapshot={},
+                    provider_context={},
+                    delivery_metadata={},
+                    requested_at=now,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            session.commit()
+
+            probe = probe_claimable_queued_run(
+                session,
+                queued_status="queued",
+                running_status="running",
+                worker_capabilities={WorkerCapability.LINUX},
+            )
+            claim = claim_next_queued_run(
+                session,
+                queued_status="queued",
+                running_status="running",
+                failed_status="failed",
+                worker_service_instance_id="worker-1",
+                worker_capabilities={WorkerCapability.LINUX},
+            )
+
+            self.assertFalse(probe.claimable)
+            self.assertEqual(probe.reason, QueueClaimabilityReason.WAITING_FOR_QA_DEMO_RELEASE)
+            self.assertEqual(probe.run_id, "run-waiting-release")
+            self.assertIsNone(claim.claimed_run)
+
+            release = session.get(ProjectDeploymentRelease, "release-waiting")
+            assert release is not None
+            release.status = "live"
+            session.commit()
+
+            claim_after_live = claim_next_queued_run(
+                session,
+                queued_status="queued",
+                running_status="running",
+                failed_status="failed",
+                worker_service_instance_id="worker-1",
+                worker_capabilities={WorkerCapability.LINUX},
+            )
+
+            self.assertIsNotNone(claim_after_live.claimed_run)
+            assert claim_after_live.claimed_run is not None
+            self.assertEqual(claim_after_live.claimed_run.run_id, "run-waiting-release")
 
     def test_claim_next_queued_run_skips_concurrency_limited_tenant(self) -> None:
         now = datetime.now(timezone.utc)

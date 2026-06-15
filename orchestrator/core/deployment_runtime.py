@@ -477,7 +477,7 @@ def _resolve_release_observation_transition(
         return "provisioning"
 
     if observed in _DEPLOYMENT_SUCCESS_STATUSES or "success" in observed:
-        if application in _DEPLOYMENT_FAILURE_STATUSES or "unhealthy" in application:
+        if application in _DEPLOYMENT_FAILURE_STATUSES or "unhealthy" in (application or ""):
             return "rolled_back" if current == "live" else "failed"
         return "live"
 

@@ -680,6 +680,8 @@ class RunLifecycleTests(unittest.TestCase):
                             "attempt": 1,
                             "status": "requeue",
                             "summary": "QA release still provisioning",
+                            "wait_reason": "qa_demo_preview_release",
+                            "wait_for_release_id": "release-preview-18",
                         }
                     ],
                     requeue_reason="QA release still provisioning",
@@ -700,6 +702,10 @@ class RunLifecycleTests(unittest.TestCase):
             self.assertEqual(requeued.pr_url, "https://github.com/example/repo/pull/18")
             self.assertEqual(workflow.pr_url, "https://github.com/example/repo/pull/18")
             self.assertEqual(checkpoint.stage, "qa")
+            self.assertEqual(
+                requeued.plan["context"]["execution_context"]["qa_demo_waiting_release_id"],
+                "release-preview-18",
+            )
 
     def test_finalize_workflow_result_preserves_existing_pr_url_when_result_omits_it(self) -> None:
         with self.session_factory() as session:
