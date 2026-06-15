@@ -500,6 +500,28 @@ class ReviewerGateTests(unittest.TestCase):
         self.assertEqual(signal.state, "missing_demo_evidence")
 
     def test_reviewer_accepts_structured_demo_evidence_covering_required_recording_count_marker(self) -> None:
+        expected_recordings = (
+            {
+                "name": "Browser happy path",
+                "capture_target": "browser",
+                "capture_reference": "https://preview.example",
+                "object_key": "example/example-default/run-1/qa-demo-1.webm",
+                "content_sha256": "0" * 63 + "1",
+                "release_commit_sha": "b" * 40,
+                "release_context_sha256": "a" * 64,
+                "artifact_url": "https://cdn.example/qa-demos/example/example-default/run-1/qa-demo-1.webm",
+            },
+            {
+                "name": "Browser edge case",
+                "capture_target": "browser",
+                "capture_reference": "https://preview.example",
+                "object_key": "example/example-default/run-1/qa-demo-2.webm",
+                "content_sha256": "0" * 63 + "2",
+                "release_commit_sha": "b" * 40,
+                "release_context_sha256": "a" * 64,
+                "artifact_url": "https://cdn.example/qa-demos/example/example-default/run-1/qa-demo-2.webm",
+            },
+        )
         gate = self._gate_with_demo_requirement(
             _FakeGitHubClient(
                 checks=[
@@ -534,7 +556,8 @@ class ReviewerGateTests(unittest.TestCase):
                     "release_context_sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa]: "
                     "https://cdn.example/qa-demos/example/example-default/run-1/qa-demo-2.webm\n"
                 ),
-            )
+            ),
+            expected_recordings=expected_recordings,
         )
 
         signal = gate.evaluate_pr(
@@ -544,6 +567,46 @@ class ReviewerGateTests(unittest.TestCase):
 
         self.assertTrue(signal.ready)
         self.assertEqual(signal.state, "ready")
+
+    def test_reviewer_blocks_structured_demo_evidence_without_persisted_recording_resolver(self) -> None:
+        gate = self._gate_with_demo_requirement(
+            _FakeGitHubClient(
+                checks=[
+                    WorkflowCheckSuite(name="CI", status="completed", conclusion="success"),
+                    WorkflowCheckSuite(name="Security", status="completed", conclusion="success"),
+                ],
+                files=[
+                    PullRequestFileChange(filename="orchestrator/core/reviewer.py", patch="+ change"),
+                    PullRequestFileChange(filename="tests/test_reviewer_gate.py", patch="+ test"),
+                ],
+                review_body=(
+                    "Good:\n- implemented\n\n"
+                    "Risks:\n- low\n\n"
+                    "Must-fix:\n- none\n\n"
+                    "Tests:\n- pytest -q\n\n"
+                    "Questions:\n- none\n\n"
+                    "Follow-ups:\n- none\n\n"
+                    "## Demo Evidence\n"
+                    "<!-- master-builder:qa-demo-evidence v1 -->\n"
+                    "<!-- master-builder:qa-demo-required-targets browser -->\n"
+                    "<!-- master-builder:qa-demo-required-counts browser=1 -->\n"
+                    "- Browser happy path [target=browser; reference=https://preview.example; "
+                    "object_key=example/example-default/run-1/qa-demo-1.webm; "
+                    "sha256=0000000000000000000000000000000000000000000000000000000000000001; "
+                    "release_commit_sha=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb; "
+                    "release_context_sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa]: "
+                    "https://cdn.example/qa-demos/example/example-default/run-1/qa-demo-1.webm\n"
+                ),
+            )
+        )
+
+        signal = gate.evaluate_pr(
+            repo_full_name="example/repo",
+            pr_number=21,
+        )
+
+        self.assertFalse(signal.ready)
+        self.assertEqual(signal.state, "missing_demo_evidence")
 
     def test_reviewer_blocks_structured_demo_evidence_that_does_not_match_persisted_run_recordings(self) -> None:
         gate = self._gate_with_demo_requirement(

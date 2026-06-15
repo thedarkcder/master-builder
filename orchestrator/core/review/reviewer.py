@@ -153,9 +153,11 @@ class ReviewAgentGate:
                 if self._demo_evidence_run_id_resolver is not None
                 else None
             )
-            expected_recordings = None
-            if self._demo_evidence_recordings_resolver is not None and expected_run_id is not None:
-                expected_recordings = self._demo_evidence_recordings_resolver(expected_run_id) or ()
+            expected_recordings = (
+                self._demo_evidence_recordings_resolver(expected_run_id) or ()
+                if self._demo_evidence_recordings_resolver is not None and expected_run_id is not None
+                else ()
+            )
             if not _demo_evidence_present(
                 pr.body,
                 required_demo_capture_targets=self._required_demo_capture_targets,
