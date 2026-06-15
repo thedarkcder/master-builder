@@ -739,9 +739,9 @@ def build_demo_evidence_section(
         lines.append(f"{DEMO_EVIDENCE_REQUIRED_COUNTS_MARKER} {serialized_counts} -->")
     for recording in recordings:
         name = _require_demo_evidence_line_field(recording.name, field="name")
-        capture_target = _require_demo_evidence_field(recording.capture_target, field="capture_target")
-        capture_reference = _require_demo_evidence_field(recording.capture_reference, field="capture_reference")
-        object_key = _require_demo_evidence_field(recording.object_key, field="object_key")
+        capture_target = _require_demo_evidence_line_field(recording.capture_target, field="capture_target")
+        capture_reference = _require_demo_evidence_line_field(recording.capture_reference, field="capture_reference")
+        object_key = _require_demo_evidence_line_field(recording.object_key, field="object_key")
         artifact_url = _require_demo_evidence_field(recording.artifact_url, field="artifact_url")
         lines.append(
             f"- {name} "

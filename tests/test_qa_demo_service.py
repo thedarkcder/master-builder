@@ -665,6 +665,28 @@ def test_upsert_demo_evidence_section_rejects_multiline_recording_metadata() -> 
         raise AssertionError("expected multiline recording metadata to block PR evidence rendering")
 
 
+def test_upsert_demo_evidence_section_rejects_structural_delimiters_in_recording_metadata() -> None:
+    try:
+        upsert_demo_evidence_section(
+            body="## Summary\n- change",
+            recordings=[
+                QaRecording(
+                    name="Browser walkthrough",
+                    artifact_url="https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-demo-1.webm",
+                    object_key="tenant-1/project-1/run-1/qa-demo-1.webm",
+                    capture_target="browser",
+                    capture_reference="https://preview.example] [target=ios",
+                )
+            ],
+            required_capture_targets=("browser",),
+            required_recording_counts={"browser": 1},
+        )
+    except RuntimeError as exc:
+        assert "QA demo evidence recording metadata is not serializable" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("expected structured metadata delimiters to block PR evidence rendering")
+
+
 def test_record_demo_scenarios_passes_explicit_playwright_module_dir() -> None:
     commands: list[tuple[list[str], dict[str, str], float | None]] = []
 
