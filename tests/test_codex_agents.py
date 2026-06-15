@@ -529,6 +529,84 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
         catalog = json.loads(str(captured["native_selector_catalog_json"]))
         self.assertIn("onboarding_tabview", catalog["accessibility_ids"])
 
+    def test_qa_rejects_native_selector_from_wrong_project_source_path(self) -> None:
+        runtime = CodexRuntime(
+            model="gpt-5-codex",
+            max_output_tokens=1200,
+            command="override",
+            _request=_RuntimeQueue(
+                [
+                    (
+                        '{"outcome":"continue","summary":["Recorded demos"],"feedback":null,"blocker_message":null,'
+                        '"scenarios":[{"name":"Android path","objective":"Show Android feature","capture_target":"android",'
+                        '"start_path":"/","expected_outcomes":["Feature visible"],'
+                        '"steps":[{"action":"assert_visible","selector":"id=ios_only_button"}]}],'
+                        '"recordings":[]}'
+                    ),
+                ]
+            ),
+        )
+        agents = CodexWorkflowAgents(runtime=runtime)
+        repo_dir = Path(self.temp_dir.name) / "repo-source-scope"
+        (repo_dir / "apps" / "ios").mkdir(parents=True, exist_ok=True)
+        (repo_dir / "apps" / "ios" / "Feature.swift").write_text(
+            '.accessibilityIdentifier("ios_only_button")\nText("iOS Ready")\n',
+            encoding="utf-8",
+        )
+        (repo_dir / "apps" / "android").mkdir(parents=True, exist_ok=True)
+        (repo_dir / "apps" / "android" / "Feature.kt").write_text(
+            'Text("Android Ready", modifier = Modifier.testTag("android_ready"))\n',
+            encoding="utf-8",
+        )
+        request = replace(
+            self._request(),
+            execution_repo_dir=str(repo_dir),
+            project_demo_capture_target_sources={"android": ("apps/android",)},
+        )
+        captured: dict[str, object] = {}
+
+        def _render_prompt(template_name: str, **kwargs) -> str:
+            if template_name == "workflow/qa_user.j2":
+                captured.update(kwargs)
+            return template_name
+
+        with patch("orchestrator.core.runtime.agents.render_prompt", side_effect=_render_prompt):
+            with self.assertRaisesRegex(CodexRuntimeError, "invented native accessibility identifier"):
+                agents.qa(
+                    request,
+                    PmPlan(
+                        plan_steps=["step1"],
+                        acceptance_criteria=["ac1"],
+                        risks=[],
+                        demo_requirements=[
+                            DemoRequirement(
+                                title="Demo",
+                                acceptance_criterion="ac1",
+                                capture_target="android",
+                                variants=[],
+                            )
+                        ],
+                    ),
+                    DevResult(change_summary=["implemented"], pr_url="https://example/pull/1"),
+                    TestResult(outcome="continue", guidance=["run tests"], feedback=None, blocker_message=None),
+                    ReviewResult(
+                        summary=["looks good"],
+                        outcome="continue",
+                        feedback=None,
+                        pr_url="https://example/pull/1",
+                        blocker_message=None,
+                    ),
+                    "",
+                    (
+                        '[{"capture_target":"android","capture_reference":"android-emulator://configured",'
+                        '"source_paths":["apps/android"]}]'
+                    ),
+                    1,
+                )
+        catalog = json.loads(str(captured["native_selector_catalog_json"]))
+        self.assertIn("android_ready", catalog["accessibility_ids"])
+        self.assertNotIn("ios_only_button", catalog["accessibility_ids"])
+
     def test_qa_requires_explicit_scenario_capture_target(self) -> None:
         runtime = CodexRuntime(
             model="gpt-5-codex",
