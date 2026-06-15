@@ -140,6 +140,7 @@ class QaRecording:
     artifact_url: str
     object_key: str
     capture_reference: str
+    content_sha256: str = ""
     capture_target: QaCaptureTarget = "browser"
 
 

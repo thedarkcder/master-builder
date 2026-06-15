@@ -25,7 +25,8 @@ _DEMO_EVIDENCE_REQUIRED_COUNTS_PATTERN = re.compile(
 )
 _STRUCTURED_DEMO_EVIDENCE_LINE_PATTERN = re.compile(
     r"^- .+ \[target=(?P<target>browser|ios|android|desktop); reference=[^\]]+; "
-    r"object_key=(?P<object_key>[^\]]+)\]: (?P<artifact_url>[^ \t\r\n]+)\s*$",
+    r"object_key=(?P<object_key>[^;\]]+); sha256=(?P<sha256>[0-9a-f]{64})\]: "
+    r"(?P<artifact_url>[^ \t\r\n]+)\s*$",
     re.MULTILINE,
 )
 _SUPPORTED_DEMO_CAPTURE_TARGETS = frozenset({"browser", "ios", "android", "desktop"})
@@ -427,6 +428,9 @@ def _demo_evidence_present(
         )
         for match in structured_matches
     ):
+        return False
+    content_sha256_counts = Counter(match.group("sha256") for match in structured_matches)
+    if any(count > 1 for count in content_sha256_counts.values()):
         return False
     required_targets = _normalize_required_demo_targets(required_demo_capture_targets)
     embedded_required_targets = _required_demo_targets_from_section(section)

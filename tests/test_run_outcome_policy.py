@@ -48,6 +48,7 @@ def _qa_recording(
         object_key=f"tenant-1/project-1/run-1/qa-demo-{index}.{suffix}",
         capture_target=capture_target,  # type: ignore[arg-type]
         capture_reference=capture_reference,
+        content_sha256=f"{index:064x}",
     )
 
 
@@ -464,6 +465,7 @@ def test_complete_requeues_when_qa_demo_stage_needs_remaining_worker_platform() 
                 object_key="tenant-1/project-1/run-1/qa-demo-1.webm",
                 capture_target="browser",
                 capture_reference="https://preview.example",
+                content_sha256=f"{1:064x}",
             )
         ],
         outcome="requeue",
@@ -925,6 +927,7 @@ def test_complete_blocks_when_qa_continue_result_has_too_few_variant_recordings(
                 object_key="tenant-1/project-1/run-1/qa-demo-1.webm",
                 capture_target="browser",
                 capture_reference="https://preview.example",
+                content_sha256=f"{101:064x}",
             )
         ],
         outcome="continue",
@@ -1008,6 +1011,7 @@ def test_complete_creates_preview_release_for_ios_only_demo_requirements() -> No
                 object_key="tenant-1/project-1/run-1/qa-demo-1.mp4",
                 capture_target="ios",
                 capture_reference="ios-simulator://girlpower",
+                content_sha256=f"{102:064x}",
             )
         ],
     )

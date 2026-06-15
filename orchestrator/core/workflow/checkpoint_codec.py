@@ -514,7 +514,15 @@ def _parse_qa_recordings(value: object) -> list[QaRecording] | None:
         object_key = _parse_optional_string(item.get("object_key"))
         capture_target = _parse_optional_string(item.get("capture_target"))
         capture_reference = _parse_optional_string(item.get("capture_reference"))
-        if name is None or artifact_url is None or object_key is None or capture_target is None or capture_reference is None:
+        content_sha256 = _parse_content_sha256(item.get("content_sha256"))
+        if (
+            name is None
+            or artifact_url is None
+            or object_key is None
+            or capture_target is None
+            or capture_reference is None
+            or content_sha256 is None
+        ):
             return None
         if capture_target not in _VALID_QA_CAPTURE_TARGETS:
             return None
@@ -525,9 +533,20 @@ def _parse_qa_recordings(value: object) -> list[QaRecording] | None:
                 object_key=object_key,
                 capture_target=capture_target,  # type: ignore[arg-type]
                 capture_reference=capture_reference,
+                content_sha256=content_sha256,
             )
         )
     return parsed
+
+
+def _parse_content_sha256(value: object) -> str | None:
+    parsed = _parse_optional_string(value)
+    if parsed is None:
+        return None
+    normalized = parsed.lower()
+    if len(normalized) != 64 or any(char not in "0123456789abcdef" for char in normalized):
+        return None
+    return normalized
 
 
 def _require_qa_recordings(value: object, *, field: str) -> list[dict[str, object]]:

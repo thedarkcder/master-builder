@@ -1144,7 +1144,15 @@ def _qa_recordings(value: object) -> list[QaRecording]:
         object_key = _optional_string(item.get("object_key"))
         capture_target = _optional_string(item.get("capture_target"))
         capture_reference = _optional_string(item.get("capture_reference"))
-        if name is None or artifact_url is None or object_key is None or capture_target is None or capture_reference is None:
+        content_sha256 = _content_sha256(item.get("content_sha256"))
+        if (
+            name is None
+            or artifact_url is None
+            or object_key is None
+            or capture_target is None
+            or capture_reference is None
+            or content_sha256 is None
+        ):
             return []
         if capture_target not in _QA_CAPTURE_TARGETS:
             return []
@@ -1155,9 +1163,20 @@ def _qa_recordings(value: object) -> list[QaRecording]:
                 object_key=object_key,
                 capture_target=capture_target,  # type: ignore[arg-type]
                 capture_reference=capture_reference,
+                content_sha256=content_sha256,
             )
         )
     return parsed
+
+
+def _content_sha256(value: object) -> str | None:
+    parsed = _optional_string(value)
+    if parsed is None:
+        return None
+    normalized = parsed.lower()
+    if len(normalized) != 64 or any(char not in "0123456789abcdef" for char in normalized):
+        return None
+    return normalized
 
 
 def _normalize_stage_outcome(value: object) -> StageOutcome | None:

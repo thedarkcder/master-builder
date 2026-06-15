@@ -539,6 +539,7 @@ class RunLifecycleTests(unittest.TestCase):
                         object_key="tenant-runs/default/TP-915/qa-demo-1.mp4",
                         capture_reference="ios-simulator://configured",
                         capture_target="ios",
+                        content_sha256=f"{1:064x}",
                     )
                 ],
             )
