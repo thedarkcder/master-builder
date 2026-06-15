@@ -328,12 +328,18 @@ def _qa_demo_recordings_for_run(
     normalized_run_id = str(run_id or "").strip()
     if not normalized_run_id:
         return None
-    statement = select(Run.plan).where(
+    statement = select(Run.status, Run.plan).where(
         Run.tenant_id == tenant_id,
         Run.project_id == project_id,
         Run.run_id == normalized_run_id,
     )
-    snapshot = ExecutionSnapshot.load(session.execute(statement).scalar_one_or_none())
+    row = session.execute(statement).one_or_none()
+    if row is None:
+        return None
+    run_status, run_plan = row
+    if str(run_status or "").strip() not in {"running", "succeeded"}:
+        return None
+    snapshot = ExecutionSnapshot.load(run_plan)
     if snapshot is None:
         return None
     qa_result = snapshot.qa_result()

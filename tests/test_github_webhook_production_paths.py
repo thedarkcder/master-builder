@@ -145,6 +145,42 @@ class _FakeGitHubClient:
         return SimpleNamespace(comment_id=comment_id)
 
 
+def _qa_demo_recording_snapshot() -> ExecutionSnapshot:
+    snapshot = ExecutionSnapshot.empty()
+    snapshot.apply_stage_checkpoint(
+        WorkflowStageCheckpoint(
+            stage="qa",
+            attempt=1,
+            status="completed",
+            summary="recorded",
+            qa_result=QaResult(
+                summary=["recorded"],
+                scenarios=[
+                    QaScenario(
+                        name="Browser happy path",
+                        objective="Show browser feature",
+                        capture_target="browser",
+                        steps=[QaStep(action="assert_visible", selector="text=Feature")],
+                    )
+                ],
+                recordings=[
+                    QaRecording(
+                        name="Browser happy path",
+                        artifact_url="https://cdn.example/qa-demos/example/example-default/run-1/qa-demo-1.webm",
+                        object_key="example/example-default/run-1/qa-demo-1.webm",
+                        capture_target="browser",
+                        capture_reference="https://preview.example",
+                        content_sha256=f"{1:064x}",
+                        release_commit_sha="b" * 40,
+                        release_context_sha256="a" * 64,
+                    )
+                ],
+            ),
+        )
+    )
+    return snapshot
+
+
 class GitHubWebhookProductionPathTests(ProductionPathApiTestCase):
     @classmethod
     def bootstrap_template_state(cls) -> None:
@@ -204,38 +240,7 @@ class GitHubWebhookProductionPathTests(ProductionPathApiTestCase):
         self.assertIn("demo_evidence_recordings_resolver", gate_cls.call_args.kwargs)
 
     def test_qa_demo_review_runtime_resolves_persisted_qa_recordings_for_run(self) -> None:
-        snapshot = ExecutionSnapshot.empty()
-        snapshot.apply_stage_checkpoint(
-            WorkflowStageCheckpoint(
-                stage="qa",
-                attempt=1,
-                status="completed",
-                summary="recorded",
-                qa_result=QaResult(
-                    summary=["recorded"],
-                    scenarios=[
-                        QaScenario(
-                            name="Browser happy path",
-                            objective="Show browser feature",
-                            capture_target="browser",
-                            steps=[QaStep(action="assert_visible", selector="text=Feature")],
-                        )
-                    ],
-                    recordings=[
-                        QaRecording(
-                            name="Browser happy path",
-                            artifact_url="https://cdn.example/qa-demos/example/example-default/run-1/qa-demo-1.webm",
-                            object_key="example/example-default/run-1/qa-demo-1.webm",
-                            capture_target="browser",
-                            capture_reference="https://preview.example",
-                            content_sha256=f"{1:064x}",
-                            release_commit_sha="b" * 40,
-                            release_context_sha256="a" * 64,
-                        )
-                    ],
-                ),
-            )
-        )
+        snapshot = _qa_demo_recording_snapshot()
         with self.session_factory() as session:
             session.add(
                 WorkflowExecution(
@@ -295,6 +300,56 @@ class GitHubWebhookProductionPathTests(ProductionPathApiTestCase):
                 },
             ),
         )
+
+    def test_qa_demo_review_runtime_ignores_persisted_qa_recordings_from_blocked_run(self) -> None:
+        snapshot = _qa_demo_recording_snapshot()
+        with self.session_factory() as session:
+            session.add(
+                WorkflowExecution(
+                    workflow_id="workflow-qa-demo-blocked",
+                    workflow_type_key="issue_execution",
+                    tenant_id="example",
+                    project_id="example-default",
+                    source_system="jira",
+                    source_ref="GP-123",
+                    repo_url="https://github.com/org/repo",
+                    branch="feature/GP-123",
+                    pr_url="https://github.com/org/repo/pull/17",
+                    orchestration_backend="temporal",
+                    dedupe_scope="issue_execution",
+                    status="failed",
+                    created_at=datetime.now(timezone.utc),
+                    updated_at=datetime.now(timezone.utc),
+                )
+            )
+            session.add(
+                Run(
+                    run_id="run-qa-demo-blocked",
+                    workflow_id="workflow-qa-demo-blocked",
+                    tenant_id="example",
+                    project_id="example-default",
+                    issue_key="GP-123",
+                    repo_url="https://github.com/org/repo",
+                    branch="feature/GP-123",
+                    pr_url="https://github.com/org/repo/pull/17",
+                    attempt_number=1,
+                    entry_stage="qa",
+                    dedupe_scope="issue_execution",
+                    status="blocked",
+                    created_at=datetime.now(timezone.utc),
+                    plan=snapshot.dump(),
+                )
+            )
+            session.commit()
+
+            recordings = _qa_demo_recordings_for_run(
+                session=session,
+                tenant_id="example",
+                project_id="example-default",
+                run_id="run-qa-demo-blocked",
+            )
+
+        self.assertIsNone(recordings)
 
     def test_qa_demo_review_runtime_resolves_latest_run_for_pr_url(self) -> None:
         pr_url = "https://github.com/org/repo/pull/17"
