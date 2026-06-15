@@ -3249,6 +3249,82 @@ def test_execute_qa_demo_stage_revalidates_previous_recording_links_before_short
             raise AssertionError("expected stale previous QA demo artifact URL to block short-circuit")
 
 
+def test_execute_qa_demo_stage_revalidates_release_readiness_before_previous_recording_short_circuit() -> None:
+    tenant = SimpleNamespace(tenant_id="tenant-1", github_config={})
+    project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo")
+    run = SimpleNamespace(run_id="run-1")
+    plan = PmPlan(
+        plan_steps=["Implement"],
+        acceptance_criteria=["Feature works"],
+        risks=[],
+        demo_requirements=[_demo_requirement()],
+    )
+    previous_qa = QaResult(
+        summary=["Previous demos"],
+        scenarios=[
+            QaScenario(
+                name="Happy path",
+                objective="Show feature works",
+                capture_target="browser",
+                steps=_proof_steps("text=Feature"),
+            ),
+            QaScenario(
+                name="Repeat action remains safe",
+                objective="Repeat action remains safe",
+                capture_target="browser",
+                steps=_proof_steps("text=Feature"),
+            ),
+        ],
+        recordings=[
+            QaRecording(
+                name="Happy path",
+                artifact_url="https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-demo-1.webm",
+                object_key="tenant-1/project-1/run-1/qa-demo-1.webm",
+                capture_target="browser",
+                capture_reference="https://preview.example",
+                content_sha256=_sha256(50),
+            ),
+            QaRecording(
+                name="Repeat action remains safe",
+                artifact_url="https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-demo-2.webm",
+                object_key="tenant-1/project-1/run-1/qa-demo-2.webm",
+                capture_target="browser",
+                capture_reference="https://preview.example",
+                content_sha256=_sha256(51),
+            ),
+        ],
+    )
+
+    with (
+        patch("orchestrator.core.qa.demo_service._default_artifact_url_probe", return_value=200),
+        patch("orchestrator.core.qa.demo_service._default_service_url_probe", return_value=404),
+    ):
+        try:
+            execute_qa_demo_stage(
+                session=SimpleNamespace(),
+                settings=_qa_artifact_settings(),
+                tenant=tenant,
+                project=project,
+                run=run,
+                request=_request(),
+                plan=plan,
+                dev_result=DevResult(change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8"),
+                test_result=TestResult(guidance=["pytest -q"]),
+                review_result=ReviewResult(summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"),
+                preview_release=SimpleNamespace(
+                    service_urls=[
+                        SimpleNamespace(service_kind="website", status="active", url="https://preview.example")
+                    ]
+                ),
+                previous_qa_result=previous_qa,
+            )
+        except RuntimeError as exc:
+            assert "QA demo recording requires reachable release service URL(s)" in str(exc)
+            assert "website (https://preview.example): HTTP 404" in str(exc)
+        else:  # pragma: no cover
+            raise AssertionError("expected broken preview release to block previous QA demo proof reuse")
+
+
 def test_execute_qa_demo_stage_rejects_previous_recording_without_matching_scenario() -> None:
     tenant = SimpleNamespace(tenant_id="tenant-1", github_config={})
     project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo")
