@@ -110,15 +110,49 @@ class RunHybridWorkersScriptTests(unittest.TestCase):
         script = script_path.read_text(encoding="utf-8")
 
         infra_index = script.index('"${DOCKER_BASE_SERVICES[@]}"')
+        minio_init_index = script.index("docker_compose run --rm --no-deps minio-init")
         migrate_index = script.index("docker_compose run --rm --no-deps migrate")
         runtime_index = script.index('"${DOCKER_RUNTIME_SERVICES[@]}"', migrate_index)
 
         self.assertIn("DOCKER_RUNTIME_SERVICES=(", script)
         self.assertIn("DOCKER_POST_API_SERVICES=(", script)
         self.assertIn("DOCKER_STOP_BEFORE_MIGRATION_SERVICES=(", script)
+        self.assertIn("minio", script[script.index("DOCKER_BASE_SERVICES=(") : script.index("DOCKER_BASE_RUNTIME_SERVICES=(")])
         self.assertIn("--no-deps -d --remove-orphans", script)
         self.assertLess(infra_index, migrate_index)
+        self.assertLess(infra_index, minio_init_index)
+        self.assertLess(minio_init_index, migrate_index)
         self.assertLess(migrate_index, runtime_index)
+
+    def test_script_exports_local_qa_demo_artifact_settings_for_macos_worker(self) -> None:
+        script_path = Path("scripts/run_hybrid_workers.sh")
+        script = script_path.read_text(encoding="utf-8")
+
+        self.assertIn('export MASTER_BUILDER_MINIO_API_PORT="${MASTER_BUILDER_MINIO_API_PORT:-60015}"', script)
+        self.assertIn(
+            'export ORCHESTRATOR_QA_DEMO_ARTIFACT_ENDPOINT="${ORCHESTRATOR_QA_DEMO_ARTIFACT_ENDPOINT:-127.0.0.1:${MASTER_BUILDER_MINIO_API_PORT}}"',
+            script,
+        )
+        self.assertIn(
+            'export ORCHESTRATOR_QA_DEMO_ARTIFACT_PUBLIC_BASE_URL="${ORCHESTRATOR_QA_DEMO_ARTIFACT_PUBLIC_BASE_URL:-http://127.0.0.1:${MASTER_BUILDER_MINIO_API_PORT}/qa-demos}"',
+            script,
+        )
+        self.assertIn(
+            'export ORCHESTRATOR_QA_DEMO_ARTIFACT_BUCKET="${ORCHESTRATOR_QA_DEMO_ARTIFACT_BUCKET:-qa-demos}"',
+            script,
+        )
+        self.assertIn(
+            'export ORCHESTRATOR_QA_DEMO_RECORDER_PROCESS_TIMEOUT_SECONDS="${ORCHESTRATOR_QA_DEMO_RECORDER_PROCESS_TIMEOUT_SECONDS:-900}"',
+            script,
+        )
+        self.assertIn(
+            'export ORCHESTRATOR_QA_DEMO_IOS_RECORDER_COMMAND="${ORCHESTRATOR_QA_DEMO_IOS_RECORDER_COMMAND:-}"',
+            script,
+        )
+        self.assertLess(
+            script.index('export ORCHESTRATOR_QA_DEMO_ARTIFACT_ENDPOINT='),
+            script.index('"${VENV_DIR}/bin/python" -m orchestrator worker-runs'),
+        )
 
     def test_script_forces_container_database_url_for_compose_services(self) -> None:
         script_path = Path("scripts/run_hybrid_workers.sh")
