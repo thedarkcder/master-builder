@@ -9,6 +9,7 @@ from orchestrator.core.worker.capability_normalization import WorkerCapability
 from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 from orchestrator.core.workflow.orchestrated_run_runner import OrchestratedRunWorkflowExecutor
 from orchestrator.core.workflow.runner import (
+    DemoRequirement,
     DevResult,
     PmPlan,
     ReviewResult,
@@ -107,6 +108,7 @@ class OrchestratedRunRunnerTests(unittest.TestCase):
         stage_agents: _StubStageAgents,
         *,
         execute_tool=None,
+        pm_capture_target_constraints_json: str = "[]",
     ) -> OrchestratedRunWorkflowExecutor:
         runtime = CodexRuntime(
             model="gpt-5-codex",
@@ -116,6 +118,7 @@ class OrchestratedRunRunnerTests(unittest.TestCase):
         )
         return OrchestratedRunWorkflowExecutor(
             runtime=runtime,
+            pm_capture_target_constraints_json=pm_capture_target_constraints_json,
             stage_agents=stage_agents,
             execute_tool=execute_tool,
         )
@@ -685,6 +688,65 @@ class OrchestratedRunRunnerTests(unittest.TestCase):
         self.assertEqual(result.requeue_reason, "StoreKit validation requires macOS worker")
         self.assertIsNone(result.diagnostics)
         self.assertEqual(result.orchestration_stage_trace[0]["status"], "requeue")
+
+    def test_pm_requeue_for_mixed_demo_targets_continues_until_qa_routing(self) -> None:
+        stage_agents = _StubStageAgents(
+            plan=PmPlan(
+                plan_steps=["Validate the delivered feature"],
+                acceptance_criteria=["Feature is demoed on browser, iOS, and Android"],
+                risks=[],
+                demo_requirements=[
+                    DemoRequirement(
+                        title="Browser walkthrough",
+                        acceptance_criterion="Feature is demoed on browser, iOS, and Android",
+                        capture_target="browser",
+                        variants=["Reload still works", "Navigation remains usable"],
+                    ),
+                    DemoRequirement(
+                        title="iOS walkthrough",
+                        acceptance_criterion="Feature is demoed on browser, iOS, and Android",
+                        capture_target="ios",
+                        variants=["Relaunch still works", "Navigation remains usable"],
+                    ),
+                    DemoRequirement(
+                        title="Android walkthrough",
+                        acceptance_criterion="Feature is demoed on browser, iOS, and Android",
+                        capture_target="android",
+                        variants=["Relaunch still works", "Navigation remains usable"],
+                    ),
+                ],
+                outcome="requeue",
+                next_stage="test",
+                execution_worker_capability="macos",
+                requeue_target="macos",
+                requeue_reason="iOS simulator validation is part of the ticket acceptance criteria.",
+            ),
+            dev_results=[],
+            test_results=[TestResult(guidance=["npm test"])],
+            review_results=[
+                ReviewResult(
+                    summary=["Approved"],
+                    pr_url="https://github.com/acme/repo/pull/8",
+                )
+            ],
+        )
+        constraints_json = (
+            '[{"capture_target":"browser","provider_available":true,"required_worker_platform":null},'
+            '{"capture_target":"ios","provider_available":true,"required_worker_platform":"macos"},'
+            '{"capture_target":"android","provider_available":true,"required_worker_platform":"linux"}]'
+        )
+
+        result = self._executor(
+            stage_agents,
+            pm_capture_target_constraints_json=constraints_json,
+        ).execute(replace(self._request(), current_worker_capability=WorkerCapability.LINUX))
+
+        self.assertEqual(result.outcome, "success")
+        self.assertEqual(stage_agents.dev_calls, 0)
+        self.assertEqual(stage_agents.test_calls, 1)
+        self.assertEqual(stage_agents.review_calls, 1)
+        self.assertEqual(result.plan.execution_worker_capability, "linux")
+        self.assertEqual(result.orchestration_stage_trace[0]["status"], "completed")
 
     def test_pm_missing_evidence_is_advisory_and_does_not_stop_before_dev(self) -> None:
         stage_agents = _StubStageAgents(
