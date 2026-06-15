@@ -120,6 +120,7 @@ def _local_recording(
     capture_target: str = "browser",
     capture_reference: str = "https://preview.example",
     content_type: str = "video/webm",
+    content_sha256: str = "0" * 64,
 ) -> SimpleNamespace:
     return SimpleNamespace(
         name=name,
@@ -127,6 +128,7 @@ def _local_recording(
         capture_target=capture_target,
         capture_reference=capture_reference,
         content_type=content_type,
+        content_sha256=content_sha256,
     )
 
 
@@ -149,6 +151,10 @@ def _fake_webm_payload() -> bytes:
 
 def _fake_mp4_payload() -> bytes:
     return b"\x00\x00\x00\x18ftypmp42" + (b"mp4-video-evidence" * 128) + b"moov"
+
+
+def _sha256(index: int) -> str:
+    return f"{index:064x}"
 
 
 def test_qa_demo_recording_enabled_reads_effective_policy() -> None:
@@ -247,6 +253,7 @@ def test_remaining_capture_targets_requires_recording_per_requirement_and_varian
                 object_key="tenant/project/run/browser-1.webm",
                 capture_target="browser",
                 capture_reference="https://preview.example",
+                content_sha256=_sha256(1),
             ),
             QaRecording(
                 name="iOS walkthrough",
@@ -254,6 +261,7 @@ def test_remaining_capture_targets_requires_recording_per_requirement_and_varian
                 object_key="tenant/project/run/ios-1.mp4",
                 capture_target="ios",
                 capture_reference="ios-simulator://configured",
+                content_sha256=_sha256(2),
             ),
         ],
     ) == ("browser",)
@@ -267,6 +275,7 @@ def test_remaining_capture_targets_requires_recording_per_requirement_and_varian
                     object_key="tenant/project/run/browser-1.webm",
                     capture_target="browser",
                     capture_reference="https://preview.example",
+                    content_sha256=_sha256(3),
                 ),
                 QaRecording(
                     name="Browser invalid input",
@@ -274,6 +283,7 @@ def test_remaining_capture_targets_requires_recording_per_requirement_and_varian
                     object_key="tenant/project/run/browser-2.webm",
                     capture_target="browser",
                     capture_reference="https://preview.example",
+                    content_sha256=_sha256(4),
                 ),
                 QaRecording(
                     name="Browser repeat action",
@@ -281,6 +291,7 @@ def test_remaining_capture_targets_requires_recording_per_requirement_and_varian
                     object_key="tenant/project/run/browser-3.webm",
                     capture_target="browser",
                     capture_reference="https://preview.example",
+                    content_sha256=_sha256(5),
                 ),
                 QaRecording(
                     name="iOS walkthrough",
@@ -288,6 +299,7 @@ def test_remaining_capture_targets_requires_recording_per_requirement_and_varian
                     object_key="tenant/project/run/ios-1.mp4",
                     capture_target="ios",
                     capture_reference="ios-simulator://configured",
+                    content_sha256=_sha256(6),
                 ),
             ],
         )
@@ -587,12 +599,13 @@ def test_upsert_demo_evidence_section_replaces_existing_section() -> None:
                 artifact_url="https://demo.example/happy.webm",
                 object_key="qa/happy.webm",
                 capture_reference="https://preview.example",
+                content_sha256=_sha256(7),
             )
         ],
     )
     assert DEMO_EVIDENCE_HEADING in updated
     assert DEMO_EVIDENCE_MARKER in updated
-    assert "[target=browser; reference=https://preview.example; object_key=qa/happy.webm]" in updated
+    assert "[target=browser; reference=https://preview.example; object_key=qa/happy.webm; sha256=" in updated
     assert "old" not in updated
     assert "https://demo.example/happy.webm" in updated
     assert "## How To Test" in updated
@@ -608,6 +621,7 @@ def test_upsert_demo_evidence_section_includes_required_capture_targets() -> Non
                 object_key="qa/browser.webm",
                 capture_target="browser",
                 capture_reference="https://preview.example",
+                content_sha256=_sha256(8),
             ),
             QaRecording(
                 name="iOS walkthrough",
@@ -615,6 +629,7 @@ def test_upsert_demo_evidence_section_includes_required_capture_targets() -> Non
                 object_key="qa/ios.mp4",
                 capture_target="ios",
                 capture_reference="ios-simulator://configured",
+                content_sha256=_sha256(9),
             ),
         ],
         required_capture_targets=("browser", "ios", "android"),
@@ -633,6 +648,7 @@ def test_upsert_demo_evidence_section_includes_required_recording_counts() -> No
                 object_key="qa/browser.webm",
                 capture_target="browser",
                 capture_reference="https://preview.example",
+                content_sha256=_sha256(10),
             ),
         ],
         required_recording_counts={"browser": 2, "ios": 1},
@@ -654,6 +670,7 @@ def test_upsert_demo_evidence_section_rejects_multiline_recording_metadata() -> 
                     object_key="tenant-1/project-1/run-1/qa-demo-1.webm",
                     capture_target="browser",
                     capture_reference="https://preview.example",
+                    content_sha256=_sha256(11),
                 )
             ],
             required_capture_targets=("browser",),
@@ -676,6 +693,7 @@ def test_upsert_demo_evidence_section_rejects_structural_delimiters_in_recording
                     object_key="tenant-1/project-1/run-1/qa-demo-1.webm",
                     capture_target="browser",
                     capture_reference="https://preview.example] [target=ios",
+                    content_sha256=_sha256(12),
                 )
             ],
             required_capture_targets=("browser",),
@@ -698,6 +716,7 @@ def test_upsert_demo_evidence_section_rejects_unsupported_recording_capture_targ
                     object_key="tenant-1/project-1/run-1/qa-demo-1.webm",
                     capture_target="tablet",
                     capture_reference="tablet://configured",
+                    content_sha256=_sha256(13),
                 )
             ],
             required_capture_targets=("tablet",),
@@ -2747,6 +2766,7 @@ def test_execute_qa_demo_stage_completes_remaining_target_with_previous_recordin
                 object_key="tenant-1/project-1/run-1/qa-demo-1.webm",
                 capture_target="browser",
                 capture_reference="https://preview.example",
+                content_sha256=_sha256(20),
             ),
             QaRecording(
                 name="Browser repeat action",
@@ -2754,6 +2774,7 @@ def test_execute_qa_demo_stage_completes_remaining_target_with_previous_recordin
                 object_key="tenant-1/project-1/run-1/qa-demo-2.webm",
                 capture_target="browser",
                 capture_reference="https://preview.example",
+                content_sha256=_sha256(21),
             ),
             QaRecording(
                 name="Android walkthrough",
@@ -2761,6 +2782,7 @@ def test_execute_qa_demo_stage_completes_remaining_target_with_previous_recordin
                 object_key="tenant-1/project-1/run-1/qa-demo-3.mp4",
                 capture_target="android",
                 capture_reference="android-emulator://configured",
+                content_sha256=_sha256(22),
             ),
             QaRecording(
                 name="Android repeat action",
@@ -2768,6 +2790,7 @@ def test_execute_qa_demo_stage_completes_remaining_target_with_previous_recordin
                 object_key="tenant-1/project-1/run-1/qa-demo-4.mp4",
                 capture_target="android",
                 capture_reference="android-emulator://configured",
+                content_sha256=_sha256(23),
             ),
         ],
         outcome="requeue",
@@ -2931,6 +2954,7 @@ def test_execute_qa_demo_stage_revalidates_partial_previous_recording_links_befo
                 object_key="tenant-1/project-1/run-1/qa-demo-1.webm",
                 capture_target="browser",
                 capture_reference="https://preview.example",
+                content_sha256=_sha256(24),
             ),
             QaRecording(
                 name="Browser repeat action",
@@ -2938,6 +2962,7 @@ def test_execute_qa_demo_stage_revalidates_partial_previous_recording_links_befo
                 object_key="tenant-1/project-1/run-1/qa-demo-2.webm",
                 capture_target="browser",
                 capture_reference="https://preview.example",
+                content_sha256=_sha256(25),
             ),
             QaRecording(
                 name="Android walkthrough",
@@ -2945,6 +2970,7 @@ def test_execute_qa_demo_stage_revalidates_partial_previous_recording_links_befo
                 object_key="tenant-1/project-1/run-1/qa-demo-3.mp4",
                 capture_target="android",
                 capture_reference="android-emulator://configured",
+                content_sha256=_sha256(26),
             ),
             QaRecording(
                 name="Android repeat action",
@@ -2952,6 +2978,7 @@ def test_execute_qa_demo_stage_revalidates_partial_previous_recording_links_befo
                 object_key="tenant-1/project-1/run-1/qa-demo-4.mp4",
                 capture_target="android",
                 capture_reference="android-emulator://configured",
+                content_sha256=_sha256(27),
             ),
         ],
         outcome="requeue",
@@ -3078,6 +3105,7 @@ def test_execute_qa_demo_stage_revalidates_previous_recording_links_before_short
                 object_key="tenant-1/project-1/run-1/qa-demo-1.webm",
                 capture_target="browser",
                 capture_reference="https://preview.example",
+                content_sha256=_sha256(28),
             ),
             QaRecording(
                 name="Repeat action remains safe",
@@ -3085,6 +3113,7 @@ def test_execute_qa_demo_stage_revalidates_previous_recording_links_before_short
                 object_key="tenant-1/project-1/run-1/qa-demo-2.webm",
                 capture_target="browser",
                 capture_reference="https://preview.example",
+                content_sha256=_sha256(29),
             ),
         ],
     )
@@ -3145,6 +3174,7 @@ def test_execute_qa_demo_stage_rejects_previous_recording_without_matching_scena
                 object_key="tenant-1/project-1/run-1/qa-demo-1.webm",
                 capture_target="browser",
                 capture_reference="https://preview.example",
+                content_sha256=_sha256(45),
             )
         ],
         outcome="requeue",
@@ -3562,6 +3592,7 @@ def test_update_pull_request_with_demo_evidence_refreshes_pr_body() -> None:
                         artifact_url="https://cdn.example/qa-demos/tenant-1/project-1/run-1/happy.webm",
                         object_key="tenant-1/project-1/run-1/happy.webm",
                         capture_reference="https://preview.example",
+                        content_sha256=_sha256(30),
                     )
                 ],
             ),
@@ -3603,6 +3634,7 @@ def test_update_pull_request_with_demo_evidence_rejects_pr_url_for_another_repos
                             object_key="tenant-1/project-1/run-1/browser.webm",
                             capture_target="browser",
                             capture_reference="https://preview.example",
+                            content_sha256=_sha256(31),
                         )
                     ],
                 ),
@@ -3621,6 +3653,12 @@ def test_update_pull_request_with_demo_evidence_rejects_external_recording_befor
         patch("orchestrator.core.qa.demo_service.github_client_from_tenant_config") as github_client_mock,
         patch("orchestrator.core.qa.demo_service._default_artifact_url_probe") as url_probe,
     ):
+        url_probe.return_value = 200
+        github_client_mock.return_value.get_pull_request_details.return_value = SimpleNamespace(
+            body="## Summary\n- change",
+            title="Demo PR",
+            base_ref="main",
+        )
         try:
             update_pull_request_with_demo_evidence(
                 session=SimpleNamespace(),
@@ -3646,6 +3684,7 @@ def test_update_pull_request_with_demo_evidence_rejects_external_recording_befor
                             object_key="tenant-1/project-1/run-1/browser.webm",
                             capture_target="browser",
                             capture_reference="https://preview.example",
+                            content_sha256=_sha256(32),
                         )
                     ],
                 ),
@@ -3665,6 +3704,12 @@ def test_update_pull_request_with_demo_evidence_rejects_out_of_scope_recording_k
         patch("orchestrator.core.qa.demo_service.github_client_from_tenant_config") as github_client_mock,
         patch("orchestrator.core.qa.demo_service._default_artifact_url_probe") as url_probe,
     ):
+        url_probe.return_value = 200
+        github_client_mock.return_value.get_pull_request_details.return_value = SimpleNamespace(
+            body="## Summary\n- change",
+            title="Demo PR",
+            base_ref="main",
+        )
         try:
             update_pull_request_with_demo_evidence(
                 session=SimpleNamespace(),
@@ -3690,6 +3735,7 @@ def test_update_pull_request_with_demo_evidence_rejects_out_of_scope_recording_k
                             object_key="tenant-2/project-2/run-2/browser.webm",
                             capture_target="browser",
                             capture_reference="https://preview.example",
+                            content_sha256=_sha256(33),
                         )
                     ],
                 ),
@@ -3709,6 +3755,12 @@ def test_update_pull_request_with_demo_evidence_rejects_recording_url_key_mismat
         patch("orchestrator.core.qa.demo_service.github_client_from_tenant_config") as github_client_mock,
         patch("orchestrator.core.qa.demo_service._default_artifact_url_probe") as url_probe,
     ):
+        url_probe.return_value = 200
+        github_client_mock.return_value.get_pull_request_details.return_value = SimpleNamespace(
+            body="## Summary\n- change",
+            title="Demo PR",
+            base_ref="main",
+        )
         try:
             update_pull_request_with_demo_evidence(
                 session=SimpleNamespace(),
@@ -3734,6 +3786,7 @@ def test_update_pull_request_with_demo_evidence_rejects_recording_url_key_mismat
                             object_key="tenant-1/project-1/run-1/browser.webm",
                             capture_target="browser",
                             capture_reference="https://preview.example",
+                            content_sha256=_sha256(34),
                         )
                     ],
                 ),
@@ -3753,6 +3806,12 @@ def test_update_pull_request_with_demo_evidence_rejects_unsafe_metadata_before_u
         patch("orchestrator.core.qa.demo_service.github_client_from_tenant_config") as github_client_mock,
         patch("orchestrator.core.qa.demo_service._default_artifact_url_probe") as url_probe,
     ):
+        url_probe.return_value = 200
+        github_client_mock.return_value.get_pull_request_details.return_value = SimpleNamespace(
+            body="## Summary\n- change",
+            title="Demo PR",
+            base_ref="main",
+        )
         try:
             update_pull_request_with_demo_evidence(
                 session=SimpleNamespace(),
@@ -3778,6 +3837,7 @@ def test_update_pull_request_with_demo_evidence_rejects_unsafe_metadata_before_u
                             object_key="tenant-1/project-1/run-1/browser.webm",
                             capture_target="browser",
                             capture_reference="https://preview.example",
+                            content_sha256=_sha256(35),
                         )
                     ],
                 ),
@@ -3823,6 +3883,7 @@ def test_update_pull_request_with_demo_evidence_rejects_missing_required_capture
                             object_key="qa/browser.webm",
                             capture_target="browser",
                             capture_reference="https://preview.example",
+                            content_sha256=_sha256(36),
                         )
                     ],
                 ),
@@ -3867,6 +3928,7 @@ def test_update_pull_request_with_demo_evidence_rejects_missing_required_recordi
                             object_key="qa/browser.webm",
                             capture_target="browser",
                             capture_reference="https://preview.example",
+                            content_sha256=_sha256(37),
                         )
                     ],
                 ),
@@ -3917,6 +3979,7 @@ def test_update_pull_request_with_demo_evidence_rejects_unreachable_accumulated_
                             artifact_url="https://cdn.example/qa-demos/tenant-1/project-1/run-1/browser.webm",
                             object_key="tenant-1/project-1/run-1/browser.webm",
                             capture_reference="https://preview.example",
+                            content_sha256=_sha256(38),
                         ),
                         QaRecording(
                             name="iOS walkthrough",
@@ -3924,6 +3987,7 @@ def test_update_pull_request_with_demo_evidence_rejects_unreachable_accumulated_
                             object_key="tenant-1/project-1/run-1/ios.mp4",
                             capture_target="ios",
                             capture_reference="ios-simulator://configured",
+                            content_sha256=_sha256(39),
                         ),
                     ],
                 ),
@@ -3954,6 +4018,7 @@ def test_update_pull_request_with_demo_evidence_rejects_recording_without_matchi
                             object_key="qa/browser.webm",
                             capture_target="browser",
                             capture_reference="https://preview.example",
+                            content_sha256=_sha256(40),
                         )
                     ],
                 ),
@@ -3993,6 +4058,7 @@ def test_update_pull_request_with_demo_evidence_rejects_duplicate_accumulated_re
                             object_key="qa/browser-1.webm",
                             capture_target="browser",
                             capture_reference="https://preview.example",
+                            content_sha256=_sha256(41),
                         ),
                         QaRecording(
                             name="Browser walkthrough",
@@ -4000,6 +4066,7 @@ def test_update_pull_request_with_demo_evidence_rejects_duplicate_accumulated_re
                             object_key="qa/browser-2.webm",
                             capture_target="browser",
                             capture_reference="https://preview.example",
+                            content_sha256=_sha256(42),
                         ),
                     ],
                 ),
@@ -4048,6 +4115,7 @@ def test_update_pull_request_with_demo_evidence_rejects_duplicate_object_key_bef
                             object_key="tenant-1/project-1/run-1/browser.webm",
                             capture_target="browser",
                             capture_reference="https://preview.example",
+                            content_sha256=_sha256(43),
                         ),
                         QaRecording(
                             name="Browser edge case",
@@ -4055,6 +4123,7 @@ def test_update_pull_request_with_demo_evidence_rejects_duplicate_object_key_bef
                             object_key="tenant-1/project-1/run-1/browser.webm",
                             capture_target="browser",
                             capture_reference="https://preview.example",
+                            content_sha256=_sha256(44),
                         ),
                     ],
                 ),
@@ -4065,6 +4134,125 @@ def test_update_pull_request_with_demo_evidence_rejects_duplicate_object_key_bef
             assert "QA demo recording object keys must be unique before PR evidence" in str(exc)
         else:  # pragma: no cover
             raise AssertionError("expected duplicate object key to block PR evidence update")
+
+    url_probe.assert_not_called()
+    github_client_mock.assert_not_called()
+
+
+def test_update_pull_request_with_demo_evidence_rejects_missing_content_sha256_before_url_probe() -> None:
+    with (
+        patch("orchestrator.core.qa.demo_service.github_client_from_tenant_config") as github_client_mock,
+        patch("orchestrator.core.qa.demo_service._default_artifact_url_probe") as url_probe,
+    ):
+        url_probe.return_value = 200
+        github_client_mock.return_value.get_pull_request_details.return_value = SimpleNamespace(
+            body="## Summary\n- change",
+            title="Demo PR",
+            base_ref="main",
+        )
+        try:
+            update_pull_request_with_demo_evidence(
+                session=SimpleNamespace(),
+                settings=_qa_artifact_settings(),
+                tenant=SimpleNamespace(tenant_id="tenant-1", github_config={}),
+                project=SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo"),
+                run=SimpleNamespace(run_id="run-1"),
+                workflow_result=SimpleNamespace(pr_url="https://github.com/acme/repo/pull/8"),
+                qa_result=QaResult(
+                    summary=["Recorded demos"],
+                    scenarios=[
+                        QaScenario(
+                            name="Browser happy path",
+                            objective="Show browser happy path",
+                            capture_target="browser",
+                            steps=_proof_steps("text=Feature"),
+                        )
+                    ],
+                    recordings=[
+                        QaRecording(
+                            name="Browser happy path",
+                            artifact_url="https://cdn.example/qa-demos/tenant-1/project-1/run-1/browser.webm",
+                            object_key="tenant-1/project-1/run-1/browser.webm",
+                            capture_target="browser",
+                            capture_reference="https://preview.example",
+                        )
+                    ],
+                ),
+                required_capture_targets=("browser",),
+                required_recording_counts={"browser": 1},
+            )
+        except RuntimeError as exc:
+            assert "QA demo recording content sha256 is required before PR evidence" in str(exc)
+        else:  # pragma: no cover
+            raise AssertionError("expected missing content sha256 to block PR evidence update")
+
+    url_probe.assert_not_called()
+    github_client_mock.assert_not_called()
+
+
+def test_update_pull_request_with_demo_evidence_rejects_duplicate_content_sha256_before_url_probe() -> None:
+    duplicated_digest = "a" * 64
+    recordings = [
+        SimpleNamespace(
+            name="Browser happy path",
+            artifact_url="https://cdn.example/qa-demos/tenant-1/project-1/run-1/browser-1.webm",
+            object_key="tenant-1/project-1/run-1/browser-1.webm",
+            capture_target="browser",
+            capture_reference="https://preview.example",
+            content_sha256=duplicated_digest,
+        ),
+        SimpleNamespace(
+            name="Browser edge case",
+            artifact_url="https://cdn.example/qa-demos/tenant-1/project-1/run-1/browser-2.webm",
+            object_key="tenant-1/project-1/run-1/browser-2.webm",
+            capture_target="browser",
+            capture_reference="https://preview.example",
+            content_sha256=duplicated_digest,
+        ),
+    ]
+    with (
+        patch("orchestrator.core.qa.demo_service.github_client_from_tenant_config") as github_client_mock,
+        patch("orchestrator.core.qa.demo_service._default_artifact_url_probe") as url_probe,
+    ):
+        url_probe.return_value = 200
+        github_client_mock.return_value.get_pull_request_details.return_value = SimpleNamespace(
+            body="## Summary\n- change",
+            title="Demo PR",
+            base_ref="main",
+        )
+        try:
+            update_pull_request_with_demo_evidence(
+                session=SimpleNamespace(),
+                settings=_qa_artifact_settings(),
+                tenant=SimpleNamespace(tenant_id="tenant-1", github_config={}),
+                project=SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo"),
+                run=SimpleNamespace(run_id="run-1"),
+                workflow_result=SimpleNamespace(pr_url="https://github.com/acme/repo/pull/8"),
+                qa_result=QaResult(
+                    summary=["Recorded demos"],
+                    scenarios=[
+                        QaScenario(
+                            name="Browser happy path",
+                            objective="Show browser happy path",
+                            capture_target="browser",
+                            steps=_proof_steps("text=Feature"),
+                        ),
+                        QaScenario(
+                            name="Browser edge case",
+                            objective="Show browser edge case",
+                            capture_target="browser",
+                            steps=_proof_steps("text=Edge"),
+                        ),
+                    ],
+                    recordings=recordings,  # type: ignore[arg-type]
+                ),
+                required_capture_targets=("browser",),
+                required_recording_counts={"browser": 2},
+            )
+        except RuntimeError as exc:
+            assert "QA demo recording content sha256 values must be unique before PR evidence" in str(exc)
+        else:  # pragma: no cover
+            raise AssertionError("expected duplicate content sha256 to block PR evidence update")
 
     url_probe.assert_not_called()
     github_client_mock.assert_not_called()

@@ -349,6 +349,7 @@ class CheckpointCodecTests(unittest.TestCase):
                             object_key="demo/happy.webm",
                             capture_reference="https://preview.example",
                             capture_target="browser",
+                            content_sha256=f"{1:064x}",
                         )
                     ],
                 ),

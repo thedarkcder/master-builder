@@ -67,6 +67,7 @@ class LocalQaRecording:
     capture_target: str
     capture_reference: str
     content_type: str
+    content_sha256: str
 
 
 @dataclass(frozen=True)
@@ -713,7 +714,15 @@ def _validate_demo_evidence_recording_metadata(recordings: list[QaRecording]) ->
         _require_demo_evidence_capture_target(recording.capture_target)
         _require_demo_evidence_line_field(recording.capture_reference, field="capture_reference")
         _require_demo_evidence_line_field(recording.object_key, field="object_key")
+        _require_demo_evidence_content_sha256(recording)
         _require_demo_evidence_field(recording.artifact_url, field="artifact_url")
+
+
+def _require_demo_evidence_content_sha256(recording: object) -> str:
+    value = str(getattr(recording, "content_sha256", "") or "").strip().lower()
+    if not re.fullmatch(r"[0-9a-f]{64}", value):
+        raise RuntimeError("QA demo recording content sha256 is required before PR evidence")
+    return value
 
 
 def _validate_distinct_demo_recording_artifacts(recordings: list[QaRecording]) -> None:
@@ -728,6 +737,15 @@ def _validate_distinct_demo_recording_artifacts(recordings: list[QaRecording]) -
     if duplicate_artifact_urls:
         raise RuntimeError(
             "QA demo recording artifact URLs must be unique before PR evidence: " + ", ".join(duplicate_artifact_urls)
+        )
+    content_sha256_counts = Counter(str(getattr(recording, "content_sha256", "") or "").strip().lower() for recording in recordings)
+    duplicate_content_sha256 = [
+        content_sha256 for content_sha256, count in content_sha256_counts.items() if content_sha256 and count > 1
+    ]
+    if duplicate_content_sha256:
+        raise RuntimeError(
+            "QA demo recording content sha256 values must be unique before PR evidence: "
+            + ", ".join(duplicate_content_sha256)
         )
 
 
@@ -786,10 +804,11 @@ def build_demo_evidence_section(
         capture_target = _require_demo_evidence_capture_target(recording.capture_target)
         capture_reference = _require_demo_evidence_line_field(recording.capture_reference, field="capture_reference")
         object_key = _require_demo_evidence_line_field(recording.object_key, field="object_key")
+        content_sha256 = _require_demo_evidence_content_sha256(recording)
         artifact_url = _require_demo_evidence_field(recording.artifact_url, field="artifact_url")
         lines.append(
             f"- {name} "
-            f"[target={capture_target}; reference={capture_reference}; object_key={object_key}]: "
+            f"[target={capture_target}; reference={capture_reference}; object_key={object_key}; sha256={content_sha256}]: "
             f"{artifact_url}"
         )
     return "\n".join(lines).strip()
@@ -887,6 +906,7 @@ def _parse_recorder_output(
                 f"QA demo recorder returned recording path outside recorder output directory: {source}"
             ) from exc
         _validate_local_recording_file(source)
+        content_sha256 = hashlib.sha256(source.read_bytes()).hexdigest()
         recordings.append(
             LocalQaRecording(
                 name=name,
@@ -894,6 +914,7 @@ def _parse_recorder_output(
                 capture_target=capture_target.capture_target,
                 capture_reference=capture_target.capture_reference,
                 content_type=_content_type_for_recording(source),
+                content_sha256=content_sha256,
             )
         )
     if not recordings:
@@ -1292,6 +1313,7 @@ def _copy_recordings(recordings: list[LocalQaRecording], *, request: WorkflowReq
                 capture_target=recording.capture_target,
                 capture_reference=recording.capture_reference,
                 content_type=recording.content_type,
+                content_sha256=recording.content_sha256,
             )
         )
     return copied
@@ -1372,7 +1394,7 @@ def _validate_distinct_local_recording_content(
     seen_content: dict[str, str] = {}
     duplicate_recording_names: list[str] = []
     for recording in recordings:
-        digest = hashlib.sha256(Path(recording.path).read_bytes()).hexdigest()
+        digest = str(recording.content_sha256 or "").strip().lower()
         recording_name = str(recording.name or "").strip() or "<unnamed>"
         previous_name = seen_content.get(digest)
         if previous_name is not None:
@@ -1717,6 +1739,7 @@ def execute_qa_demo_stage(
                         object_key=object_key,
                         capture_target=recording.capture_target,
                         capture_reference=recording.capture_reference,
+                        content_sha256=recording.content_sha256,
                     )
                 )
             combined_recordings = [*previous_recordings, *uploaded]
