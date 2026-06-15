@@ -65,7 +65,7 @@ class MigrationTests(unittest.TestCase):
 
         duplicates = {revision_id: count for revision_id, count in Counter(revision_ids).items() if count > 1}
         self.assertEqual(duplicates, {})
-        self.assertEqual(script.get_heads(), ["20260615_0121"])
+        self.assertEqual(script.get_heads(), ["20260615_0122"])
 
     def test_project_app_deployment_config_migration_removes_qa_capture_metadata(self) -> None:
         migration = self._load_migration_module(
@@ -119,6 +119,20 @@ class MigrationTests(unittest.TestCase):
         self.assertTrue(changed)
         self.assertEqual(updated_start_command, "npx expo-cli start --web --non-interactive --host 0.0.0.0")
 
+    def test_invalid_legacy_expo_web_host_repair_uses_legacy_host_mode(self) -> None:
+        migration = self._load_migration_module(
+            "20260615_0122_repair_invalid_legacy_expo_web_host.py",
+            "migration_20260615_0122",
+        )
+
+        updated_start_command, changed = migration.canonical_legacy_expo_web_host(
+            detected_runtime="react_native_web",
+            start_command="npx expo-cli start --web --non-interactive --host 0.0.0.0",
+        )
+
+        self.assertTrue(changed)
+        self.assertEqual(updated_start_command, "npx expo-cli start --web --non-interactive --host lan")
+
     def test_project_install_request_label_normalization_migration_canonicalizes_provider_labels(self) -> None:
         module = self._load_migration_module(
             "20260526_0111_normalize_project_install_request_labels.py",
@@ -162,7 +176,7 @@ class MigrationTests(unittest.TestCase):
             with engine.connect() as connection:
                 versions = connection.execute(text("SELECT version_num FROM alembic_version")).scalars().all()
 
-            self.assertEqual(versions, ["20260615_0121"])
+            self.assertEqual(versions, ["20260615_0122"])
 
     def test_requeue_snapshot_reason_repair_migration_backfills_missing_reason(self) -> None:
         migration = self._load_migration_module(
@@ -2057,7 +2071,7 @@ class MigrationTests(unittest.TestCase):
 
             with engine.begin() as connection:
                 versions = connection.execute(text("SELECT version_num FROM alembic_version")).scalars().all()
-            self.assertEqual(versions, ["20260615_0121"])
+            self.assertEqual(versions, ["20260615_0122"])
 
     def test_run_migrations_disables_alembic_logger_reconfiguration(self) -> None:
         fake_config = MagicMock()

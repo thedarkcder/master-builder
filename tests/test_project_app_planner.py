@@ -180,7 +180,7 @@ plugins {
     root_candidate = next(candidate for candidate in candidates if candidate.source_path == ".")
     assert root_candidate.detected_runtime == "react_native_web"
     assert root_candidate.exposed_port == 19006
-    assert root_candidate.start_command == "npx expo-cli start --web --non-interactive --host 0.0.0.0"
+    assert root_candidate.start_command == "npx expo-cli start --web --non-interactive --host lan"
     assert root_candidate.deployment_config["source_strategy"] == "nixpacks"
     assert "capture_target" not in root_candidate.deployment_config
     assert root_candidate.deployment_config["install_command"] == (
@@ -223,7 +223,7 @@ def test_scan_repo_for_project_apps_sets_npm_install_for_react_native_web_with_s
 
     root_candidate = next(candidate for candidate in candidates if candidate.source_path == ".")
     assert root_candidate.detected_runtime == "react_native_web"
-    assert root_candidate.start_command == "npx expo-cli start --web --non-interactive --host 0.0.0.0"
+    assert root_candidate.start_command == "npx expo-cli start --web --non-interactive --host lan"
     assert root_candidate.deployment_config["source_strategy"] == "nixpacks"
     assert root_candidate.deployment_config["install_command"] == (
         "npm install --package-lock=false --legacy-peer-deps --production=false && "

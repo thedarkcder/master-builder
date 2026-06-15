@@ -59,6 +59,7 @@ from orchestrator.core.deployment_runtime import (
     reconcile_deployment_release,
 )
 from orchestrator.core.node_release_contracts import (
+    INVALID_LEGACY_EXPO_WEB_START_COMMAND,
     LEGACY_EXPO_CLI_INSTALL_COMMAND,
     LEGACY_EXPO_WEB_START_COMMAND,
     STALE_LEGACY_EXPO_WEB_START_COMMAND,
@@ -3508,7 +3509,7 @@ class DeploymentContractTests(unittest.TestCase):
         self.assertEqual(fake_client.application_payload["base_directory"], "/")
         self.assertEqual(
             fake_client.application_payload["start_command"],
-            "npx expo-cli start --web --non-interactive --host 0.0.0.0",
+            "npx expo-cli start --web --non-interactive --host lan",
         )
         self.assertEqual(
             fake_client.application_payload["install_command"],
@@ -3581,6 +3582,128 @@ class DeploymentContractTests(unittest.TestCase):
             exposed_port=19006,
             healthcheck=None,
             start_command=STALE_LEGACY_EXPO_WEB_START_COMMAND,
+            env_schema_json={},
+            secret_schema_json={},
+            deployment_config={},
+            status="ready",
+            created_at=now,
+            updated_at=now,
+        )
+        tenant_plane = TenantDeploymentPlaneRead.model_validate(
+            {
+                "provider": "internal_coolify",
+                "infrastructure_provider": "hetzner",
+                "region": "eu-west",
+                "base_domain": "apps.example.com",
+                "platform_subdomain": "builder",
+                "api_base_url": "https://builder.apps.example.com/api/v1",
+                "coolify_project_uuid": "coolify-project-1",
+                "coolify_environment_name": "production",
+                "coolify_server_uuid": "server-1",
+                "coolify_destination_uuid": "destination-1",
+                "coolify_github_app_uuid": "github-app-1",
+                "secret_refs": {"coolify_api_token": "platform/COOLIFY_API_TOKEN"},
+                "state": "active",
+            }
+        )
+        project_deployment = ProjectDeploymentConfigRead.model_validate(
+            {
+                "enabled": True,
+                "environment_name": "production",
+                "source_strategy": "nixpacks",
+                "deployment_branch": "main",
+                "deployment_commit_sha": "abcdef1",
+                "install_command": LEGACY_EXPO_CLI_INSTALL_COMMAND,
+                "build_command": "npm run build:web",
+                "domains": [],
+                "services": [],
+                "resources": [],
+                "backup_policies": [],
+            }
+        )
+        fake_client = FakeCoolifyClient()
+
+        with (
+            self.session_factory() as session,
+            patch("orchestrator.api.admin.deployment_release_service._resolve_secret_value", return_value="token"),
+            patch("orchestrator.api.admin.deployment_release_service.CoolifyApiClient", return_value=fake_client),
+        ):
+            submit_internal_coolify_release(
+                session=session,
+                tenant=tenant,
+                project=project,
+                project_app=project_app,
+                tenant_plane=tenant_plane,
+                project_deployment=project_deployment,
+                payload=ProjectDeploymentReleaseCreate(git_ref="main", commit_sha="abcdef1", release_kind="run_preview"),
+                existing_application_uuid=None,
+                existing_service_uuid=None,
+            )
+
+        assert fake_client.application_payload is not None
+        self.assertEqual(fake_client.application_payload["start_command"], LEGACY_EXPO_WEB_START_COMMAND)
+        self.assertEqual(fake_client.application_payload["install_command"], LEGACY_EXPO_CLI_INSTALL_COMMAND)
+
+    def test_internal_coolify_release_repairs_invalid_legacy_expo_web_host_command(self) -> None:
+        class FakeCoolifyClient:
+            def __init__(self) -> None:
+                self.application_payload: dict[str, object] | None = None
+
+            def create_private_github_app_application(self, *, payload: dict[str, object]) -> str:
+                self.application_payload = payload
+                return "application-1"
+
+            def bulk_update_application_envs(self, *, application_uuid: str, payload: dict[str, object]) -> dict[str, object]:
+                return {"application_uuid": application_uuid, **payload}
+
+            def start_application(self, *, application_uuid: str) -> str:
+                return "deployment-1"
+
+            def get_application(self, *, application_uuid: str) -> dict[str, object]:
+                return {"uuid": application_uuid, "fqdn": "https://web.project-1.apps.example.com"}
+
+        now = datetime.now(timezone.utc)
+        tenant = Tenant(
+            tenant_id="tenant-1",
+            name="Tenant 1",
+            is_enabled=True,
+            jira_config={},
+            github_config={},
+            repos_config={},
+            policy_config={},
+            discord_config=None,
+            created_at=now,
+            updated_at=now,
+        )
+        project = Project(
+            project_id="project-1",
+            tenant_id="tenant-1",
+            name="Project 1",
+            github_repository="https://github.com/example/repo",
+            jira_project_key="TP",
+            policy_overrides={},
+            environment={},
+            secret_refs={},
+            discord_config=None,
+            is_archived=False,
+            created_at=now,
+            updated_at=now,
+        )
+        project_app = ProjectApp(
+            app_id="app-1",
+            tenant_id="tenant-1",
+            project_id="project-1",
+            name="Web",
+            slug="web",
+            source_path=".",
+            detection_confidence=1.0,
+            detected_runtime="react_native_web",
+            detected_language="typescript",
+            analysis_source="test",
+            build_strategy="nixpacks",
+            exposed_port=19006,
+            healthcheck=None,
+            start_command=INVALID_LEGACY_EXPO_WEB_START_COMMAND,
             env_schema_json={},
             secret_schema_json={},
             deployment_config={},
