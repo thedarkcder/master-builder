@@ -156,7 +156,11 @@ def _release_service_kinds(release) -> tuple[str, ...]:  # noqa: ANN001
     return tuple(ordered)
 
 
-def _release_service_urls_payload(release) -> list[dict[str, str]]:  # noqa: ANN001
+def _release_service_urls_payload(
+    release,  # noqa: ANN001
+    *,
+    include_recording_details: bool = False,
+) -> list[dict[str, str]]:
     urls = list(getattr(release, "service_urls", []) or []) if release is not None else []
     payload: list[dict[str, str]] = []
     for service_url in urls:
@@ -170,6 +174,13 @@ def _release_service_urls_payload(release) -> list[dict[str, str]]:  # noqa: ANN
             "service_name": str(getattr(service_url, "service_name", "") or "").strip(),
             "url": url,
         }
+        if include_recording_details:
+            recording_url, recording_headers = _release_service_recording_probe(service_url)
+            if recording_url and recording_url != url:
+                item["recording_url"] = recording_url
+            recording_host_header = recording_headers.get("Host")
+            if recording_host_header:
+                item["recording_host_header"] = recording_host_header
         service_key = str(getattr(service_url, "service_key", "") or "").strip()
         if service_key:
             item["service_key"] = service_key
@@ -261,10 +272,17 @@ def qa_demo_artifact_url_timeout_seconds(settings) -> float:  # noqa: ANN001
     return max(1.0, configured)
 
 
-def _default_service_url_probe(url: str, *, timeout_seconds: float) -> int:
+def _default_service_url_probe(
+    url: str,
+    *,
+    timeout_seconds: float,
+    headers: dict[str, str] | None = None,
+) -> int:
+    request_headers = {"User-Agent": "MasterBuilder-QA-Demo/1.0"}
+    request_headers.update(headers or {})
     request = urllib.request.Request(
         url,
-        headers={"User-Agent": "MasterBuilder-QA-Demo/1.0"},
+        headers=request_headers,
         method="GET",
     )
     try:
@@ -330,25 +348,37 @@ def ensure_release_ready_for_qa(
             for service_url in urls
             if str(getattr(service_url, "service_kind", "") or "").strip() == required_kind
         ]
-        active_urls = [
-            str(getattr(service_url, "url", "") or "").strip()
+        active_service_urls = [
+            service_url
             for service_url in matching_urls
             if str(getattr(service_url, "status", "") or "").strip() == "active"
             and str(getattr(service_url, "url", "") or "").strip()
         ]
-        if not active_urls:
+        if not active_service_urls:
             inactive_failures.append(required_kind)
             continue
         if service_url_probe is None:
             continue
-        for active_url in active_urls:
+        for service_url in active_service_urls:
+            public_url = str(getattr(service_url, "url", "") or "").strip()
+            probe_url, probe_headers = _release_service_recording_probe(service_url)
+            probe_label = public_url if probe_url == public_url else f"{public_url} via {probe_url}"
             try:
-                status_code = int(service_url_probe(active_url, timeout_seconds=timeout_seconds))
+                if probe_headers:
+                    status_code = int(
+                        service_url_probe(
+                            probe_url,
+                            timeout_seconds=timeout_seconds,
+                            headers=probe_headers,
+                        )
+                    )
+                else:
+                    status_code = int(service_url_probe(probe_url, timeout_seconds=timeout_seconds))
             except Exception as exc:  # noqa: BLE001
-                probe_failures.append(f"{required_kind} ({active_url}): {exc}")
+                probe_failures.append(f"{required_kind} ({probe_label}): {exc}")
                 continue
             if not _release_service_status_is_ready(status_code):
-                probe_failures.append(f"{required_kind} ({active_url}): HTTP {status_code}")
+                probe_failures.append(f"{required_kind} ({probe_label}): HTTP {status_code}")
     if inactive_failures:
         raise RuntimeError(
             "QA demo recording requires active release service URL(s); not active: "
@@ -365,6 +395,27 @@ def _release_service_status_is_ready(status_code: int) -> bool:
     return 200 <= status_code < 400 or status_code in _RELEASE_SERVICE_READY_STATUSES
 
 
+def _release_service_recording_probe(service_url) -> tuple[str, dict[str, str]]:  # noqa: ANN001
+    public_url = str(getattr(service_url, "url", "") or "").strip()
+    internal_url = str(getattr(service_url, "internal_url", "") or "").strip()
+    probe_url = _normalize_release_probe_url_for_current_runtime(internal_url or public_url)
+    headers: dict[str, str] = {}
+    host = str(getattr(service_url, "host", "") or "").strip()
+    if internal_url and host:
+        headers["Host"] = host
+    return probe_url, headers
+
+
+def _normalize_release_probe_url_for_current_runtime(url: str) -> str:
+    parsed = urllib.parse.urlsplit(url)
+    if parsed.hostname != "host.docker.internal" or Path("/.dockerenv").exists():
+        return url
+    netloc = "localhost"
+    if parsed.port is not None:
+        netloc = f"{netloc}:{parsed.port}"
+    return urllib.parse.urlunsplit((parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment))
+
+
 def _is_builtin_android_recorder_command(command: tuple[str, ...] | None) -> bool:
     return any(str(part).endswith("qa_demo_android_recorder.py") for part in (command or ()))
 
@@ -376,7 +427,63 @@ def _is_builtin_ios_recorder_command(command: tuple[str, ...] | None) -> bool:
 def _required_android_recorder_tool(*, env_var: str | None, default: str) -> str:
     if env_var is None:
         return default
-    return str(os.environ.get(env_var) or default).strip()
+    configured = str(os.environ.get(env_var) or "").strip()
+    if configured:
+        return configured
+    discovered = _discover_android_sdk_build_tool(default)
+    return discovered or default
+
+
+def _discover_android_sdk_build_tool(tool_name: str) -> str | None:
+    if shutil.which(tool_name) is not None:
+        return tool_name
+    sdk_roots = [
+        str(os.environ.get("ANDROID_HOME") or "").strip(),
+        str(os.environ.get("ANDROID_SDK_ROOT") or "").strip(),
+        str(Path.home() / "Library" / "Android" / "sdk"),
+        str(Path.home() / "Android" / "Sdk"),
+    ]
+    candidates: list[Path] = []
+    for raw_root in sdk_roots:
+        if not raw_root:
+            continue
+        build_tools_dir = Path(raw_root).expanduser() / "build-tools"
+        if not build_tools_dir.exists():
+            continue
+        candidates.extend(path for path in build_tools_dir.glob(f"*/{tool_name}") if path.is_file())
+    if not candidates:
+        return None
+    return str(sorted(candidates, key=_android_build_tool_version_key)[-1])
+
+
+def _discover_android_emulator() -> str | None:
+    path_emulator = shutil.which("emulator")
+    if path_emulator is not None:
+        return path_emulator
+    sdk_roots = [
+        str(os.environ.get("ANDROID_HOME") or "").strip(),
+        str(os.environ.get("ANDROID_SDK_ROOT") or "").strip(),
+        str(Path.home() / "Library" / "Android" / "sdk"),
+        str(Path.home() / "Android" / "Sdk"),
+    ]
+    for raw_root in sdk_roots:
+        if not raw_root:
+            continue
+        sdk_root = Path(raw_root).expanduser()
+        for candidate in (sdk_root / "emulator" / "emulator", sdk_root / "tools" / "emulator"):
+            if candidate.is_file():
+                return str(candidate)
+    return None
+
+
+def _android_build_tool_version_key(path: Path) -> tuple[tuple[int, ...], str]:
+    parts: list[int] = []
+    for item in path.parent.name.split("."):
+        try:
+            parts.append(int(item))
+        except ValueError:
+            parts.append(0)
+    return tuple(parts), str(path)
 
 
 def _ensure_worker_tool_available(*, command: str, purpose: str) -> None:
@@ -396,6 +503,10 @@ def _ready_adb_devices(adb_devices_output: str) -> tuple[str, ...]:
         if len(parts) >= 2 and parts[1] == "device":
             devices.append(parts[0])
     return tuple(devices)
+
+
+def _available_android_avds(emulator_list_avds_output: str) -> tuple[str, ...]:
+    return tuple(line.strip() for line in emulator_list_avds_output.splitlines() if line.strip())
 
 
 def _ensure_builtin_android_runtime_ready() -> None:
@@ -421,8 +532,31 @@ def _ensure_builtin_android_runtime_ready() -> None:
         stdout = str(exc.stdout or "").strip()
         details = stderr or stdout or f"exit code {exc.returncode}"
         raise RuntimeError(f"Android QA demo recording could not list adb devices: {details}") from exc
-    if not _ready_adb_devices(result.stdout):
-        raise RuntimeError("No available Android emulator/device found via adb devices")
+    if _ready_adb_devices(result.stdout):
+        return
+    emulator = _discover_android_emulator()
+    if emulator is None:
+        raise RuntimeError("No available Android emulator/device found via adb devices and Android emulator is unavailable")
+    try:
+        avd_result = subprocess.run(
+            [emulator, "-list-avds"],
+            capture_output=True,
+            check=True,
+            text=True,
+            timeout=10,
+        )
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError("Android QA demo recording timed out while checking Android Virtual Devices") from exc
+    except subprocess.CalledProcessError as exc:
+        stderr = str(exc.stderr or "").strip()
+        details = f": {stderr}" if stderr else ""
+        raise RuntimeError(f"Android QA demo recording could not list Android Virtual Devices{details}") from exc
+    configured_avd = str(os.environ.get("QA_DEMO_ANDROID_AVD") or "").strip()
+    avds = _available_android_avds(avd_result.stdout)
+    if configured_avd and configured_avd not in avds:
+        raise RuntimeError(f"Configured Android QA demo AVD does not exist: {configured_avd}")
+    if not avds:
+        raise RuntimeError("No available Android emulator/device found via adb devices and no Android Virtual Device exists")
 
 
 def _ensure_builtin_ios_runtime_ready() -> None:
@@ -1526,6 +1660,24 @@ def _first_release_service_url(release_service_urls: list[dict[str, str]], *, se
     return ""
 
 
+def _first_release_service_recording_url(release_service_urls: list[dict[str, str]], *, service_kind: str) -> str:
+    for service_url in release_service_urls:
+        if service_url.get("service_kind") == service_kind:
+            return str(service_url.get("recording_url") or service_url.get("url") or "").strip()
+    return ""
+
+
+def _first_release_service_recording_host_header(
+    release_service_urls: list[dict[str, str]],
+    *,
+    service_kind: str,
+) -> str:
+    for service_url in release_service_urls:
+        if service_url.get("service_kind") == service_kind:
+            return str(service_url.get("recording_host_header") or "").strip()
+    return ""
+
+
 def _recorder_env_with_release_context(
     *,
     base_env: dict[str, str],
@@ -1537,10 +1689,16 @@ def _recorder_env_with_release_context(
     release_commit_sha = str(release_commit_sha or "").strip()
     api_base_url = _first_release_service_url(release_service_urls, service_kind="api")
     browser_url = _first_release_service_url(release_service_urls, service_kind="website")
+    api_recording_url = _first_release_service_recording_url(release_service_urls, service_kind="api")
+    browser_recording_url = _first_release_service_recording_url(release_service_urls, service_kind="website")
     env["MB_QA_DEMO_RELEASE_COMMIT_SHA"] = release_commit_sha
     env["MB_QA_DEMO_RELEASE_SERVICE_URLS_JSON"] = serialized_urls
     env["MB_QA_DEMO_RELEASE_API_BASE_URL"] = api_base_url
     env["MB_QA_DEMO_RELEASE_BROWSER_URL"] = browser_url
+    if api_recording_url:
+        env["MB_QA_DEMO_RELEASE_API_RECORDING_URL"] = api_recording_url
+    if browser_recording_url:
+        env["MB_QA_DEMO_RELEASE_BROWSER_RECORDING_URL"] = browser_recording_url
     if api_base_url:
         env["QA_DEMO_API_BASE_URL"] = api_base_url
     if browser_url:
@@ -1699,6 +1857,14 @@ def record_demo_scenarios(
             "release_service_urls": release_service_urls,
             "release_api_base_url": _first_release_service_url(release_service_urls, service_kind="api"),
             "release_browser_url": _first_release_service_url(release_service_urls, service_kind="website"),
+            "release_api_recording_url": _first_release_service_recording_url(
+                release_service_urls,
+                service_kind="api",
+            ),
+            "release_browser_recording_url": _first_release_service_recording_url(
+                release_service_urls,
+                service_kind="website",
+            ),
             "scenarios": [
                 {
                     "name": scenario.name,
@@ -1749,6 +1915,18 @@ def record_demo_scenarios(
                 release_commit_sha=release_commit_sha,
             )
             payload["preview_url"] = capture_target.capture_reference
+            browser_recording_url = _first_release_service_recording_url(
+                release_service_urls,
+                service_kind="website",
+            )
+            browser_recording_host_header = _first_release_service_recording_host_header(
+                release_service_urls,
+                service_kind="website",
+            )
+            if browser_recording_url:
+                payload["recording_url"] = browser_recording_url
+            if browser_recording_host_header:
+                payload["recording_host_header"] = browser_recording_host_header
             recordings = _invoke_json_recorder(
                 command=["node", str(script_path)],
                 payload=payload,
@@ -1904,6 +2082,10 @@ def execute_qa_demo_stage(
         timeout_seconds=qa_demo_release_health_timeout_seconds(settings),
     )
     release_service_urls = _release_service_urls_payload(preview_release)
+    recorder_release_service_urls = _release_service_urls_payload(
+        preview_release,
+        include_recording_details=True,
+    )
     release_context_sha256 = release_context_sha256_for_release(
         release=preview_release,
         release_service_urls=release_service_urls,
@@ -2034,7 +2216,7 @@ def execute_qa_demo_stage(
                 request=request,
                 available_capture_targets=current_worker_capture_targets,
                 qa_result=qa_result,
-                release_service_urls=release_service_urls,
+                release_service_urls=recorder_release_service_urls,
                 release_commit_sha=release_commit_sha,
             )
             uploaded: list[QaRecording] = []

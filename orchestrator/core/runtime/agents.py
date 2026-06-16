@@ -83,6 +83,26 @@ _ANDROID_RESOURCE_ID_RE = re.compile(r'android:id="@\+id/([^"]+)"')
 _ANDROID_TEXT_RE = re.compile(r'android:text="([^"@][^"]*)"')
 _ANDROID_COMPOSE_TEST_TAG_RE = re.compile(r'\.testTag\("([^"]+)"\)')
 _ANDROID_COMPOSE_TEXT_RE = re.compile(r'Text\(\s*"([^"]+)"')
+_REACT_NATIVE_TEST_ID_RE = re.compile(r'\b(?:testID|accessibilityLabel)\s*=\s*["\']([^"\']+)["\']')
+_REACT_NATIVE_TEXT_RE = re.compile(r"<Text(?:\s[^>]*)?>\s*([^<>{}][^<>{}]*)\s*</Text>")
+_JS_OBJECT_STRING_VALUE_RE = re.compile(r':\s*(?:"((?:\\.|[^"\\])*)"|\'((?:\\.|[^\'\\])*)\')')
+_REACT_NATIVE_SHARED_SOURCE_SKIP_PARTS = frozenset(
+    {
+        ".expo",
+        ".git",
+        ".next",
+        "android",
+        "build",
+        "coverage",
+        "dist",
+        "e2e",
+        "ios",
+        "node_modules",
+        "test",
+        "tests",
+        "__tests__",
+    }
+)
 _NATIVE_INPUT_ID_HINTS = ("field", "input", "email", "password", "search", "username", "code", "otp")
 _TEST_VALIDATION_SCOPES = frozenset({"targeted_only", "current_head_acceptance", "full_suite"})
 _QA_CAPTURE_TARGETS = frozenset({"browser", "ios", "android", "desktop"})
@@ -165,10 +185,68 @@ def _native_selector_catalog(repo_dir: str | None, source_paths: Iterable[str] |
         accessibility_ids.update(match.group(1) for match in _ANDROID_COMPOSE_TEST_TAG_RE.finditer(source))
         text_anchors.update(match.group(1) for match in _ANDROID_TEXT_RE.finditer(source))
         text_anchors.update(match.group(1) for match in _ANDROID_COMPOSE_TEXT_RE.finditer(source))
+    for native_file in _catalog_files(roots=roots, patterns=("*.js", "*.jsx", "*.ts", "*.tsx")):
+        try:
+            source = native_file.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        accessibility_ids.update(match.group(1) for match in _REACT_NATIVE_TEST_ID_RE.finditer(source))
+        text_anchors.update(_clean_react_native_text_anchor(match.group(1)) for match in _REACT_NATIVE_TEXT_RE.finditer(source))
+        text_anchors.update(_react_native_language_text_anchors(source=source, source_path=native_file))
+        text_anchors.discard("")
     return {
         "accessibility_ids": sorted(accessibility_ids),
         "text_anchors": sorted(text_anchors),
         "ui_test_selectors": sorted(ui_test_selectors),
+    }
+
+
+def _clean_react_native_text_anchor(value: str) -> str:
+    return re.sub(r"\s+", " ", str(value or "").strip())
+
+
+def _react_native_language_text_anchors(*, source: str, source_path: Path) -> set[str]:
+    if "language" not in source_path.parts and ".lang." not in source_path.name:
+        return set()
+    anchors: set[str] = set()
+    for match in _JS_OBJECT_STRING_VALUE_RE.finditer(source):
+        value = next((group for group in match.groups() if group is not None), "")
+        decoded = value.replace("\\r", "\r").replace("\\n", "\n")
+        cleaned = _clean_react_native_text_anchor(decoded)
+        if cleaned:
+            anchors.add(cleaned)
+        for line in decoded.splitlines():
+            cleaned_line = _clean_react_native_text_anchor(line)
+            if cleaned_line:
+                anchors.add(cleaned_line)
+    return anchors
+
+
+def _shared_react_native_selector_catalog(repo_dir: str | None) -> dict[str, list[str]]:
+    resolved_repo_dir = Path(str(repo_dir or "").strip())
+    if not resolved_repo_dir.exists():
+        return {"accessibility_ids": [], "text_anchors": []}
+
+    accessibility_ids: set[str] = set()
+    text_anchors: set[str] = set()
+    for native_file in _catalog_files(roots=(resolved_repo_dir,), patterns=("*.js", "*.jsx", "*.ts", "*.tsx")):
+        try:
+            relative_parts = set(native_file.relative_to(resolved_repo_dir).parts[:-1])
+        except ValueError:
+            continue
+        if relative_parts & _REACT_NATIVE_SHARED_SOURCE_SKIP_PARTS:
+            continue
+        try:
+            source = native_file.read_text(encoding="utf-8")
+        except OSError:
+            continue
+        accessibility_ids.update(match.group(1) for match in _REACT_NATIVE_TEST_ID_RE.finditer(source))
+        text_anchors.update(_clean_react_native_text_anchor(match.group(1)) for match in _REACT_NATIVE_TEXT_RE.finditer(source))
+        text_anchors.update(_react_native_language_text_anchors(source=source, source_path=native_file))
+        text_anchors.discard("")
+    return {
+        "accessibility_ids": sorted(accessibility_ids),
+        "text_anchors": sorted(text_anchors),
     }
 
 
@@ -289,6 +367,9 @@ def _validate_native_qa_scenarios(
     repo_catalog = _native_selector_catalog(repo_dir)
     repo_valid_ids = set(repo_catalog["accessibility_ids"])
     repo_valid_texts = set(repo_catalog["text_anchors"])
+    shared_react_native_catalog = _shared_react_native_selector_catalog(repo_dir)
+    shared_react_native_ids = set(shared_react_native_catalog["accessibility_ids"])
+    shared_react_native_texts = set(shared_react_native_catalog["text_anchors"])
     target_catalogs = {
         target: _native_selector_catalog(repo_dir, source_paths=source_paths)
         for target, source_paths in (source_paths_by_target or {}).items()
@@ -298,8 +379,12 @@ def _validate_native_qa_scenarios(
             continue
         catalog = target_catalogs.get(scenario.capture_target)
         scoped_catalog = catalog is not None
-        valid_ids = set((catalog or {}).get("accessibility_ids", ())) if scoped_catalog else repo_valid_ids
-        valid_texts = set((catalog or {}).get("text_anchors", ())) if scoped_catalog else repo_valid_texts
+        if scoped_catalog:
+            valid_ids = set((catalog or {}).get("accessibility_ids", ())) | shared_react_native_ids
+            valid_texts = set((catalog or {}).get("text_anchors", ())) | shared_react_native_texts
+        else:
+            valid_ids = repo_valid_ids
+            valid_texts = repo_valid_texts
         for step in scenario.steps:
             selector = str(step.selector or "").strip()
             if selector.startswith("id="):

@@ -11,8 +11,11 @@ from scripts.qa_demo_android_recorder import find_element
 from scripts.qa_demo_android_recorder import launch_app
 from scripts.qa_demo_android_recorder import parse_bounds
 from scripts.qa_demo_android_recorder import preferred_adb_device
+from scripts.qa_demo_android_recorder import preferred_android_avd
 from scripts.qa_demo_android_recorder import qa_demo_launch_extras
 from scripts.qa_demo_android_recorder import record_live_screen_demo
+from scripts.qa_demo_android_recorder import resolve_android_build_tool
+from scripts.qa_demo_android_recorder import resolve_android_emulator
 from scripts.qa_demo_android_recorder import resolve_launch_activity
 from scripts.qa_demo_android_recorder import validate_mp4_recording
 from scripts.qa_demo_android_recorder import _run
@@ -27,6 +30,41 @@ device-1	device
 """
 
     assert preferred_adb_device(output) == "emulator-5554"
+
+
+def test_resolve_android_build_tool_uses_latest_sdk_build_tools(monkeypatch, tmp_path: Path) -> None:
+    sdk = tmp_path / "sdk"
+    old_tool = sdk / "build-tools" / "34.0.0" / "aapt"
+    new_tool = sdk / "build-tools" / "35.0.0" / "aapt"
+    old_tool.parent.mkdir(parents=True)
+    new_tool.parent.mkdir(parents=True)
+    old_tool.write_text("#!/bin/sh\n", encoding="utf-8")
+    new_tool.write_text("#!/bin/sh\n", encoding="utf-8")
+    monkeypatch.setenv("ANDROID_HOME", str(sdk))
+    monkeypatch.delenv("ANDROID_SDK_ROOT", raising=False)
+    monkeypatch.delenv("QA_DEMO_ANDROID_AAPT", raising=False)
+    monkeypatch.setattr("scripts.qa_demo_android_recorder.shutil.which", lambda _tool: None)
+    monkeypatch.setattr("scripts.qa_demo_android_recorder.Path.home", lambda: tmp_path / "home")
+
+    assert resolve_android_build_tool(tool_name="aapt", env_var="QA_DEMO_ANDROID_AAPT") == str(new_tool)
+
+
+def test_resolve_android_emulator_uses_sdk_emulator(monkeypatch, tmp_path: Path) -> None:
+    emulator = tmp_path / "sdk" / "emulator" / "emulator"
+    emulator.parent.mkdir(parents=True)
+    emulator.write_text("#!/bin/sh\n", encoding="utf-8")
+    monkeypatch.setenv("ANDROID_HOME", str(tmp_path / "sdk"))
+    monkeypatch.delenv("ANDROID_SDK_ROOT", raising=False)
+    monkeypatch.setattr("scripts.qa_demo_android_recorder.shutil.which", lambda _tool: None)
+    monkeypatch.setattr("scripts.qa_demo_android_recorder.Path.home", lambda: tmp_path / "home")
+
+    assert resolve_android_emulator() == str(emulator)
+
+
+def test_preferred_android_avd_uses_configured_avd(monkeypatch) -> None:
+    monkeypatch.setenv("QA_DEMO_ANDROID_AVD", "mb_qa_api33")
+
+    assert preferred_android_avd("Pixel_10\nmb_qa_api33\n") == "mb_qa_api33"
 
 
 def test_parse_bounds_returns_tappable_rectangle() -> None:

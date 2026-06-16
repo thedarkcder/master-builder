@@ -5,8 +5,10 @@ import json
 import os
 import re
 import signal
+import shutil
 import subprocess
 import sys
+import time
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
@@ -20,6 +22,7 @@ from orchestrator.core.workflow.runner import QaScenario, QaStep  # noqa: E402
 from scripts.qa_demo_release_context import qa_demo_launch_context  # noqa: E402
 
 DEFAULT_ADB_COMMAND_TIMEOUT_SECONDS = 60
+DEFAULT_ANDROID_EMULATOR_BOOT_TIMEOUT_SECONDS = 180
 
 
 @dataclass(frozen=True)
@@ -59,8 +62,8 @@ def main(argv: list[str]) -> int:
 
     output_dir = Path(str(payload.get("output_dir") or "").strip()).resolve()
     output_dir.mkdir(parents=True, exist_ok=True)
-    device_id = str(os.environ.get("QA_DEMO_ANDROID_DEVICE_ID") or "").strip() or preferred_adb_device(
-        _run(["adb", "devices"], capture_output=True).stdout
+    device_id = str(os.environ.get("QA_DEMO_ANDROID_DEVICE_ID") or "").strip() or ensure_preferred_android_device(
+        timeout_seconds=DEFAULT_ANDROID_EMULATOR_BOOT_TIMEOUT_SECONDS,
     )
     apk_path = Path(
         str(os.environ.get("QA_DEMO_ANDROID_APK") or "").strip()
@@ -106,6 +109,81 @@ def preferred_adb_device(adb_devices_output: str) -> str:
     if not devices:
         raise RuntimeError("No available Android emulator/device found via adb devices")
     return devices[0]
+
+
+def ensure_preferred_android_device(*, timeout_seconds: int = DEFAULT_ANDROID_EMULATOR_BOOT_TIMEOUT_SECONDS) -> str:
+    ready_devices = _ready_adb_devices(_run(["adb", "devices"], capture_output=True).stdout)
+    if ready_devices:
+        return ready_devices[0]
+    emulator = resolve_android_emulator()
+    avd = str(os.environ.get("QA_DEMO_ANDROID_AVD") or "").strip() or preferred_android_avd(
+        _run([emulator, "-list-avds"], capture_output=True).stdout
+    )
+    subprocess.Popen(  # noqa: S603 - executable is resolved from Android SDK/PATH above.
+        [emulator, "-avd", avd, "-no-window", "-no-audio", "-no-snapshot-save"],
+        stdout=subprocess.DEVNULL,
+        stderr=subprocess.DEVNULL,
+        text=True,
+    )
+    _run(["adb", "wait-for-device"], capture_output=True, timeout=timeout_seconds)
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        ready_devices = _ready_adb_devices(_run(["adb", "devices"], capture_output=True, check=False).stdout)
+        if ready_devices:
+            boot_completed = _run(
+                ["adb", "-s", ready_devices[0], "shell", "getprop", "sys.boot_completed"],
+                capture_output=True,
+                check=False,
+                timeout=10,
+            ).stdout.strip()
+            if boot_completed == "1":
+                return ready_devices[0]
+        time.sleep(2)
+    raise RuntimeError(f"Android emulator did not boot within {timeout_seconds} seconds: {avd}")
+
+
+def _ready_adb_devices(adb_devices_output: str) -> list[str]:
+    devices: list[str] = []
+    for raw_line in adb_devices_output.splitlines():
+        line = raw_line.strip()
+        if not line or line.startswith("List of devices"):
+            continue
+        parts = line.split()
+        if len(parts) >= 2 and parts[1] == "device":
+            devices.append(parts[0])
+    return devices
+
+
+def preferred_android_avd(emulator_list_avds_output: str) -> str:
+    avds = [line.strip() for line in emulator_list_avds_output.splitlines() if line.strip()]
+    if not avds:
+        raise RuntimeError("Android QA demo recording requires an Android Virtual Device when no adb device is ready")
+    configured = str(os.environ.get("QA_DEMO_ANDROID_AVD") or "").strip()
+    if configured:
+        if configured not in avds:
+            raise RuntimeError(f"Configured Android QA demo AVD does not exist: {configured}")
+        return configured
+    return avds[0]
+
+
+def resolve_android_emulator() -> str:
+    path_emulator = shutil.which("emulator")
+    if path_emulator:
+        return path_emulator
+    sdk_roots = [
+        str(os.environ.get("ANDROID_HOME") or "").strip(),
+        str(os.environ.get("ANDROID_SDK_ROOT") or "").strip(),
+        str(Path.home() / "Library" / "Android" / "sdk"),
+        str(Path.home() / "Android" / "Sdk"),
+    ]
+    for raw_root in sdk_roots:
+        if not raw_root:
+            continue
+        sdk_root = Path(raw_root).expanduser()
+        for candidate in (sdk_root / "emulator" / "emulator", sdk_root / "tools" / "emulator"):
+            if candidate.is_file():
+                return str(candidate)
+    raise RuntimeError("Android QA demo recording requires the Android emulator on PATH or under the Android SDK")
 
 
 def _target_source_paths(value: object) -> list[str]:
@@ -189,12 +267,51 @@ def _is_android_application_gradle_source(source: str) -> bool:
 
 
 def resolve_package_name(*, apk_path: Path) -> str:
-    aapt = os.environ.get("QA_DEMO_ANDROID_AAPT") or "aapt"
+    aapt = resolve_android_build_tool(
+        tool_name="aapt",
+        env_var="QA_DEMO_ANDROID_AAPT",
+    )
     result = _run([aapt, "dump", "badging", str(apk_path)], capture_output=True)
     match = re.search(r"package: name='([^']+)'", result.stdout)
     if match is None:
         raise RuntimeError(f"Unable to resolve Android package name from {apk_path}")
     return match.group(1)
+
+
+def resolve_android_build_tool(*, tool_name: str, env_var: str) -> str:
+    configured = str(os.environ.get(env_var) or "").strip()
+    if configured:
+        return configured
+    path_tool = shutil.which(tool_name)
+    if path_tool:
+        return path_tool
+    sdk_roots = [
+        str(os.environ.get("ANDROID_HOME") or "").strip(),
+        str(os.environ.get("ANDROID_SDK_ROOT") or "").strip(),
+        str(Path.home() / "Library" / "Android" / "sdk"),
+        str(Path.home() / "Android" / "Sdk"),
+    ]
+    candidates: list[Path] = []
+    for raw_root in sdk_roots:
+        if not raw_root:
+            continue
+        build_tools_dir = Path(raw_root).expanduser() / "build-tools"
+        if not build_tools_dir.exists():
+            continue
+        candidates.extend(path for path in build_tools_dir.glob(f"*/{tool_name}") if path.is_file())
+    if not candidates:
+        raise RuntimeError(f"Android QA demo recording requires {tool_name} on PATH or under an Android SDK build-tools directory")
+    return str(sorted(candidates, key=_android_build_tool_version_key)[-1])
+
+
+def _android_build_tool_version_key(path: Path) -> tuple[tuple[int, ...], str]:
+    parts: list[int] = []
+    for item in path.parent.name.split("."):
+        try:
+            parts.append(int(item))
+        except ValueError:
+            parts.append(0)
+    return tuple(parts), str(path)
 
 
 def install_apk(*, device_id: str, apk_path: Path) -> None:

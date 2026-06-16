@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import secrets
+import signal
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
@@ -19,13 +21,36 @@ from orchestrator.api.admin.deployment_release_service import (
 from orchestrator.api.schemas import ProjectDeploymentReleaseStatusUpdate, TenantDeploymentPlaneRead
 from orchestrator.core.config import Settings, get_settings
 from orchestrator.core.local_preview_route_sync import (
+    LOCAL_PREVIEW_ROUTE_SYNC_COMMAND_KIND,
     ensure_local_preview_route_sync_command,
     latest_local_preview_route_command,
 )
 from orchestrator.core.deployment_status import DEPLOYMENT_RELEASE_ACTIVE_STATUSES
+from orchestrator.core.node_release_contracts import (
+    INVALID_LEGACY_EXPO_WEB_START_COMMAND,
+    LEGACY_EXPO_CLI_INSTALL_COMMAND,
+    LEGACY_EXPO_CLI_INSTALL_COMMAND_OVERSIZED_WITH_PROJECT_DEPS,
+    LEGACY_EXPO_CLI_INSTALL_COMMAND_WITH_NATIVE_BUILD_TOOLS_WITHOUT_PROJECT_DEPS,
+    LEGACY_EXPO_CLI_INSTALL_COMMAND_WITH_SEPARATE_EXPO_INSTALL,
+    LEGACY_EXPO_CLI_INSTALL_COMMAND_WITHOUT_NPM_LOG_PROGRESS,
+    LEGACY_EXPO_CLI_INSTALL_COMMAND_WITHOUT_YARN_LOCK_CLEANUP,
+    LEGACY_EXPO_CLI_INSTALL_COMMAND_WITHOUT_NATIVE_BUILD_TOOLS,
+    LEGACY_EXPO_CLI_INSTALL_COMMAND_WITHOUT_WEBSOCKET,
+    LEGACY_EXPO_WEB_START_COMMAND,
+    LEGACY_EXPO_WEB_START_COMMAND_WITHOUT_OPENSSL,
+    STALE_LEGACY_EXPO_WEB_START_COMMAND,
+)
 from orchestrator.core.platform.secret_service import resolve_platform_secret_ref
 from orchestrator.core.platform.secret_manager import normalize_secret_ref, resolve_scoped_secret_ref
-from orchestrator.storage.models import Project, ProjectDeploymentRelease, Tenant
+from orchestrator.core.observability.logging import configure_logging
+from orchestrator.core.observability.otel_telemetry import initialize_telemetry, shutdown_telemetry
+from orchestrator.storage.database_support import ensure_postgres_database_url
+from orchestrator.storage.database_recovery import (
+    database_recovery_retry_delay_seconds,
+    retryable_database_recovery_error,
+)
+from orchestrator.storage.db import create_session_factory
+from orchestrator.storage.models import DeploymentHostCommand, Project, ProjectApp, ProjectDeploymentRelease, Tenant
 from orchestrator.tools.coolify_api import CoolifyApiClient, CoolifyApiConfig, CoolifyApiError
 
 logger = logging.getLogger(__name__)
@@ -35,6 +60,22 @@ _DEPLOYMENT_FAILURE_STATUSES = {"failed", "error", "crashed", "failure", "timeou
 _DEPLOYMENT_CANCELLED_STATUSES = {"cancelled", "canceled", "rollback", "rolled_back"}
 _DEPLOYMENT_SUCCESS_STATUSES = {"success", "succeeded", "complete", "completed", "done", "finished", "healthy"}
 _DEPLOYMENT_PROGRESS_STATUSES = {"queued", "provisioning", "deploying", "building", "running", "starting", "started", "pending", "preparing"}
+_LOCAL_PREVIEW_ROUTE_SYNC_MAX_ATTEMPTS = 5
+_STALE_LEGACY_EXPO_PROVIDER_START_COMMANDS = {
+    "npm run web",
+    INVALID_LEGACY_EXPO_WEB_START_COMMAND,
+    LEGACY_EXPO_WEB_START_COMMAND_WITHOUT_OPENSSL,
+    STALE_LEGACY_EXPO_WEB_START_COMMAND,
+}
+_STALE_LEGACY_EXPO_PROVIDER_INSTALL_COMMANDS = {
+    LEGACY_EXPO_CLI_INSTALL_COMMAND_WITH_SEPARATE_EXPO_INSTALL,
+    LEGACY_EXPO_CLI_INSTALL_COMMAND_OVERSIZED_WITH_PROJECT_DEPS,
+    LEGACY_EXPO_CLI_INSTALL_COMMAND_WITHOUT_NPM_LOG_PROGRESS,
+    LEGACY_EXPO_CLI_INSTALL_COMMAND_WITHOUT_YARN_LOCK_CLEANUP,
+    LEGACY_EXPO_CLI_INSTALL_COMMAND_WITH_NATIVE_BUILD_TOOLS_WITHOUT_PROJECT_DEPS,
+    LEGACY_EXPO_CLI_INSTALL_COMMAND_WITHOUT_NATIVE_BUILD_TOOLS,
+    LEGACY_EXPO_CLI_INSTALL_COMMAND_WITHOUT_WEBSOCKET,
+}
 
 
 @dataclass(frozen=True)
@@ -44,6 +85,7 @@ class CoolifyDeploymentObservation:
     status: str
     application_status: str | None = None
     provider_updated_at: datetime | None = None
+    provider_log_updated_at: datetime | None = None
     last_error: str | None = None
 
 
@@ -77,13 +119,46 @@ def _release_activity_anchor(
     release: ProjectDeploymentRelease,
     observation: CoolifyDeploymentObservation,
 ) -> datetime | None:
-    for candidate in (observation.provider_updated_at, release.started_at, release.requested_at, release.created_at):
+    for candidate in (
+        observation.provider_log_updated_at,
+        observation.provider_updated_at,
+        release.started_at,
+        release.requested_at,
+        release.created_at,
+    ):
         if candidate is None:
             continue
         if candidate.tzinfo is None:
             return candidate.replace(tzinfo=timezone.utc)
         return candidate.astimezone(timezone.utc)
     return None
+
+
+def _latest_coolify_log_timestamp(value: object) -> datetime | None:
+    entries: object
+    if isinstance(value, str):
+        normalized = value.strip()
+        if not normalized:
+            return None
+        try:
+            entries = json.loads(normalized)
+        except json.JSONDecodeError:
+            return None
+    else:
+        entries = value
+    if not isinstance(entries, list):
+        return None
+
+    latest: datetime | None = None
+    for entry in entries:
+        if not isinstance(entry, dict):
+            continue
+        parsed = _parse_provider_datetime(entry.get("timestamp"))
+        if parsed is None:
+            continue
+        if latest is None or parsed > latest:
+            latest = parsed
+    return latest
 
 
 def _stale_active_release_error(
@@ -109,6 +184,39 @@ def _stale_active_release_error(
         f"Deployment provider remained in progress status '{observation.status}' for more than "
         f"{timeout_seconds} seconds without reaching a terminal release state."
     )
+
+
+def _release_observation_failure_error(*, observation: CoolifyDeploymentObservation) -> str:
+    observed_status = _normalize_optional_string(observation.status) or "unknown"
+    application_status = _normalize_optional_string(observation.application_status)
+    if application_status is None:
+        return f"Deployment provider reported terminal failure status '{observed_status}'."
+    return (
+        f"Deployment provider reported status '{observed_status}', "
+        f"but application status was '{application_status}'."
+    )
+
+
+def _release_has_route_bindings(release: ProjectDeploymentRelease) -> bool:
+    provider_context = _coerce_dict(release.provider_context)
+    route_bindings = provider_context.get("route_bindings")
+    return isinstance(route_bindings, list) and any(isinstance(route, dict) for route in route_bindings)
+
+
+def _should_defer_unhealthy_success_to_route_verification(
+    *,
+    release: ProjectDeploymentRelease,
+    observation: CoolifyDeploymentObservation,
+) -> bool:
+    if str(release.release_kind or "").strip() != "run_preview":
+        return False
+    if not _release_has_route_bindings(release):
+        return False
+    observed = _normalize_release_status(observation.status)
+    application = _normalize_release_status(observation.application_status)
+    if observed not in _DEPLOYMENT_SUCCESS_STATUSES and "success" not in (observed or ""):
+        return False
+    return application in _DEPLOYMENT_FAILURE_STATUSES or "unhealthy" in (application or "")
 
 
 def _required_plane_value(value: str | None, field_name: str) -> str:
@@ -179,6 +287,16 @@ def _project_for_release(session: Session, *, release: ProjectDeploymentRelease)
     return project
 
 
+def _project_app_for_release(session: Session, *, release: ProjectDeploymentRelease) -> ProjectApp | None:
+    app_id = _normalize_optional_string(release.app_id)
+    if app_id is None:
+        return None
+    project_app = session.get(ProjectApp, app_id)
+    if project_app is None or project_app.tenant_id != release.tenant_id or project_app.project_id != release.project_id:
+        return None
+    return project_app
+
+
 def _coolify_client_for_tenant(
     *,
     session: Session,
@@ -247,9 +365,9 @@ def _coolify_observation_for_release(
     application_status = _normalize_optional_string(application_payload.get("status"))
     observed_deployment_uuid = _normalize_optional_string(payload.get("deployment_uuid")) or deployment_uuid
     observed_application_uuid = (
-        _normalize_optional_string(payload.get("application_id"))
-        or _normalize_optional_string(application_payload.get("uuid"))
+        _normalize_optional_string(application_payload.get("uuid"))
         or application_uuid
+        or _normalize_optional_string(payload.get("application_uuid"))
     )
     normalized_observed_status = _normalize_release_status(observed_status)
     last_error = (
@@ -263,8 +381,61 @@ def _coolify_observation_for_release(
         status=observed_status,
         application_status=application_status,
         provider_updated_at=_parse_provider_datetime(payload.get("updated_at") or payload.get("created_at")),
+        provider_log_updated_at=_latest_coolify_log_timestamp(payload.get("logs")),
         last_error=last_error,
     )
+
+
+def _provider_application_release_commands(
+    *,
+    client: CoolifyApiClient,
+    observation: CoolifyDeploymentObservation,
+) -> tuple[str | None, str | None]:
+    application_uuid = _normalize_optional_string(observation.application_uuid)
+    if application_uuid is None:
+        return None, None
+    application_payload = client.get_application(application_uuid=application_uuid)
+    return (
+        _normalize_optional_string(application_payload.get("start_command")),
+        _normalize_optional_string(application_payload.get("install_command")),
+    )
+
+
+def _stale_provider_application_contract_error(
+    *,
+    client: CoolifyApiClient,
+    release: ProjectDeploymentRelease,
+    project_app: ProjectApp | None,
+    observation: CoolifyDeploymentObservation,
+) -> str | None:
+    if str(release.release_kind or "").strip() != "run_preview":
+        return None
+    if project_app is None or _normalize_optional_string(project_app.detected_runtime) != "react_native_web":
+        return None
+    provider_start_command, provider_install_command = _provider_application_release_commands(
+        client=client,
+        observation=observation,
+    )
+    if provider_start_command in _STALE_LEGACY_EXPO_PROVIDER_START_COMMANDS:
+        return (
+            "Deployment provider application uses stale legacy Expo start command "
+            f"{provider_start_command!r}; expected {LEGACY_EXPO_WEB_START_COMMAND!r}."
+        )
+    if provider_install_command in _STALE_LEGACY_EXPO_PROVIDER_INSTALL_COMMANDS:
+        return (
+            "Deployment provider application uses stale legacy Expo install command "
+            f"{provider_install_command!r}; expected {LEGACY_EXPO_CLI_INSTALL_COMMAND!r}."
+        )
+    return None
+
+
+def _local_preview_route_sync_attempt_count(*, session: Session, release_id: str) -> int:
+    return len(session.execute(
+        select(DeploymentHostCommand.command_id).where(
+            DeploymentHostCommand.release_id == release_id,
+            DeploymentHostCommand.kind == LOCAL_PREVIEW_ROUTE_SYNC_COMMAND_KIND,
+        )
+    ).all())
 
 
 def list_reconcilable_deployment_releases(*, session: Session) -> list[ProjectDeploymentRelease]:
@@ -302,6 +473,45 @@ def reconcile_deployment_release(
         return False
 
     current_status = str(release.status or "").strip()
+    try:
+        contract_error = _stale_provider_application_contract_error(
+            client=client,
+            release=release,
+            project_app=_project_app_for_release(session, release=release),
+            observation=observation,
+        )
+    except CoolifyApiError as exc:
+        logger.warning(
+            "deployment_reconcile_coolify_application_contract_poll_failed tenant_id=%s project_id=%s release_id=%s error=%s",
+            release.tenant_id,
+            release.project_id,
+            release.release_id,
+            exc,
+        )
+        contract_error = None
+    if contract_error is not None:
+        updated = update_project_deployment_release_status(
+            session=session,
+            tenant_id=release.tenant_id,
+            project_id=release.project_id,
+            release_id=release.release_id,
+            app_id=release.app_id,
+            payload=ProjectDeploymentReleaseStatusUpdate(
+                status="failed",
+                last_error=contract_error,
+                deployment_uuid=observation.deployment_uuid,
+            ),
+        )
+        logger.warning(
+            "deployment_reconcile_stale_provider_contract tenant_id=%s project_id=%s release_id=%s from_status=%s to_status=%s",
+            release.tenant_id,
+            release.project_id,
+            release.release_id,
+            current_status,
+            updated.status,
+        )
+        return True
+
     stale_error = _stale_active_release_error(
         release=release,
         observation=observation,
@@ -340,6 +550,14 @@ def reconcile_deployment_release(
     if next_status is None:
         return False
     last_error = observation.last_error
+    if next_status in {"failed", "rolled_back"} and _should_defer_unhealthy_success_to_route_verification(
+        release=release,
+        observation=observation,
+    ):
+        next_status = "live"
+        last_error = None
+    if next_status in {"failed", "rolled_back"} and not last_error:
+        last_error = _release_observation_failure_error(observation=observation)
     if next_status == "live":
         verification = verify_release_route_bindings(release)
         if not verification.ok:
@@ -376,8 +594,21 @@ def reconcile_deployment_release(
                         else "Local preview route sync failed"
                     )
                 else:
-                    next_status = "failed"
-                    last_error = f"Local preview route remained inactive after sync: {verification.error}"
+                    attempt_count = _local_preview_route_sync_attempt_count(session=session, release_id=release.release_id)
+                    if attempt_count >= _LOCAL_PREVIEW_ROUTE_SYNC_MAX_ATTEMPTS:
+                        next_status = "failed"
+                        last_error = f"Local preview route remained inactive after sync: {verification.error}"
+                    else:
+                        ensure_local_preview_route_sync_command(
+                            session=session,
+                            tenant=tenant,
+                            project=project,
+                            release=release,
+                            deployment_uuid=observation.deployment_uuid,
+                            force=True,
+                        )
+                        next_status = "route_activating"
+                        last_error = verification.error
             else:
                 next_status = "route_activating"
                 last_error = verification.error
@@ -412,33 +643,56 @@ def reconcile_deployment_releases_once(
     settings: Settings,
     limit: int | None = None,
 ) -> int:
-    _ = settings
     processed = 0
     batch_size = max(1, int(limit or 25))
+    reconciled_release_ids: set[str] = set()
     with session_factory() as session:
-        releases = list_reconcilable_deployment_releases(session=session)[:batch_size]
-        for release in releases:
+        release_ids = [release.release_id for release in list_reconcilable_deployment_releases(session=session)[:batch_size]]
+    for release_id in release_ids:
+        with session_factory() as session:
+            release = session.get(ProjectDeploymentRelease, release_id)
+            if release is None or str(release.status or "").strip() not in DEPLOYMENT_RELEASE_ACTIVE_STATUSES:
+                continue
+            tenant_id = release.tenant_id
+            project_id = release.project_id
             try:
                 if reconcile_deployment_release(session=session, release=release):
+                    session.commit()
                     processed += 1
+                    reconciled_release_ids.add(release_id)
+                else:
+                    session.rollback()
             except HTTPException as exc:
+                session.rollback()
                 logger.warning(
                     "deployment_reconcile_release_skipped tenant_id=%s project_id=%s release_id=%s status_code=%s detail=%s",
-                    release.tenant_id,
-                    release.project_id,
-                    release.release_id,
+                    tenant_id,
+                    project_id,
+                    release_id,
                     exc.status_code,
                     exc.detail,
                 )
             except Exception as exc:  # noqa: BLE001
+                session.rollback()
                 logger.exception(
                     "deployment_reconcile_release_failed tenant_id=%s project_id=%s release_id=%s error=%s",
-                    release.tenant_id,
-                    release.project_id,
-                    release.release_id,
+                    tenant_id,
+                    project_id,
+                    release_id,
                     exc,
                 )
-        session.commit()
+    with session_factory() as session:
+        from orchestrator.core.deployment_previews import cleanup_stale_run_preview_deployments
+
+        cleanup_result = cleanup_stale_run_preview_deployments(
+            session=session,
+            settings=settings,
+            limit=batch_size,
+            exclude_release_ids=reconciled_release_ids,
+        )
+        if cleanup_result.destroyed_release_ids:
+            session.commit()
+            processed += len(cleanup_result.destroyed_release_ids)
     return processed
 
 
@@ -449,6 +703,7 @@ async def run_deployment_reconciliation_loop(
     stop_event: asyncio.Event,
 ) -> None:
     poll_interval_seconds = max(5, int(getattr(settings, "deployment_reconcile_poll_seconds", 30)))
+    db_recovery_attempts = 0
     while not stop_event.is_set():
         try:
             processed = await asyncio.to_thread(
@@ -456,14 +711,71 @@ async def run_deployment_reconciliation_loop(
                 session_factory=session_factory,
                 settings=settings,
             )
+            db_recovery_attempts = 0
             if processed:
                 logger.info("deployment_reconcile_cycle_completed processed=%s", processed)
-        except Exception:
+        except Exception as exc:
+            if retryable_database_recovery_error(exc):
+                db_recovery_attempts += 1
+                retry_delay_seconds = database_recovery_retry_delay_seconds(attempt=db_recovery_attempts)
+                logger.warning(
+                    "deployment_reconcile_database_unavailable attempt=%s retry_in_seconds=%.1f error=%s",
+                    db_recovery_attempts,
+                    retry_delay_seconds,
+                    exc,
+                )
+                try:
+                    await asyncio.wait_for(stop_event.wait(), timeout=retry_delay_seconds)
+                except asyncio.TimeoutError:
+                    continue
+                continue
             logger.exception("deployment_reconcile_cycle_failed")
         try:
             await asyncio.wait_for(stop_event.wait(), timeout=poll_interval_seconds)
         except asyncio.TimeoutError:
             continue
+
+
+def run_deployment_reconciler() -> None:
+    settings = get_settings()
+    configure_logging(
+        settings.log_level,
+        environment=settings.sentry_environment,
+        platform_version=settings.sentry_release or "dev-local",
+        default_agent_id="deployment-reconciler",
+    )
+    initialize_telemetry(settings=settings, service_name="deployment-reconciler")
+    ensure_postgres_database_url(
+        database_url=settings.database_url,
+        context="deployment reconciler runtime",
+        allow_sqlite_for_tests=bool(getattr(settings, "allow_sqlite_for_tests", False)),
+    )
+    session_factory = create_session_factory(database_url=settings.database_url)
+
+    async def _run() -> None:
+        loop = asyncio.get_running_loop()
+        stop_event = asyncio.Event()
+
+        def _request_stop() -> None:
+            stop_event.set()
+
+        for signum in (signal.SIGINT, signal.SIGTERM):
+            try:
+                loop.add_signal_handler(signum, _request_stop)
+            except NotImplementedError:  # pragma: no cover - Windows event loops only.
+                signal.signal(signum, lambda _sig, _frame: loop.call_soon_threadsafe(_request_stop))
+
+        logger.info("deployment_reconciler_runtime_started")
+        await run_deployment_reconciliation_loop(
+            session_factory=session_factory,
+            settings=settings,
+            stop_event=stop_event,
+        )
+
+    try:
+        asyncio.run(_run())
+    finally:
+        shutdown_telemetry()
 
 
 def _extract_webhook_secret_ref(tenant_plane: TenantDeploymentPlaneRead) -> str | None:
