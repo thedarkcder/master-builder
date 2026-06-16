@@ -29,7 +29,9 @@ Native Codex tools available directly in this runtime: {{ native_tools_json }}
 
 Required actions:
 1. Produce several walkthrough scenarios that a QA engineer would actually execute.
-2. Cover the acceptance criteria with realistic main-path behavior and at least two PM-planned variant paths per demo requirement.
+2. Cover the acceptance criteria with realistic main-path behavior and PM-planned variant paths per demo requirement.
+2a. For every PM demo requirement, produce at least `1 + variants.length` scenarios for that requirement's `capture_target`: one scenario whose objective or expected outcomes quote the PM demo requirement `title` or `acceptance_criterion`, plus one scenario per listed variant.
+2b. For every PM demo requirement variant, include the exact variant sentence in that variant scenario's objective or expected outcomes. Do not paraphrase away the PM title, acceptance criterion, or variant text; downstream recording coverage validates those strings.
 3. Include at least one attempt-to-break or misuse scenario when the criteria describe interactive behavior.
 4. Set `capture_target` on every scenario and only use targets listed in `Available capture targets`.
 5. For `capture_target="browser"`, keep the scenario executable against the supplied browser capture reference and use `start_path` relative to that reference when possible.

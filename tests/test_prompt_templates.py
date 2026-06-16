@@ -74,6 +74,8 @@ class PromptTemplateTests(unittest.TestCase):
         prompt_text = prompt_path.read_text(encoding="utf-8")
         self.assertIn("Browser capture reference", prompt_text)
         self.assertIn('For `capture_target="browser"`', prompt_text)
+        self.assertIn("produce at least `1 + variants.length` scenarios", prompt_text)
+        self.assertIn("include the exact variant sentence", prompt_text)
         self.assertIn('For `capture_target="ios"`, `capture_target="android"`, or `capture_target="desktop"`', prompt_text)
         self.assertIn("use `id=<accessibility_identifier>`", prompt_text)
         self.assertIn("use `text=<visible text>`", prompt_text)

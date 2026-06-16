@@ -201,6 +201,7 @@ def test_complete_runs_qa_demo_stage_before_finalization() -> None:
             _qa_recording(name="Repeat action remains safe", index=3),
         ],
     )
+    preview_release = SimpleNamespace(release_id="release-preview-1", release_kind="run_preview", status="live", service_urls=[])
     finalizer_calls: dict[str, object] = {}
 
     class _Finalizer:
@@ -222,7 +223,7 @@ def test_complete_runs_qa_demo_stage_before_finalization() -> None:
     with (
         patch(
             "orchestrator.core.worker.run_outcome_policy.create_run_preview_deployment",
-            return_value=SimpleNamespace(created=False, reason="existing", release=SimpleNamespace(service_urls=[])),
+            return_value=SimpleNamespace(created=False, reason="existing", release=preview_release),
         ),
         patch(
             "orchestrator.core.worker.run_outcome_policy.execute_qa_demo_stage",
@@ -232,6 +233,7 @@ def test_complete_runs_qa_demo_stage_before_finalization() -> None:
             "orchestrator.core.worker.run_outcome_policy.update_pull_request_with_demo_evidence",
             return_value="updated-body",
         ) as update_pr_mock,
+        patch("orchestrator.core.worker.run_outcome_policy.destroy_project_deployment_preview_release") as destroy_preview_mock,
         patch("orchestrator.core.worker.run_outcome_policy.WorkflowFinalizer", _Finalizer),
         patch("orchestrator.core.worker.run_outcome_policy.CompletionTailExecutor") as tail_executor_cls,
     ):
@@ -254,10 +256,17 @@ def test_complete_runs_qa_demo_stage_before_finalization() -> None:
     assert checkpoint.qa_result == qa_result
     assert update_pr_mock.called
     assert update_pr_mock.call_args.kwargs["required_recording_counts"] == {"browser": 3}
+    destroy_preview_mock.assert_called_once_with(
+        session=session,
+        tenant_id="tenant-1",
+        project_id="project-1",
+        release_id="release-preview-1",
+        reason="qa_demo_complete",
+    )
     assert finalizer_calls["workflow_result"].orchestration_stage_trace[-1]["stage"] == "qa"
 
 
-def test_complete_forces_new_preview_release_when_resuming_qa_demo_stage() -> None:
+def test_complete_does_not_force_replace_preview_release_when_resuming_qa_demo_stage() -> None:
     session = SimpleNamespace(refresh=lambda _run: None)
     deps = _deps()
     prepared = _prepared(_build_snapshot(), effective_policy={"qa_demo_recording_enabled": True})
@@ -317,13 +326,320 @@ def test_complete_forces_new_preview_release_when_resuming_qa_demo_stage() -> No
             execution_context={"execution_branch": "run/MAB-400/run-1"},
         )
 
-    assert preview_mock.call_args.kwargs["force"] is True
+    assert preview_mock.call_args.kwargs["force"] is False
 
 
-def test_complete_blocks_success_when_qa_demo_stage_cannot_finish() -> None:
+def test_complete_blocks_success_when_qa_demo_preview_cleanup_fails() -> None:
     session = SimpleNamespace(refresh=lambda _run: None)
     deps = _deps()
     prepared = _prepared(_build_snapshot(), effective_policy={"qa_demo_recording_enabled": True})
+    workflow_result = _workflow_result()
+    qa_result = QaResult(
+        summary=["Recorded demos"],
+        scenarios=[],
+        recordings=[
+            _qa_recording(name="Happy path", index=1),
+            _qa_recording(name="Invalid input is rejected", index=2),
+            _qa_recording(name="Repeat action remains safe", index=3),
+        ],
+    )
+    preview_release = SimpleNamespace(release_id="release-preview-1", release_kind="run_preview", status="live", service_urls=[])
+    finalizer_calls: dict[str, object] = {}
+
+    class _Finalizer:
+        def __init__(self, **_kwargs):
+            pass
+
+        def finalize(self, **kwargs):
+            finalizer_calls.update(kwargs)
+            return SimpleNamespace(
+                run=prepared.run,
+                workflow_result=kwargs["workflow_result"],
+                persisted_status="blocked",
+                last_error=kwargs["workflow_result"].blocker_message,
+                persisted_plan=prepared.run.plan,
+                event_types=(),
+                tail_steps=(),
+            )
+
+    with (
+        patch(
+            "orchestrator.core.worker.run_outcome_policy.create_run_preview_deployment",
+            return_value=SimpleNamespace(created=False, reason="existing", release=preview_release),
+        ),
+        patch("orchestrator.core.worker.run_outcome_policy.execute_qa_demo_stage", return_value=qa_result),
+        patch(
+            "orchestrator.core.worker.run_outcome_policy.update_pull_request_with_demo_evidence",
+            return_value="updated-body",
+        ),
+        patch(
+            "orchestrator.core.worker.run_outcome_policy.destroy_project_deployment_preview_release",
+            side_effect=RuntimeError("provider deletion failed"),
+        ) as destroy_preview_mock,
+        patch("orchestrator.core.worker.run_outcome_policy.WorkflowFinalizer", _Finalizer),
+        patch("orchestrator.core.worker.run_outcome_policy.CompletionTailExecutor") as tail_executor_cls,
+    ):
+        tail_executor_cls.return_value.execute.return_value = None
+        RunOutcomePolicy(
+            session=session,
+            settings=SimpleNamespace(project_repo_checkout_base_dir="/tmp/workdirs"),
+            deps=deps,
+            cleanup_run_workspaces_safe_fn=MagicMock(),
+        ).complete(
+            prepared=prepared,
+            workflow_result=workflow_result,
+            execution_context={"execution_branch": "run/MAB-400/run-1"},
+        )
+
+    destroy_preview_mock.assert_called_once()
+    assert finalizer_calls["workflow_result"].outcome == "blocked"
+    assert "QA demo preview cleanup failed" in finalizer_calls["workflow_result"].blocker_message
+    assert "provider deletion failed" in finalizer_calls["workflow_result"].blocker_message
+    final_checkpoint = deps.execution.persist_stage_checkpoint_fn.call_args.kwargs["checkpoint"]
+    assert final_checkpoint.stage == "qa"
+    assert final_checkpoint.status == "blocked"
+
+
+def test_complete_reuses_waiting_preview_release_when_resuming_qa_demo_after_release_wait() -> None:
+    waiting_release = SimpleNamespace(
+        release_id="release-preview-1",
+        tenant_id="tenant-1",
+        project_id="project-1",
+        source_run_id="run-1",
+        release_kind="run_preview",
+        status="live",
+        service_urls=[],
+    )
+    session = SimpleNamespace(refresh=lambda _run: None, get=lambda _model, _id: waiting_release)
+    deps = _deps()
+    prepared = _prepared(_build_snapshot(), effective_policy={"qa_demo_recording_enabled": True})
+    prepared.workflow_request.entry_mode = "resume"
+    prepared.workflow_request.entry_stage = "qa"
+    workflow_result = _workflow_result()
+    qa_result = QaResult(
+        summary=["Recorded demos"],
+        scenarios=[],
+        recordings=[
+            _qa_recording(name="Happy path", index=1),
+            _qa_recording(name="Invalid input is rejected", index=2),
+            _qa_recording(name="Repeat action remains safe", index=3),
+        ],
+    )
+
+    class _Finalizer:
+        def __init__(self, **_kwargs):
+            pass
+
+        def finalize(self, **kwargs):
+            return SimpleNamespace(
+                run=prepared.run,
+                workflow_result=kwargs["workflow_result"],
+                persisted_status="succeeded",
+                last_error=None,
+                persisted_plan=prepared.run.plan,
+                event_types=(),
+                tail_steps=(),
+            )
+
+    with (
+        patch(
+            "orchestrator.core.worker.run_outcome_policy.create_run_preview_deployment",
+        ) as preview_mock,
+        patch(
+            "orchestrator.core.worker.run_outcome_policy.execute_qa_demo_stage",
+            return_value=qa_result,
+        ) as qa_mock,
+        patch(
+            "orchestrator.core.worker.run_outcome_policy.update_pull_request_with_demo_evidence",
+            return_value="updated-body",
+        ),
+        patch("orchestrator.core.worker.run_outcome_policy.WorkflowFinalizer", _Finalizer),
+        patch("orchestrator.core.worker.run_outcome_policy.CompletionTailExecutor") as tail_executor_cls,
+    ):
+        tail_executor_cls.return_value.execute.return_value = None
+        RunOutcomePolicy(
+            session=session,
+            settings=SimpleNamespace(project_repo_checkout_base_dir="/tmp/workdirs"),
+            deps=deps,
+            cleanup_run_workspaces_safe_fn=MagicMock(),
+        ).complete(
+            prepared=prepared,
+            workflow_result=workflow_result,
+            execution_context={
+                "execution_branch": "run/MAB-400/run-1",
+                "qa_demo_waiting_release_id": "release-preview-1",
+            },
+        )
+
+    preview_mock.assert_not_called()
+    assert qa_mock.call_args.kwargs["preview_release"] is waiting_release
+
+
+def test_complete_reuses_waiting_preview_release_from_persisted_snapshot_context() -> None:
+    waiting_release = SimpleNamespace(
+        release_id="release-preview-1",
+        tenant_id="tenant-1",
+        project_id="project-1",
+        source_run_id="run-1",
+        release_kind="run_preview",
+        status="live",
+        service_urls=[],
+    )
+    session = SimpleNamespace(refresh=lambda _run: None, get=lambda _model, _id: waiting_release)
+    deps = _deps()
+    snapshot = ExecutionSnapshot.require(_build_snapshot())
+    snapshot.context.execution_context["qa_demo_waiting_release_id"] = "release-preview-1"
+    prepared = _prepared(snapshot.dump(), effective_policy={"qa_demo_recording_enabled": True})
+    prepared.workflow_request.entry_mode = "resume"
+    prepared.workflow_request.entry_stage = "qa"
+    workflow_result = _workflow_result()
+    qa_result = QaResult(
+        summary=["Recorded demos"],
+        scenarios=[],
+        recordings=[
+            _qa_recording(name="Happy path", index=1),
+            _qa_recording(name="Invalid input is rejected", index=2),
+            _qa_recording(name="Repeat action remains safe", index=3),
+        ],
+    )
+
+    class _Finalizer:
+        def __init__(self, **_kwargs):
+            pass
+
+        def finalize(self, **kwargs):
+            return SimpleNamespace(
+                run=prepared.run,
+                workflow_result=kwargs["workflow_result"],
+                persisted_status="succeeded",
+                last_error=None,
+                persisted_plan=prepared.run.plan,
+                event_types=(),
+                tail_steps=(),
+            )
+
+    with (
+        patch(
+            "orchestrator.core.worker.run_outcome_policy.create_run_preview_deployment",
+        ) as preview_mock,
+        patch(
+            "orchestrator.core.worker.run_outcome_policy.execute_qa_demo_stage",
+            return_value=qa_result,
+        ) as qa_mock,
+        patch(
+            "orchestrator.core.worker.run_outcome_policy.update_pull_request_with_demo_evidence",
+            return_value="updated-body",
+        ),
+        patch("orchestrator.core.worker.run_outcome_policy.WorkflowFinalizer", _Finalizer),
+        patch("orchestrator.core.worker.run_outcome_policy.CompletionTailExecutor") as tail_executor_cls,
+    ):
+        tail_executor_cls.return_value.execute.return_value = None
+        RunOutcomePolicy(
+            session=session,
+            settings=SimpleNamespace(project_repo_checkout_base_dir="/tmp/workdirs"),
+            deps=deps,
+            cleanup_run_workspaces_safe_fn=MagicMock(),
+        ).complete(
+            prepared=prepared,
+            workflow_result=workflow_result,
+            execution_context={"execution_branch": "run/MAB-400/run-1"},
+        )
+
+    preview_mock.assert_not_called()
+    assert qa_mock.call_args.kwargs["preview_release"] is waiting_release
+
+
+def test_complete_regenerates_preview_when_waiting_release_failed() -> None:
+    failed_waiting_release = SimpleNamespace(
+        release_id="release-preview-1",
+        tenant_id="tenant-1",
+        project_id="project-1",
+        source_run_id="run-1",
+        release_kind="run_preview",
+        status="failed",
+        service_urls=[],
+        last_error="previous preview failed",
+    )
+    regenerated_release = SimpleNamespace(
+        release_id="release-preview-2",
+        tenant_id="tenant-1",
+        project_id="project-1",
+        source_run_id="run-1",
+        release_kind="run_preview",
+        status="live",
+        service_urls=[],
+    )
+    session = SimpleNamespace(refresh=lambda _run: None, get=lambda _model, _id: failed_waiting_release)
+    deps = _deps()
+    snapshot = ExecutionSnapshot.require(_build_snapshot())
+    snapshot.context.execution_context["qa_demo_waiting_release_id"] = "release-preview-1"
+    prepared = _prepared(snapshot.dump(), effective_policy={"qa_demo_recording_enabled": True})
+    prepared.workflow_request.entry_mode = "resume"
+    prepared.workflow_request.entry_stage = "qa"
+    workflow_result = _workflow_result()
+    qa_result = QaResult(
+        summary=["Recorded demos"],
+        scenarios=[],
+        recordings=[
+            _qa_recording(name="Happy path", index=1),
+            _qa_recording(name="Invalid input is rejected", index=2),
+            _qa_recording(name="Repeat action remains safe", index=3),
+        ],
+    )
+
+    class _Finalizer:
+        def __init__(self, **_kwargs):
+            pass
+
+        def finalize(self, **kwargs):
+            return SimpleNamespace(
+                run=prepared.run,
+                workflow_result=kwargs["workflow_result"],
+                persisted_status="succeeded",
+                last_error=None,
+                persisted_plan=prepared.run.plan,
+                event_types=(),
+                tail_steps=(),
+            )
+
+    with (
+        patch(
+            "orchestrator.core.worker.run_outcome_policy.create_run_preview_deployment",
+            return_value=SimpleNamespace(created=True, reason="created", release=regenerated_release),
+        ) as preview_mock,
+        patch(
+            "orchestrator.core.worker.run_outcome_policy.execute_qa_demo_stage",
+            return_value=qa_result,
+        ) as qa_mock,
+        patch(
+            "orchestrator.core.worker.run_outcome_policy.update_pull_request_with_demo_evidence",
+            return_value="updated-body",
+        ),
+        patch("orchestrator.core.worker.run_outcome_policy.WorkflowFinalizer", _Finalizer),
+        patch("orchestrator.core.worker.run_outcome_policy.CompletionTailExecutor") as tail_executor_cls,
+    ):
+        tail_executor_cls.return_value.execute.return_value = None
+        RunOutcomePolicy(
+            session=session,
+            settings=SimpleNamespace(project_repo_checkout_base_dir="/tmp/workdirs"),
+            deps=deps,
+            cleanup_run_workspaces_safe_fn=MagicMock(),
+        ).complete(
+            prepared=prepared,
+            workflow_result=workflow_result,
+            execution_context={"execution_branch": "run/MAB-400/run-1"},
+        )
+
+    preview_mock.assert_called_once()
+    assert qa_mock.call_args.kwargs["preview_release"] is regenerated_release
+
+
+def test_complete_fails_on_conflicting_waiting_preview_release_contexts() -> None:
+    session = SimpleNamespace(refresh=lambda _run: None)
+    deps = _deps()
+    snapshot = ExecutionSnapshot.require(_build_snapshot())
+    snapshot.context.execution_context["qa_demo_waiting_release_id"] = "release-preview-1"
+    prepared = _prepared(snapshot.dump(), effective_policy={"qa_demo_recording_enabled": True})
     workflow_result = _workflow_result()
     finalizer_calls: dict[str, object] = {}
 
@@ -346,12 +662,65 @@ def test_complete_blocks_success_when_qa_demo_stage_cannot_finish() -> None:
     with (
         patch(
             "orchestrator.core.worker.run_outcome_policy.create_run_preview_deployment",
-            return_value=SimpleNamespace(created=False, reason="existing", release=SimpleNamespace(service_urls=[])),
+        ) as preview_mock,
+        patch("orchestrator.core.worker.run_outcome_policy.WorkflowFinalizer", _Finalizer),
+        patch("orchestrator.core.worker.run_outcome_policy.CompletionTailExecutor") as tail_executor_cls,
+    ):
+        tail_executor_cls.return_value.execute.return_value = None
+        RunOutcomePolicy(
+            session=session,
+            settings=SimpleNamespace(project_repo_checkout_base_dir="/tmp/workdirs"),
+            deps=deps,
+            cleanup_run_workspaces_safe_fn=MagicMock(),
+        ).complete(
+            prepared=prepared,
+            workflow_result=workflow_result,
+            execution_context={
+                "execution_branch": "run/MAB-400/run-1",
+                "qa_demo_waiting_release_id": "release-preview-2",
+            },
+        )
+
+    preview_mock.assert_not_called()
+    finalized_result = finalizer_calls["workflow_result"]
+    assert finalized_result.outcome == "blocked"
+    assert "QA demo waiting release id conflict" in finalized_result.blocker_message
+
+
+def test_complete_blocks_success_when_qa_demo_stage_cannot_finish() -> None:
+    session = SimpleNamespace(refresh=lambda _run: None)
+    deps = _deps()
+    prepared = _prepared(_build_snapshot(), effective_policy={"qa_demo_recording_enabled": True})
+    workflow_result = _workflow_result()
+    preview_release = SimpleNamespace(release_id="release-preview-1", release_kind="run_preview", status="live", service_urls=[])
+    finalizer_calls: dict[str, object] = {}
+
+    class _Finalizer:
+        def __init__(self, **_kwargs):
+            pass
+
+        def finalize(self, **kwargs):
+            finalizer_calls.update(kwargs)
+            return SimpleNamespace(
+                run=prepared.run,
+                workflow_result=kwargs["workflow_result"],
+                persisted_status="blocked",
+                last_error=kwargs["workflow_result"].blocker_message,
+                persisted_plan=prepared.run.plan,
+                event_types=(),
+                tail_steps=(),
+            )
+
+    with (
+        patch(
+            "orchestrator.core.worker.run_outcome_policy.create_run_preview_deployment",
+            return_value=SimpleNamespace(created=False, reason="existing", release=preview_release),
         ),
         patch(
             "orchestrator.core.worker.run_outcome_policy.execute_qa_demo_stage",
             side_effect=RuntimeError("upload failed after retries"),
         ),
+        patch("orchestrator.core.worker.run_outcome_policy.destroy_project_deployment_preview_release") as destroy_preview_mock,
         patch("orchestrator.core.worker.run_outcome_policy.WorkflowFinalizer", _Finalizer),
         patch("orchestrator.core.worker.run_outcome_policy.CompletionTailExecutor") as tail_executor_cls,
     ):
@@ -372,6 +741,13 @@ def test_complete_blocks_success_when_qa_demo_stage_cannot_finish() -> None:
     assert checkpoint.status == "blocked"
     assert finalizer_calls["workflow_result"].outcome == "blocked"
     assert "upload failed after retries" in finalizer_calls["workflow_result"].blocker_message
+    destroy_preview_mock.assert_called_once_with(
+        session=session,
+        tenant_id="tenant-1",
+        project_id="project-1",
+        release_id="release-preview-1",
+        reason="qa_demo_failed",
+    )
 
 
 def test_complete_blocks_demo_required_success_when_preview_release_is_not_created() -> None:

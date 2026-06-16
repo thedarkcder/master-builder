@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 from dataclasses import replace
 
-from orchestrator.core.deployment_previews import create_run_preview_deployment
+from orchestrator.core.deployment_previews import create_run_preview_deployment, destroy_project_deployment_preview_release
 from orchestrator.core.qa.demo_service import (
     execute_qa_demo_stage,
     next_required_qa_demo_worker_capability,
@@ -19,6 +19,7 @@ from orchestrator.core.workflow.execution_artifacts import latest_pushed_executi
 from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 from orchestrator.core.workflow.runner import QaResult, WorkflowStageCheckpoint
 from orchestrator.core.worker.capabilities import worker_label_for_capability
+from orchestrator.storage.models import ProjectDeploymentRelease
 
 _QA_DEMO_PREVIEW_PENDING_STATUSES = frozenset({"queued", "provisioning", "deploying", "route_activating"})
 _QA_DEMO_PREVIEW_TERMINAL_FAILURE_STATUSES = frozenset({"failed", "rolled_back", "destroyed"})
@@ -176,7 +177,23 @@ class RunOutcomePolicy:
                     ),
                 )
             try:
-                if workflow_result.outcome == "success" and (not demo_recording_required or qa_plan is not None):
+                waiting_preview_release = None
+                if demo_recording_required and workflow_result.outcome == "success":
+                    waiting_preview_release = _qa_demo_waiting_preview_release(
+                        session=self._session,
+                        tenant_id=run.tenant_id,
+                        project_id=project.project_id,
+                        run_id=run.run_id,
+                        execution_context=execution_context,
+                        persisted_plan=getattr(run, "plan", None),
+                    )
+                    if waiting_preview_release is not None:
+                        preview_release = waiting_preview_release
+                if (
+                    workflow_result.outcome == "success"
+                    and (not demo_recording_required or qa_plan is not None)
+                    and preview_release is None
+                ):
                     preview_result = create_run_preview_deployment(
                         session=self._session,
                         tenant=prepared.tenant,
@@ -187,6 +204,8 @@ class RunOutcomePolicy:
                         force=_qa_demo_preview_force_requested(
                             workflow_request=getattr(prepared, "workflow_request", None),
                             demo_recording_required=demo_recording_required,
+                            execution_context=execution_context,
+                            persisted_plan=getattr(run, "plan", None),
                         ),
                     )
                     preview_release = preview_result.release
@@ -461,6 +480,20 @@ class RunOutcomePolicy:
                 ],
             )
         if qa_result.outcome != "continue":
+            cleanup_error = self._cleanup_qa_demo_preview_release(
+                prepared=prepared,
+                preview_release=preview_release,
+                reason="qa_demo_failed",
+            )
+            if cleanup_error:
+                qa_result = replace(
+                    qa_result,
+                    blocker_message=(
+                        (qa_result.blocker_message or qa_result.feedback or _summarize_qa_result(qa_result))
+                        + f" {cleanup_error}"
+                    ),
+                    summary=[*list(qa_result.summary or []), cleanup_error],
+                )
             return _workflow_result_with_qa_blocker(
                 workflow_result=workflow_result,
                 attempt=attempt,
@@ -492,10 +525,40 @@ class RunOutcomePolicy:
                 attempt=attempt,
                 execution_context=execution_context,
             )
+            cleanup_error = self._cleanup_qa_demo_preview_release(
+                prepared=prepared,
+                preview_release=preview_release,
+                reason="qa_demo_failed",
+            )
+            if cleanup_error:
+                message = f"{message} {cleanup_error}"
             return _workflow_result_with_qa_blocker(
                 workflow_result=workflow_result,
                 attempt=attempt,
                 message=message,
+            )
+        cleanup_error = self._cleanup_qa_demo_preview_release(
+            prepared=prepared,
+            preview_release=preview_release,
+            reason="qa_demo_complete",
+        )
+        if cleanup_error:
+            blocked_qa_result = replace(
+                qa_result,
+                outcome="blocked",
+                blocker_message=cleanup_error,
+                summary=[*list(qa_result.summary or []), cleanup_error],
+            )
+            self._persist_qa_stage_checkpoint(
+                prepared=prepared,
+                qa_result=blocked_qa_result,
+                attempt=attempt,
+                execution_context=execution_context,
+            )
+            return _workflow_result_with_qa_blocker(
+                workflow_result=workflow_result,
+                attempt=attempt,
+                message=cleanup_error,
             )
         return replace(
             workflow_result,
@@ -532,6 +595,52 @@ class RunOutcomePolicy:
             expected_worker_service_instance_id=prepared.worker_service_instance_id,
             expected_claim_id=prepared.claim_id,
         )
+
+    def _cleanup_qa_demo_preview_release(
+        self,
+        *,
+        prepared,
+        preview_release,
+        reason: str,
+    ) -> str | None:
+        release_id = str(getattr(preview_release, "release_id", "") or "").strip()
+        if not release_id:
+            return None
+        if str(getattr(preview_release, "release_kind", "run_preview") or "").strip() != "run_preview":
+            return None
+        if str(getattr(preview_release, "status", "") or "").strip() == "destroyed":
+            return None
+        try:
+            destroy_project_deployment_preview_release(
+                session=self._session,
+                tenant_id=prepared.run.tenant_id,
+                project_id=prepared.project.project_id,
+                release_id=release_id,
+                reason=reason,
+            )
+        except Exception as exc:  # noqa: BLE001
+            message = (
+                "QA demo preview cleanup failed; run preview release was not proven destroyed: "
+                f"{release_id}: {type(exc).__name__}: {exc}"
+            )
+            self._deps.identity.logger.exception(
+                "qa_demo_preview_cleanup_failed tenant_id=%s project_id=%s run_id=%s release_id=%s reason=%s",
+                prepared.run.tenant_id,
+                prepared.project.project_id,
+                prepared.run.run_id,
+                release_id,
+                reason,
+            )
+            return message
+        self._deps.identity.logger.info(
+            "qa_demo_preview_cleanup_completed tenant_id=%s project_id=%s run_id=%s release_id=%s reason=%s",
+            prepared.run.tenant_id,
+            prepared.project.project_id,
+            prepared.run.run_id,
+            release_id,
+            reason,
+        )
+        return None
 
     def _handle_stale_snapshot(self, *, prepared, workflow_result, execution_context):
         if not (
@@ -783,12 +892,69 @@ def _qa_demo_missing_project_capture_targets(*, qa_plan, workflow_request) -> tu
     return tuple(target for target in project_targets if target not in selected_targets)
 
 
-def _qa_demo_preview_force_requested(*, workflow_request, demo_recording_required: bool) -> bool:  # noqa: ANN001
-    if not demo_recording_required:
+def _qa_demo_preview_force_requested(
+    *,
+    workflow_request,
+    demo_recording_required: bool,
+    execution_context: dict[str, object] | None,
+    persisted_plan: object | None = None,
+) -> bool:  # noqa: ANN001
+    if demo_recording_required:
         return False
     entry_mode = str(getattr(workflow_request, "entry_mode", "") or "").strip().lower()
     entry_stage = str(getattr(workflow_request, "entry_stage", "") or "").strip().lower()
     return entry_mode == "resume" and entry_stage == "qa"
+
+
+def _qa_demo_waiting_release_id(
+    *,
+    execution_context: dict[str, object] | None,
+    persisted_plan: object | None,
+) -> str | None:
+    transient_release_id = str((execution_context or {}).get("qa_demo_waiting_release_id") or "").strip()
+    persisted_release_id = ""
+    snapshot = ExecutionSnapshot.load(persisted_plan)
+    if snapshot is not None:
+        persisted_release_id = str(
+            (snapshot.context.execution_context or {}).get("qa_demo_waiting_release_id") or ""
+        ).strip()
+    if transient_release_id and persisted_release_id and transient_release_id != persisted_release_id:
+        raise RuntimeError(
+            "QA demo waiting release id conflict between dispatch context and persisted run snapshot: "
+            f"{transient_release_id} != {persisted_release_id}"
+        )
+    return persisted_release_id or transient_release_id or None
+
+
+def _qa_demo_waiting_preview_release(
+    *,
+    session,
+    tenant_id: str,
+    project_id: str,
+    run_id: str,
+    execution_context: dict[str, object] | None,
+    persisted_plan: object | None = None,
+):
+    release_id = _qa_demo_waiting_release_id(
+        execution_context=execution_context,
+        persisted_plan=persisted_plan,
+    )
+    if not release_id:
+        return None
+    release = session.get(ProjectDeploymentRelease, release_id)
+    if release is None:
+        raise RuntimeError(f"QA demo recording is waiting for unknown preview release: {release_id}")
+    if str(getattr(release, "tenant_id", "") or "").strip() != tenant_id:
+        raise RuntimeError(f"QA demo waiting release is outside the run tenant scope: {release_id}")
+    if str(getattr(release, "project_id", "") or "").strip() != project_id:
+        raise RuntimeError(f"QA demo waiting release is outside the run project scope: {release_id}")
+    if str(getattr(release, "source_run_id", "") or "").strip() != run_id:
+        raise RuntimeError(f"QA demo waiting release is not owned by the run: {release_id}")
+    if str(getattr(release, "release_kind", "") or "").strip() != "run_preview":
+        raise RuntimeError(f"QA demo waiting release is not a run preview release: {release_id}")
+    if _preview_release_status(release) in _QA_DEMO_PREVIEW_TERMINAL_FAILURE_STATUSES:
+        return None
+    return release
 
 
 def _workflow_result_with_qa_blocker(*, workflow_result, attempt: int, message: str):

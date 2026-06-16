@@ -471,14 +471,29 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
             'assertVisible(selector: "text=Start Free Demo")\nassertVisible(selector: "id=onboarding_tabview")\nlet nextButton = app.buttons["Next"]\nlet continueButton = app.buttons["Continue"]\n',
             encoding="utf-8",
         )
+        (repo_dir / "components").mkdir(parents=True, exist_ok=True)
+        (repo_dir / "components" / "QADemoReadyIndicator.tsx").write_text(
+            '<View testID="qa-demo-ready-indicator"><Text>QA Demo Ready</Text></View>\n',
+            encoding="utf-8",
+        )
+        (repo_dir / "constants" / "language").mkdir(parents=True, exist_ok=True)
+        (repo_dir / "constants" / "language" / "english.lang.js").write_text(
+            'export default { sign_in_label: "Sign In", registration_page_headline: "Enter \\nYour number" };\n',
+            encoding="utf-8",
+        )
 
         catalog = _native_selector_catalog(str(repo_dir))
 
         self.assertIn("onboarding_tabview", catalog["accessibility_ids"])
         self.assertIn("start_demo_button", catalog["accessibility_ids"])
+        self.assertIn("qa-demo-ready-indicator", catalog["accessibility_ids"])
         self.assertIn("Next", catalog["text_anchors"])
         self.assertIn("Continue", catalog["text_anchors"])
         self.assertIn("Start Free Demo", catalog["text_anchors"])
+        self.assertIn("QA Demo Ready", catalog["text_anchors"])
+        self.assertIn("Sign In", catalog["text_anchors"])
+        self.assertIn("Enter", catalog["text_anchors"])
+        self.assertIn("Your number", catalog["text_anchors"])
 
     def test_qa_prompt_includes_native_selector_catalog_and_rejects_invented_mobile_selector(self) -> None:
         runtime = CodexRuntime(
@@ -623,6 +638,84 @@ class CodexWorkflowAgentsTests(unittest.TestCase):
         catalog = json.loads(str(captured["native_selector_catalog_json"]))
         self.assertIn("android_ready", catalog["accessibility_ids"])
         self.assertNotIn("ios_only_button", catalog["accessibility_ids"])
+
+    def test_qa_allows_shared_react_native_selector_for_scoped_native_target(self) -> None:
+        runtime = CodexRuntime(
+            model="gpt-5-codex",
+            max_output_tokens=1200,
+            command="override",
+            _request=_RuntimeQueue(
+                [
+                    (
+                        '{"outcome":"continue","summary":["Recorded demos"],"feedback":null,"blocker_message":null,'
+                        '"scenarios":[{"name":"Android shared shell","objective":"Show shared shell","capture_target":"android",'
+                        '"start_path":"/","expected_outcomes":["Feature visible"],'
+                        '"steps":[{"action":"assert_visible","selector":"id=app-shell"},'
+                        '{"action":"assert_visible","selector":"text=QA Demo Ready"},'
+                        '{"action":"assert_visible","selector":"text=Sign In"},'
+                        '{"action":"assert_visible","selector":"text=Sign up"}]}],'
+                        '"recordings":[]}'
+                    ),
+                ]
+            ),
+        )
+        agents = CodexWorkflowAgents(runtime=runtime)
+        repo_dir = Path(self.temp_dir.name) / "repo-shared-rn-scope"
+        (repo_dir / "apps" / "android").mkdir(parents=True, exist_ok=True)
+        (repo_dir / "apps" / "android" / "Feature.kt").write_text(
+            'Text("Android Ready", modifier = Modifier.testTag("android_ready"))\n',
+            encoding="utf-8",
+        )
+        (repo_dir / "App.tsx").write_text(
+            '<View testID="app-shell"><Text>QA Demo Ready</Text></View>\n',
+            encoding="utf-8",
+        )
+        (repo_dir / "constants" / "language").mkdir(parents=True, exist_ok=True)
+        (repo_dir / "constants" / "language" / "english.lang.js").write_text(
+            'export default { sign_in_label: "Sign In", sign_up_label: "Sign up" };\n',
+            encoding="utf-8",
+        )
+        request = replace(
+            self._request(),
+            execution_repo_dir=str(repo_dir),
+            project_demo_capture_target_sources={"android": ("apps/android",)},
+        )
+
+        with patch("orchestrator.core.runtime.agents.render_prompt", side_effect=lambda template_name, **_: template_name):
+            result = agents.qa(
+                request,
+                PmPlan(
+                    plan_steps=["step1"],
+                    acceptance_criteria=["ac1"],
+                    risks=[],
+                    demo_requirements=[
+                        DemoRequirement(
+                            title="Demo",
+                            acceptance_criterion="ac1",
+                            capture_target="android",
+                            variants=[],
+                        )
+                    ],
+                ),
+                DevResult(change_summary=["implemented"], pr_url="https://example/pull/1"),
+                TestResult(outcome="continue", guidance=["run tests"], feedback=None, blocker_message=None),
+                ReviewResult(
+                    summary=["looks good"],
+                    outcome="continue",
+                    feedback=None,
+                    pr_url="https://example/pull/1",
+                    blocker_message=None,
+                ),
+                "",
+                (
+                    '[{"capture_target":"android","capture_reference":"android-emulator://configured",'
+                    '"source_paths":["apps/android"]}]'
+                ),
+                1,
+            )
+
+        self.assertEqual(result.outcome, "continue")
+        self.assertEqual(result.scenarios[0].steps[0].selector, "id=app-shell")
 
     def test_qa_requires_explicit_scenario_capture_target(self) -> None:
         runtime = CodexRuntime(

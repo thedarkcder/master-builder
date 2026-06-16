@@ -809,6 +809,36 @@ def test_ensure_release_ready_for_qa_rejects_unreachable_active_service_url() ->
         raise AssertionError("expected live release readiness failure")
 
 
+def test_ensure_release_ready_for_qa_uses_internal_route_with_public_host_header() -> None:
+    release = SimpleNamespace(
+        commit_sha="b" * 40,
+        service_urls=[
+            SimpleNamespace(
+                service_kind="website",
+                status="active",
+                url="http://preview.example:8088",
+                internal_url="http://127.0.0.1:8088",
+                host="preview.example",
+            )
+        ],
+    )
+    calls: list[tuple[str, dict[str, str] | None]] = []
+
+    def _probe(url: str, *, timeout_seconds: float, headers: dict[str, str] | None = None) -> int:
+        assert timeout_seconds == 7.0
+        calls.append((url, headers))
+        return 200
+
+    ensure_release_ready_for_qa(
+        release,
+        required_service_kinds=("website",),
+        service_url_probe=_probe,
+        timeout_seconds=7.0,
+    )
+
+    assert calls == [("http://127.0.0.1:8088", {"Host": "preview.example"})]
+
+
 def test_ensure_release_ready_for_qa_rejects_server_error_service_response() -> None:
     release = SimpleNamespace(
         commit_sha="b" * 40,
@@ -912,10 +942,12 @@ def test_android_builtin_capture_runtime_requires_ready_adb_device(monkeypatch) 
     monkeypatch.setattr("orchestrator.core.qa.demo_service.shutil.which", lambda command: f"/usr/bin/{command}")
 
     def _fake_run(args, **_kwargs):  # noqa: ANN001
-        assert args == ["adb", "devices"]
-
         class _Result:
-            stdout = "List of devices attached\nemulator-5554\toffline\n"
+            stdout = (
+                "List of devices attached\nemulator-5554\toffline\n"
+                if args == ["adb", "devices"]
+                else ""
+            )
 
         return _Result()
 
@@ -945,6 +977,9 @@ def test_android_builtin_capture_runtime_requires_recorder_toolchain_before_adb_
     adb_probe = MagicMock(side_effect=AssertionError("adb devices should not run when recorder tools are missing"))
     monkeypatch.setattr("orchestrator.core.qa.demo_service.shutil.which", _which)
     monkeypatch.setattr("orchestrator.core.qa.demo_service.subprocess.run", adb_probe)
+    monkeypatch.delenv("ANDROID_HOME", raising=False)
+    monkeypatch.delenv("ANDROID_SDK_ROOT", raising=False)
+    monkeypatch.setattr("orchestrator.core.qa.demo_service.Path.home", lambda: Path("/tmp/no-android-sdk"))
 
     try:
         ensure_capture_target_runtime_ready(target)

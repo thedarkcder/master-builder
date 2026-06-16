@@ -23,7 +23,23 @@ const previewUrl = String(input.preview_url || "").trim();
 if (!previewUrl) {
   throw new Error("preview_url is required");
 }
+const recordingUrl = String(input.recording_url || previewUrl).trim();
+if (!recordingUrl) {
+  throw new Error("recording_url is required");
+}
 const previewOrigin = new URL(previewUrl).origin;
+const previewUrlParts = new URL(previewUrl);
+const recordingUrlParts = new URL(recordingUrl);
+const recordingOrigin = recordingUrlParts.origin;
+const allowedRuntimeOrigins = new Set([previewOrigin, recordingOrigin]);
+const recordingHostHeader = String(input.recording_host_header || "").trim();
+const useHostResolverRouting = Boolean(recordingHostHeader && recordingOrigin !== previewOrigin);
+
+if (useHostResolverRouting && previewUrlParts.port !== recordingUrlParts.port) {
+  throw new Error(
+    "QA demo browser host-resolver routing requires preview_url and recording_url to use the same port",
+  );
+}
 
 await fs.mkdir(input.output_dir, { recursive: true });
 
@@ -36,13 +52,17 @@ function resolvePreviewUrl(value, context) {
       `QA demo browser scenario must stay on preview release origin: ${context} resolved to ${resolved.origin}`,
     );
   }
-  return resolved.toString();
+  const runtimeBase = new URL(useHostResolverRouting ? previewUrl : recordingUrl);
+  runtimeBase.pathname = resolved.pathname;
+  runtimeBase.search = resolved.search;
+  runtimeBase.hash = resolved.hash;
+  return runtimeBase.toString();
 }
 
 function assertPreviewOrigin(page, context) {
   const currentUrl = page.url();
   const currentOrigin = new URL(currentUrl).origin;
-  if (currentOrigin !== previewOrigin) {
+  if (!allowedRuntimeOrigins.has(currentOrigin)) {
     throw new Error(
       `QA demo browser scenario must stay on preview release origin: ${context} resolved to ${currentOrigin}`,
     );
@@ -71,13 +91,25 @@ async function resolveTextLocator(page, text) {
   return page.getByText(text, { exact: false }).first();
 }
 
+function formatDiagnostics(diagnostics) {
+  if (!diagnostics.length) {
+    return "none";
+  }
+  return diagnostics.slice(-20).join("\n");
+}
+
 for (const scenario of input.scenarios || []) {
   let browser = null;
   let context = null;
   let contextClosed = false;
   let browserClosed = false;
+  const diagnostics = [];
   try {
-    browser = await chromium.launch({ headless: true });
+    const launchArgs = [];
+    if (useHostResolverRouting) {
+      launchArgs.push(`--host-resolver-rules=MAP ${previewUrlParts.hostname} ${recordingUrlParts.hostname}`);
+    }
+    browser = await chromium.launch({ headless: true, args: launchArgs });
     context = await browser.newContext({
       recordVideo: {
         dir: input.output_dir,
@@ -86,39 +118,55 @@ for (const scenario of input.scenarios || []) {
       viewport: { width: 1440, height: 900 },
     });
     const page = await context.newPage();
+    if (typeof page.on === "function") {
+      page.on("console", (message) => {
+        if (["error", "warning"].includes(message.type())) {
+          diagnostics.push(`console.${message.type()}: ${message.text()}`);
+        }
+      });
+      page.on("pageerror", (error) => {
+        diagnostics.push(`pageerror: ${error.message}`);
+      });
+    }
     const video = page.video();
     const startPath = String(scenario.start_path || "/");
-    await page.goto(resolvePreviewUrl(startPath, "scenario start_path"), { waitUntil: "networkidle" });
-    assertPreviewOrigin(page, "scenario start_path");
-    for (const step of scenario.steps || []) {
-      const action = String(step.action || "").trim();
-      const selector = step.selector ? String(step.selector) : null;
-      const value = step.value ? String(step.value) : null;
-      if (action === "goto") {
-        await page.goto(resolvePreviewUrl(value || "/", "goto step"), { waitUntil: "networkidle" });
-      } else if (action === "click") {
-        await (await resolveLocator(page, selector)).click();
-      } else if (action === "fill") {
-        await (await resolveLocator(page, selector)).fill(value || "");
-      } else if (action === "press") {
-        await (await resolveLocator(page, selector)).press(value || "Enter");
-      } else if (action === "select_option") {
-        await (await resolveLocator(page, selector)).selectOption(value || "");
-      } else if (action === "wait_for_text") {
-        await (await resolveTextLocator(page, value || "")).waitFor();
-      } else if (action === "wait_for_url") {
-        await page.waitForURL(resolvePreviewUrl(value || "/", "wait_for_url step"));
-      } else if (action === "assert_text") {
-        const text = await (await resolveLocator(page, selector)).textContent();
-        if (!text || !text.includes(value || "")) {
-          throw new Error(`assert_text failed for ${selector}`);
+    try {
+      await page.goto(resolvePreviewUrl(startPath, "scenario start_path"), { waitUntil: "networkidle" });
+      assertPreviewOrigin(page, "scenario start_path");
+      for (const step of scenario.steps || []) {
+        const action = String(step.action || "").trim();
+        const selector = step.selector ? String(step.selector) : null;
+        const value = step.value ? String(step.value) : null;
+        if (action === "goto") {
+          await page.goto(resolvePreviewUrl(value || "/", "goto step"), { waitUntil: "networkidle" });
+        } else if (action === "click") {
+          await (await resolveLocator(page, selector)).click();
+        } else if (action === "fill") {
+          await (await resolveLocator(page, selector)).fill(value || "");
+        } else if (action === "press") {
+          await (await resolveLocator(page, selector)).press(value || "Enter");
+        } else if (action === "select_option") {
+          await (await resolveLocator(page, selector)).selectOption(value || "");
+        } else if (action === "wait_for_text") {
+          await (await resolveTextLocator(page, value || "")).waitFor();
+        } else if (action === "wait_for_url") {
+          await page.waitForURL(resolvePreviewUrl(value || "/", "wait_for_url step"));
+        } else if (action === "assert_text") {
+          const text = await (await resolveLocator(page, selector)).textContent();
+          if (!text || !text.includes(value || "")) {
+            throw new Error(`assert_text failed for ${selector}`);
+          }
+        } else if (action === "assert_visible") {
+          await (await resolveLocator(page, selector)).waitFor({ state: "visible" });
+        } else {
+          throw new Error(`Unsupported QA step action: ${action}`);
         }
-      } else if (action === "assert_visible") {
-        await (await resolveLocator(page, selector)).waitFor({ state: "visible" });
-      } else {
-        throw new Error(`Unsupported QA step action: ${action}`);
+        assertPreviewOrigin(page, `${action} step`);
       }
-      assertPreviewOrigin(page, `${action} step`);
+    } catch (error) {
+      throw new Error(
+        `QA demo browser scenario failed: ${String(scenario.name || "Demo")}\n${error.message}\nBrowser diagnostics:\n${formatDiagnostics(diagnostics)}`,
+      );
     }
     await context.close();
     contextClosed = true;
