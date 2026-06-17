@@ -24,6 +24,19 @@ ISSUE_EXECUTION_STEP_NOTIFICATION_EMIT = "notification_emit"
 PR_REMEDIATION_STEP_RUN_ATTEMPT_EXECUTION = "run_attempt_execution"
 PR_REMEDIATION_STEP_HUMAN_INPUT_RESUME = "human_input_resume"
 PR_REMEDIATION_STEP_NOTIFICATION_EMIT = "notification_emit"
+DEMO_PROOF_STEP_PREVIEW_LEASE = "preview_lease"
+DEMO_PROOF_STEP_RELEASE = "release"
+DEMO_PROOF_STEP_RECORDING = "recording"
+DEMO_PROOF_STEP_EVIDENCE_UPLOAD = "evidence_upload"
+DEMO_PROOF_STEP_PR_EVIDENCE_UPDATE = "pr_evidence_update"
+DEMO_PROOF_STEP_PREVIEW_CLEANUP = "preview_cleanup"
+
+_DEMO_PROOF_WORK_UNIT_RETRY = WorkflowWorkUnitRetryPolicy(
+    max_attempts=3,
+    initial_interval_seconds=30,
+    max_interval_seconds=300,
+    backoff_coefficient=2.0,
+)
 
 
 class IssueExecutionWorkflow:
@@ -205,6 +218,146 @@ class PrRemediationWorkflow:
         raise NotImplementedError
 
 
+class DemoProofWorkflowDefinition:
+    @workflow_work_unit(
+        key="preview_lease.enforce_single_active",
+        step_key=DEMO_PROOF_STEP_PREVIEW_LEASE,
+        label="Enforce single active preview lease",
+        kind=WorkflowWorkUnitKind.PURE_COMPUTE,
+        description="Derive the proof scope and reject duplicate active preview leases before release work starts.",
+    )
+    @workflow_work_unit(
+        key="preview_lease.acquire",
+        step_key=DEMO_PROOF_STEP_PREVIEW_LEASE,
+        label="Acquire preview lease",
+        kind=WorkflowWorkUnitKind.SIDE_EFFECT,
+        retry_policy=_DEMO_PROOF_WORK_UNIT_RETRY,
+        description="Acquire or supersede the scoped preview lease for the proof scope.",
+    )
+    @workflow_step(
+        key=DEMO_PROOF_STEP_PREVIEW_LEASE,
+        label="Preview lease",
+        kind=WorkflowStepKind.BUSINESS,
+        description="Own the one-active-preview-lease invariant for the proof scope.",
+    )
+    def preview_lease(self) -> None:
+        raise NotImplementedError
+
+    @workflow_work_unit(
+        key="release.create_or_reuse",
+        step_key=DEMO_PROOF_STEP_RELEASE,
+        label="Create or reuse release",
+        kind=WorkflowWorkUnitKind.EXTERNAL_API,
+        retry_policy=_DEMO_PROOF_WORK_UNIT_RETRY,
+        description="Create or reuse the real preview release attached to the acquired lease.",
+    )
+    @workflow_work_unit(
+        key="release.wait_for_live",
+        step_key=DEMO_PROOF_STEP_RELEASE,
+        label="Wait for release live event",
+        kind=WorkflowWorkUnitKind.SIDE_EFFECT,
+        retry_policy=_DEMO_PROOF_WORK_UNIT_RETRY,
+        description="Advance only from release events/signals for the leased preview release.",
+    )
+    @workflow_step(
+        key=DEMO_PROOF_STEP_RELEASE,
+        label="Release workflow",
+        kind=WorkflowStepKind.INTEGRATION,
+        after=DEMO_PROOF_STEP_PREVIEW_LEASE,
+        description="Satisfy the preview lease with a real release and service readiness evidence.",
+    )
+    def release(self) -> None:
+        raise NotImplementedError
+
+    @workflow_work_unit(
+        key="recording.browser",
+        step_key=DEMO_PROOF_STEP_RECORDING,
+        label="Record browser walkthrough",
+        kind=WorkflowWorkUnitKind.EXTERNAL_API,
+        retry_policy=_DEMO_PROOF_WORK_UNIT_RETRY,
+        description="Record browser proof against the real release context.",
+    )
+    @workflow_work_unit(
+        key="recording.ios",
+        step_key=DEMO_PROOF_STEP_RECORDING,
+        label="Record iOS walkthrough",
+        kind=WorkflowWorkUnitKind.EXTERNAL_API,
+        retry_policy=_DEMO_PROOF_WORK_UNIT_RETRY,
+        description="Record iOS proof against the real release context.",
+    )
+    @workflow_work_unit(
+        key="recording.android",
+        step_key=DEMO_PROOF_STEP_RECORDING,
+        label="Record Android walkthrough",
+        kind=WorkflowWorkUnitKind.EXTERNAL_API,
+        retry_policy=_DEMO_PROOF_WORK_UNIT_RETRY,
+        description="Record Android proof against the real release context.",
+    )
+    @workflow_step(
+        key=DEMO_PROOF_STEP_RECORDING,
+        label="Recording workflow",
+        kind=WorkflowStepKind.INTEGRATION,
+        after=DEMO_PROOF_STEP_RELEASE,
+        description="Record required walkthrough variants for browser, iOS, and Android targets.",
+    )
+    def recording(self) -> None:
+        raise NotImplementedError
+
+    @workflow_work_unit(
+        key="evidence_upload.persist",
+        step_key=DEMO_PROOF_STEP_EVIDENCE_UPLOAD,
+        label="Upload evidence",
+        kind=WorkflowWorkUnitKind.EXTERNAL_API,
+        retry_policy=_DEMO_PROOF_WORK_UNIT_RETRY,
+        description="Upload recorded videos to configured S3/MinIO-compatible artifact storage.",
+    )
+    @workflow_step(
+        key=DEMO_PROOF_STEP_EVIDENCE_UPLOAD,
+        label="Evidence upload",
+        kind=WorkflowStepKind.INTEGRATION,
+        after=DEMO_PROOF_STEP_RECORDING,
+        description="Persist proof artifacts and verify their storage metadata.",
+    )
+    def evidence_upload(self) -> None:
+        raise NotImplementedError
+
+    @workflow_work_unit(
+        key="pr_evidence_update.attach_links",
+        step_key=DEMO_PROOF_STEP_PR_EVIDENCE_UPDATE,
+        label="Attach PR evidence links",
+        kind=WorkflowWorkUnitKind.EXTERNAL_API,
+        retry_policy=_DEMO_PROOF_WORK_UNIT_RETRY,
+        description="Attach playable proof links to the pull request before ready-for-review.",
+    )
+    @workflow_step(
+        key=DEMO_PROOF_STEP_PR_EVIDENCE_UPDATE,
+        label="PR evidence update",
+        kind=WorkflowStepKind.SIDE_EFFECT,
+        after=DEMO_PROOF_STEP_EVIDENCE_UPLOAD,
+        description="Publish verified evidence links to the pull request.",
+    )
+    def pr_evidence_update(self) -> None:
+        raise NotImplementedError
+
+    @workflow_work_unit(
+        key="preview_cleanup.destroy_or_ttl",
+        step_key=DEMO_PROOF_STEP_PREVIEW_CLEANUP,
+        label="Destroy or TTL preview lease",
+        kind=WorkflowWorkUnitKind.EXTERNAL_API,
+        retry_policy=_DEMO_PROOF_WORK_UNIT_RETRY,
+        description="Destroy or TTL-schedule every preview resource created by the proof lease.",
+    )
+    @workflow_step(
+        key=DEMO_PROOF_STEP_PREVIEW_CLEANUP,
+        label="Preview cleanup workflow",
+        kind=WorkflowStepKind.SIDE_EFFECT,
+        after=DEMO_PROOF_STEP_PR_EVIDENCE_UPDATE,
+        description="Clean up or TTL every preview resource owned by the proof lease.",
+    )
+    def preview_cleanup(self) -> None:
+        raise NotImplementedError
+
+
 def normalize_workflow_retry_policy_config(raw: dict | None) -> dict[str, object]:
     config = raw if isinstance(raw, dict) else {}
     return {
@@ -287,6 +440,30 @@ def _register_builtin_workflows() -> None:
             ),
             steps=infer_workflow_steps(ProjectDeploymentSetupWorkflowDefinition),
             work_units=infer_workflow_work_units(ProjectDeploymentSetupWorkflowDefinition),
+        )
+    )
+    workflow_definition_registry.register(
+        WorkflowDefinition(
+            workflow_type_key="demo_proof",
+            system_key="demo_proof",
+            handler_key="demo_proof",
+            label="Demo proof",
+            description="Durable QA demo proof workflow for leased release, recording, evidence, PR, and cleanup.",
+            orchestration_backend="temporal",
+            retry_policy=WorkflowRetryPolicyDefinition(
+                manual_retry_enabled=True,
+                max_attempts=3,
+                initial_interval_seconds=30,
+                max_interval_seconds=300,
+                backoff_coefficient=2.0,
+            ),
+            capabilities={
+                "independent_trigger": True,
+                "preview_lease": True,
+                "required_capture_targets": ("browser", "ios", "android"),
+            },
+            steps=infer_workflow_steps(DemoProofWorkflowDefinition),
+            work_units=infer_workflow_work_units(DemoProofWorkflowDefinition),
         )
     )
     workflow_definition_registry.register(

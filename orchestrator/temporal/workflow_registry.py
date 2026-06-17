@@ -45,6 +45,12 @@ _TEMPORAL_BINDINGS = (
         execution_mode="setup",
     ),
     TemporalWorkflowBinding(
+        handler_key="demo_proof",
+        workflow_name="HandlerBackedWorkflow",
+        workflow_defn=HandlerBackedWorkflow,
+        execution_mode="handler",
+    ),
+    TemporalWorkflowBinding(
         handler_key="pr_remediation",
         workflow_name="DevelopmentTeamRunWorkflow",
         workflow_defn=DevelopmentTeamRunWorkflow,
