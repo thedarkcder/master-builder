@@ -562,6 +562,94 @@ class DeploymentContractTests(unittest.TestCase):
         session.flush()
         return tenant, project, run
 
+    def _add_preview_run_on_same_branch(
+        self,
+        *,
+        session,
+        now: datetime,
+        tenant: Tenant,
+        project: Project,
+        run_id: str,
+        commit_sha: str,
+    ) -> Run:
+        workflow = WorkflowExecution(
+            workflow_id=f"workflow-{run_id}",
+            execution_id=f"execution-{run_id}",
+            workflow_type_key="development_team_run",
+            tenant_id=tenant.tenant_id,
+            project_id=project.project_id,
+            source_system="jira",
+            source_ref=f"AP-123-{run_id}",
+            source_external_id=f"AP-123-{run_id}",
+            display_name=f"AP-123 {run_id}",
+            source_description=None,
+            repo_url=project.github_repository,
+            branch="feature/AP-123",
+            pr_url=None,
+            orchestration_backend="temporal",
+            dedupe_scope="issue_execution",
+            status="running",
+            last_error=None,
+            active_run_id=run_id,
+            latest_checkpoint_id=None,
+            source_workflow_id=None,
+            source_run_id=None,
+            created_at=now,
+            started_at=now,
+            finished_at=None,
+            updated_at=now,
+        )
+        run = Run(
+            run_id=run_id,
+            workflow_id=workflow.workflow_id,
+            tenant_id=tenant.tenant_id,
+            project_id=project.project_id,
+            issue_key="AP-123",
+            issue_summary="Preview issue",
+            issue_description="Preview issue description",
+            repo_url=project.github_repository,
+            branch="feature/AP-123",
+            pr_url=None,
+            attempt_number=2,
+            parent_run_id=None,
+            entry_mode="fresh",
+            entry_stage="pm",
+            entry_checkpoint_id=None,
+            dedupe_scope="issue_execution",
+            status="running",
+            last_error=None,
+            pre_check_outcome=None,
+            required_worker_capability=None,
+            required_runtime_kinds_json=[],
+            claim_id=None,
+            plan={},
+            created_at=now,
+            dispatch_claimed_at=None,
+            started_at=now,
+            last_heartbeat_at=now,
+            worker_service_instance_id=None,
+            finished_at=None,
+        )
+        artifact = WorkflowExecutionArtifact(
+            artifact_id=f"artifact-{run_id}",
+            tenant_id=tenant.tenant_id,
+            project_id=project.project_id,
+            workflow_id=workflow.workflow_id,
+            run_id=run.run_id,
+            artifact_kind="execution_branch",
+            status="pushed",
+            repo_url=project.github_repository,
+            branch=f"run/ap-123/{run_id}",
+            commit_sha=commit_sha,
+            diff_stat_json={},
+            pushed_at=now,
+            created_at=now,
+            updated_at=now,
+        )
+        session.add_all([workflow, run, artifact])
+        session.flush()
+        return run
+
     def test_deployment_config_write_rejects_raw_secret_material(self) -> None:
         with self.assertRaises(ValidationError):
             ProjectDeploymentConfigWrite.model_validate(
@@ -688,6 +776,142 @@ class DeploymentContractTests(unittest.TestCase):
         self.assertEqual(result.reason, "existing")
         self.assertEqual(result.release.release_id, "release-existing")
         create_release.assert_not_called()
+
+    def test_run_preview_generation_reuses_existing_branch_preview_for_same_commit(self) -> None:
+        now = datetime.now(timezone.utc)
+        with self.session_factory() as session:
+            tenant, project, first_run = self._seed_preview_run(session=session, now=now, commit_sha="a" * 40)
+            second_run = self._add_preview_run_on_same_branch(
+                session=session,
+                now=now + timedelta(seconds=1),
+                tenant=tenant,
+                project=project,
+                run_id="run-2",
+                commit_sha="a" * 40,
+            )
+            session.add(
+                ProjectDeploymentRelease(
+                    release_id="release-branch-existing",
+                    tenant_id=tenant.tenant_id,
+                    project_id=project.project_id,
+                    app_id="app-1",
+                    provider="internal_coolify",
+                    release_kind="run_preview",
+                    status="live",
+                    environment_name="production",
+                    source_strategy="dockerfile",
+                    git_ref="run/ap-123/run-1",
+                    commit_sha="a" * 40,
+                    source_run_id=first_run.run_id,
+                    pr_number=12,
+                    requested_by_user_id=None,
+                    deployment_snapshot={},
+                    provider_context={},
+                    delivery_metadata={},
+                    last_error=None,
+                    requested_at=now,
+                    started_at=now,
+                    completed_at=now,
+                    destroyed_at=None,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            session.commit()
+
+            with (
+                patch("orchestrator.core.deployment_previews.create_project_deployment_release") as create_release,
+                patch("orchestrator.core.deployment_previews.destroy_project_deployment_preview_release") as destroy_release,
+            ):
+                result = create_run_preview_deployment(
+                    session=session,
+                    tenant=tenant,
+                    project=project,
+                    run=second_run,
+                    settings=SimpleNamespace(project_repo_checkout_base_dir="/tmp/unused", secrets_encryption_key="unused"),
+                    pr_url="https://github.com/example/repo/pull/12",
+                )
+
+        self.assertFalse(result.created)
+        self.assertEqual(result.reason, "existing")
+        self.assertEqual(result.release.release_id, "release-branch-existing")
+        create_release.assert_not_called()
+        destroy_release.assert_not_called()
+
+    def test_run_preview_generation_replaces_existing_branch_preview_for_new_commit(self) -> None:
+        now = datetime.now(timezone.utc)
+        with self.session_factory() as session:
+            tenant, project, first_run = self._seed_preview_run(session=session, now=now, commit_sha="a" * 40)
+            second_run = self._add_preview_run_on_same_branch(
+                session=session,
+                now=now + timedelta(seconds=1),
+                tenant=tenant,
+                project=project,
+                run_id="run-2",
+                commit_sha="b" * 40,
+            )
+            session.add(
+                ProjectDeploymentRelease(
+                    release_id="release-branch-stale",
+                    tenant_id=tenant.tenant_id,
+                    project_id=project.project_id,
+                    app_id="app-1",
+                    provider="internal_coolify",
+                    release_kind="run_preview",
+                    status="live",
+                    environment_name="production",
+                    source_strategy="dockerfile",
+                    git_ref="run/ap-123/run-1",
+                    commit_sha="a" * 40,
+                    source_run_id=first_run.run_id,
+                    pr_number=12,
+                    requested_by_user_id=None,
+                    deployment_snapshot={},
+                    provider_context={"application_uuid": "stale-app"},
+                    delivery_metadata={},
+                    last_error=None,
+                    requested_at=now,
+                    started_at=now,
+                    completed_at=now,
+                    destroyed_at=None,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            session.commit()
+
+            with (
+                patch(
+                    "orchestrator.core.deployment_previews.destroy_project_deployment_preview_release",
+                    return_value=SimpleNamespace(release_id="release-branch-stale"),
+                ) as destroy_release,
+                patch(
+                    "orchestrator.core.deployment_previews.create_project_deployment_release",
+                    return_value=SimpleNamespace(release_id="release-branch-new"),
+                ) as create_release,
+            ):
+                result = create_run_preview_deployment(
+                    session=session,
+                    tenant=tenant,
+                    project=project,
+                    run=second_run,
+                    settings=SimpleNamespace(project_repo_checkout_base_dir="/tmp/unused", secrets_encryption_key="unused"),
+                    pr_url="https://github.com/example/repo/pull/12",
+                )
+
+        self.assertTrue(result.created)
+        self.assertEqual(result.release.release_id, "release-branch-new")
+        destroy_release.assert_called_once_with(
+            session=session,
+            tenant_id=tenant.tenant_id,
+            project_id=project.project_id,
+            release_id="release-branch-stale",
+            reason="preview_replaced",
+        )
+        create_release.assert_called_once()
+        payload = create_release.call_args.kwargs["payload"]
+        self.assertEqual(payload.source_run_id, "run-2")
+        self.assertEqual(payload.commit_sha, "b" * 40)
 
     def test_run_preview_generation_reuses_inflight_preview_with_pending_provider_route(self) -> None:
         now = datetime.now(timezone.utc)
