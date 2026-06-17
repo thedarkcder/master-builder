@@ -76,6 +76,7 @@ def main(argv: list[str]) -> int:
     launch_extras = qa_demo_launch_extras(payload)
     install_apk(device_id=device_id, apk_path=apk_path)
     launch_activity = resolve_launch_activity(device_id=device_id, package_name=package_name)
+    capture_reference = str(payload.get("capture_reference") or "android-emulator://configured").strip()
 
     recordings: list[dict[str, str]] = []
     for scenario in qa_result.scenarios:
@@ -83,14 +84,36 @@ def main(argv: list[str]) -> int:
         local_video_path = output_dir / f"{sanitized_name}.mp4"
         reset_app_state(device_id=device_id, package_name=package_name)
         launch_app(device_id=device_id, launch_activity=launch_activity, launch_extras=launch_extras)
-        record_live_screen_demo(
-            device_id=device_id,
-            package_name=package_name,
-            launch_activity=launch_activity,
-            scenario=scenario,
-            output_path=local_video_path,
-            launch_extras=launch_extras,
-        )
+        try:
+            record_live_screen_demo(
+                device_id=device_id,
+                package_name=package_name,
+                launch_activity=launch_activity,
+                scenario=scenario,
+                output_path=local_video_path,
+                launch_extras=launch_extras,
+            )
+        except Exception as exc:  # noqa: BLE001
+            validate_mp4_recording(local_video_path)
+            output_path.write_text(
+                json.dumps(
+                    {
+                        "recordings": recordings,
+                        "failure_evidence": [
+                            {
+                                "name": scenario.name,
+                                "path": str(local_video_path),
+                                "error_message": f"QA demo Android scenario failed: {scenario.name}\n{exc}",
+                                "capture_target": "android",
+                                "capture_reference": capture_reference,
+                            }
+                        ],
+                    },
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+            return 1
         recordings.append({"name": scenario.name, "path": str(local_video_path)})
 
     output_path.write_text(json.dumps({"recordings": recordings}, indent=2), encoding="utf-8")
@@ -405,10 +428,21 @@ def record_live_screen_demo(
         except Exception as exc:  # noqa: BLE001
             stop_error = exc
     combined_error = combined_recording_failure(primary_error=primary_error, stop_error=stop_error)
+    pull_error: Exception | None = None
+    try:
+        _run(["adb", "-s", device_id, "pull", remote_path, str(output_path)], capture_output=True)
+    except Exception as exc:  # noqa: BLE001
+        pull_error = exc
+    finally:
+        _run(["adb", "-s", device_id, "shell", "rm", "-f", remote_path], capture_output=True, check=False)
     if combined_error is not None:
+        if pull_error is not None:
+            raise RuntimeError(f"{combined_error}\nAndroid failure recording pull failed: {pull_error}") from pull_error
+        if not output_path.exists():
+            raise RuntimeError(f"{combined_error}\nExpected Android QA failure recording missing: {output_path}")
         raise combined_error
-    _run(["adb", "-s", device_id, "pull", remote_path, str(output_path)], capture_output=True)
-    _run(["adb", "-s", device_id, "shell", "rm", "-f", remote_path], capture_output=True, check=False)
+    if pull_error is not None:
+        raise pull_error
     if not output_path.exists():
         raise RuntimeError(f"Expected Android QA recording missing: {output_path}")
     validate_mp4_recording(output_path)

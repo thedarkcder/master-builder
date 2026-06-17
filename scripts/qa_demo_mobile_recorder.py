@@ -80,6 +80,7 @@ def main(argv: list[str]) -> int:
         launch_environment=qa_demo_launch_environment(payload),
     )
     ui_test_file.write_text(generated_source, encoding="utf-8")
+    capture_reference = str(payload.get("capture_reference") or "ios-simulator://configured").strip()
 
     try:
         _reboot_simulator(simulator_udid)
@@ -131,7 +132,26 @@ def main(argv: list[str]) -> int:
                     stop_error = exc
             combined_error = _combined_recording_failure(primary_error=primary_error, stop_error=stop_error)
             if combined_error is not None:
-                raise combined_error
+                _validate_mp4_recording(video_path)
+                output_path.write_text(
+                    json.dumps(
+                        {
+                            "recordings": recordings,
+                            "failure_evidence": [
+                                {
+                                    "name": scenario.name,
+                                    "path": str(video_path),
+                                    "error_message": f"QA demo iOS scenario failed: {scenario.name}\n{combined_error}",
+                                    "capture_target": "ios",
+                                    "capture_reference": capture_reference,
+                                }
+                            ],
+                        },
+                        indent=2,
+                    ),
+                    encoding="utf-8",
+                )
+                return 1
             if not video_path.exists():
                 raise RuntimeError(f"Expected mobile QA recording missing: {video_path}")
             recordings.append({"name": scenario.name, "path": str(video_path)})
@@ -145,6 +165,14 @@ def main(argv: list[str]) -> int:
 def sanitize_recording_name(name: str) -> str:
     normalized = re.sub(r"[^a-z0-9]+", "-", str(name or "demo").strip().lower()).strip("-")
     return normalized or "demo"
+
+
+def _validate_mp4_recording(path: Path) -> None:
+    if not path.exists() or not path.is_file():
+        raise RuntimeError(f"Expected iOS QA failure recording missing: {path}")
+    payload = path.read_bytes()
+    if len(payload) < 1024 or b"ftyp" not in payload[:64] or b"moov" not in payload:
+        raise RuntimeError(f"iOS QA failure recording is not valid video evidence: {path}")
 
 
 def _target_source_paths(value: object) -> list[str]:
