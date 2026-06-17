@@ -4,6 +4,7 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from sqlalchemy import select
 from temporalio.client import WorkflowUpdateFailedError
 from temporalio.exceptions import ApplicationError
 
@@ -19,6 +20,16 @@ def _now() -> datetime:
 
 
 class JiraProjectReconciliationTriggerTests(AdminApiTestHarness):
+    def _first_project_id(self, tenant_id: str = "tenant-a") -> str:
+        session_factory = create_session_factory(self.database_url)
+        with session_factory() as session:
+            project = session.execute(
+                select(Project).where(Project.tenant_id == tenant_id).order_by(Project.created_at.asc())
+            ).scalars().first()
+            self.assertIsNotNone(project)
+            assert project is not None
+            return project.project_id
+
     def test_manual_project_reconciliation_route_is_not_registered(self) -> None:
         paths = {getattr(route, "path", "") for route in self.client.app.routes}
 
@@ -40,12 +51,13 @@ class JiraProjectReconciliationTriggerTests(AdminApiTestHarness):
             auth=("admin", "secret"),
         )
         self.assertEqual(create_response.status_code, 201)
+        project_id = self._first_project_id()
 
         with patch(
             "orchestrator.api.admin.workflows.use_cases.start_jira_project_reconciliation",
             return_value=SimpleNamespace(
                 execution_id="wfexec-jira-reconcile-1",
-                workflow_id="jira_project_reconciliation:tenant-a-default",
+                workflow_id=f"jira_project_reconciliation:{project_id}",
                 workflow_type_key="jira_project_reconciliation",
                 status="running",
                 started_attempt_id="attempt-jira-reconcile-1",
@@ -56,7 +68,7 @@ class JiraProjectReconciliationTriggerTests(AdminApiTestHarness):
                 json={
                     "workflow_type_key": "jira_project_reconciliation",
                     "tenant_id": "tenant-a",
-                    "project_id": "tenant-a-default",
+                    "project_id": project_id,
                     "input": {"max_items": 250},
                 },
                 auth=("admin", "secret"),
@@ -64,14 +76,68 @@ class JiraProjectReconciliationTriggerTests(AdminApiTestHarness):
 
         self.assertEqual(response.status_code, 201, response.text)
         self.assertEqual(response.json()["execution_id"], "wfexec-jira-reconcile-1")
-        self.assertEqual(response.json()["workflow_id"], "jira_project_reconciliation:tenant-a-default")
+        self.assertEqual(response.json()["workflow_id"], f"jira_project_reconciliation:{project_id}")
         self.assertEqual(response.json()["workflow_type_key"], "jira_project_reconciliation")
         self.assertEqual(response.json()["started_attempt_id"], "attempt-jira-reconcile-1")
         start_mock.assert_called_once()
         start_kwargs = start_mock.call_args.kwargs
         self.assertEqual(start_kwargs["tenant"].tenant_id, "tenant-a")
-        self.assertEqual(start_kwargs["project"].project_id, "tenant-a-default")
+        self.assertEqual(start_kwargs["project"].project_id, project_id)
         self.assertEqual(start_kwargs["max_items"], 250)
+        self.assertEqual(start_kwargs["trigger_event"], "admin_workflow_start")
+
+    def test_generic_workflow_start_route_starts_demo_proof(self) -> None:
+        payload = self._tenant_payload()
+        create_response = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_response.status_code, 201)
+        project_id = self._first_project_id()
+
+        with patch(
+            "orchestrator.api.admin.workflows.use_cases.start_demo_proof_workflow",
+            return_value=SimpleNamespace(
+                execution_id="wfexec-demo-proof-1",
+                workflow_id="demo_proof:run-1-main-abcdef1",
+                workflow_type_key="demo_proof",
+                status="waiting_for_input",
+                started_attempt_id="attempt-preview-lease-1",
+            ),
+        ) as start_mock:
+            response = self.client.post(
+                "/api/admin/workflows",
+                json={
+                    "workflow_type_key": "demo_proof",
+                    "tenant_id": "tenant-a",
+                    "project_id": project_id,
+                    "input": {
+                        "proof_scope_id": "run-1-main-abcdef1",
+                        "commit_sha": "abcdef1",
+                        "run_id": "run-1",
+                        "pr_url": "https://github.com/acme/repo/pull/8",
+                        "required_capture_targets": ["browser", "ios", "android"],
+                    },
+                },
+                auth=("admin", "secret"),
+            )
+
+        self.assertEqual(response.status_code, 201, response.text)
+        self.assertEqual(response.json()["execution_id"], "wfexec-demo-proof-1")
+        self.assertEqual(response.json()["workflow_id"], "demo_proof:run-1-main-abcdef1")
+        self.assertEqual(response.json()["workflow_type_key"], "demo_proof")
+        self.assertEqual(response.json()["status"], "waiting_for_input")
+        self.assertEqual(response.json()["started_attempt_id"], "attempt-preview-lease-1")
+        start_mock.assert_called_once()
+        start_kwargs = start_mock.call_args.kwargs
+        self.assertEqual(start_kwargs["tenant"].tenant_id, "tenant-a")
+        self.assertEqual(start_kwargs["project"].project_id, project_id)
+        self.assertEqual(start_kwargs["proof_scope_id"], "run-1-main-abcdef1")
+        self.assertEqual(start_kwargs["commit_sha"], "abcdef1")
+        self.assertEqual(start_kwargs["run_id"], "run-1")
+        self.assertEqual(start_kwargs["pr_url"], "https://github.com/acme/repo/pull/8")
+        self.assertEqual(start_kwargs["required_capture_targets"], ["browser", "ios", "android"])
         self.assertEqual(start_kwargs["trigger_event"], "admin_workflow_start")
 
     def test_generic_workflow_start_route_returns_reauth_required_when_jira_token_is_invalid(self) -> None:
@@ -83,6 +149,7 @@ class JiraProjectReconciliationTriggerTests(AdminApiTestHarness):
             auth=("admin", "secret"),
         )
         self.assertEqual(create_response.status_code, 201)
+        project_id = self._first_project_id()
 
         temporal_error = WorkflowUpdateFailedError(
             ApplicationError(
@@ -99,7 +166,7 @@ class JiraProjectReconciliationTriggerTests(AdminApiTestHarness):
                 json={
                     "workflow_type_key": "jira_project_reconciliation",
                     "tenant_id": "tenant-a",
-                    "project_id": "tenant-a-default",
+                    "project_id": project_id,
                     "input": {"max_items": 250},
                 },
                 auth=("admin", "secret"),

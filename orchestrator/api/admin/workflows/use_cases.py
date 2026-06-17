@@ -63,6 +63,7 @@ from orchestrator.core.platform.admin_notifications import (
     emit_admin_notification,
 )
 from orchestrator.core.platform.access import PERMISSION_PROJECTS_MANAGE
+from orchestrator.core.qa.demo_proof_start import start_demo_proof_workflow
 from orchestrator.core.security import AuthenticatedPrincipal, require_tenant_permission, require_tenant_workspace_access
 from orchestrator.core.integrations.workflow.router import WorkflowIntegrationRouter
 from orchestrator.core.workflow.type_catalog import get_workflow_type
@@ -301,24 +302,30 @@ def start_workflow_execution(
         workflow_type = get_workflow_type(session, workflow_type_key=payload.workflow_type_key)
     except LookupError as exc:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Workflow type not found") from exc
-    if workflow_type.workflow_type_key != "jira_project_reconciliation":
-        raise HTTPException(
-            status_code=status.HTTP_409_CONFLICT,
-            detail="Workflow type does not support direct admin starts",
+    if workflow_type.workflow_type_key == "jira_project_reconciliation":
+        return _start_jira_project_reconciliation_workflow(
+            session=session,
+            principal=principal,
+            payload=payload,
         )
-    return _start_jira_project_reconciliation_workflow(
-        session=session,
-        principal=principal,
-        payload=payload,
+    if workflow_type.workflow_type_key == "demo_proof":
+        return _start_demo_proof_workflow(
+            session=session,
+            principal=principal,
+            payload=payload,
+        )
+    raise HTTPException(
+        status_code=status.HTTP_409_CONFLICT,
+        detail="Workflow type does not support direct admin starts",
     )
 
 
-def _start_jira_project_reconciliation_workflow(
+def _require_start_tenant_and_project(
     *,
     session: Session,
     principal: AuthenticatedPrincipal,
     payload: WorkflowExecutionStartRequest,
-) -> WorkflowExecutionStartRead:
+) -> tuple[Tenant, Project]:
     tenant_id = payload.tenant_id.strip()
     if not tenant_id:
         raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail="tenant_id is required")
@@ -336,6 +343,77 @@ def _start_jira_project_reconciliation_workflow(
     project = session.get(Project, project_id)
     if project is None or project.tenant_id != tenant_id:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Project not found")
+    return tenant, project
+
+
+def _start_demo_proof_workflow(
+    *,
+    session: Session,
+    principal: AuthenticatedPrincipal,
+    payload: WorkflowExecutionStartRequest,
+) -> WorkflowExecutionStartRead:
+    tenant, project = _require_start_tenant_and_project(
+        session=session,
+        principal=principal,
+        payload=payload,
+    )
+    if project.is_archived:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Archived projects cannot run demo proof",
+        )
+    settings = get_settings()
+    proof_scope_id = str(payload.input.get("proof_scope_id") or "").strip()
+    commit_sha = str(payload.input.get("commit_sha") or "").strip()
+    run_id = str(payload.input.get("run_id") or "").strip() or None
+    pr_url = str(payload.input.get("pr_url") or "").strip() or None
+    required_capture_targets = payload.input.get("required_capture_targets")
+    if required_capture_targets is not None and not isinstance(required_capture_targets, list):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="input.required_capture_targets must be a list",
+        )
+    try:
+        result = start_demo_proof_workflow(
+            session=session,
+            settings=settings,
+            tenant=tenant,
+            project=project,
+            proof_scope_id=proof_scope_id,
+            commit_sha=commit_sha,
+            run_id=run_id,
+            pr_url=pr_url,
+            required_capture_targets=required_capture_targets,
+            trigger_event="admin_workflow_start",
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=status.HTTP_422_UNPROCESSABLE_ENTITY, detail=str(exc)) from exc
+    except WorkflowUpdateFailedError as exc:
+        session.rollback()
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Demo proof workflow could not start because the workflow update failed.",
+        ) from exc
+    return WorkflowExecutionStartRead(
+        execution_id=result.execution_id,
+        workflow_id=result.workflow_id,
+        workflow_type_key=result.workflow_type_key,
+        status=result.status,
+        started_attempt_id=result.started_attempt_id,
+    )
+
+
+def _start_jira_project_reconciliation_workflow(
+    *,
+    session: Session,
+    principal: AuthenticatedPrincipal,
+    payload: WorkflowExecutionStartRequest,
+) -> WorkflowExecutionStartRead:
+    tenant, project = _require_start_tenant_and_project(
+        session=session,
+        principal=principal,
+        payload=payload,
+    )
     if project.is_archived:
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Archived projects cannot be reconciled")
 

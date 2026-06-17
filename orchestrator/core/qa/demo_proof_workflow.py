@@ -18,6 +18,11 @@ DEMO_PROOF_STATE_EVIDENCE_UPLOADED = "evidence_uploaded"
 DEMO_PROOF_STATE_PR_ATTACHING = "pr_attaching"
 DEMO_PROOF_STATE_PR_ATTACHED = "pr_attached"
 DEMO_PROOF_STATE_CLEANUP_SCHEDULED = "cleanup_scheduled"
+DEMO_PROOF_STATE_FAILURE_EVIDENCE_UPLOADING = "failure_evidence_uploading"
+DEMO_PROOF_STATE_FAILURE_EVIDENCE_UPLOADED = "failure_evidence_uploaded"
+DEMO_PROOF_STATE_FAILURE_PR_ATTACHING = "failure_pr_attaching"
+DEMO_PROOF_STATE_FAILURE_PR_ATTACHED = "failure_pr_attached"
+DEMO_PROOF_STATE_FAILURE_CLEANUP_SCHEDULED = "failure_cleanup_scheduled"
 DEMO_PROOF_STATE_COMPLETE = "complete"
 DEMO_PROOF_STATE_BLOCKED = "blocked"
 
@@ -72,6 +77,11 @@ _ALL_DEMO_PROOF_NON_TERMINAL_STATES = frozenset(
         DEMO_PROOF_STATE_PR_ATTACHING,
         DEMO_PROOF_STATE_PR_ATTACHED,
         DEMO_PROOF_STATE_CLEANUP_SCHEDULED,
+        DEMO_PROOF_STATE_FAILURE_EVIDENCE_UPLOADING,
+        DEMO_PROOF_STATE_FAILURE_EVIDENCE_UPLOADED,
+        DEMO_PROOF_STATE_FAILURE_PR_ATTACHING,
+        DEMO_PROOF_STATE_FAILURE_PR_ATTACHED,
+        DEMO_PROOF_STATE_FAILURE_CLEANUP_SCHEDULED,
     }
 )
 
@@ -145,6 +155,10 @@ _DEMO_PROOF_TRANSITIONS: dict[str, _EventTransition] = {
         frozenset({DEMO_PROOF_STATE_RECORDING}),
         DEMO_PROOF_STATE_BLOCKED,
     ),
+    "RecordingFailureEvidenceCaptured": _EventTransition(
+        frozenset({DEMO_PROOF_STATE_RECORDING}),
+        DEMO_PROOF_STATE_FAILURE_EVIDENCE_UPLOADING,
+    ),
     "EvidenceUploadStarted": _EventTransition(
         frozenset({DEMO_PROOF_STATE_EVIDENCE_UPLOADING}),
         DEMO_PROOF_STATE_EVIDENCE_UPLOADING,
@@ -179,6 +193,42 @@ _DEMO_PROOF_TRANSITIONS: dict[str, _EventTransition] = {
     ),
     "PreviewCleanupFailed": _EventTransition(
         frozenset({DEMO_PROOF_STATE_CLEANUP_SCHEDULED}),
+        DEMO_PROOF_STATE_BLOCKED,
+    ),
+    "FailureEvidenceUploadStarted": _EventTransition(
+        frozenset({DEMO_PROOF_STATE_FAILURE_EVIDENCE_UPLOADING}),
+        DEMO_PROOF_STATE_FAILURE_EVIDENCE_UPLOADING,
+    ),
+    "FailureEvidenceUploaded": _EventTransition(
+        frozenset({DEMO_PROOF_STATE_FAILURE_EVIDENCE_UPLOADING}),
+        DEMO_PROOF_STATE_FAILURE_EVIDENCE_UPLOADED,
+    ),
+    "FailureEvidenceUploadFailed": _EventTransition(
+        frozenset({DEMO_PROOF_STATE_FAILURE_EVIDENCE_UPLOADING}),
+        DEMO_PROOF_STATE_BLOCKED,
+    ),
+    "PRFailureEvidenceAttachStarted": _EventTransition(
+        frozenset({DEMO_PROOF_STATE_FAILURE_EVIDENCE_UPLOADED}),
+        DEMO_PROOF_STATE_FAILURE_PR_ATTACHING,
+    ),
+    "PRFailureEvidenceAttached": _EventTransition(
+        frozenset({DEMO_PROOF_STATE_FAILURE_PR_ATTACHING}),
+        DEMO_PROOF_STATE_FAILURE_PR_ATTACHED,
+    ),
+    "PRFailureEvidenceAttachFailed": _EventTransition(
+        frozenset({DEMO_PROOF_STATE_FAILURE_PR_ATTACHING}),
+        DEMO_PROOF_STATE_BLOCKED,
+    ),
+    "FailurePreviewCleanupRequested": _EventTransition(
+        frozenset({DEMO_PROOF_STATE_FAILURE_PR_ATTACHED}),
+        DEMO_PROOF_STATE_FAILURE_CLEANUP_SCHEDULED,
+    ),
+    "FailurePreviewCleanupCompleted": _EventTransition(
+        frozenset({DEMO_PROOF_STATE_FAILURE_CLEANUP_SCHEDULED}),
+        DEMO_PROOF_STATE_BLOCKED,
+    ),
+    "FailurePreviewCleanupFailed": _EventTransition(
+        frozenset({DEMO_PROOF_STATE_FAILURE_CLEANUP_SCHEDULED}),
         DEMO_PROOF_STATE_BLOCKED,
     ),
     "DemoProofCompleted": _EventTransition(

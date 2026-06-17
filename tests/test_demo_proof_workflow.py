@@ -6,8 +6,10 @@ from orchestrator.core.qa.demo_proof_workflow import (
     DEMO_PROOF_STATE_BLOCKED,
     DEMO_PROOF_STATE_COMPLETE,
     DEMO_PROOF_STATE_EVIDENCE_UPLOADING,
+    DEMO_PROOF_STATE_FAILURE_EVIDENCE_UPLOADING,
     DEMO_PROOF_STATE_LEASE_ACQUIRING,
     DEMO_PROOF_STATE_REQUESTED,
+    DEMO_PROOF_STATE_RECORDING,
     PREVIEW_LEASE_STATE_DESTROYED,
     PREVIEW_LEASE_STATE_LIVE,
     PREVIEW_LEASE_STATE_RECORDING,
@@ -71,6 +73,50 @@ def test_demo_proof_failure_event_blocks_at_owned_boundary() -> None:
 
     assert state == DEMO_PROOF_STATE_BLOCKED
     assert is_demo_proof_terminal(state)
+
+
+def test_demo_proof_recording_failure_with_evidence_reports_failure_then_blocks() -> None:
+    state = transition_demo_proof_state(
+        current_state=DEMO_PROOF_STATE_REQUESTED,
+        event="DemoProofRequested",
+    )
+    for event in (
+        "ProofLeaseAcquired",
+        "ReleaseRequested",
+        "ReleaseProvisioning",
+        "ReleaseLive",
+        "RouteReady",
+        "ServiceVerificationPassed",
+        "RecordingStarted",
+    ):
+        state = transition_demo_proof_state(current_state=state, event=event)
+
+    state = transition_demo_proof_state(
+        current_state=state,
+        event="RecordingFailureEvidenceCaptured",
+    )
+    assert state == DEMO_PROOF_STATE_FAILURE_EVIDENCE_UPLOADING
+
+    for event in (
+        "FailureEvidenceUploaded",
+        "PRFailureEvidenceAttachStarted",
+        "PRFailureEvidenceAttached",
+        "FailurePreviewCleanupRequested",
+        "FailurePreviewCleanupCompleted",
+    ):
+        state = transition_demo_proof_state(current_state=state, event=event)
+
+    assert state == DEMO_PROOF_STATE_BLOCKED
+    assert is_demo_proof_terminal(state)
+
+
+def test_demo_proof_recording_failure_without_evidence_blocks_immediately() -> None:
+    state = transition_demo_proof_state(
+        current_state=DEMO_PROOF_STATE_RECORDING,
+        event="RecordingFailed",
+    )
+
+    assert state == DEMO_PROOF_STATE_BLOCKED
 
 
 def test_demo_proof_terminal_state_rejects_late_non_duplicate_event() -> None:
