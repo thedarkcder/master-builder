@@ -104,6 +104,60 @@ def test_registered_project_deployment_setup_uses_dedicated_temporal_workflow() 
     }
 
 
+def test_registered_demo_proof_workflow_matches_required_proof_chain() -> None:
+    workflow_type = get_workflow_type(workflow_type_key="demo_proof")
+    binding = resolve_temporal_binding_for_handler(handler_key=workflow_type.handler_key)
+
+    assert workflow_type.orchestration_backend == "temporal"
+    assert workflow_type.handler_key == "demo_proof"
+    assert workflow_type.capabilities["independent_trigger"] is True
+    assert workflow_type.capabilities["required_capture_targets"] == ("browser", "ios", "android")
+    assert binding.workflow_name == "HandlerBackedWorkflow"
+    assert binding.execution_mode == "handler"
+    assert [step.key for step in workflow_type.steps] == [
+        "preview_lease",
+        "release",
+        "recording",
+        "evidence_upload",
+        "pr_evidence_update",
+        "preview_cleanup",
+    ]
+    assert {unit.key for unit in workflow_type.work_units} == {
+        "preview_lease.enforce_single_active",
+        "preview_lease.acquire",
+        "release.create_or_reuse",
+        "release.wait_for_live",
+        "recording.browser",
+        "recording.ios",
+        "recording.android",
+        "evidence_upload.persist",
+        "pr_evidence_update.attach_links",
+        "preview_cleanup.destroy_or_ttl",
+    }
+    assert workflow_type.step("release").after == ("preview_lease",)
+    assert workflow_type.step("recording").after == ("release",)
+    assert workflow_type.step("evidence_upload").after == ("recording",)
+    assert workflow_type.step("pr_evidence_update").after == ("evidence_upload",)
+    assert workflow_type.step("preview_cleanup").after == ("pr_evidence_update",)
+
+
+def test_registered_demo_proof_side_effect_units_require_idempotency() -> None:
+    workflow_type = get_workflow_type(workflow_type_key="demo_proof")
+
+    side_effect_unit_keys = {
+        unit.key
+        for unit in workflow_type.work_units
+        if unit.kind in {WorkflowWorkUnitKind.EXTERNAL_API, WorkflowWorkUnitKind.SIDE_EFFECT}
+    }
+    idempotent_unit_keys = {
+        unit.key
+        for unit in workflow_type.work_units
+        if unit.idempotency_policy.required
+    }
+
+    assert side_effect_unit_keys <= idempotent_unit_keys
+
+
 def test_parent_planning_supporting_steps_declare_visual_owners() -> None:
     workflow_type = get_workflow_type(workflow_type_key="parent_planning")
     steps = {step.key: step for step in workflow_type.steps}
