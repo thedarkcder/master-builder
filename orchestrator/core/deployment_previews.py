@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from urllib.parse import urlparse
 
+from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.orm import Session
 
@@ -39,11 +41,14 @@ class RunPreviewDeploymentResult:
 @dataclass(frozen=True)
 class PreviewCleanupResult:
     destroyed_release_ids: tuple[str, ...]
+    failed_release_ids: tuple[str, ...] = ()
 
 
 _REUSABLE_PREVIEW_RELEASE_STATUSES = {"queued", "provisioning", "deploying", "route_activating", "live"}
 _RECONCILE_BEFORE_REUSE_STATUSES = {"provisioning", "deploying", "route_activating"}
 _FAILED_PREVIEW_RELEASE_STATUSES = {"failed", "rolled_back"}
+_DESTROYED_PREVIEW_STATUS_CONTEXT_KEY = "status_before_destroy"
+_TERMINAL_PREVIEW_RELEASE_STATUSES = {"failed", "rolled_back", "live"}
 
 
 def create_run_preview_deployment(
@@ -62,12 +67,24 @@ def create_run_preview_deployment(
     if not policy.preview_prs_enabled:
         return RunPreviewDeploymentResult(created=False, reason="preview_prs_disabled")
 
+    artifact = latest_pushed_execution_artifact_for_run(session=session, run_id=run.run_id)
+    if artifact is None:
+        raise RuntimeError("Run preview deployment requires a pushed durable execution branch artifact")
+
+    branch_run_ids = _run_preview_branch_run_ids(
+        session=session,
+        tenant_id=tenant.tenant_id,
+        project_id=project.project_id,
+        branch=getattr(run, "branch", None),
+        current_run_id=run.run_id,
+    )
     if not force:
         existing_release = _reusable_existing_preview_release(
             session=session,
             tenant_id=tenant.tenant_id,
             project_id=project.project_id,
-            run_id=run.run_id,
+            branch_run_ids=branch_run_ids,
+            expected_commit_sha=artifact.commit_sha,
             current_base_domain=_normalize_optional_string((tenant.deployment_plane_config or {}).get("base_domain")),
         )
         if existing_release is not None:
@@ -80,7 +97,8 @@ def create_run_preview_deployment(
             session=session,
             tenant_id=tenant.tenant_id,
             project_id=project.project_id,
-            run_id=run.run_id,
+            branch_run_ids=branch_run_ids,
+            expected_commit_sha=artifact.commit_sha,
             retry_limit=_preview_failure_retry_limit(settings),
         )
         if failed_release is not None:
@@ -90,17 +108,13 @@ def create_run_preview_deployment(
                 release=project_deployment_release_to_schema(failed_release),
             )
 
-    _destroy_active_preview_releases_for_run(
+    _destroy_active_preview_releases_for_branch(
         session=session,
         tenant_id=tenant.tenant_id,
         project_id=project.project_id,
-        run_id=run.run_id,
+        branch_run_ids=branch_run_ids,
         reason="preview_replaced",
     )
-
-    artifact = latest_pushed_execution_artifact_for_run(session=session, run_id=run.run_id)
-    if artifact is None:
-        raise RuntimeError("Run preview deployment requires a pushed durable execution branch artifact")
 
     app = _project_level_deployment_app(session=session, tenant_id=tenant.tenant_id, project_id=project.project_id)
     deployment_config = dict(app.deployment_config or {})
@@ -173,16 +187,20 @@ def _reusable_existing_preview_release(
     session: Session,
     tenant_id: str,
     project_id: str,
-    run_id: str,
+    branch_run_ids: tuple[str, ...],
+    expected_commit_sha: str,
     current_base_domain: str | None,
 ) -> ProjectDeploymentRelease | None:
+    if not branch_run_ids:
+        return None
     existing_release = session.execute(
         select(ProjectDeploymentRelease)
         .where(
             ProjectDeploymentRelease.tenant_id == tenant_id,
             ProjectDeploymentRelease.project_id == project_id,
             ProjectDeploymentRelease.release_kind == "run_preview",
-            ProjectDeploymentRelease.source_run_id == run_id,
+            ProjectDeploymentRelease.source_run_id.in_(branch_run_ids),
+            ProjectDeploymentRelease.commit_sha == expected_commit_sha,
             ProjectDeploymentRelease.status.in_(_REUSABLE_PREVIEW_RELEASE_STATUSES),
             ProjectDeploymentRelease.destroyed_at.is_(None),
         )
@@ -229,48 +247,65 @@ def _latest_failed_preview_release_after_retry_limit(
     session: Session,
     tenant_id: str,
     project_id: str,
-    run_id: str,
+    branch_run_ids: tuple[str, ...],
+    expected_commit_sha: str,
     retry_limit: int,
 ) -> ProjectDeploymentRelease | None:
-    failed_releases = session.execute(
+    if not branch_run_ids:
+        return None
+    preview_releases = session.execute(
         select(ProjectDeploymentRelease)
         .where(
             ProjectDeploymentRelease.tenant_id == tenant_id,
             ProjectDeploymentRelease.project_id == project_id,
             ProjectDeploymentRelease.release_kind == "run_preview",
-            ProjectDeploymentRelease.source_run_id == run_id,
-            ProjectDeploymentRelease.status.in_(_FAILED_PREVIEW_RELEASE_STATUSES),
-            ProjectDeploymentRelease.destroyed_at.is_(None),
+            ProjectDeploymentRelease.source_run_id.in_(branch_run_ids),
+            ProjectDeploymentRelease.commit_sha == expected_commit_sha,
         )
         .order_by(ProjectDeploymentRelease.created_at.desc(), ProjectDeploymentRelease.release_id.desc())
     ).scalars().all()
+    failed_releases = [release for release in preview_releases if _preview_release_counts_as_failed_attempt(release)]
     if len(failed_releases) < retry_limit:
         return None
     return failed_releases[0]
 
 
-def _destroy_active_preview_releases_for_run(
+def _preview_release_counts_as_failed_attempt(release: ProjectDeploymentRelease) -> bool:
+    status = str(release.status or "").strip()
+    if status in _FAILED_PREVIEW_RELEASE_STATUSES:
+        return True
+    if status != "destroyed":
+        return False
+    provider_context = release.provider_context if isinstance(release.provider_context, dict) else {}
+    return str(provider_context.get(_DESTROYED_PREVIEW_STATUS_CONTEXT_KEY) or "").strip() in _FAILED_PREVIEW_RELEASE_STATUSES
+
+
+def _destroy_active_preview_releases_for_branch(
     *,
     session: Session,
     tenant_id: str,
     project_id: str,
-    run_id: str,
+    branch_run_ids: tuple[str, ...],
     reason: str,
 ) -> PreviewCleanupResult:
+    if not branch_run_ids:
+        return PreviewCleanupResult(destroyed_release_ids=())
     releases = session.execute(
         select(ProjectDeploymentRelease)
         .where(
             ProjectDeploymentRelease.tenant_id == tenant_id,
             ProjectDeploymentRelease.project_id == project_id,
             ProjectDeploymentRelease.release_kind == "run_preview",
-            ProjectDeploymentRelease.source_run_id == run_id,
-            ProjectDeploymentRelease.status.in_(_REUSABLE_PREVIEW_RELEASE_STATUSES),
-            ProjectDeploymentRelease.destroyed_at.is_(None),
+            ProjectDeploymentRelease.source_run_id.in_(branch_run_ids),
+            ProjectDeploymentRelease.status != "destroyed",
         )
         .order_by(ProjectDeploymentRelease.created_at.asc(), ProjectDeploymentRelease.release_id.asc())
     ).scalars().all()
     destroyed: list[str] = []
     for release in releases:
+        status = str(release.status or "").strip()
+        if status not in _REUSABLE_PREVIEW_RELEASE_STATUSES and not _preview_release_has_provider_resource(release):
+            continue
         destroyed_release = destroy_project_deployment_preview_release(
             session=session,
             tenant_id=tenant_id,
@@ -280,6 +315,118 @@ def _destroy_active_preview_releases_for_run(
         )
         destroyed.append(destroyed_release.release_id)
     return PreviewCleanupResult(destroyed_release_ids=tuple(destroyed))
+
+
+def _run_preview_branch_run_ids(
+    *,
+    session: Session,
+    tenant_id: str,
+    project_id: str,
+    branch: str | None,
+    current_run_id: str,
+) -> tuple[str, ...]:
+    normalized_current_run_id = _normalize_optional_string(current_run_id)
+    if normalized_current_run_id is None:
+        return ()
+    normalized_branch = _normalize_optional_string(branch)
+    if normalized_branch is None:
+        return (normalized_current_run_id,)
+    run_ids = list(
+        session.execute(
+            select(Run.run_id)
+            .where(
+                Run.tenant_id == tenant_id,
+                Run.project_id == project_id,
+                Run.branch == normalized_branch,
+            )
+            .order_by(Run.created_at.asc(), Run.run_id.asc())
+        ).scalars()
+    )
+    if normalized_current_run_id not in run_ids:
+        run_ids.append(normalized_current_run_id)
+    return tuple(dict.fromkeys(run_ids))
+
+
+def _preview_release_has_provider_resource(release: ProjectDeploymentRelease) -> bool:
+    provider_context = release.provider_context if isinstance(release.provider_context, dict) else {}
+    for key in ("application_uuid", "service_uuid"):
+        if str(provider_context.get(key) or "").strip():
+            return True
+    return False
+
+
+def cleanup_stale_run_preview_deployments(
+    *,
+    session: Session,
+    settings,
+    limit: int = 25,
+    now: datetime | None = None,
+    exclude_release_ids: set[str] | None = None,
+) -> PreviewCleanupResult:  # noqa: ANN001
+    cutoff = _run_preview_ttl_cutoff(settings=settings, now=now or datetime.now(timezone.utc))
+    excluded = set(exclude_release_ids or set())
+    releases = session.execute(
+        select(ProjectDeploymentRelease)
+        .where(
+            ProjectDeploymentRelease.release_kind == "run_preview",
+            ProjectDeploymentRelease.status.in_(_TERMINAL_PREVIEW_RELEASE_STATUSES),
+            ProjectDeploymentRelease.destroyed_at.is_(None),
+        )
+        .order_by(ProjectDeploymentRelease.created_at.asc(), ProjectDeploymentRelease.release_id.asc())
+        .limit(max(1, int(limit)))
+    ).scalars().all()
+    destroyed: list[str] = []
+    failed: list[str] = []
+    for release in releases:
+        if release.release_id in excluded:
+            continue
+        if not _run_preview_release_is_cleanup_due(release=release, ttl_cutoff=cutoff):
+            continue
+        try:
+            destroyed_release = destroy_project_deployment_preview_release(
+                session=session,
+                tenant_id=release.tenant_id,
+                project_id=release.project_id,
+                release_id=release.release_id,
+                reason="preview_ttl_expired" if str(release.status or "").strip() == "live" else "preview_terminal_cleanup",
+            )
+        except HTTPException as exc:
+            session.rollback()
+            current = session.get(ProjectDeploymentRelease, release.release_id)
+            if current is not None:
+                current.last_error = f"Preview cleanup failed: {exc.detail}"
+                current.updated_at = datetime.now(timezone.utc)
+                session.flush()
+            failed.append(release.release_id)
+            continue
+        destroyed.append(destroyed_release.release_id)
+    return PreviewCleanupResult(destroyed_release_ids=tuple(destroyed), failed_release_ids=tuple(failed))
+
+
+def _run_preview_ttl_cutoff(*, settings, now: datetime) -> datetime:  # noqa: ANN001
+    try:
+        ttl_seconds = max(60, int(getattr(settings, "run_preview_release_ttl_seconds", 86400) or 86400))
+    except (TypeError, ValueError):
+        ttl_seconds = 86400
+    return _as_utc(now) - timedelta(seconds=ttl_seconds)
+
+
+def _run_preview_release_is_cleanup_due(*, release: ProjectDeploymentRelease, ttl_cutoff: datetime) -> bool:
+    status = str(release.status or "").strip()
+    if status in _FAILED_PREVIEW_RELEASE_STATUSES:
+        return True
+    if status != "live":
+        return False
+    anchor = release.completed_at or release.updated_at or release.created_at
+    if anchor is None:
+        return False
+    return _as_utc(anchor) <= ttl_cutoff
+
+
+def _as_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
 
 def destroy_run_preview_deployments_for_pr(
@@ -370,7 +517,10 @@ def _mobile_delivery_metadata(*, session: Session, tenant_id: str, project_id: s
         "mobile_delivery": {
             "status": "pending_fastlane_distribution",
             "targets": mobile_targets,
-            "note": "Mobile apps are qualified through the preview API/backend deployment and require configured Fastlane distribution before device testing.",
+            "note": (
+                "Mobile QA demo proof uses source-built simulator/emulator recordings against the preview "
+                "release context. Fastlane distribution is only required for external mobile delivery."
+            ),
         }
     }
 
