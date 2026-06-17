@@ -17,6 +17,8 @@ from orchestrator.core.qa.demo_service import (
     DEMO_EVIDENCE_REQUIRED_COUNTS_MARKER,
     DEMO_EVIDENCE_REQUIRED_TARGETS_MARKER,
     DemoCaptureTarget,
+    LocalQaFailureEvidence,
+    QaDemoRecordingFailure,
     ensure_artifact_url_reachable,
     ensure_release_ready_for_qa,
     ensure_capture_target_runtime_ready,
@@ -4902,6 +4904,92 @@ def test_execute_qa_demo_stage_retries_recording_failures() -> None:
 
     assert upload_attempts["count"] == 4
     assert result.recordings[0].artifact_url.endswith("qa-demo-1.webm")
+
+
+def test_execute_qa_demo_stage_uploads_failure_evidence_when_app_does_not_load() -> None:
+    tenant = SimpleNamespace(tenant_id="tenant-1", github_config={})
+    project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo")
+    run = SimpleNamespace(run_id="run-1")
+    release = SimpleNamespace(
+        commit_sha="b" * 40,
+        service_urls=[SimpleNamespace(service_kind="website", status="active", url="https://preview.example")],
+    )
+    plan = PmPlan(
+        plan_steps=["Implement"],
+        acceptance_criteria=["Feature works"],
+        risks=[],
+        demo_requirements=[_demo_requirement()],
+    )
+    dev_result = DevResult(change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8")
+    test_result = TestResult(guidance=["pytest -q"])
+    review_result = ReviewResult(summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8")
+    failure_evidence = LocalQaFailureEvidence(
+        name="App load",
+        path="/tmp/app-load-failure.webm",
+        capture_target="browser",
+        capture_reference="https://preview.example",
+        content_type="video/webm",
+        content_sha256="a" * 64,
+        error_message=(
+            "QA demo browser scenario failed: App load\n"
+            "QA Demo Ready was not visible\n"
+            "Browser diagnostics:\npageerror: process is not defined"
+        ),
+    )
+
+    fake_agents = SimpleNamespace(qa=lambda **_: _qa_result())
+
+    with (
+        patch("orchestrator.core.qa.demo_service.build_codex_runtime"),
+        patch("orchestrator.core.qa.demo_service.CodexWorkflowAgents", return_value=fake_agents),
+        patch(
+            "orchestrator.core.qa.demo_service.record_demo_scenarios",
+            side_effect=QaDemoRecordingFailure(
+                "QA demo recorder command failed (1): node qa_demo_recorder.mjs\n"
+                + failure_evidence.error_message,
+                failure_evidence=[failure_evidence],
+            ),
+        ),
+        patch(
+            "orchestrator.core.qa.demo_service.storage_config_from_settings",
+            return_value=SimpleNamespace(
+                endpoint="minio:9000",
+                access_key="key",
+                secret_key="secret",
+                bucket="qa-demos",
+                public_base_url="https://cdn.example/qa-demos",
+                secure=False,
+            ),
+        ),
+        patch(
+            "orchestrator.core.qa.demo_service.upload_recording",
+            return_value="https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-failure-1.webm",
+        ) as upload_mock,
+        patch("orchestrator.core.qa.demo_service._default_service_url_probe", return_value=200),
+        patch("orchestrator.core.qa.demo_service._default_artifact_url_probe", return_value=200),
+    ):
+        result = execute_qa_demo_stage(
+            session=SimpleNamespace(),
+            settings=SimpleNamespace(qa_demo_playwright_module_dir="", qa_demo_max_attempts=1),
+            tenant=tenant,
+            project=project,
+            run=run,
+            request=_request(),
+            plan=plan,
+            dev_result=dev_result,
+            test_result=test_result,
+            review_result=review_result,
+            preview_release=release,
+        )
+
+    assert result.outcome == "blocked"
+    assert result.recordings == []
+    assert result.failure_evidence[0].artifact_url.endswith("qa-failure-1.webm")
+    assert result.failure_evidence[0].object_key == "tenant-1/project-1/run-1/qa-failure-1.webm"
+    assert "process is not defined" in result.failure_evidence[0].error_message
+    upload_mock.assert_called_once()
+    assert upload_mock.call_args.kwargs["local_path"] == "/tmp/app-load-failure.webm"
+    assert upload_mock.call_args.kwargs["object_key"] == "tenant-1/project-1/run-1/qa-failure-1.webm"
 
 
 def test_update_pull_request_with_demo_evidence_refreshes_pr_body() -> None:

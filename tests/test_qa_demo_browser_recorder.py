@@ -123,10 +123,128 @@ module.exports = {{
     )
 
     assert result.returncode != 0
-    assert "QA demo browser scenario must stay on preview release origin" in (
-        result.stderr + result.stdout
+    output = json.loads(output_path.read_text(encoding="utf-8"))
+    assert output["recordings"] == []
+    assert "QA demo browser scenario must stay on preview release origin" in output["failure_evidence"][0]["error_message"]
+
+
+def test_browser_recorder_writes_failure_evidence_for_app_load_error(tmp_path: Path) -> None:
+    module_root = tmp_path / "modules"
+    playwright_dir = module_root / "playwright"
+    playwright_dir.mkdir(parents=True)
+    video_path = tmp_path / "source-video.webm"
+    video_path.write_bytes(b"\x1a\x45\xdf\xa3" + (b"0" * 4096))
+    (playwright_dir / "index.js").write_text(
+        f"""
+let currentUrl = "";
+const handlers = {{}};
+const videoPath = {json.dumps(str(video_path))};
+
+function locator() {{
+  return {{
+    async click() {{}},
+    async fill() {{}},
+    async press() {{}},
+    async selectOption() {{}},
+    async waitFor() {{
+      throw new Error("QA Demo Ready was not visible");
+    }},
+    async textContent() {{
+      return "";
+    }},
+  }};
+}}
+
+const page = {{
+  on(event, handler) {{
+    handlers[event] = handler;
+  }},
+  async goto(url) {{
+    currentUrl = url;
+    if (handlers.pageerror) {{
+      handlers.pageerror(new Error("process is not defined"));
+    }}
+  }},
+  url() {{
+    return currentUrl;
+  }},
+  video() {{
+    return {{
+      async path() {{
+        return videoPath;
+      }},
+    }};
+  }},
+  getByText() {{
+    return {{
+      async count() {{
+        return 0;
+      }},
+    }};
+  }},
+  locator,
+  async waitForURL(url) {{
+    currentUrl = url;
+  }},
+}};
+
+module.exports = {{
+  chromium: {{
+    async launch() {{
+      return {{
+        async newContext() {{
+          return {{
+            async newPage() {{
+              return page;
+            }},
+            async close() {{}},
+          }};
+        }},
+        async close() {{}},
+      }};
+    }},
+  }},
+}};
+""",
+        encoding="utf-8",
     )
-    assert not output_path.exists()
+    input_path = tmp_path / "input.json"
+    output_path = tmp_path / "output.json"
+    output_dir = tmp_path / "videos"
+    input_path.write_text(
+        json.dumps(
+            {
+                "preview_url": "https://preview.example/",
+                "output_dir": str(output_dir),
+                "scenarios": [
+                    {
+                        "name": "App load",
+                        "start_path": "/",
+                        "steps": [{"action": "assert_visible", "selector": "text=QA Demo Ready"}],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    env = dict(os.environ)
+    env["QA_DEMO_PLAYWRIGHT_MODULE_DIR"] = str(module_root)
+    result = subprocess.run(
+        ["node", str(SCRIPT_PATH), str(input_path), str(output_path)],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    output = json.loads(output_path.read_text(encoding="utf-8"))
+    assert output["recordings"] == []
+    assert output["failure_evidence"][0]["name"] == "App load"
+    assert "process is not defined" in output["failure_evidence"][0]["error_message"]
+    assert "QA Demo Ready was not visible" in output["failure_evidence"][0]["error_message"]
+    assert Path(output["failure_evidence"][0]["path"]).exists()
 
 
 def test_browser_recorder_routes_public_host_to_recording_host_without_host_header(tmp_path: Path) -> None:
