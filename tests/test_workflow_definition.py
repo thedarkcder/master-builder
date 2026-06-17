@@ -15,7 +15,10 @@ from orchestrator.core.workflow.definition import (
     workflow_step,
     workflow_work_unit,
 )
-from orchestrator.core.workflow.handler_composition import installed_operation_retry_capabilities
+from orchestrator.core.workflow.handler_composition import (
+    build_installed_workflow_handler_registry,
+    installed_operation_retry_capabilities,
+)
 from orchestrator.core.workflow.type_catalog import get_workflow_type
 from orchestrator.temporal.workflow_registry import resolve_temporal_binding_for_handler
 
@@ -156,6 +159,20 @@ def test_registered_demo_proof_side_effect_units_require_idempotency() -> None:
     }
 
     assert side_effect_unit_keys <= idempotent_unit_keys
+
+
+def test_installed_workflow_handler_registry_resolves_demo_proof_handler() -> None:
+    registry = build_installed_workflow_handler_registry(
+        integration_router=object(),
+        extract_changed_fields_fn=lambda *_args, **_kwargs: (),
+        extract_status_transition_fn=lambda *_args, **_kwargs: None,
+        build_runtime_for_selector_fn=lambda *_args, **_kwargs: object(),
+        seed_issues_with_runtime_fn=lambda *_args, **_kwargs: object(),
+        post_jira_comment_fn=lambda *_args, **_kwargs: object(),
+        create_jira_comment_fn=lambda *_args, **_kwargs: object(),
+    )
+
+    assert registry.resolve_advance_handler("demo_proof").__class__.__name__ == "DemoProofWorkflowAdvanceHandler"
 
 
 def test_parent_planning_supporting_steps_declare_visual_owners() -> None:
