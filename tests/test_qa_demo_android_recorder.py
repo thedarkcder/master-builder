@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import subprocess
 from pathlib import Path
 
@@ -9,6 +10,7 @@ from scripts.qa_demo_android_recorder import discover_android_project_dir
 from scripts.qa_demo_android_recorder import execute_scenario
 from scripts.qa_demo_android_recorder import find_element
 from scripts.qa_demo_android_recorder import launch_app
+from scripts.qa_demo_android_recorder import main
 from scripts.qa_demo_android_recorder import parse_bounds
 from scripts.qa_demo_android_recorder import preferred_adb_device
 from scripts.qa_demo_android_recorder import preferred_android_avd
@@ -414,6 +416,62 @@ def test_record_live_screen_demo_uses_android_screenrecord_around_scenario(monke
     assert calls[5][:5] == ["adb", "-s", "device-1", "pull", "/sdcard/Download/master-builder-qa-demo-live-android-walkthrough.mp4"]
     assert not any("screencap" in " ".join(call) for call in calls)
     assert output_path.exists()
+
+
+def test_android_recorder_writes_failure_evidence_when_app_does_not_load(monkeypatch, tmp_path) -> None:
+    repo_dir = tmp_path / "repo"
+    repo_dir.mkdir()
+    apk_path = tmp_path / "app-debug.apk"
+    apk_path.write_bytes(b"apk")
+    input_path = tmp_path / "input.json"
+    output_path = tmp_path / "output.json"
+    output_dir = tmp_path / "videos"
+    input_path.write_text(
+        json.dumps(
+            {
+                "execution_repo_dir": str(repo_dir),
+                "output_dir": str(output_dir),
+                "capture_reference": "android-emulator://configured",
+                "scenarios": [
+                    {
+                        "name": "App load",
+                        "objective": "Prove the app opens",
+                        "capture_target": "android",
+                        "expected_outcomes": ["Ready screen appears"],
+                        "steps": [{"action": "assert_visible", "selector": "text=Ready"}],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def _record_failure(**kwargs):  # noqa: ANN001
+        Path(kwargs["output_path"]).write_bytes(b"\x00\x00\x00\x18ftypmp42" + (b"0" * 2048) + b"moov")
+        raise RuntimeError("Missing Android element: text=Ready")
+
+    monkeypatch.setattr("scripts.qa_demo_android_recorder.ensure_preferred_android_device", lambda **_kwargs: "device-1")
+    monkeypatch.setattr("scripts.qa_demo_android_recorder.build_debug_apk", lambda **_kwargs: apk_path)
+    monkeypatch.setattr("scripts.qa_demo_android_recorder.resolve_package_name", lambda **_kwargs: "com.example.app")
+    monkeypatch.setattr("scripts.qa_demo_android_recorder.install_apk", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        "scripts.qa_demo_android_recorder.resolve_launch_activity",
+        lambda **_kwargs: "com.example.app/.MainActivity",
+    )
+    monkeypatch.setattr("scripts.qa_demo_android_recorder.reset_app_state", lambda **_kwargs: None)
+    monkeypatch.setattr("scripts.qa_demo_android_recorder.launch_app", lambda **_kwargs: None)
+    monkeypatch.setattr("scripts.qa_demo_android_recorder.record_live_screen_demo", _record_failure)
+
+    result = main(["qa_demo_android_recorder.py", str(input_path), str(output_path)])
+
+    output = json.loads(output_path.read_text(encoding="utf-8"))
+    assert result == 1
+    assert output["recordings"] == []
+    assert output["failure_evidence"][0]["name"] == "App load"
+    assert output["failure_evidence"][0]["capture_target"] == "android"
+    assert output["failure_evidence"][0]["capture_reference"] == "android-emulator://configured"
+    assert "Missing Android element: text=Ready" in output["failure_evidence"][0]["error_message"]
+    assert Path(output["failure_evidence"][0]["path"]).exists()
 
 
 def test_validate_mp4_recording_rejects_incomplete_mp4(tmp_path) -> None:

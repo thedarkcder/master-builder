@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+import signal
 from pathlib import Path
 from unittest.mock import patch
 
@@ -11,6 +13,7 @@ from scripts.qa_demo_mobile_recorder import _build_for_testing
 from scripts.qa_demo_mobile_recorder import _reboot_simulator
 from scripts.qa_demo_mobile_recorder import _run
 from scripts.qa_demo_mobile_recorder import discover_ios_project_files
+from scripts.qa_demo_mobile_recorder import main
 from scripts.qa_demo_mobile_recorder import qa_demo_launch_environment
 from orchestrator.core.qa.mobile_xcuitest_recorder import render_xcuitest_source
 from orchestrator.core.workflow.runner import QaScenario, QaStep
@@ -192,6 +195,88 @@ def test_discover_ios_project_files_prefers_workspace_when_present(tmp_path: Pat
 
     assert project_path == ios_dir / "Yana.xcworkspace"
     assert discovered_test_file == ui_test_file
+
+
+def test_ios_recorder_writes_failure_evidence_when_app_does_not_load(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    repo_dir = tmp_path / "repo"
+    repo_dir.mkdir()
+    project_path = repo_dir / "Yana.xcodeproj"
+    project_path.mkdir()
+    ui_test_file = repo_dir / "YanaUITests" / "YanaUITests.swift"
+    ui_test_file.parent.mkdir()
+    ui_test_file.write_text("import XCTest\n", encoding="utf-8")
+    xctestrun_path = tmp_path / "Yana.xctestrun"
+    xctestrun_path.write_text("", encoding="utf-8")
+    input_path = tmp_path / "input.json"
+    output_path = tmp_path / "output.json"
+    output_dir = tmp_path / "videos"
+    input_path.write_text(
+        json.dumps(
+            {
+                "execution_repo_dir": str(repo_dir),
+                "output_dir": str(output_dir),
+                "capture_reference": "ios-simulator://configured",
+                "scenarios": [
+                    {
+                        "name": "App load",
+                        "objective": "Prove the app opens",
+                        "capture_target": "ios",
+                        "expected_outcomes": ["Ready screen appears"],
+                        "steps": [{"action": "assert_visible", "selector": "text=Ready"}],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    class _Recorder:
+        returncode = None
+
+        def __init__(self, args, **_kwargs):  # noqa: ANN001
+            Path(args[-1]).write_bytes(b"\x00\x00\x00\x18ftypmp42" + (b"0" * 2048) + b"moov")
+
+        def poll(self):  # noqa: ANN201
+            return self.returncode
+
+        def send_signal(self, _signal_value):  # noqa: ANN001
+            return None
+
+        def wait(self, timeout=None):  # noqa: ANN001, ANN201
+            self.returncode = -signal.SIGINT
+            return self.returncode
+
+        def kill(self):  # noqa: ANN201
+            self.returncode = -signal.SIGINT
+
+    def _fake_run(args, **_kwargs):  # noqa: ANN001
+        if "test-without-building" in args:
+            raise RuntimeError("XCTAssert failed: Ready was not visible")
+        return type("Result", (), {"stdout": "", "stderr": "", "returncode": 0})()
+
+    monkeypatch.setenv("QA_DEMO_IOS_BUNDLE_ID", "com.example.app")
+    monkeypatch.setenv("QA_DEMO_IOS_SIMULATOR_UDID", "SIM-123")
+    monkeypatch.setattr("scripts.qa_demo_mobile_recorder.discover_ios_project_files", lambda **_kwargs: (project_path, ui_test_file))
+    monkeypatch.setattr("scripts.qa_demo_mobile_recorder._reboot_simulator", lambda _udid: None)
+    monkeypatch.setattr("scripts.qa_demo_mobile_recorder._build_for_testing", lambda **_kwargs: None)
+    monkeypatch.setattr("scripts.qa_demo_mobile_recorder._discover_xctestrun_path", lambda _derived_data_dir: xctestrun_path)
+    monkeypatch.setattr("scripts.qa_demo_mobile_recorder._reset_app_state", lambda **_kwargs: None)
+    monkeypatch.setattr("scripts.qa_demo_mobile_recorder._run", _fake_run)
+    monkeypatch.setattr("scripts.qa_demo_mobile_recorder.subprocess.Popen", _Recorder)
+
+    result = main(["qa_demo_mobile_recorder.py", str(input_path), str(output_path)])
+
+    output = json.loads(output_path.read_text(encoding="utf-8"))
+    assert result == 1
+    assert output["recordings"] == []
+    assert output["failure_evidence"][0]["name"] == "App load"
+    assert output["failure_evidence"][0]["capture_target"] == "ios"
+    assert output["failure_evidence"][0]["capture_reference"] == "ios-simulator://configured"
+    assert "Ready was not visible" in output["failure_evidence"][0]["error_message"]
+    assert Path(output["failure_evidence"][0]["path"]).exists()
 
 
 def test_build_for_testing_uses_workspace_flag_for_workspace(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
