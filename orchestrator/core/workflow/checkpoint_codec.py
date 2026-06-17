@@ -6,6 +6,7 @@ from orchestrator.core.worker.capability_normalization import KNOWN_WORKER_CAPAB
 from orchestrator.core.workflow.runner import DemoRequirement
 from orchestrator.core.workflow.runner import DevResult
 from orchestrator.core.workflow.runner import PmPlan
+from orchestrator.core.workflow.runner import QaFailureEvidence
 from orchestrator.core.workflow.runner import QaRecording
 from orchestrator.core.workflow.runner import QaResult
 from orchestrator.core.workflow.runner import QaScenario
@@ -172,6 +173,10 @@ def encode_qa_result(result: QaResult) -> dict:
         payload.get("recordings"),
         field="QA result recordings",
     )
+    payload["failure_evidence"] = _require_qa_failure_evidence(
+        payload.get("failure_evidence"),
+        field="QA result failure_evidence",
+    )
     payload["feedback"] = _parse_optional_string(payload.get("feedback"))
     payload["blocker_message"] = _parse_optional_string(payload.get("blocker_message"))
     if outcome == "blocked" and payload["blocker_message"] is None:
@@ -311,8 +316,9 @@ def decode_qa_result_payload(payload: dict | None) -> QaResult | None:
     summary = _parse_string_list(payload.get("summary"), require_non_empty=True)
     scenarios = _parse_qa_scenarios(payload.get("scenarios"))
     recordings = _parse_qa_recordings(payload.get("recordings"))
+    failure_evidence = _parse_qa_failure_evidence(payload.get("failure_evidence"))
     blocker_message = _parse_optional_string(payload.get("blocker_message"))
-    if summary is None or scenarios is None or recordings is None:
+    if summary is None or scenarios is None or recordings is None or failure_evidence is None:
         return None
     if outcome == "blocked" and blocker_message is None:
         return None
@@ -321,6 +327,7 @@ def decode_qa_result_payload(payload: dict | None) -> QaResult | None:
         summary=summary,
         scenarios=scenarios,
         recordings=recordings,
+        failure_evidence=failure_evidence,
         outcome=outcome,
         feedback=feedback,
         blocker_message=blocker_message,
@@ -552,6 +559,54 @@ def _parse_qa_recordings(value: object) -> list[QaRecording] | None:
     return parsed
 
 
+def _parse_qa_failure_evidence(value: object) -> list[QaFailureEvidence] | None:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        return None
+    parsed: list[QaFailureEvidence] = []
+    for item in value:
+        if not isinstance(item, dict):
+            return None
+        name = _parse_optional_string(item.get("name"))
+        artifact_url = _parse_optional_string(item.get("artifact_url"))
+        object_key = _parse_optional_string(item.get("object_key"))
+        capture_target = _parse_optional_string(item.get("capture_target"))
+        capture_reference = _parse_optional_string(item.get("capture_reference"))
+        error_message = _parse_optional_string(item.get("error_message"))
+        content_sha256 = _parse_content_sha256(item.get("content_sha256"))
+        release_commit_sha = _parse_commit_sha(item.get("release_commit_sha"))
+        release_context_sha256 = _parse_content_sha256(item.get("release_context_sha256"))
+        if (
+            name is None
+            or artifact_url is None
+            or object_key is None
+            or capture_target is None
+            or capture_reference is None
+            or error_message is None
+            or content_sha256 is None
+            or release_commit_sha is None
+            or release_context_sha256 is None
+        ):
+            return None
+        if capture_target not in _VALID_QA_CAPTURE_TARGETS:
+            return None
+        parsed.append(
+            QaFailureEvidence(
+                name=name,
+                artifact_url=artifact_url,
+                object_key=object_key,
+                capture_target=capture_target,  # type: ignore[arg-type]
+                capture_reference=capture_reference,
+                error_message=error_message,
+                content_sha256=content_sha256,
+                release_commit_sha=release_commit_sha,
+                release_context_sha256=release_context_sha256,
+            )
+        )
+    return parsed
+
+
 def _parse_commit_sha(value: object) -> str | None:
     parsed = _parse_optional_string(value)
     if parsed is None:
@@ -576,4 +631,11 @@ def _require_qa_recordings(value: object, *, field: str) -> list[dict[str, objec
     parsed = _parse_qa_recordings(value)
     if parsed is None:
         raise ValueError(f"{field} must be a QA recording list")
+    return [asdict(item) for item in parsed]
+
+
+def _require_qa_failure_evidence(value: object, *, field: str) -> list[dict[str, object]]:
+    parsed = _parse_qa_failure_evidence(value)
+    if parsed is None:
+        raise ValueError(f"{field} must be a QA failure evidence list")
     return [asdict(item) for item in parsed]

@@ -44,6 +44,7 @@ if (useHostResolverRouting && previewUrlParts.port !== recordingUrlParts.port) {
 await fs.mkdir(input.output_dir, { recursive: true });
 
 const recordings = [];
+const failureEvidence = [];
 
 function resolvePreviewUrl(value, context) {
   const resolved = new URL(String(value || "/"), previewUrl);
@@ -96,6 +97,10 @@ function formatDiagnostics(diagnostics) {
     return "none";
   }
   return diagnostics.slice(-20).join("\n");
+}
+
+function safeSlug(value) {
+  return String(value || "demo").replace(/[^a-z0-9]+/gi, "-").toLowerCase();
 }
 
 for (const scenario of input.scenarios || []) {
@@ -164,16 +169,43 @@ for (const scenario of input.scenarios || []) {
         assertPreviewOrigin(page, `${action} step`);
       }
     } catch (error) {
-      throw new Error(
-        `QA demo browser scenario failed: ${String(scenario.name || "Demo")}\n${error.message}\nBrowser diagnostics:\n${formatDiagnostics(diagnostics)}`,
-      );
+      const scenarioName = String(scenario.name || "Demo");
+      const errorMessage = `QA demo browser scenario failed: ${scenarioName}\n${error.message}\nBrowser diagnostics:\n${formatDiagnostics(diagnostics)}`;
+      let failurePath = "";
+      try {
+        if (context && !contextClosed) {
+          await context.close();
+          contextClosed = true;
+        }
+        const videoPath = await video.path();
+        failurePath = path.join(input.output_dir, `${safeSlug(scenarioName)}-failure.webm`);
+        await fs.copyFile(videoPath, failurePath);
+      } catch (evidenceError) {
+        diagnostics.push(`failure-evidence-error: ${evidenceError.message}`);
+      }
+      if (browser && !browserClosed) {
+        await browser.close();
+        browserClosed = true;
+      }
+      failureEvidence.push({
+        name: scenarioName,
+        path: failurePath,
+        error_message: errorMessage,
+        diagnostics: diagnostics.slice(-20),
+        capture_target: "browser",
+        capture_reference: previewUrl,
+      });
+      break;
+    }
+    if (failureEvidence.length) {
+      break;
     }
     await context.close();
     contextClosed = true;
     const videoPath = await video.path();
     await browser.close();
     browserClosed = true;
-    const targetPath = path.join(input.output_dir, `${String(scenario.name || "demo").replace(/[^a-z0-9]+/gi, "-").toLowerCase()}.webm`);
+    const targetPath = path.join(input.output_dir, `${safeSlug(scenario.name || "demo")}.webm`);
     await fs.copyFile(videoPath, targetPath);
     recordings.push({ name: String(scenario.name || "Demo"), path: targetPath });
   } finally {
@@ -184,6 +216,12 @@ for (const scenario of input.scenarios || []) {
       await browser.close();
     }
   }
+  if (failureEvidence.length) {
+    break;
+  }
 }
 
-await fs.writeFile(outputPath, JSON.stringify({ recordings }, null, 2), "utf8");
+await fs.writeFile(outputPath, JSON.stringify({ recordings, failure_evidence: failureEvidence }, null, 2), "utf8");
+if (failureEvidence.length) {
+  process.exitCode = 1;
+}

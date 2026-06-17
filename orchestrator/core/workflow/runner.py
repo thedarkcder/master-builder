@@ -147,10 +147,24 @@ class QaRecording:
 
 
 @dataclass(frozen=True)
+class QaFailureEvidence:
+    name: str
+    artifact_url: str
+    object_key: str
+    capture_reference: str
+    error_message: str
+    content_sha256: str = ""
+    release_commit_sha: str = ""
+    release_context_sha256: str = ""
+    capture_target: QaCaptureTarget = "browser"
+
+
+@dataclass(frozen=True)
 class QaResult:
     summary: list[str]
     scenarios: list[QaScenario]
     recordings: list[QaRecording] = field(default_factory=list)
+    failure_evidence: list[QaFailureEvidence] = field(default_factory=list)
     outcome: StageOutcome = "continue"
     feedback: str | None = None
     blocker_message: str | None = None

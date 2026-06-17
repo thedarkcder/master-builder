@@ -4,6 +4,7 @@ import unittest
 
 from orchestrator.core.workflow.checkpoint_codec import decode_pm_plan_payload
 from orchestrator.core.workflow.checkpoint_codec import decode_dev_result_payload
+from orchestrator.core.workflow.checkpoint_codec import decode_qa_result_payload
 from orchestrator.core.workflow.checkpoint_codec import decode_review_result_payload
 from orchestrator.core.workflow.checkpoint_codec import decode_test_result_payload
 from orchestrator.core.workflow.checkpoint_codec import encode_pm_plan
@@ -11,6 +12,7 @@ from orchestrator.core.workflow.checkpoint_codec import encode_stage_checkpoint_
 from orchestrator.core.workflow.runner import DevResult
 from orchestrator.core.workflow.runner import DemoRequirement
 from orchestrator.core.workflow.runner import PmPlan
+from orchestrator.core.workflow.runner import QaFailureEvidence
 from orchestrator.core.workflow.runner import QaRecording
 from orchestrator.core.workflow.runner import QaResult
 from orchestrator.core.workflow.runner import QaScenario
@@ -407,6 +409,45 @@ class CheckpointCodecTests(unittest.TestCase):
         self.assertEqual(qa_artifact["outcome"], "blocked")
         self.assertEqual(qa_artifact["scenarios"], [])
         self.assertEqual(qa_artifact["recordings"], [])
+
+    def test_encode_and_decode_blocked_qa_failure_evidence(self) -> None:
+        qa_artifact = encode_stage_checkpoint_artifact(
+            WorkflowStageCheckpoint(
+                stage="qa",
+                attempt=1,
+                status="blocked",
+                summary="qa blocked",
+                qa_result=QaResult(
+                    summary=["App failed to load"],
+                    scenarios=[],
+                    recordings=[],
+                    failure_evidence=[
+                        QaFailureEvidence(
+                            name="App load",
+                            artifact_url="https://demo.example/failure.webm",
+                            object_key="tenant/project/run/qa-failure-1.webm",
+                            capture_reference="https://preview.example",
+                            capture_target="browser",
+                            error_message="pageerror: process is not defined",
+                            content_sha256=f"{3:064x}",
+                            release_commit_sha="b" * 40,
+                            release_context_sha256=f"{4:064x}",
+                        )
+                    ],
+                    outcome="blocked",
+                    blocker_message="App failed to load",
+                ),
+            )
+        )
+
+        decoded = decode_qa_result_payload(qa_artifact)
+
+        self.assertIsNotNone(decoded)
+        assert decoded is not None
+        self.assertEqual(decoded.outcome, "blocked")
+        self.assertEqual(decoded.recordings, [])
+        self.assertEqual(decoded.failure_evidence[0].object_key, "tenant/project/run/qa-failure-1.webm")
+        self.assertEqual(decoded.failure_evidence[0].error_message, "pageerror: process is not defined")
 
 
 if __name__ == "__main__":

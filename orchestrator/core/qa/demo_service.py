@@ -26,6 +26,7 @@ from orchestrator.core.worker.capability_normalization import parse_worker_capab
 from orchestrator.core.workflow.runner import (
     DevResult,
     PmPlan,
+    QaFailureEvidence,
     QaRecording,
     QaResult,
     QaScenario,
@@ -75,6 +76,23 @@ class LocalQaRecording:
     capture_reference: str
     content_type: str
     content_sha256: str
+
+
+@dataclass(frozen=True)
+class LocalQaFailureEvidence:
+    name: str
+    path: str
+    capture_target: str
+    capture_reference: str
+    content_type: str
+    content_sha256: str
+    error_message: str
+
+
+class QaDemoRecordingFailure(RuntimeError):
+    def __init__(self, message: str, *, failure_evidence: list[LocalQaFailureEvidence] | None = None) -> None:
+        super().__init__(message)
+        self.failure_evidence = list(failure_evidence or [])
 
 
 @dataclass(frozen=True)
@@ -1220,6 +1238,65 @@ def _parse_recorder_output(
     return recordings
 
 
+def _parse_recorder_failure_evidence(
+    *,
+    output_path: Path,
+    output_dir: Path,
+    capture_target: DemoCaptureTarget,
+) -> list[LocalQaFailureEvidence]:
+    if not output_path.exists():
+        return []
+    result = json.loads(output_path.read_text(encoding="utf-8"))
+    evidence: list[LocalQaFailureEvidence] = []
+    seen_paths: set[str] = set()
+    resolved_output_dir = output_dir.resolve()
+    for item in list(result.get("failure_evidence") or []):
+        if not isinstance(item, dict):
+            raise RuntimeError("QA demo recorder returned invalid failure evidence payload")
+        name = str(item.get("name") or "").strip()
+        path = str(item.get("path") or "").strip()
+        error_message = str(item.get("error_message") or "").strip()
+        if not name or not path or not error_message:
+            raise RuntimeError("QA demo recorder returned incomplete failure evidence metadata")
+        reported_capture_target = str(item.get("capture_target") or "").strip()
+        if reported_capture_target and reported_capture_target != capture_target.capture_target:
+            raise RuntimeError(
+                "QA demo recorder returned failure evidence outside planned target: "
+                f"{reported_capture_target} != {capture_target.capture_target}"
+            )
+        reported_capture_reference = str(item.get("capture_reference") or "").strip()
+        if reported_capture_reference and reported_capture_reference != capture_target.capture_reference:
+            raise RuntimeError(
+                "QA demo recorder returned failure evidence reference outside planned target: "
+                f"{reported_capture_reference} != {capture_target.capture_reference}"
+            )
+        source = Path(path).resolve()
+        source_key = str(source)
+        if source_key in seen_paths:
+            raise RuntimeError(f"QA demo recorder returned duplicate local failure evidence path: {source}")
+        seen_paths.add(source_key)
+        try:
+            source.relative_to(resolved_output_dir)
+        except ValueError as exc:
+            raise RuntimeError(
+                f"QA demo recorder returned failure evidence path outside recorder output directory: {source}"
+            ) from exc
+        _validate_local_recording_file(source)
+        content_sha256 = hashlib.sha256(source.read_bytes()).hexdigest()
+        evidence.append(
+            LocalQaFailureEvidence(
+                name=name,
+                path=str(source),
+                capture_target=capture_target.capture_target,
+                capture_reference=capture_target.capture_reference,
+                content_type=_content_type_for_recording(source),
+                content_sha256=content_sha256,
+                error_message=error_message,
+            )
+        )
+    return evidence
+
+
 def _invoke_json_recorder(
     *,
     command: list[str],
@@ -1236,9 +1313,9 @@ def _invoke_json_recorder(
         payload["output_dir"] = str(output_dir)
         input_path.write_text(json.dumps(payload), encoding="utf-8")
         try:
-            subprocess.run(
+            completed = subprocess.run(
                 [*command, str(input_path), str(output_path)],
-                check=True,
+                check=False,
                 text=True,
                 capture_output=True,
                 env=env,
@@ -1259,6 +1336,24 @@ def _invoke_json_recorder(
             raise RuntimeError(
                 f"QA demo recorder command failed ({exc.returncode}): {' '.join(command)}"
             ) from exc
+        returncode = int(getattr(completed, "returncode", 0) or 0)
+        if returncode != 0:
+            stderr = str(completed.stderr or "").strip()
+            stdout = str(completed.stdout or "").strip()
+            details = stderr or stdout
+            failure_evidence = _parse_recorder_failure_evidence(
+                output_path=output_path,
+                output_dir=output_dir,
+                capture_target=capture_target,
+            )
+            if details:
+                message = f"QA demo recorder command failed ({returncode}): {' '.join(command)}\n{details}"
+            else:
+                message = f"QA demo recorder command failed ({returncode}): {' '.join(command)}"
+            raise QaDemoRecordingFailure(
+                message,
+                failure_evidence=_copy_failure_evidence(failure_evidence, request=request),
+            )
         recordings = _parse_recorder_output(
             output_path=output_path,
             output_dir=output_dir,
@@ -1457,6 +1552,51 @@ def _validate_recordings_cover_required_counts(
         )
 
 
+def _upload_failure_evidence(
+    *,
+    storage: DemoArtifactStorageConfig,
+    tenant,  # noqa: ANN001
+    project,  # noqa: ANN001
+    run,  # noqa: ANN001
+    local_evidence: list[LocalQaFailureEvidence],
+    release_commit_sha: str,
+    release_context_sha256: str,
+) -> list[QaFailureEvidence]:
+    uploaded: list[QaFailureEvidence] = []
+    for index, item in enumerate(local_evidence, start=1):
+        suffix = Path(item.path).suffix.lower()
+        object_key = _demo_failure_artifact_object_key(
+            tenant=tenant,
+            project=project,
+            run=run,
+            index=index,
+            suffix=suffix,
+        )
+        artifact_url = upload_recording(
+            storage=storage,
+            local_path=item.path,
+            object_key=object_key,
+            content_type=item.content_type,
+            content_sha256=item.content_sha256,
+            release_commit_sha=release_commit_sha,
+            release_context_sha256=release_context_sha256,
+        )
+        uploaded.append(
+            QaFailureEvidence(
+                name=item.name,
+                artifact_url=artifact_url,
+                object_key=object_key,
+                capture_target=item.capture_target,  # type: ignore[arg-type]
+                capture_reference=item.capture_reference,
+                error_message=item.error_message,
+                content_sha256=item.content_sha256,
+                release_commit_sha=release_commit_sha,
+                release_context_sha256=release_context_sha256,
+            )
+        )
+    return uploaded
+
+
 def _validate_recordings_use_configured_storage(
     *,
     recordings: list[QaRecording],
@@ -1653,6 +1793,47 @@ def _copy_recordings(recordings: list[LocalQaRecording], *, request: WorkflowReq
     return copied
 
 
+def _copy_failure_evidence(
+    evidence: list[LocalQaFailureEvidence],
+    *,
+    request: WorkflowRequest,
+) -> list[LocalQaFailureEvidence]:
+    tenant_id = _require_safe_recording_scope_segment(
+        request.tenant_id,
+        field_name="tenant_id",
+        scope_name="failure evidence copy scope",
+    )
+    project_id = _require_safe_recording_scope_segment(
+        request.project_id,
+        field_name="project_id",
+        scope_name="failure evidence copy scope",
+    )
+    run_id = _require_safe_recording_scope_segment(
+        request.run_id,
+        field_name="run_id",
+        scope_name="failure evidence copy scope",
+    )
+    persisted_dir = Path.cwd() / "tmp" / "qa-demos" / tenant_id / project_id / run_id / "failures"
+    persisted_dir.mkdir(parents=True, exist_ok=True)
+    copied: list[LocalQaFailureEvidence] = []
+    for index, item in enumerate(evidence, start=1):
+        source = Path(item.path)
+        target = persisted_dir / f"{item.capture_target}-{index}{source.suffix.lower()}"
+        target.write_bytes(source.read_bytes())
+        copied.append(
+            LocalQaFailureEvidence(
+                name=item.name,
+                path=str(target),
+                capture_target=item.capture_target,
+                capture_reference=item.capture_reference,
+                content_type=item.content_type,
+                content_sha256=item.content_sha256,
+                error_message=item.error_message,
+            )
+        )
+    return copied
+
+
 def _first_release_service_url(release_service_urls: list[dict[str, str]], *, service_kind: str) -> str:
     for service_url in release_service_urls:
         if service_url.get("service_kind") == service_kind:
@@ -1732,6 +1913,25 @@ def _demo_artifact_object_key(*, tenant, project, run, index: int, suffix: str) 
         scope_name="artifact object key scope",
     )
     return f"{tenant_id}/{project_id}/{run_id}/qa-demo-{index}{suffix}"
+
+
+def _demo_failure_artifact_object_key(*, tenant, project, run, index: int, suffix: str) -> str:  # noqa: ANN001
+    tenant_id = _require_safe_recording_scope_segment(
+        getattr(tenant, "tenant_id", None),
+        field_name="tenant_id",
+        scope_name="failure artifact object key scope",
+    )
+    project_id = _require_safe_recording_scope_segment(
+        getattr(project, "project_id", None),
+        field_name="project_id",
+        scope_name="failure artifact object key scope",
+    )
+    run_id = _require_safe_recording_scope_segment(
+        getattr(run, "run_id", None),
+        field_name="run_id",
+        scope_name="failure artifact object key scope",
+    )
+    return f"{tenant_id}/{project_id}/{run_id}/qa-failure-{index}{suffix}"
 
 
 def _validate_recordings_cover_scenarios(
@@ -2209,6 +2409,7 @@ def execute_qa_demo_stage(
 
     max_attempts = qa_demo_max_attempts(settings)
     last_error: Exception | None = None
+    last_failure_evidence: list[LocalQaFailureEvidence] = []
     for attempt in range(1, max_attempts + 1):
         try:
             local_recordings = record_demo_scenarios(
@@ -2282,15 +2483,42 @@ def execute_qa_demo_stage(
                     blocker_message=None,
                 )
             return combined_result
+        except QaDemoRecordingFailure as exc:
+            last_error = exc
+            last_failure_evidence = list(exc.failure_evidence)
+            if attempt >= max_attempts:
+                break
         except Exception as exc:  # noqa: BLE001
+            if "QA demo artifact object key scope has unsafe" in str(exc):
+                raise
             last_error = exc
             if attempt >= max_attempts:
                 break
     if last_error is None:  # pragma: no cover
         raise RuntimeError("QA demo recording failed without an exception")
-    raise RuntimeError(
-        f"QA demo recording failed after {max_attempts} attempts: {type(last_error).__name__}: {last_error}"
-    ) from last_error
+    message = f"QA demo recording failed after {max_attempts} attempts: {type(last_error).__name__}: {last_error}"
+    uploaded_failure_evidence = _upload_failure_evidence(
+        storage=storage,
+        tenant=tenant,
+        project=project,
+        run=run,
+        local_evidence=last_failure_evidence,
+        release_commit_sha=release_commit_sha,
+        release_context_sha256=release_context_sha256,
+    )
+    for item in uploaded_failure_evidence:
+        ensure_artifact_url_reachable(
+            item.artifact_url,
+            timeout_seconds=qa_demo_artifact_url_timeout_seconds(settings),
+        )
+    return QaResult(
+        summary=[message],
+        scenarios=list(qa_result.scenarios),
+        recordings=previous_recordings,
+        failure_evidence=uploaded_failure_evidence,
+        outcome="blocked",
+        blocker_message=message,
+    )
 
 
 def update_pull_request_with_demo_evidence(
