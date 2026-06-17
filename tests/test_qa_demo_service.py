@@ -16,6 +16,8 @@ from orchestrator.core.qa.demo_service import (
     DEMO_EVIDENCE_MARKER,
     DEMO_EVIDENCE_REQUIRED_COUNTS_MARKER,
     DEMO_EVIDENCE_REQUIRED_TARGETS_MARKER,
+    DEMO_FAILURE_EVIDENCE_HEADING,
+    DEMO_FAILURE_EVIDENCE_MARKER,
     DemoCaptureTarget,
     LocalQaFailureEvidence,
     QaDemoRecordingFailure,
@@ -37,6 +39,7 @@ from orchestrator.core.qa.demo_service import (
     resolve_available_capture_targets,
     resolve_preview_demo_url,
     storage_config_from_settings,
+    update_pull_request_with_demo_failure_evidence,
     update_pull_request_with_demo_evidence,
     upload_recording,
     upsert_demo_evidence_section,
@@ -45,6 +48,7 @@ from orchestrator.core.workflow.runner import (
     DemoRequirement,
     DevResult,
     PmPlan,
+    QaFailureEvidence,
     QaRecording as RunnerQaRecording,
     QaResult,
     QaScenario,
@@ -5054,6 +5058,73 @@ def test_update_pull_request_with_demo_evidence_refreshes_pr_body() -> None:
     assert f"{DEMO_EVIDENCE_REQUIRED_TARGETS_MARKER} browser -->" in updated_body
     assert "https://cdn.example/qa-demos/tenant-1/project-1/run-1/happy.webm" in updated_body
     assert github_client.ready_calls == [{"repo_full_name": "acme/repo", "pr_number": 8}]
+
+
+def test_update_pull_request_with_demo_failure_evidence_reports_app_load_crash_without_readying_pr() -> None:
+    class _GitHubClient:
+        body = "## Summary\n- change"
+        ready_calls: list[dict[str, object]]
+
+        def __init__(self) -> None:
+            self.ready_calls = []
+
+        def get_pull_request_details(self, **_kwargs: object) -> SimpleNamespace:
+            return SimpleNamespace(
+                title="MAB-400: Add QA demos",
+                body=self.body,
+                base_ref="main",
+            )
+
+        def update_pull_request(self, **kwargs: object) -> object:
+            self.body = str(kwargs["body"])
+            return kwargs
+
+        def mark_pull_request_ready_for_review(self, **kwargs: object) -> object:
+            self.ready_calls.append(dict(kwargs))
+            return SimpleNamespace(number=8, html_url="https://github.com/acme/repo/pull/8", draft=False)
+
+    github_client = _GitHubClient()
+    with (
+        patch("orchestrator.core.qa.demo_service.github_client_from_tenant_config", return_value=github_client),
+        patch("orchestrator.core.qa.demo_service._default_artifact_url_probe", return_value=200),
+    ):
+        updated_body = update_pull_request_with_demo_failure_evidence(
+            session=SimpleNamespace(),
+            settings=_qa_artifact_settings(),
+            tenant=SimpleNamespace(tenant_id="tenant-1", github_config={}),
+            project=SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo"),
+            run=SimpleNamespace(run_id="run-1"),
+            workflow_result=SimpleNamespace(pr_url="https://github.com/acme/repo/pull/8"),
+            qa_result=QaResult(
+                summary=["QA demo recording failed"],
+                scenarios=[],
+                failure_evidence=[
+                    QaFailureEvidence(
+                        name="App load",
+                        artifact_url="https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-failure-1.webm",
+                        object_key="tenant-1/project-1/run-1/qa-failure-1.webm",
+                        capture_target="browser",
+                        capture_reference="https://preview.example",
+                        error_message=(
+                            "QA demo browser scenario failed: App load\n"
+                            "QA Demo Ready was not visible\n"
+                            "Browser diagnostics:\npageerror: process is not defined"
+                        ),
+                        content_sha256=_sha256(31),
+                        release_commit_sha=_RELEASE_COMMIT_SHA,
+                        release_context_sha256=_release_context_sha256(),
+                    )
+                ],
+                outcome="blocked",
+            ),
+        )
+
+    assert DEMO_FAILURE_EVIDENCE_HEADING in updated_body
+    assert DEMO_FAILURE_EVIDENCE_MARKER in updated_body
+    assert "https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-failure-1.webm" in updated_body
+    assert "QA Demo Ready was not visible" in updated_body
+    assert "process is not defined" in updated_body
+    assert github_client.ready_calls == []
 
 
 def test_update_pull_request_with_demo_evidence_verifies_pr_readback_after_update() -> None:

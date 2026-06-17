@@ -9,6 +9,7 @@ from orchestrator.core.workflow.runner import (
     DemoRequirement,
     DevResult,
     PmPlan,
+    QaFailureEvidence,
     QaRecording,
     QaResult,
     ReviewResult,
@@ -49,6 +50,26 @@ def _qa_recording(
         capture_target=capture_target,  # type: ignore[arg-type]
         capture_reference=capture_reference,
         content_sha256=f"{index:064x}",
+        release_commit_sha="b" * 40,
+        release_context_sha256=f"{999:064x}",
+    )
+
+
+def _qa_failure_evidence(
+    *,
+    name: str = "App load",
+    index: int = 1,
+    capture_target: str = "browser",
+    capture_reference: str = "https://preview.example",
+) -> QaFailureEvidence:
+    return QaFailureEvidence(
+        name=name,
+        artifact_url=f"https://cdn.example/qa-failure-{index}.webm",
+        object_key=f"tenant-1/project-1/run-1/qa-failure-{index}.webm",
+        capture_target=capture_target,  # type: ignore[arg-type]
+        capture_reference=capture_reference,
+        error_message="QA Demo Ready was not visible\nBrowser diagnostics:\npageerror: process is not defined",
+        content_sha256=f"{100 + index:064x}",
         release_commit_sha="b" * 40,
         release_context_sha256=f"{999:064x}",
     )
@@ -1474,6 +1495,82 @@ def test_complete_persists_blocked_qa_checkpoint_when_pr_evidence_update_fails()
     )
     assert finalizer_calls["workflow_result"].outcome == "blocked"
     assert "GitHub rejected PR update" in str(finalizer_calls["workflow_result"].blocker_message)
+
+
+def test_complete_attaches_qa_failure_evidence_to_pr_before_blocking_ready_review() -> None:
+    session = SimpleNamespace(refresh=lambda _run: None)
+    deps = _deps()
+    prepared = _prepared(_build_snapshot(), effective_policy={"qa_demo_recording_enabled": True})
+    workflow_result = _workflow_result()
+    qa_result = QaResult(
+        summary=["QA demo recording failed after 1 attempts"],
+        scenarios=[],
+        recordings=[],
+        failure_evidence=[_qa_failure_evidence()],
+        outcome="blocked",
+        blocker_message="QA demo recording failed after 1 attempts: app did not load",
+    )
+    preview_release = SimpleNamespace(
+        release_id="release-1",
+        release_kind="run_preview",
+        status="live",
+        service_urls=[],
+    )
+    finalizer_calls: dict[str, object] = {}
+
+    class _Finalizer:
+        def __init__(self, **_kwargs):
+            pass
+
+        def finalize(self, **kwargs):
+            finalizer_calls.update(kwargs)
+            return SimpleNamespace(
+                run=prepared.run,
+                workflow_result=kwargs["workflow_result"],
+                persisted_status="blocked",
+                last_error=kwargs["workflow_result"].blocker_message,
+                persisted_plan=prepared.run.plan,
+                event_types=(),
+                tail_steps=(),
+            )
+
+    with (
+        patch(
+            "orchestrator.core.worker.run_outcome_policy.create_run_preview_deployment",
+            return_value=SimpleNamespace(created=False, reason="existing", release=preview_release),
+        ),
+        patch("orchestrator.core.worker.run_outcome_policy.execute_qa_demo_stage", return_value=qa_result),
+        patch(
+            "orchestrator.core.worker.run_outcome_policy.update_pull_request_with_demo_failure_evidence",
+            return_value="updated-body",
+        ) as update_failure_pr_mock,
+        patch("orchestrator.core.worker.run_outcome_policy.update_pull_request_with_demo_evidence") as update_pr_mock,
+        patch("orchestrator.core.worker.run_outcome_policy.destroy_project_deployment_preview_release") as destroy_mock,
+        patch("orchestrator.core.worker.run_outcome_policy.WorkflowFinalizer", _Finalizer),
+        patch("orchestrator.core.worker.run_outcome_policy.CompletionTailExecutor") as tail_executor_cls,
+    ):
+        tail_executor_cls.return_value.execute.return_value = None
+        RunOutcomePolicy(
+            session=session,
+            settings=SimpleNamespace(project_repo_checkout_base_dir="/tmp/workdirs"),
+            deps=deps,
+            cleanup_run_workspaces_safe_fn=MagicMock(),
+        ).complete(
+            prepared=prepared,
+            workflow_result=workflow_result,
+            execution_context={"execution_branch": "run/MAB-400/run-1"},
+        )
+
+    checkpoint = deps.execution.persist_stage_checkpoint_fn.call_args.kwargs["checkpoint"]
+    assert checkpoint.status == "blocked"
+    assert checkpoint.qa_result.failure_evidence == qa_result.failure_evidence
+    update_failure_pr_mock.assert_called_once()
+    assert update_failure_pr_mock.call_args.kwargs["qa_result"] == qa_result
+    update_pr_mock.assert_not_called()
+    destroy_mock.assert_called_once()
+    assert destroy_mock.call_args.kwargs["reason"] == "qa_demo_failed"
+    assert finalizer_calls["workflow_result"].outcome == "blocked"
+    assert "app did not load" in str(finalizer_calls["workflow_result"].blocker_message)
 
 
 def test_complete_blocks_when_qa_continue_result_is_missing_required_capture_target_proof() -> None:

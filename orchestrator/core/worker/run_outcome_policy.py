@@ -11,6 +11,7 @@ from orchestrator.core.qa.demo_service import (
     remaining_capture_targets,
     required_capture_targets,
     required_recording_counts_by_target,
+    update_pull_request_with_demo_failure_evidence,
     update_pull_request_with_demo_evidence,
 )
 from orchestrator.core.runs.service import RUN_STATUS_WAITING_FOR_INPUT
@@ -480,6 +481,33 @@ class RunOutcomePolicy:
                 ],
             )
         if qa_result.outcome != "continue":
+            if qa_result.failure_evidence:
+                try:
+                    update_pull_request_with_demo_failure_evidence(
+                        session=self._session,
+                        settings=self._settings,
+                        tenant=prepared.tenant,
+                        project=prepared.project,
+                        run=prepared.run,
+                        workflow_result=workflow_result,
+                        qa_result=qa_result,
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    message = f"QA demo failure evidence PR update failed: {type(exc).__name__}: {exc}"
+                    qa_result = replace(
+                        qa_result,
+                        blocker_message=(
+                            (qa_result.blocker_message or qa_result.feedback or _summarize_qa_result(qa_result))
+                            + f" {message}"
+                        ),
+                        summary=[*list(qa_result.summary or []), message],
+                    )
+                    self._persist_qa_stage_checkpoint(
+                        prepared=prepared,
+                        qa_result=qa_result,
+                        attempt=attempt,
+                        execution_context=execution_context,
+                    )
             cleanup_error = self._cleanup_qa_demo_preview_release(
                 prepared=prepared,
                 preview_release=preview_release,
