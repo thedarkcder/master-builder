@@ -44,6 +44,8 @@ DEMO_EVIDENCE_HEADING = "## Demo Evidence"
 DEMO_EVIDENCE_MARKER = "<!-- master-builder:qa-demo-evidence v1 -->"
 DEMO_EVIDENCE_REQUIRED_TARGETS_MARKER = "<!-- master-builder:qa-demo-required-targets"
 DEMO_EVIDENCE_REQUIRED_COUNTS_MARKER = "<!-- master-builder:qa-demo-required-counts"
+DEMO_FAILURE_EVIDENCE_HEADING = "## Demo Failure Evidence"
+DEMO_FAILURE_EVIDENCE_MARKER = "<!-- master-builder:qa-demo-failure-evidence v1 -->"
 _TRANSIENT_NATIVE_SELECTORS = frozenset({"id=splash_screen", "splash_screen"})
 _DEMO_CAPTURE_TARGETS = frozenset({"browser", "ios", "android", "desktop"})
 _NATIVE_CAPTURE_TARGETS = frozenset({"ios", "android", "desktop"})
@@ -109,6 +111,16 @@ class PlannedCaptureTargetConstraint:
     provider_available: bool
     required_worker_platform: str | None = None
     availability_reason: str | None = None
+
+
+@dataclass(frozen=True)
+class _PullRequestBodyUpdateContext:
+    github_client: object
+    repo_full_name: str
+    pr_number: int
+    title: str
+    base_branch: str
+    body: str
 
 
 def qa_demo_recording_enabled(effective_policy: dict[str, object] | None) -> bool:
@@ -965,6 +977,27 @@ def _validate_demo_evidence_recording_metadata(recordings: list[QaRecording]) ->
     _validate_recordings_share_release_context(recordings)
 
 
+def _validate_demo_failure_evidence_metadata(failure_evidence: list[QaFailureEvidence]) -> None:
+    for item in failure_evidence:
+        _require_demo_evidence_line_field(item.name, field="name")
+        _require_demo_evidence_capture_target(item.capture_target)
+        _require_demo_evidence_line_field(item.capture_reference, field="capture_reference")
+        _require_demo_evidence_line_field(item.object_key, field="object_key")
+        _require_demo_evidence_content_sha256(item)
+        _require_demo_evidence_release_commit_sha(item)
+        _require_demo_evidence_release_context_sha256(item)
+        _require_demo_evidence_field(item.artifact_url, field="artifact_url")
+        _require_demo_failure_error_message(item.error_message)
+    _validate_failure_evidence_share_release_context(failure_evidence)
+
+
+def _require_demo_failure_error_message(value: object) -> str:
+    normalized = str(value or "").strip()
+    if not normalized:
+        raise RuntimeError("QA demo failure evidence error message is required before PR evidence")
+    return normalized
+
+
 def _require_demo_evidence_content_sha256(recording: object) -> str:
     value = str(getattr(recording, "content_sha256", "") or "").strip().lower()
     if not re.fullmatch(r"[0-9a-f]{64}", value):
@@ -999,6 +1032,21 @@ def _validate_recordings_share_release_context(recordings: list[QaRecording]) ->
     }
     if len(release_commits) > 1:
         raise RuntimeError("QA demo recordings must all prove the same release commit before PR evidence")
+
+
+def _validate_failure_evidence_share_release_context(failure_evidence: list[QaFailureEvidence]) -> None:
+    release_contexts = {
+        str(getattr(item, "release_context_sha256", "") or "").strip().lower()
+        for item in failure_evidence
+    }
+    if len(release_contexts) > 1:
+        raise RuntimeError("QA demo failure evidence must all prove the same release context before PR evidence")
+    release_commits = {
+        str(getattr(item, "release_commit_sha", "") or "").strip().lower()
+        for item in failure_evidence
+    }
+    if len(release_commits) > 1:
+        raise RuntimeError("QA demo failure evidence must all prove the same release commit before PR evidence")
 
 
 def _validate_recordings_match_release_context(
@@ -1057,6 +1105,32 @@ def _validate_distinct_demo_recording_artifacts(recordings: list[QaRecording]) -
     if duplicate_content_sha256:
         raise RuntimeError(
             "QA demo recording content sha256 values must be unique before PR evidence: "
+            + ", ".join(duplicate_content_sha256)
+        )
+
+
+def _validate_distinct_demo_failure_evidence_artifacts(failure_evidence: list[QaFailureEvidence]) -> None:
+    object_key_counts = Counter(str(item.object_key or "").strip() for item in failure_evidence)
+    duplicate_object_keys = [object_key for object_key, count in object_key_counts.items() if object_key and count > 1]
+    if duplicate_object_keys:
+        raise RuntimeError(
+            "QA demo failure evidence object keys must be unique before PR evidence: " + ", ".join(duplicate_object_keys)
+        )
+    artifact_url_counts = Counter(str(item.artifact_url or "").strip() for item in failure_evidence)
+    duplicate_artifact_urls = [url for url, count in artifact_url_counts.items() if url and count > 1]
+    if duplicate_artifact_urls:
+        raise RuntimeError(
+            "QA demo failure evidence artifact URLs must be unique before PR evidence: " + ", ".join(duplicate_artifact_urls)
+        )
+    content_sha256_counts = Counter(
+        str(getattr(item, "content_sha256", "") or "").strip().lower() for item in failure_evidence
+    )
+    duplicate_content_sha256 = [
+        content_sha256 for content_sha256, count in content_sha256_counts.items() if content_sha256 and count > 1
+    ]
+    if duplicate_content_sha256:
+        raise RuntimeError(
+            "QA demo failure evidence content sha256 values must be unique before PR evidence: "
             + ", ".join(duplicate_content_sha256)
         )
 
@@ -1130,6 +1204,29 @@ def build_demo_evidence_section(
     return "\n".join(lines).strip()
 
 
+def build_demo_failure_evidence_section(failure_evidence: list[QaFailureEvidence]) -> str:
+    lines = [DEMO_FAILURE_EVIDENCE_HEADING, DEMO_FAILURE_EVIDENCE_MARKER]
+    for item in failure_evidence:
+        name = _require_demo_evidence_line_field(item.name, field="name")
+        capture_target = _require_demo_evidence_capture_target(item.capture_target)
+        capture_reference = _require_demo_evidence_line_field(item.capture_reference, field="capture_reference")
+        object_key = _require_demo_evidence_line_field(item.object_key, field="object_key")
+        content_sha256 = _require_demo_evidence_content_sha256(item)
+        release_commit_sha = _require_demo_evidence_release_commit_sha(item)
+        release_context_sha256 = _require_demo_evidence_release_context_sha256(item)
+        artifact_url = _require_demo_evidence_field(item.artifact_url, field="artifact_url")
+        error_message = _require_demo_failure_error_message(item.error_message)
+        lines.append(
+            f"- {name} "
+            f"[target={capture_target}; reference={capture_reference}; object_key={object_key}; "
+            f"sha256={content_sha256}; release_commit_sha={release_commit_sha}; "
+            f"release_context_sha256={release_context_sha256}]: "
+            f"{artifact_url}"
+        )
+        lines.append(f"  Error: {json.dumps(error_message, ensure_ascii=True)}")
+    return "\n".join(lines).strip()
+
+
 def upsert_demo_evidence_section(
     *,
     body: str | None,
@@ -1146,6 +1243,21 @@ def upsert_demo_evidence_section(
     if not normalized_body:
         return evidence
     pattern = re.compile(r"^## Demo Evidence\s*$.*?(?=^## |\Z)", re.MULTILINE | re.DOTALL)
+    if pattern.search(normalized_body):
+        return pattern.sub(evidence + "\n\n", normalized_body).strip()
+    return f"{normalized_body}\n\n{evidence}".strip()
+
+
+def upsert_demo_failure_evidence_section(
+    *,
+    body: str | None,
+    failure_evidence: list[QaFailureEvidence],
+) -> str:
+    evidence = build_demo_failure_evidence_section(failure_evidence)
+    normalized_body = str(body or "").strip()
+    if not normalized_body:
+        return evidence
+    pattern = re.compile(r"^## Demo Failure Evidence\s*$.*?(?=^## |\Z)", re.MULTILINE | re.DOTALL)
     if pattern.search(normalized_body):
         return pattern.sub(evidence + "\n\n", normalized_body).strip()
     return f"{normalized_body}\n\n{evidence}".strip()
@@ -1625,6 +1737,37 @@ def _validate_recordings_use_configured_storage(
             raise RuntimeError(
                 "QA demo recording URL must match its uploaded object key before PR evidence update: "
                 f"{recording.capture_target}: {recording.name}"
+            )
+
+
+def _validate_failure_evidence_use_configured_storage(
+    *,
+    failure_evidence: list[QaFailureEvidence],
+    storage: DemoArtifactStorageConfig,
+    tenant,
+    project,
+    run,
+) -> None:
+    public_base_url = storage.public_base_url.rstrip("/")
+    expected_key_prefix = f"{tenant.tenant_id}/{project.project_id}/{run.run_id}/"
+    for item in failure_evidence:
+        artifact_url = str(item.artifact_url or "").strip()
+        if not artifact_url.startswith(f"{public_base_url}/"):
+            raise RuntimeError(
+                "QA demo failure evidence must use configured artifact storage URL before PR evidence update: "
+                f"{item.capture_target}: {item.name}"
+            )
+        object_key = str(item.object_key or "").strip()
+        if not object_key.startswith(expected_key_prefix):
+            raise RuntimeError(
+                "QA demo failure evidence object key must be scoped to this run before PR evidence update: "
+                f"{item.capture_target}: {item.name}"
+            )
+        expected_artifact_url = f"{public_base_url}/{object_key}"
+        if artifact_url != expected_artifact_url:
+            raise RuntimeError(
+                "QA demo failure evidence URL must match its uploaded object key before PR evidence update: "
+                f"{item.capture_target}: {item.name}"
             )
 
 
@@ -2521,6 +2664,78 @@ def execute_qa_demo_stage(
     )
 
 
+def _load_pull_request_update_context(
+    *,
+    session,
+    settings,
+    tenant,
+    project,
+    workflow_result,
+) -> _PullRequestBodyUpdateContext:
+    pr_url = str(getattr(workflow_result, "pr_url", "") or "").strip()
+    match = re.search(r"/pull/(\d+)(?:/|$)", pr_url)
+    if not pr_url or match is None:
+        raise RuntimeError("QA demo recording requires a PR URL")
+    normalized_repo = normalize_repo_identifier(project.github_repository)
+    pr_repo = _repo_full_name_from_pull_request_url(pr_url)
+    repo_full_name = _repo_full_name_from_normalized_repo(normalized_repo)
+    if pr_repo != repo_full_name:
+        raise RuntimeError(
+            "QA demo recording PR URL must match project repository before PR evidence update: "
+            f"{pr_repo or '<unknown>'} != {repo_full_name}"
+        )
+    pr_number = int(match.group(1))
+    github_client = github_client_from_tenant_config(
+        tenant.github_config,
+        tenant_secret_lookup=lambda secret_ref: resolve_scoped_secret_ref(
+            session,
+            secret_ref=secret_ref,
+            encryption_key=settings.secrets_encryption_key,
+            tenant_id=tenant.tenant_id,
+            project_id=project.project_id,
+        ),
+        platform_secret_lookup=lambda secret_ref: resolve_platform_secret_ref(
+            session,
+            secret_ref=secret_ref,
+            encryption_key=settings.secrets_encryption_key,
+        ),
+    )
+    pr_details = github_client.get_pull_request_details(repo_full_name=repo_full_name, pr_number=pr_number)
+    base_branch = str(pr_details.base_ref or "").strip()
+    if not base_branch:
+        raise RuntimeError("QA demo evidence PR update requires PR details to include a base branch")
+    return _PullRequestBodyUpdateContext(
+        github_client=github_client,
+        repo_full_name=repo_full_name,
+        pr_number=pr_number,
+        title=pr_details.title,
+        base_branch=base_branch,
+        body=str(pr_details.body or ""),
+    )
+
+
+def _persist_pull_request_body(
+    *,
+    context: _PullRequestBodyUpdateContext,
+    project,
+    body: str,
+) -> None:
+    context.github_client.update_pull_request(
+        repo_full_name=context.repo_full_name,
+        github_repository=project.github_repository,
+        pr_number=context.pr_number,
+        title=context.title,
+        base_branch=context.base_branch,
+        body=body,
+    )
+    updated_pr_details = context.github_client.get_pull_request_details(
+        repo_full_name=context.repo_full_name,
+        pr_number=context.pr_number,
+    )
+    if updated_pr_details.body != body:
+        raise RuntimeError("QA demo evidence PR update did not persist required evidence")
+
+
 def update_pull_request_with_demo_evidence(
     *,
     session,
@@ -2559,56 +2774,66 @@ def update_pull_request_with_demo_evidence(
             recording.artifact_url,
             timeout_seconds=qa_demo_artifact_url_timeout_seconds(settings),
         )
-    pr_url = str(getattr(workflow_result, "pr_url", "") or "").strip()
-    match = re.search(r"/pull/(\d+)(?:/|$)", pr_url)
-    if not pr_url or match is None:
-        raise RuntimeError("QA demo recording requires a PR URL")
-    normalized_repo = normalize_repo_identifier(project.github_repository)
-    pr_repo = _repo_full_name_from_pull_request_url(pr_url)
-    repo_full_name = _repo_full_name_from_normalized_repo(normalized_repo)
-    if pr_repo != repo_full_name:
-        raise RuntimeError(
-            "QA demo recording PR URL must match project repository before PR evidence update: "
-            f"{pr_repo or '<unknown>'} != {repo_full_name}"
-        )
-    pr_number = int(match.group(1))
-    github_client = github_client_from_tenant_config(
-        tenant.github_config,
-        tenant_secret_lookup=lambda secret_ref: resolve_scoped_secret_ref(
-            session,
-            secret_ref=secret_ref,
-            encryption_key=settings.secrets_encryption_key,
-            tenant_id=tenant.tenant_id,
-            project_id=project.project_id,
-        ),
-        platform_secret_lookup=lambda secret_ref: resolve_platform_secret_ref(
-            session,
-            secret_ref=secret_ref,
-            encryption_key=settings.secrets_encryption_key,
-        ),
+    pr_context = _load_pull_request_update_context(
+        session=session,
+        settings=settings,
+        tenant=tenant,
+        project=project,
+        workflow_result=workflow_result,
     )
-    pr_details = github_client.get_pull_request_details(repo_full_name=repo_full_name, pr_number=pr_number)
     body = upsert_demo_evidence_section(
-        body=pr_details.body,
+        body=pr_context.body,
         recordings=qa_result.recordings,
         required_capture_targets=required_capture_targets,
         required_recording_counts=required_recording_counts,
     )
-    base_branch = str(pr_details.base_ref or "").strip()
-    if not base_branch:
-        raise RuntimeError("QA demo evidence PR update requires PR details to include a base branch")
-    github_client.update_pull_request(
-        repo_full_name=repo_full_name,
-        github_repository=project.github_repository,
-        pr_number=pr_number,
-        title=pr_details.title,
-        base_branch=base_branch,
-        body=body,
+    _persist_pull_request_body(context=pr_context, project=project, body=body)
+    pr_context.github_client.mark_pull_request_ready_for_review(
+        repo_full_name=pr_context.repo_full_name,
+        pr_number=pr_context.pr_number,
     )
-    updated_pr_details = github_client.get_pull_request_details(repo_full_name=repo_full_name, pr_number=pr_number)
-    if updated_pr_details.body != body:
-        raise RuntimeError("QA demo evidence PR update did not persist required evidence")
-    github_client.mark_pull_request_ready_for_review(repo_full_name=repo_full_name, pr_number=pr_number)
+    return body
+
+
+def update_pull_request_with_demo_failure_evidence(
+    *,
+    session,
+    settings,
+    tenant,
+    project,
+    run,
+    workflow_result,
+    qa_result: QaResult,
+) -> str:
+    if not qa_result.failure_evidence:
+        raise RuntimeError("QA demo failure evidence PR update requires at least one failure artifact")
+    _validate_demo_failure_evidence_metadata(qa_result.failure_evidence)
+    _validate_distinct_demo_failure_evidence_artifacts(qa_result.failure_evidence)
+    storage = storage_config_from_settings(settings)
+    _validate_failure_evidence_use_configured_storage(
+        failure_evidence=qa_result.failure_evidence,
+        storage=storage,
+        tenant=tenant,
+        project=project,
+        run=run,
+    )
+    for item in qa_result.failure_evidence:
+        ensure_artifact_url_reachable(
+            item.artifact_url,
+            timeout_seconds=qa_demo_artifact_url_timeout_seconds(settings),
+        )
+    pr_context = _load_pull_request_update_context(
+        session=session,
+        settings=settings,
+        tenant=tenant,
+        project=project,
+        workflow_result=workflow_result,
+    )
+    body = upsert_demo_failure_evidence_section(
+        body=pr_context.body,
+        failure_evidence=qa_result.failure_evidence,
+    )
+    _persist_pull_request_body(context=pr_context, project=project, body=body)
     return body
 
 
