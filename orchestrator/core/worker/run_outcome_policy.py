@@ -591,6 +591,17 @@ class RunOutcomePolicy:
                 reason="qa_demo_failed",
             )
             if cleanup_error:
+                if proof_context is not None:
+                    try:
+                        self._advance_qa_demo_proof_events(
+                            proof_context=proof_context,
+                            events=("FailurePreviewCleanupRequested", "FailurePreviewCleanupFailed"),
+                        )
+                    except Exception as exc:  # noqa: BLE001
+                        cleanup_error = (
+                            f"{cleanup_error} QA demo failure proof cleanup failure event failed: "
+                            f"{type(exc).__name__}: {exc}"
+                        )
                 qa_result = replace(
                     qa_result,
                     blocker_message=(
