@@ -1919,7 +1919,7 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 "PreviewCleanupRequested",
             ):
                 event_request = _demo_proof_request_for_event(request, event)
-                if event == "RecordingCompleted":
+                if event in {"RecordingCompleted", "EvidenceUploaded"}:
                     metadata = _demo_proof_event_metadata(event)
                     assert metadata is not None
                     recordings = list(metadata["recordings"])
@@ -1944,6 +1944,15 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                             },
                         },
                     )
+                if event == "PREvidenceAttached":
+                    payload = dict(event_request.payload)
+                    metadata = dict(payload["event_metadata"])
+                    artifact_urls = list(metadata["artifact_urls"])
+                    artifact_urls.append("https://cdn.example/qa-demos/tenant-1/project-1/run-1/browser-variant.webm")
+                    metadata["artifact_urls"] = artifact_urls
+                    metadata["checked_artifact_urls"] = artifact_urls
+                    payload["event_metadata"] = metadata
+                    event_request = replace(event_request, payload=payload)
                 execute_workflow_advance(
                     session=session,
                     settings=SimpleNamespace(),
@@ -2109,46 +2118,45 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 "RecordingStarted",
                 "RecordingCompleted",
                 "EvidenceUploadStarted",
-                "EvidenceUploaded",
-                "PREvidenceAttachStarted",
-                "PREvidenceAttached",
-                "PreviewCleanupRequested",
             ):
-                event_request = _demo_proof_request_for_event(request, event)
-                if event == "EvidenceUploaded":
-                    payload = dict(event_request.payload)
-                    payload["event_metadata"] = {
-                        "artifact_urls": ["https://cdn.example/qa-demos/tenant-1/project-1/run-1/shared.webm"],
-                        "recording_count": 1,
-                        "capture_targets": ["browser", "ios", "android"],
-                        "recordings": [
-                            _recording_artifact_metadata(
-                                "browser",
-                                "https://cdn.example/qa-demos/tenant-1/project-1/run-1/shared.webm",
-                            )
-                        ],
-                    }
-                    event_request = replace(event_request, payload=payload)
                 execute_workflow_advance(
                     session=session,
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
-                    request=event_request,
+                    request=_demo_proof_request_for_event(request, event),
                     resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
                 )
 
-            try:
+            event_request = _demo_proof_request_for_event(request, "EvidenceUploaded")
+            payload = dict(event_request.payload)
+            payload["event_metadata"] = {
+                "artifact_urls": ["https://cdn.example/qa-demos/tenant-1/project-1/run-1/shared.webm"],
+                "recording_count": 1,
+                "capture_targets": ["browser", "ios", "android"],
+                "recordings": [
+                    _recording_artifact_metadata(
+                        "browser",
+                        "https://cdn.example/qa-demos/tenant-1/project-1/run-1/shared.webm",
+                    )
+                ],
+            }
+            with pytest.raises(RuntimeError, match="requires at least 3 playable artifact URL"):
                 execute_workflow_advance(
                     session=session,
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
-                    request=_demo_proof_request_for_event(request, "PreviewCleanupCompleted"),
+                    request=replace(event_request, payload=payload),
                     resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
                 )
-            except RuntimeError as exc:
-                assert "requires at least 3 playable artifact URL(s)" in str(exc)
-            else:  # pragma: no cover
-                raise AssertionError("expected demo proof completion to require one artifact URL per target")
+
+            workflow = session.execute(select(WorkflowExecution)).scalar_one()
+            pr_operation = session.execute(
+                select(WorkflowOperation).where(
+                    WorkflowOperation.workflow_id == workflow.workflow_id,
+                    WorkflowOperation.operation_type == "pr_evidence_update",
+                )
+            ).scalar_one()
+            assert pr_operation.status == "pending"
 
     def test_demo_proof_rejects_evidence_upload_before_pr_update_when_capture_targets_are_missing(self) -> None:
         with self.session_factory() as session:
@@ -2243,58 +2251,57 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 "RecordingStarted",
                 "RecordingCompleted",
                 "EvidenceUploadStarted",
-                "EvidenceUploaded",
-                "PREvidenceAttachStarted",
-                "PREvidenceAttached",
-                "PreviewCleanupRequested",
             ):
-                event_request = _demo_proof_request_for_event(request, event)
-                if event == "EvidenceUploaded":
-                    payload = dict(event_request.payload)
-                    payload["event_metadata"] = {
-                        "artifact_urls": [
-                            "https://cdn.example/qa-demos/tenant-1/project-1/run-1/shared.webm",
-                            "https://cdn.example/qa-demos/tenant-1/project-1/run-1/shared.webm",
-                            "https://cdn.example/qa-demos/tenant-1/project-1/run-1/shared.webm",
-                        ],
-                        "recording_count": 3,
-                        "capture_targets": ["browser", "ios", "android"],
-                        "recordings": [
-                            _recording_artifact_metadata(
-                                "browser",
-                                "https://cdn.example/qa-demos/tenant-1/project-1/run-1/shared.webm",
-                            ),
-                            _recording_artifact_metadata(
-                                "ios",
-                                "https://cdn.example/qa-demos/tenant-1/project-1/run-1/shared.webm",
-                            ),
-                            _recording_artifact_metadata(
-                                "android",
-                                "https://cdn.example/qa-demos/tenant-1/project-1/run-1/shared.webm",
-                            ),
-                        ],
-                    }
-                    event_request = replace(event_request, payload=payload)
                 execute_workflow_advance(
                     session=session,
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
-                    request=event_request,
+                    request=_demo_proof_request_for_event(request, event),
                     resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
                 )
 
-            try:
+            event_request = _demo_proof_request_for_event(request, "EvidenceUploaded")
+            payload = dict(event_request.payload)
+            payload["event_metadata"] = {
+                "artifact_urls": [
+                    "https://cdn.example/qa-demos/tenant-1/project-1/run-1/shared.webm",
+                    "https://cdn.example/qa-demos/tenant-1/project-1/run-1/shared.webm",
+                    "https://cdn.example/qa-demos/tenant-1/project-1/run-1/shared.webm",
+                ],
+                "recording_count": 3,
+                "capture_targets": ["browser", "ios", "android"],
+                "recordings": [
+                    _recording_artifact_metadata(
+                        "browser",
+                        "https://cdn.example/qa-demos/tenant-1/project-1/run-1/shared.webm",
+                    ),
+                    _recording_artifact_metadata(
+                        "ios",
+                        "https://cdn.example/qa-demos/tenant-1/project-1/run-1/shared.webm",
+                    ),
+                    _recording_artifact_metadata(
+                        "android",
+                        "https://cdn.example/qa-demos/tenant-1/project-1/run-1/shared.webm",
+                    ),
+                ],
+            }
+            with pytest.raises(RuntimeError, match="requires at least 3 distinct playable artifact URL"):
                 execute_workflow_advance(
                     session=session,
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
-                    request=_demo_proof_request_for_event(request, "PreviewCleanupCompleted"),
+                    request=replace(event_request, payload=payload),
                     resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
                 )
-            except RuntimeError as exc:
-                assert "requires at least 3 distinct playable artifact URL(s)" in str(exc)
-            else:  # pragma: no cover
-                raise AssertionError("expected demo proof completion to require distinct artifact URLs")
+
+            workflow = session.execute(select(WorkflowExecution)).scalar_one()
+            pr_operation = session.execute(
+                select(WorkflowOperation).where(
+                    WorkflowOperation.workflow_id == workflow.workflow_id,
+                    WorkflowOperation.operation_type == "pr_evidence_update",
+                )
+            ).scalar_one()
+            assert pr_operation.status == "pending"
 
     def test_demo_proof_rejects_success_completion_without_per_target_artifact_url_mappings(self) -> None:
         with self.session_factory() as session:
@@ -2319,44 +2326,47 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 "RecordingStarted",
                 "RecordingCompleted",
                 "EvidenceUploadStarted",
-                "EvidenceUploaded",
-                "PREvidenceAttachStarted",
-                "PREvidenceAttached",
-                "PreviewCleanupRequested",
             ):
-                event_request = _demo_proof_request_for_event(request, event)
-                if event == "EvidenceUploaded":
-                    payload = dict(event_request.payload)
-                    payload["event_metadata"] = {
-                        "artifact_urls": [
-                            "https://cdn.example/qa-demos/tenant-1/project-1/run-1/browser.webm",
-                            "https://cdn.example/qa-demos/tenant-1/project-1/run-1/ios.webm",
-                            "https://cdn.example/qa-demos/tenant-1/project-1/run-1/android.webm",
-                        ],
-                        "recording_count": 3,
-                        "capture_targets": ["browser", "ios", "android"],
-                    }
-                    event_request = replace(event_request, payload=payload)
                 execute_workflow_advance(
                     session=session,
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
-                    request=event_request,
+                    request=_demo_proof_request_for_event(request, event),
                     resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
                 )
 
-            try:
+            event_request = _demo_proof_request_for_event(request, "EvidenceUploaded")
+            with pytest.raises(RuntimeError, match="evidence metadata is missing uploaded artifact metadata"):
                 execute_workflow_advance(
                     session=session,
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
-                    request=_demo_proof_request_for_event(request, "PreviewCleanupCompleted"),
+                    request=replace(
+                        event_request,
+                        payload={
+                            **event_request.payload,
+                            "event_metadata": {
+                                "artifact_urls": [
+                                    "https://cdn.example/qa-demos/tenant-1/project-1/run-1/browser.webm",
+                                    "https://cdn.example/qa-demos/tenant-1/project-1/run-1/ios.webm",
+                                    "https://cdn.example/qa-demos/tenant-1/project-1/run-1/android.webm",
+                                ],
+                                "recording_count": 3,
+                                "capture_targets": ["browser", "ios", "android"],
+                            },
+                        },
+                    ),
                     resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
                 )
-            except RuntimeError as exc:
-                assert "EvidenceUploaded.recordings" in str(exc)
-            else:  # pragma: no cover
-                raise AssertionError("expected demo proof completion to require per-target artifact URL mappings")
+
+            workflow = session.execute(select(WorkflowExecution)).scalar_one()
+            pr_operation = session.execute(
+                select(WorkflowOperation).where(
+                    WorkflowOperation.workflow_id == workflow.workflow_id,
+                    WorkflowOperation.operation_type == "pr_evidence_update",
+                )
+            ).scalar_one()
+            assert pr_operation.status == "pending"
 
     def test_demo_proof_rejects_success_completion_without_uploaded_artifact_metadata(self) -> None:
         with self.session_factory() as session:
@@ -2381,65 +2391,67 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 "RecordingStarted",
                 "RecordingCompleted",
                 "EvidenceUploadStarted",
-                "EvidenceUploaded",
-                "PREvidenceAttachStarted",
-                "PREvidenceAttached",
-                "PreviewCleanupRequested",
             ):
-                event_request = _demo_proof_request_for_event(request, event)
-                if event == "EvidenceUploaded":
-                    payload = dict(event_request.payload)
-                    payload["event_metadata"] = {
-                        "artifact_urls": [
-                            "https://cdn.example/qa-demos/tenant-1/project-1/run-1/browser.webm",
-                            "https://cdn.example/qa-demos/tenant-1/project-1/run-1/ios.webm",
-                            "https://cdn.example/qa-demos/tenant-1/project-1/run-1/android.webm",
-                        ],
-                        "recording_count": 3,
-                        "capture_targets": ["browser", "ios", "android"],
-                        "recordings": [
-                            {
-                                "capture_target": "browser",
-                                "artifact_url": (
-                                    "https://cdn.example/qa-demos/tenant-1/project-1/run-1/browser.webm"
-                                ),
-                            },
-                            {
-                                "capture_target": "ios",
-                                "artifact_url": "https://cdn.example/qa-demos/tenant-1/project-1/run-1/ios.webm",
-                            },
-                            {
-                                "capture_target": "android",
-                                "artifact_url": (
-                                    "https://cdn.example/qa-demos/tenant-1/project-1/run-1/android.webm"
-                                ),
-                            },
-                        ],
-                    }
-                    event_request = replace(event_request, payload=payload)
                 execute_workflow_advance(
                     session=session,
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
-                    request=event_request,
+                    request=_demo_proof_request_for_event(request, event),
                     resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
                 )
 
-            try:
+            event_request = _demo_proof_request_for_event(request, "EvidenceUploaded")
+            with pytest.raises(RuntimeError, match="evidence metadata is missing uploaded artifact metadata"):
                 execute_workflow_advance(
                     session=session,
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
-                    request=_demo_proof_request_for_event(request, "PreviewCleanupCompleted"),
+                    request=replace(
+                        event_request,
+                        payload={
+                            **event_request.payload,
+                            "event_metadata": {
+                                "artifact_urls": [
+                                    "https://cdn.example/qa-demos/tenant-1/project-1/run-1/browser.webm",
+                                    "https://cdn.example/qa-demos/tenant-1/project-1/run-1/ios.webm",
+                                    "https://cdn.example/qa-demos/tenant-1/project-1/run-1/android.webm",
+                                ],
+                                "recording_count": 3,
+                                "capture_targets": ["browser", "ios", "android"],
+                                "recordings": [
+                                    {
+                                        "capture_target": "browser",
+                                        "artifact_url": (
+                                            "https://cdn.example/qa-demos/tenant-1/project-1/run-1/browser.webm"
+                                        ),
+                                    },
+                                    {
+                                        "capture_target": "ios",
+                                        "artifact_url": (
+                                            "https://cdn.example/qa-demos/tenant-1/project-1/run-1/ios.webm"
+                                        ),
+                                    },
+                                    {
+                                        "capture_target": "android",
+                                        "artifact_url": (
+                                            "https://cdn.example/qa-demos/tenant-1/project-1/run-1/android.webm"
+                                        ),
+                                    },
+                                ],
+                            },
+                        },
+                    ),
                     resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
                 )
-            except RuntimeError as exc:
-                assert "missing uploaded artifact metadata" in str(exc)
-                assert "browser" in str(exc)
-                assert "ios" in str(exc)
-                assert "android" in str(exc)
-            else:  # pragma: no cover
-                raise AssertionError("expected demo proof completion to require uploaded artifact metadata")
+
+            workflow = session.execute(select(WorkflowExecution)).scalar_one()
+            pr_operation = session.execute(
+                select(WorkflowOperation).where(
+                    WorkflowOperation.workflow_id == workflow.workflow_id,
+                    WorkflowOperation.operation_type == "pr_evidence_update",
+                )
+            ).scalar_one()
+            assert pr_operation.status == "pending"
 
     def test_demo_proof_rejects_success_completion_when_artifact_urls_omit_required_walkthroughs(self) -> None:
         with self.session_factory() as session:
@@ -2478,26 +2490,15 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 "RecordingStarted",
                 "RecordingCompleted",
                 "EvidenceUploadStarted",
-                "EvidenceUploaded",
-                "PREvidenceAttachStarted",
-                "PREvidenceAttached",
-                "PreviewCleanupRequested",
             ):
                 event_request = _demo_proof_request_for_event(request, event)
-                if event in {"RecordingCompleted", "EvidenceUploaded"}:
+                if event == "RecordingCompleted":
                     payload = dict(event_request.payload)
                     metadata = dict(payload["event_metadata"])
                     metadata["artifact_urls"] = [artifact_urls[0]]
                     metadata["recording_count"] = 3
                     metadata["capture_targets"] = ["browser"]
                     metadata["recordings"] = recording_metadata
-                    payload["event_metadata"] = metadata
-                    event_request = replace(event_request, payload=payload)
-                if event == "PREvidenceAttached":
-                    payload = dict(event_request.payload)
-                    metadata = dict(payload["event_metadata"])
-                    metadata["artifact_urls"] = [artifact_urls[0]]
-                    metadata["checked_artifact_urls"] = [artifact_urls[0]]
                     payload["event_metadata"] = metadata
                     event_request = replace(event_request, payload=payload)
                 execute_workflow_advance(
@@ -2508,20 +2509,34 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
                 )
 
-            try:
+            event_request = _demo_proof_request_for_event(request, "EvidenceUploaded")
+            payload = dict(event_request.payload)
+            metadata = dict(payload["event_metadata"])
+            metadata["artifact_urls"] = [artifact_urls[0]]
+            metadata["recording_count"] = 3
+            metadata["capture_targets"] = ["browser"]
+            metadata["recordings"] = recording_metadata
+            payload["event_metadata"] = metadata
+            with pytest.raises(RuntimeError) as exc_info:
                 execute_workflow_advance(
                     session=session,
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
-                    request=_demo_proof_request_for_event(request, "PreviewCleanupCompleted"),
+                    request=replace(event_request, payload=payload),
                     resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
                 )
-            except RuntimeError as exc:
-                assert "EvidenceUploaded.artifact_urls is missing recording artifact URL(s)" in str(exc)
-                assert artifact_urls[1] in str(exc)
-                assert artifact_urls[2] in str(exc)
-            else:  # pragma: no cover
-                raise AssertionError("expected demo proof completion to reject missing walkthrough artifact URLs")
+            assert "EvidenceUploaded.artifact_urls is missing recording artifact URL(s)" in str(exc_info.value)
+            assert artifact_urls[1] in str(exc_info.value)
+            assert artifact_urls[2] in str(exc_info.value)
+
+            workflow = session.execute(select(WorkflowExecution)).scalar_one()
+            pr_operation = session.execute(
+                select(WorkflowOperation).where(
+                    WorkflowOperation.workflow_id == workflow.workflow_id,
+                    WorkflowOperation.operation_type == "pr_evidence_update",
+                )
+            ).scalar_one()
+            assert pr_operation.status == "pending"
 
     def test_demo_proof_rejects_success_completion_when_recording_release_commit_mismatches_release(self) -> None:
         with self.session_factory() as session:
@@ -2546,13 +2561,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 "RecordingStarted",
                 "RecordingCompleted",
                 "EvidenceUploadStarted",
-                "EvidenceUploaded",
-                "PREvidenceAttachStarted",
-                "PREvidenceAttached",
-                "PreviewCleanupRequested",
             ):
                 event_request = _demo_proof_request_for_event(request, event)
-                if event in {"RecordingCompleted", "EvidenceUploaded"}:
+                if event == "RecordingCompleted":
                     payload = dict(event_request.payload)
                     metadata = dict(payload["event_metadata"])
                     recordings = [dict(item) for item in metadata["recordings"]]
@@ -2568,19 +2579,32 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
                 )
 
-            try:
+            event_request = _demo_proof_request_for_event(request, "EvidenceUploaded")
+            payload = dict(event_request.payload)
+            metadata = dict(payload["event_metadata"])
+            recordings = [dict(item) for item in metadata["recordings"]]
+            recordings[1]["release_commit_sha"] = "c" * 40
+            metadata["recordings"] = recordings
+            payload["event_metadata"] = metadata
+            with pytest.raises(RuntimeError) as exc_info:
                 execute_workflow_advance(
                     session=session,
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
-                    request=_demo_proof_request_for_event(request, "PreviewCleanupCompleted"),
+                    request=replace(event_request, payload=payload),
                     resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
                 )
-            except RuntimeError as exc:
-                assert "recording metadata release commit does not match" in str(exc)
-                assert "ios" in str(exc)
-            else:  # pragma: no cover
-                raise AssertionError("expected demo proof completion to require matching release commit metadata")
+            assert "recording metadata release commit does not match" in str(exc_info.value)
+            assert "ios" in str(exc_info.value)
+
+            workflow = session.execute(select(WorkflowExecution)).scalar_one()
+            pr_operation = session.execute(
+                select(WorkflowOperation).where(
+                    WorkflowOperation.workflow_id == workflow.workflow_id,
+                    WorkflowOperation.operation_type == "pr_evidence_update",
+                )
+            ).scalar_one()
+            assert pr_operation.status == "pending"
 
     def test_demo_proof_rejects_success_completion_without_cleanup_status_metadata(self) -> None:
         with self.session_factory() as session:
@@ -2611,7 +2635,7 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 "PreviewCleanupRequested",
             ):
                 event_request = _demo_proof_request_for_event(request, event)
-                if event == "RecordingCompleted":
+                if event in {"RecordingCompleted", "EvidenceUploaded"}:
                     metadata = _demo_proof_event_metadata(event)
                     assert metadata is not None
                     recordings = list(metadata["recordings"])
@@ -2636,6 +2660,15 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                             },
                         },
                     )
+                if event == "PREvidenceAttached":
+                    payload = dict(event_request.payload)
+                    metadata = dict(payload["event_metadata"])
+                    artifact_urls = list(metadata["artifact_urls"])
+                    artifact_urls.append("https://cdn.example/qa-demos/tenant-1/project-1/run-1/browser-variant.webm")
+                    metadata["artifact_urls"] = artifact_urls
+                    metadata["checked_artifact_urls"] = artifact_urls
+                    payload["event_metadata"] = metadata
+                    event_request = replace(event_request, payload=payload)
                 execute_workflow_advance(
                     session=session,
                     settings=SimpleNamespace(),
@@ -3335,12 +3368,22 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 "EvidenceUploadStarted",
                 "EvidenceUploaded",
                 "PREvidenceAttachStarted",
-                "PREvidenceAttached",
-                "PreviewCleanupRequested",
             ):
-                event_request = _demo_proof_request_for_event(request, event)
-                if event == "PREvidenceAttached":
-                    event_request = replace(
+                execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=_demo_proof_request_for_event(request, event),
+                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                )
+
+            event_request = _demo_proof_request_for_event(request, "PREvidenceAttached")
+            with pytest.raises(RuntimeError, match="PR evidence metadata is missing uploaded artifact URL"):
+                execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=replace(
                         event_request,
                         payload={
                             **event_request.payload,
@@ -3349,28 +3392,18 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                                 "pr_body_sha256": "e" * 64,
                             },
                         },
-                    )
-                execute_workflow_advance(
-                    session=session,
-                    settings=SimpleNamespace(),
-                    workflow_type=workflow_type,
-                    request=event_request,
+                    ),
                     resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
                 )
 
-            try:
-                execute_workflow_advance(
-                    session=session,
-                    settings=SimpleNamespace(),
-                    workflow_type=workflow_type,
-                    request=_demo_proof_request_for_event(request, "PreviewCleanupCompleted"),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+            workflow = session.execute(select(WorkflowExecution)).scalar_one()
+            cleanup_operation = session.execute(
+                select(WorkflowOperation).where(
+                    WorkflowOperation.workflow_id == workflow.workflow_id,
+                    WorkflowOperation.operation_type == "preview_cleanup",
                 )
-            except RuntimeError as exc:
-                assert "PR evidence metadata is missing uploaded artifact URL(s)" in str(exc)
-                assert "browser.webm" in str(exc)
-            else:  # pragma: no cover
-                raise AssertionError("expected demo proof completion to require PR evidence artifact URL metadata")
+            ).scalar_one()
+            assert cleanup_operation.status == "pending"
 
     def test_demo_proof_rejects_success_completion_when_pr_evidence_targets_another_pr(self) -> None:
         with self.session_factory() as session:
@@ -3511,37 +3544,100 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 "EvidenceUploadStarted",
                 "EvidenceUploaded",
                 "PREvidenceAttachStarted",
-                "PREvidenceAttached",
-                "PreviewCleanupRequested",
             ):
-                event_request = _demo_proof_request_for_event(request, event)
-                if event == "PREvidenceAttached":
-                    payload = dict(event_request.payload)
-                    metadata = dict(payload["event_metadata"])
-                    metadata.pop("artifact_url_check_status", None)
-                    metadata.pop("checked_artifact_urls", None)
-                    payload["event_metadata"] = metadata
-                    event_request = replace(event_request, payload=payload)
                 execute_workflow_advance(
                     session=session,
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
-                    request=event_request,
+                    request=_demo_proof_request_for_event(request, event),
                     resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
                 )
 
-            try:
+            event_request = _demo_proof_request_for_event(request, "PREvidenceAttached")
+            payload = dict(event_request.payload)
+            metadata = dict(payload["event_metadata"])
+            metadata.pop("artifact_url_check_status", None)
+            metadata.pop("checked_artifact_urls", None)
+            payload["event_metadata"] = metadata
+
+            with pytest.raises(RuntimeError, match="PREvidenceAttached artifact URL checks must pass"):
                 execute_workflow_advance(
                     session=session,
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
-                    request=_demo_proof_request_for_event(request, "PreviewCleanupCompleted"),
+                    request=replace(event_request, payload=payload),
                     resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
                 )
-            except RuntimeError as exc:
-                assert "PREvidenceAttached artifact URL checks must pass before terminal completion" in str(exc)
-            else:  # pragma: no cover
-                raise AssertionError("expected demo proof completion to require checked PR artifact links")
+
+            workflow = session.execute(select(WorkflowExecution)).scalar_one()
+            cleanup_operation = session.execute(
+                select(WorkflowOperation).where(
+                    WorkflowOperation.workflow_id == workflow.workflow_id,
+                    WorkflowOperation.operation_type == "preview_cleanup",
+                )
+            ).scalar_one()
+            assert cleanup_operation.status == "pending"
+
+    def test_demo_proof_rejects_pr_evidence_attach_before_cleanup_when_artifact_links_were_not_checked(
+        self,
+    ) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-a")
+            workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
+            request = _demo_proof_request(tenant=tenant)
+            execute_workflow_advance(
+                session=session,
+                settings=SimpleNamespace(),
+                workflow_type=workflow_type,
+                request=request,
+                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+            )
+
+            for event in (
+                "ProofLeaseAcquired",
+                "ReleaseRequested",
+                "ReleaseProvisioning",
+                "ReleaseLive",
+                "RouteReady",
+                "ServiceVerificationPassed",
+                "RecordingStarted",
+                "RecordingCompleted",
+                "EvidenceUploadStarted",
+                "EvidenceUploaded",
+                "PREvidenceAttachStarted",
+            ):
+                execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=_demo_proof_request_for_event(request, event),
+                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                )
+
+            event_request = _demo_proof_request_for_event(request, "PREvidenceAttached")
+            payload = dict(event_request.payload)
+            metadata = dict(payload["event_metadata"])
+            metadata.pop("artifact_url_check_status", None)
+            metadata.pop("checked_artifact_urls", None)
+            payload["event_metadata"] = metadata
+
+            with pytest.raises(RuntimeError, match="PREvidenceAttached artifact URL checks must pass"):
+                execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=replace(event_request, payload=payload),
+                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                )
+
+            workflow = session.execute(select(WorkflowExecution)).scalar_one()
+            cleanup_operation = session.execute(
+                select(WorkflowOperation).where(
+                    WorkflowOperation.workflow_id == workflow.workflow_id,
+                    WorkflowOperation.operation_type == "preview_cleanup",
+                )
+            ).scalar_one()
+            assert cleanup_operation.status == "pending"
 
     def test_demo_proof_rejects_success_completion_when_required_recording_count_is_missing(self) -> None:
         with self.session_factory() as session:
@@ -3573,10 +3669,6 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 "RecordingStarted",
                 "RecordingCompleted",
                 "EvidenceUploadStarted",
-                "EvidenceUploaded",
-                "PREvidenceAttachStarted",
-                "PREvidenceAttached",
-                "PreviewCleanupRequested",
             ):
                 event_request = _demo_proof_request_for_event(request, event)
                 if event == "RecordingCompleted":
@@ -3612,19 +3704,25 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
                 )
 
-            try:
+            with pytest.raises(RuntimeError) as exc_info:
                 execute_workflow_advance(
                     session=session,
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
-                    request=_demo_proof_request_for_event(request, "PreviewCleanupCompleted"),
+                    request=_demo_proof_request_for_event(request, "EvidenceUploaded"),
                     resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
                 )
-            except RuntimeError as exc:
-                assert "EvidenceUploaded.recordings must match RecordingCompleted.recordings" in str(exc)
-                assert "browser" in str(exc)
-            else:  # pragma: no cover
-                raise AssertionError("expected demo proof completion to reject missing uploaded recording lineage")
+            assert "EvidenceUploaded.recordings must match RecordingCompleted.recordings" in str(exc_info.value)
+            assert "browser" in str(exc_info.value)
+
+            workflow = session.execute(select(WorkflowExecution)).scalar_one()
+            pr_operation = session.execute(
+                select(WorkflowOperation).where(
+                    WorkflowOperation.workflow_id == workflow.workflow_id,
+                    WorkflowOperation.operation_type == "pr_evidence_update",
+                )
+            ).scalar_one()
+            assert pr_operation.status == "pending"
 
     def test_demo_proof_rejects_recording_completed_when_required_recording_count_is_missing(self) -> None:
         with self.session_factory() as session:
