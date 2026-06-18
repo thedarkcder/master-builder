@@ -375,6 +375,12 @@ def _start_demo_proof_workflow(
             status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
             detail="input.required_capture_targets must be a list",
         )
+    required_recording_counts = payload.input.get("required_recording_counts")
+    if required_recording_counts is not None and not isinstance(required_recording_counts, dict):
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail="input.required_recording_counts must be an object",
+        )
     try:
         result = start_demo_proof_workflow(
             session=session,
@@ -388,6 +394,7 @@ def _start_demo_proof_workflow(
             release_id=release_id,
             pr_url=pr_url,
             required_capture_targets=required_capture_targets,
+            required_recording_counts=required_recording_counts,
             trigger_event="admin_workflow_start",
         )
     except ValueError as exc:

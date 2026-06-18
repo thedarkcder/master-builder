@@ -119,10 +119,10 @@ def _normalize_required_recording_counts(
 ) -> dict[str, int]:
     required_targets = set(required_capture_targets)
     if value is None:
-        return {target: 1 for target in required_capture_targets}
+        raise ValueError("Demo proof required_recording_counts must be provided by PM demo requirements")
     if not isinstance(value, dict):
         raise ValueError("Demo proof required_recording_counts must be a JSON object")
-    counts: dict[str, int] = {target: 1 for target in required_capture_targets}
+    counts: dict[str, int] = {}
     for raw_target, raw_count in value.items():
         target = str(raw_target or "").strip()
         if target not in required_targets:
@@ -136,6 +136,11 @@ def _normalize_required_recording_counts(
         if count < 1:
             raise ValueError(f"Demo proof required_recording_counts.{target} must be a positive integer")
         counts[target] = count
+    missing_targets = [target for target in required_capture_targets if target not in counts]
+    if missing_targets:
+        raise ValueError(
+            "Demo proof required_recording_counts is missing required target(s): " + ", ".join(missing_targets)
+        )
     return counts
 
 
