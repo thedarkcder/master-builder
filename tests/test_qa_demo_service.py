@@ -39,6 +39,7 @@ from orchestrator.core.qa.demo_service import (
     resolve_available_capture_targets,
     resolve_preview_demo_url,
     storage_config_from_settings,
+    mark_pull_request_ready_after_demo_proof,
     update_pull_request_with_demo_failure_evidence,
     update_pull_request_with_demo_evidence,
     upload_recording,
@@ -5057,7 +5058,7 @@ def test_update_pull_request_with_demo_evidence_refreshes_pr_body() -> None:
     assert DEMO_EVIDENCE_HEADING in updated_body
     assert f"{DEMO_EVIDENCE_REQUIRED_TARGETS_MARKER} browser -->" in updated_body
     assert "https://cdn.example/qa-demos/tenant-1/project-1/run-1/happy.webm" in updated_body
-    assert github_client.ready_calls == [{"repo_full_name": "acme/repo", "pr_number": 8}]
+    assert github_client.ready_calls == []
 
 
 def test_update_pull_request_with_demo_failure_evidence_reports_app_load_crash_without_readying_pr() -> None:
@@ -5237,7 +5238,7 @@ def test_update_pull_request_with_demo_evidence_rejects_missing_pr_base_branch()
     github_client.mark_pull_request_ready_for_review.assert_not_called()
 
 
-def test_update_pull_request_with_demo_evidence_blocks_when_ready_transition_fails() -> None:
+def test_mark_pull_request_ready_after_demo_proof_blocks_when_ready_transition_fails() -> None:
     class _GitHubClient:
         body = "## Summary\n- change"
 
@@ -5258,43 +5259,19 @@ def test_update_pull_request_with_demo_evidence_blocks_when_ready_transition_fai
     github_client = _GitHubClient()
     with (
         patch("orchestrator.core.qa.demo_service.github_client_from_tenant_config", return_value=github_client),
-        patch("orchestrator.core.qa.demo_service._default_artifact_url_probe", return_value=200),
     ):
         try:
-            update_pull_request_with_demo_evidence(
+            mark_pull_request_ready_after_demo_proof(
                 session=SimpleNamespace(),
                 settings=_qa_artifact_settings(),
                 tenant=SimpleNamespace(tenant_id="tenant-1", github_config={}),
                 project=SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo"),
-                run=SimpleNamespace(run_id="run-1"),
                 workflow_result=SimpleNamespace(pr_url="https://github.com/acme/repo/pull/8"),
-                qa_result=QaResult(
-                    summary=["Recorded demos"],
-                    scenarios=[
-                        QaScenario(
-                            name="Happy path",
-                            objective="Show feature works",
-                            steps=_proof_steps("text=Feature"),
-                        )
-                    ],
-                    recordings=[
-                        QaRecording(
-                            name="Happy path",
-                            artifact_url="https://cdn.example/qa-demos/tenant-1/project-1/run-1/happy.webm",
-                            object_key="tenant-1/project-1/run-1/happy.webm",
-                            capture_reference="https://preview.example",
-                            content_sha256=_sha256(48),
-                            release_context_sha256=_release_context_sha256(),
-                        )
-                    ],
-                ),
-                required_capture_targets=("browser",),
-                required_recording_counts={"browser": 1},
             )
         except RuntimeError as exc:
             assert "GitHub refused ready-for-review transition" in str(exc)
         else:  # pragma: no cover
-            raise AssertionError("expected failed ready-for-review transition to block QA evidence completion")
+            raise AssertionError("expected failed ready-for-review transition to block proof completion")
 
 
 def test_update_pull_request_with_demo_evidence_rejects_missing_release_context_before_url_probe() -> None:

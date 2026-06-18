@@ -23,7 +23,7 @@ DEMO_PROOF_HANDLER_KEY = "demo_proof"
 DEMO_PROOF_STEP_PREVIEW_LEASE = "preview_lease"
 
 
-_DEMO_PROOF_HAPPY_PATH_EVENTS: dict[str, tuple[str, str | None, str]] = {
+_DEMO_PROOF_EVENTS: dict[str, tuple[str, str | None, str]] = {
     "ProofLeaseAcquired": (
         DEMO_PROOF_STEP_PREVIEW_LEASE,
         DEMO_PROOF_STEP_RELEASE,
@@ -53,6 +53,26 @@ _DEMO_PROOF_HAPPY_PATH_EVENTS: dict[str, tuple[str, str | None, str]] = {
         DEMO_PROOF_STEP_PREVIEW_CLEANUP,
         None,
         "demo_proof_completed",
+    ),
+    "RecordingFailureEvidenceCaptured": (
+        DEMO_PROOF_STEP_RECORDING,
+        DEMO_PROOF_STEP_EVIDENCE_UPLOAD,
+        "failure_evidence_upload_requested",
+    ),
+    "FailureEvidenceUploaded": (
+        DEMO_PROOF_STEP_EVIDENCE_UPLOAD,
+        DEMO_PROOF_STEP_PR_EVIDENCE_UPDATE,
+        "pr_failure_evidence_update_requested",
+    ),
+    "PRFailureEvidenceAttached": (
+        DEMO_PROOF_STEP_PR_EVIDENCE_UPDATE,
+        DEMO_PROOF_STEP_PREVIEW_CLEANUP,
+        "failure_preview_cleanup_requested",
+    ),
+    "FailurePreviewCleanupCompleted": (
+        DEMO_PROOF_STEP_PREVIEW_CLEANUP,
+        None,
+        "demo_proof_blocked_with_failure_evidence",
     ),
 }
 
@@ -191,7 +211,7 @@ class DemoProofWorkflowAdvanceHandler:
         proof_scope_id: str,
         run_id: str | None,
     ) -> WorkflowAdvanceOutcome:
-        event_spec = _DEMO_PROOF_HAPPY_PATH_EVENTS.get(event)
+        event_spec = _DEMO_PROOF_EVENTS.get(event)
         if event_spec is None:
             raise RuntimeError(f"Unsupported demo proof workflow event: {event}")
         completed_operation_type, next_operation_type, reason = event_spec

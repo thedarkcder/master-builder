@@ -2788,11 +2788,28 @@ def update_pull_request_with_demo_evidence(
         required_recording_counts=required_recording_counts,
     )
     _persist_pull_request_body(context=pr_context, project=project, body=body)
+    return body
+
+
+def mark_pull_request_ready_after_demo_proof(
+    *,
+    session,
+    settings,
+    tenant,
+    project,
+    workflow_result,
+) -> None:
+    pr_context = _load_pull_request_update_context(
+        session=session,
+        settings=settings,
+        tenant=tenant,
+        project=project,
+        workflow_result=workflow_result,
+    )
     pr_context.github_client.mark_pull_request_ready_for_review(
         repo_full_name=pr_context.repo_full_name,
         pr_number=pr_context.pr_number,
     )
-    return body
 
 
 def update_pull_request_with_demo_failure_evidence(
