@@ -444,6 +444,127 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
             ).scalar_one()
             assert release_operation.status == "waiting_for_input"
 
+    def test_demo_proof_release_failed_event_fails_waiting_release_operation_and_blocks_workflow(self) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-a")
+            workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
+            request = _demo_proof_request(tenant=tenant)
+            execute_workflow_advance(
+                session=session,
+                settings=SimpleNamespace(),
+                workflow_type=workflow_type,
+                request=request,
+                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+            )
+            execute_workflow_advance(
+                session=session,
+                settings=SimpleNamespace(),
+                workflow_type=workflow_type,
+                request=replace(request, trigger=WorkflowTrigger(event="ProofLeaseAcquired")),
+                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+            )
+            execute_workflow_advance(
+                session=session,
+                settings=SimpleNamespace(),
+                workflow_type=workflow_type,
+                request=replace(request, trigger=WorkflowTrigger(event="ReleaseRequested")),
+                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+            )
+
+            result = execute_workflow_advance(
+                session=session,
+                settings=SimpleNamespace(),
+                workflow_type=workflow_type,
+                request=replace(request, trigger=WorkflowTrigger(event="ReleaseFailed")),
+                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+            )
+
+            assert result.reason == "release_failed"
+            assert result.failed is True
+            workflow = session.execute(select(WorkflowExecution)).scalar_one()
+            release_operation = session.execute(
+                select(WorkflowOperation).where(
+                    WorkflowOperation.workflow_id == workflow.workflow_id,
+                    WorkflowOperation.operation_type == "release",
+                )
+            ).scalar_one()
+            release_attempt = session.execute(
+                select(WorkflowOperationAttempt).where(
+                    WorkflowOperationAttempt.operation_id == release_operation.operation_id,
+                )
+            ).scalar_one()
+            description = json.loads(workflow.source_description or "{}")
+            assert workflow.status == "failed"
+            assert workflow.last_error == "Demo proof event ReleaseFailed blocked proof scope run-1-main-abcdef1."
+            assert description["demo_proof_state"] == "blocked"
+            assert description["demo_proof_events"][-1] == "ReleaseFailed"
+            assert release_operation.status == "failed"
+            assert release_attempt.status == "failed"
+            assert release_attempt.error_category == "release_failed"
+
+    def test_demo_proof_pr_attach_failed_event_fails_waiting_pr_update_operation_and_blocks_workflow(self) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-a")
+            workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
+            request = _demo_proof_request(tenant=tenant)
+            execute_workflow_advance(
+                session=session,
+                settings=SimpleNamespace(),
+                workflow_type=workflow_type,
+                request=request,
+                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+            )
+            for event in (
+                "ProofLeaseAcquired",
+                "ReleaseRequested",
+                "ReleaseProvisioning",
+                "ReleaseLive",
+                "RouteReady",
+                "ServiceVerificationPassed",
+                "RecordingStarted",
+                "RecordingCompleted",
+                "EvidenceUploadStarted",
+                "EvidenceUploaded",
+                "PREvidenceAttachStarted",
+            ):
+                execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=replace(request, trigger=WorkflowTrigger(event=event)),
+                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                )
+
+            result = execute_workflow_advance(
+                session=session,
+                settings=SimpleNamespace(),
+                workflow_type=workflow_type,
+                request=replace(request, trigger=WorkflowTrigger(event="PREvidenceAttachFailed")),
+                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+            )
+
+            assert result.reason == "pr_evidence_attach_failed"
+            assert result.failed is True
+            workflow = session.execute(select(WorkflowExecution)).scalar_one()
+            operation = session.execute(
+                select(WorkflowOperation).where(
+                    WorkflowOperation.workflow_id == workflow.workflow_id,
+                    WorkflowOperation.operation_type == "pr_evidence_update",
+                )
+            ).scalar_one()
+            attempt = session.execute(
+                select(WorkflowOperationAttempt).where(
+                    WorkflowOperationAttempt.operation_id == operation.operation_id,
+                )
+            ).scalar_one()
+            description = json.loads(workflow.source_description or "{}")
+            assert workflow.status == "failed"
+            assert description["demo_proof_state"] == "blocked"
+            assert description["demo_proof_events"][-1] == "PREvidenceAttachFailed"
+            assert operation.status == "failed"
+            assert attempt.status == "failed"
+            assert attempt.error_category == "pr_evidence_attach_failed"
+
     def test_demo_proof_full_lifecycle_events_complete_operations_in_order(self) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
