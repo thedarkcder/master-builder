@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
+import hashlib
 import json
 import re
 
@@ -1026,6 +1027,93 @@ def _artifact_urls_from_metadata_items(value: object) -> set[str]:
     }
 
 
+def _expected_release_context_sha256(
+    *,
+    metadata: dict[str, dict[str, object]],
+) -> str:
+    service_metadata = metadata.get("ServiceVerificationPassed", {})
+    service_urls = service_metadata.get("service_urls")
+    if not isinstance(service_urls, list):
+        return ""
+    release_commit_sha = (
+        _metadata_string(service_metadata.get("release_commit_sha"))
+        or _metadata_string(metadata.get("ReleaseLive", {}).get("release_commit_sha"))
+    )
+    if not release_commit_sha:
+        return ""
+    payload = {
+        "commit_sha": release_commit_sha,
+        "service_urls": [dict(item) for item in service_urls if isinstance(item, dict)],
+    }
+    serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def _verified_release_service_url(
+    *,
+    metadata: dict[str, dict[str, object]],
+    service_kind: str,
+) -> str:
+    service_metadata = metadata.get("ServiceVerificationPassed", {})
+    service_urls = service_metadata.get("service_urls")
+    if not isinstance(service_urls, list):
+        return ""
+    for item in service_urls:
+        if not isinstance(item, dict):
+            continue
+        if _metadata_string(item.get("service_kind")) != service_kind:
+            continue
+        if _metadata_string(item.get("status")) != "active":
+            continue
+        url = _metadata_string(item.get("url"))
+        if url:
+            return url
+    return ""
+
+
+def _normalized_release_reference(value: object) -> str:
+    return _metadata_string(value).rstrip("/")
+
+
+def _require_recordings_match_verified_release_context(
+    *,
+    metadata: dict[str, dict[str, object]],
+    recordings: object,
+    event: str,
+    proof_scope_id: str,
+) -> None:
+    if not isinstance(recordings, list):
+        return
+    expected_context_sha256 = _expected_release_context_sha256(metadata=metadata)
+    if expected_context_sha256:
+        mismatched_targets = sorted(
+            _metadata_string(item.get("capture_target")) or "<missing>"
+            for item in recordings
+            if isinstance(item, dict)
+            and _metadata_string(item.get("release_context_sha256")).lower() != expected_context_sha256.lower()
+        )
+        if mismatched_targets:
+            raise RuntimeError(
+                f"Demo proof scope {proof_scope_id} {event}.recordings release context does not match verified "
+                "release context for capture target(s): " + ", ".join(mismatched_targets)
+            )
+    browser_release_url = _verified_release_service_url(metadata=metadata, service_kind="website")
+    if browser_release_url:
+        expected_browser_reference = _normalized_release_reference(browser_release_url)
+        mismatched_browser_references = sorted(
+            _normalized_release_reference(item.get("capture_reference")) or "<missing>"
+            for item in recordings
+            if isinstance(item, dict)
+            and _metadata_string(item.get("capture_target")) == "browser"
+            and _normalized_release_reference(item.get("capture_reference")) != expected_browser_reference
+        )
+        if mismatched_browser_references:
+            raise RuntimeError(
+                f"Demo proof scope {proof_scope_id} browser recording capture_reference must match verified "
+                f"release URL {expected_browser_reference}: " + ", ".join(mismatched_browser_references)
+            )
+
+
 def _require_artifact_urls_cover_metadata_items(
     *,
     listed_artifact_urls: object,
@@ -1623,6 +1711,12 @@ def _require_recording_completion_metadata(*, description: dict[str, object], pr
             f"Demo proof scope {proof_scope_id} recording completion metadata is missing artifact metadata "
             "for required capture target(s): " + ", ".join(missing_target_artifacts)
         )
+    _require_recordings_match_verified_release_context(
+        metadata=metadata,
+        recordings=recording_metadata.get("recordings"),
+        event="RecordingCompleted",
+        proof_scope_id=proof_scope_id,
+    )
     recording_counts_by_target = _recording_artifact_counts_by_target(recording_metadata.get("recordings"))
     required_counts = _normalized_required_recording_counts(
         required_capture_targets=list(required_targets),
