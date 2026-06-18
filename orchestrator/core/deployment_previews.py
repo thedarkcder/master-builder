@@ -118,6 +118,7 @@ def create_run_preview_deployment(
             branch_run_ids=branch_run_ids,
             expected_commit_sha=artifact.commit_sha,
             current_base_domain=_normalize_optional_string((tenant.deployment_plane_config or {}).get("base_domain")),
+            proof_scope_id=normalized_proof_scope_id,
         )
         if existing_release is not None:
             if normalized_proof_scope_id is not None:
@@ -424,6 +425,7 @@ def _reusable_existing_preview_release(
     branch_run_ids: tuple[str, ...],
     expected_commit_sha: str,
     current_base_domain: str | None,
+    proof_scope_id: str | None,
 ) -> ProjectDeploymentRelease | None:
     if not branch_run_ids:
         return None
@@ -460,7 +462,30 @@ def _reusable_existing_preview_release(
             require_preview_wildcard_shape=True,
         ):
             return None
+    _raise_if_preview_release_has_conflicting_demo_proof_lease(
+        release=existing_release,
+        proof_scope_id=proof_scope_id,
+    )
     return existing_release
+
+
+def _raise_if_preview_release_has_conflicting_demo_proof_lease(
+    *,
+    release: ProjectDeploymentRelease,
+    proof_scope_id: str | None,
+) -> None:
+    if proof_scope_id is None:
+        return
+    metadata = _demo_proof_lease_metadata(release)
+    if metadata.get("state") != _DEMO_PROOF_LEASE_ACTIVE_STATE:
+        return
+    existing_scope = metadata.get("proof_scope_id")
+    if existing_scope == proof_scope_id:
+        return
+    raise RuntimeError(
+        "Run preview release is already leased to another demo proof scope and cannot be reused as proof: "
+        f"{release.release_id}: existing={existing_scope or '<missing>'}: requested={proof_scope_id}"
+    )
 
 
 def _normalize_optional_string(value: object) -> str | None:
