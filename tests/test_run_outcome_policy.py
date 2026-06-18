@@ -294,10 +294,18 @@ def test_complete_runs_qa_demo_stage_before_finalization() -> None:
         for call in deps.execution.advance_demo_proof_workflow_event_fn.call_args_list
     ] == [
         "ProofLeaseAcquired",
+        "ReleaseRequested",
+        "ReleaseProvisioning",
+        "ReleaseLive",
+        "RouteReady",
         "ServiceVerificationPassed",
+        "RecordingStarted",
         "RecordingCompleted",
+        "EvidenceUploadStarted",
         "EvidenceUploaded",
+        "PREvidenceAttachStarted",
         "PREvidenceAttached",
+        "PreviewCleanupRequested",
         "PreviewCleanupCompleted",
     ]
     deps.execution.mark_pull_request_ready_after_demo_proof_fn.assert_called_once()
@@ -1612,10 +1620,18 @@ def test_complete_attaches_qa_failure_evidence_to_pr_before_blocking_ready_revie
         call.kwargs["event"] for call in deps.execution.advance_demo_proof_workflow_event_fn.call_args_list
     ] == [
         "ProofLeaseAcquired",
+        "ReleaseRequested",
+        "ReleaseProvisioning",
+        "ReleaseLive",
+        "RouteReady",
         "ServiceVerificationPassed",
+        "RecordingStarted",
         "RecordingFailureEvidenceCaptured",
+        "FailureEvidenceUploadStarted",
         "FailureEvidenceUploaded",
+        "PRFailureEvidenceAttachStarted",
         "PRFailureEvidenceAttached",
+        "FailurePreviewCleanupRequested",
         "FailurePreviewCleanupCompleted",
     ]
     deps.execution.mark_pull_request_ready_after_demo_proof_fn.assert_not_called()
