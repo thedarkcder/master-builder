@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 from dataclasses import replace
+from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -84,6 +85,11 @@ def _qa_failure_evidence(
         release_commit_sha="b" * 40,
         release_context_sha256=f"{999:064x}",
     )
+
+
+def _assert_iso_created_at(value: object) -> None:
+    assert isinstance(value, str)
+    assert datetime.fromisoformat(value).tzinfo is not None
 
 
 def test_pr_evidence_attach_failed_metadata_requires_explicit_checked_artifact_urls() -> None:
@@ -416,30 +422,40 @@ def test_complete_runs_qa_demo_stage_before_finalization() -> None:
         "https://cdn.example/qa-demo-2.webm",
         "https://cdn.example/qa-demo-3.webm",
     ]
-    assert metadata_by_event["EvidenceUploaded"]["recordings"] == [
+    uploaded_recordings = metadata_by_event["EvidenceUploaded"]["recordings"]
+    assert len(uploaded_recordings) == 3
+    for uploaded_recording in uploaded_recordings:
+        _assert_iso_created_at(uploaded_recording["created_at"])
+    assert uploaded_recordings == [
         {
+            "recording_name": "Happy path",
             "capture_target": "browser",
             "artifact_url": "https://cdn.example/qa-demo-1.webm",
             "object_key": "tenant-1/project-1/run-1/qa-demo-1.webm",
             "capture_reference": "https://preview.example",
+            "created_at": uploaded_recordings[0]["created_at"],
             "content_sha256": f"{1:064x}",
             "release_commit_sha": "b" * 40,
             "release_context_sha256": f"{999:064x}",
         },
         {
+            "recording_name": "Invalid input is rejected",
             "capture_target": "browser",
             "artifact_url": "https://cdn.example/qa-demo-2.webm",
             "object_key": "tenant-1/project-1/run-1/qa-demo-2.webm",
             "capture_reference": "https://preview.example",
+            "created_at": uploaded_recordings[1]["created_at"],
             "content_sha256": f"{2:064x}",
             "release_commit_sha": "b" * 40,
             "release_context_sha256": f"{999:064x}",
         },
         {
+            "recording_name": "Repeat action remains safe",
             "capture_target": "browser",
             "artifact_url": "https://cdn.example/qa-demo-3.webm",
             "object_key": "tenant-1/project-1/run-1/qa-demo-3.webm",
             "capture_reference": "https://preview.example",
+            "created_at": uploaded_recordings[2]["created_at"],
             "content_sha256": f"{3:064x}",
             "release_commit_sha": "b" * 40,
             "release_context_sha256": f"{999:064x}",
@@ -2563,12 +2579,17 @@ def test_complete_attaches_qa_failure_evidence_to_pr_before_blocking_ready_revie
         "FailurePreviewCleanupFailed",
     ]
     metadata_by_event = {call.kwargs["event"]: call.kwargs.get("event_metadata") for call in event_calls}
-    assert metadata_by_event["ServiceVerificationFailed"]["failure_evidence"] == [
+    service_failure_evidence = metadata_by_event["ServiceVerificationFailed"]["failure_evidence"]
+    assert len(service_failure_evidence) == 1
+    _assert_iso_created_at(service_failure_evidence[0]["created_at"])
+    assert service_failure_evidence == [
         {
+            "recording_name": "App load",
             "capture_target": "browser",
             "artifact_url": "https://cdn.example/qa-failure-1.webm",
             "object_key": "tenant-1/project-1/run-1/qa-failure-1.webm",
             "capture_reference": "https://preview.example",
+            "created_at": service_failure_evidence[0]["created_at"],
             "content_sha256": f"{101:064x}",
             "release_commit_sha": "b" * 40,
             "release_context_sha256": f"{999:064x}",
@@ -2576,12 +2597,17 @@ def test_complete_attaches_qa_failure_evidence_to_pr_before_blocking_ready_revie
         }
     ]
     assert "did not load" in metadata_by_event["ServiceVerificationFailed"]["error_message"]
-    assert metadata_by_event["FailureEvidenceUploaded"]["failure_evidence"] == [
+    uploaded_failure_evidence = metadata_by_event["FailureEvidenceUploaded"]["failure_evidence"]
+    assert len(uploaded_failure_evidence) == 1
+    _assert_iso_created_at(uploaded_failure_evidence[0]["created_at"])
+    assert uploaded_failure_evidence == [
         {
+            "recording_name": "App load",
             "capture_target": "browser",
             "artifact_url": "https://cdn.example/qa-failure-1.webm",
             "object_key": "tenant-1/project-1/run-1/qa-failure-1.webm",
             "capture_reference": "https://preview.example",
+            "created_at": uploaded_failure_evidence[0]["created_at"],
             "content_sha256": f"{101:064x}",
             "release_commit_sha": "b" * 40,
             "release_context_sha256": f"{999:064x}",

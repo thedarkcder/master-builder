@@ -916,12 +916,19 @@ def _require_from_release_event_matches_requested_release(
 
 _RECORDING_ARTIFACT_REQUIRED_FIELDS = frozenset(
     {
+        "recording_name",
         "artifact_url",
         "object_key",
         "capture_reference",
         "content_sha256",
         "release_commit_sha",
         "release_context_sha256",
+    }
+)
+_UPLOADED_ARTIFACT_REQUIRED_FIELDS = frozenset(
+    {
+        *_RECORDING_ARTIFACT_REQUIRED_FIELDS,
+        "created_at",
     }
 )
 _FAILURE_EVIDENCE_PROBLEM_REQUIRED_FIELDS = frozenset(
@@ -933,7 +940,7 @@ _FAILURE_EVIDENCE_PROBLEM_REQUIRED_FIELDS = frozenset(
 )
 _FAILURE_EVIDENCE_REQUIRED_FIELDS = frozenset(
     {
-        *_RECORDING_ARTIFACT_REQUIRED_FIELDS,
+        *_UPLOADED_ARTIFACT_REQUIRED_FIELDS,
         *_FAILURE_EVIDENCE_PROBLEM_REQUIRED_FIELDS,
     }
 )
@@ -1025,6 +1032,36 @@ def _artifact_urls_from_metadata_items(value: object) -> set[str]:
         for artifact_url in [_metadata_string(item.get("artifact_url"))]
         if artifact_url
     }
+
+
+def _require_artifact_metadata_fields(
+    *,
+    value: object,
+    event: str,
+    evidence_field: str,
+    required_fields: frozenset[str],
+    proof_scope_id: str,
+) -> None:
+    if not isinstance(value, list):
+        raise RuntimeError(
+            f"Demo proof scope {proof_scope_id} {event}.{evidence_field} must include artifact metadata"
+        )
+    for item in value:
+        if not isinstance(item, dict):
+            raise RuntimeError(
+                f"Demo proof scope {proof_scope_id} {event}.{evidence_field} must include artifact metadata"
+            )
+        capture_target = _metadata_string(item.get("capture_target")) or "<missing>"
+        missing = sorted(
+            field
+            for field in required_fields
+            if not _metadata_field_is_present(item.get(field))
+        )
+        if missing:
+            raise RuntimeError(
+                f"Demo proof scope {proof_scope_id} requires uploaded artifact metadata before PR evidence: "
+                + ", ".join(f"{event}.{evidence_field}.{capture_target}.{field}" for field in missing)
+            )
 
 
 def _expected_release_context_sha256(
@@ -1760,6 +1797,13 @@ def _require_evidence_uploaded_metadata(*, description: dict[str, object], proof
         evidence_field="recordings",
         proof_scope_id=proof_scope_id,
     )
+    _require_artifact_metadata_fields(
+        value=evidence_metadata.get("recordings"),
+        event="EvidenceUploaded",
+        evidence_field="recordings",
+        required_fields=_UPLOADED_ARTIFACT_REQUIRED_FIELDS,
+        proof_scope_id=proof_scope_id,
+    )
     artifact_urls_by_target = {
         target: artifacts_by_target[target]["artifact_url"]
         for target in required_targets
@@ -1913,6 +1957,13 @@ def _require_failure_evidence_target_metadata(
         artifact_metadata_items=failure_metadata.get("failure_evidence"),
         event="FailureEvidenceUploaded",
         evidence_field="failure_evidence",
+        proof_scope_id=proof_scope_id,
+    )
+    _require_artifact_metadata_fields(
+        value=failure_metadata.get("failure_evidence"),
+        event="FailureEvidenceUploaded",
+        evidence_field="failure_evidence",
+        required_fields=_FAILURE_EVIDENCE_REQUIRED_FIELDS,
         proof_scope_id=proof_scope_id,
     )
     artifact_urls_by_target = {
