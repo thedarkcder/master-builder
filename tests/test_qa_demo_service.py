@@ -5173,6 +5173,102 @@ def test_execute_qa_demo_stage_uploads_failure_evidence_when_release_readiness_f
     runtime_mock.assert_not_called()
 
 
+def test_execute_qa_demo_stage_uploads_target_complete_failure_evidence_when_release_readiness_fails() -> None:
+    tenant = SimpleNamespace(tenant_id="tenant-1", github_config={})
+    project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo")
+    run = SimpleNamespace(run_id="run-1")
+    release = SimpleNamespace(
+        commit_sha="b" * 40,
+        service_urls=[SimpleNamespace(service_kind="website", status="active", url="https://preview.example")],
+    )
+    plan = PmPlan(
+        plan_steps=["Implement"],
+        acceptance_criteria=["Feature works across platforms"],
+        risks=[],
+        demo_requirements=[
+            _demo_requirement(capture_target="browser"),
+            _demo_requirement(capture_target="ios"),
+            _demo_requirement(capture_target="android"),
+        ],
+    )
+    failure_evidence = LocalQaFailureEvidence(
+        name="Release readiness failure",
+        path="/tmp/release-readiness-failure.webm",
+        capture_target="browser",
+        capture_reference="https://preview.example",
+        content_type="video/webm",
+        content_sha256="c" * 64,
+        error_message=(
+            "QA demo browser scenario failed: Release readiness failure\n"
+            "QA demo recording requires reachable release service URL(s); not reachable: website "
+            "(https://preview.example): connection refused"
+        ),
+    )
+    uploaded_urls = [
+        "https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-failure-1.webm",
+        "https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-failure-2.txt",
+        "https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-failure-3.txt",
+    ]
+
+    with (
+        patch("orchestrator.core.qa.demo_service.build_codex_runtime") as runtime_mock,
+        patch(
+            "orchestrator.core.qa.demo_service._default_service_url_probe",
+            side_effect=RuntimeError("connection refused"),
+        ),
+        patch(
+            "orchestrator.core.qa.demo_service.record_demo_scenarios",
+            side_effect=QaDemoRecordingFailure(
+                "QA demo recorder command failed (1): node qa_demo_recorder.mjs\n"
+                + failure_evidence.error_message,
+                failure_evidence=[failure_evidence],
+            ),
+        ),
+        patch(
+            "orchestrator.core.qa.demo_service.storage_config_from_settings",
+            return_value=SimpleNamespace(
+                endpoint="minio:9000",
+                access_key="key",
+                secret_key="secret",
+                bucket="qa-demos",
+                public_base_url="https://cdn.example/qa-demos",
+                secure=False,
+            ),
+        ),
+        patch("orchestrator.core.qa.demo_service.upload_recording", side_effect=uploaded_urls) as upload_mock,
+        patch("orchestrator.core.qa.demo_service._default_artifact_url_probe", return_value=200),
+    ):
+        result = execute_qa_demo_stage(
+            session=SimpleNamespace(),
+            settings=SimpleNamespace(
+                qa_demo_playwright_module_dir="",
+                qa_demo_max_attempts=1,
+                qa_demo_ios_recorder_command="python /tmp/ios_recorder.py",
+                qa_demo_android_recorder_command="python /tmp/android_recorder.py",
+            ),
+            tenant=tenant,
+            project=project,
+            run=run,
+            request=replace(_request(), project_demo_capture_targets=("browser", "ios", "android")),
+            plan=plan,
+            dev_result=DevResult(change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8"),
+            test_result=TestResult(guidance=["pytest -q"]),
+            review_result=ReviewResult(summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"),
+            preview_release=release,
+        )
+
+    assert result.outcome == "blocked"
+    assert [item.capture_target for item in result.failure_evidence] == ["browser", "ios", "android"]
+    assert [item.artifact_url for item in result.failure_evidence] == uploaded_urls
+    assert all("connection refused" in item.error_message for item in result.failure_evidence)
+    assert [call.kwargs["content_type"] for call in upload_mock.call_args_list] == [
+        "video/webm",
+        "text/plain",
+        "text/plain",
+    ]
+    runtime_mock.assert_not_called()
+
+
 def test_update_pull_request_with_demo_evidence_refreshes_pr_body() -> None:
     class _GitHubClient:
         body = "## Summary\n- change"

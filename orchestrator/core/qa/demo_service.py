@@ -2053,6 +2053,78 @@ def _capture_recording_terminal_failure_evidence(
     return evidence
 
 
+def _capture_release_readiness_diagnostic_failure_evidence(
+    *,
+    request: WorkflowRequest,
+    available_targets: dict[str, DemoCaptureTarget],
+    required_capture_targets: tuple[str, ...],
+    existing_evidence: list[LocalQaFailureEvidence],
+    failure_message: str,
+) -> list[LocalQaFailureEvidence]:
+    existing_targets = {str(item.capture_target or "").strip() for item in existing_evidence}
+    tenant_id = _require_safe_recording_scope_segment(
+        request.tenant_id,
+        field_name="tenant_id",
+        scope_name="release readiness failure diagnostic scope",
+    )
+    project_id = _require_safe_recording_scope_segment(
+        request.project_id,
+        field_name="project_id",
+        scope_name="release readiness failure diagnostic scope",
+    )
+    run_id = _require_safe_recording_scope_segment(
+        request.run_id,
+        field_name="run_id",
+        scope_name="release readiness failure diagnostic scope",
+    )
+    persisted_dir = Path.cwd() / "tmp" / "qa-demos" / tenant_id / project_id / run_id / "failures"
+    persisted_dir.mkdir(parents=True, exist_ok=True)
+
+    evidence: list[LocalQaFailureEvidence] = []
+    for raw_target in required_capture_targets:
+        capture_target_name = str(raw_target or "").strip()
+        if not capture_target_name or capture_target_name in existing_targets:
+            continue
+        safe_capture_target = _require_safe_recording_scope_segment(
+            capture_target_name,
+            field_name="capture_target",
+            scope_name="release readiness failure diagnostic scope",
+        )
+        capture_target = available_targets.get(capture_target_name)
+        capture_reference = (
+            str(capture_target.capture_reference or "").strip()
+            if capture_target is not None
+            else f"{capture_target_name}://unavailable"
+        )
+        content = "\n".join(
+            [
+                "QA demo release readiness failed before target recording could start.",
+                f"tenant_id: {tenant_id}",
+                f"project_id: {project_id}",
+                f"run_id: {run_id}",
+                f"capture_target: {capture_target_name}",
+                f"capture_reference: {capture_reference}",
+                "error:",
+                failure_message,
+            ]
+        ).strip() + "\n"
+        target = persisted_dir / f"{safe_capture_target}-release-readiness-failure.txt"
+        payload = content.encode("utf-8")
+        target.write_bytes(payload)
+        evidence.append(
+            LocalQaFailureEvidence(
+                name=f"{capture_target_name} release readiness failure",
+                path=str(target),
+                capture_target=capture_target_name,
+                capture_reference=capture_reference,
+                content_type="text/plain",
+                content_sha256=hashlib.sha256(payload).hexdigest(),
+                error_message=failure_message,
+            )
+        )
+    return evidence
+
+
 def _capture_release_readiness_failure_evidence(
     *,
     settings,  # noqa: ANN001
@@ -2060,42 +2132,55 @@ def _capture_release_readiness_failure_evidence(
     preview_release,  # noqa: ANN001
     release_service_urls: list[dict[str, str]],
     release_commit_sha: str,
+    required_capture_targets: tuple[str, ...],
     failure_message: str,
 ) -> list[LocalQaFailureEvidence]:
     available_targets = resolve_available_capture_targets(settings=settings, preview_release=preview_release)
     browser_target = available_targets.get("browser")
-    if browser_target is None or not _capture_target_runs_on_worker(capture_target=browser_target, request=request):
-        return []
-    scenario = QaScenario(
-        name="Release readiness failure",
-        objective="Record the preview release failing to load before QA demo execution.",
-        capture_target="browser",
-        start_path="/",
-        expected_outcomes=[failure_message],
-        steps=[
-            QaStep(
-                action="assert_visible",
-                selector="text=Master Builder QA release readiness passed",
-            )
-        ],
-    )
-    try:
-        record_demo_scenarios(
-            settings=settings,
-            request=request,
-            available_capture_targets={"browser": browser_target},
-            qa_result=QaResult(
-                summary=[failure_message],
-                scenarios=[scenario],
-            ),
-            release_service_urls=release_service_urls,
-            release_commit_sha=release_commit_sha,
+    evidence: list[LocalQaFailureEvidence] = []
+    if browser_target is not None and _capture_target_runs_on_worker(capture_target=browser_target, request=request):
+        scenario = QaScenario(
+            name="Release readiness failure",
+            objective="Record the preview release failing to load before QA demo execution.",
+            capture_target="browser",
+            start_path="/",
+            expected_outcomes=[failure_message],
+            steps=[
+                QaStep(
+                    action="assert_visible",
+                    selector="text=Master Builder QA release readiness passed",
+                )
+            ],
         )
-    except QaDemoRecordingFailure as exc:
-        return list(exc.failure_evidence)
-    except Exception:
-        return []
-    return []
+        try:
+            record_demo_scenarios(
+                settings=settings,
+                request=request,
+                available_capture_targets={"browser": browser_target},
+                qa_result=QaResult(
+                    summary=[failure_message],
+                    scenarios=[scenario],
+                ),
+                release_service_urls=release_service_urls,
+                release_commit_sha=release_commit_sha,
+            )
+        except QaDemoRecordingFailure as exc:
+            evidence.extend(exc.failure_evidence)
+        except Exception as exc:  # noqa: BLE001
+            failure_message = (
+                f"{failure_message} Browser release-readiness failure recording did not produce video evidence: "
+                f"{type(exc).__name__}: {exc}"
+            )
+    evidence.extend(
+        _capture_release_readiness_diagnostic_failure_evidence(
+            request=request,
+            available_targets=available_targets,
+            required_capture_targets=required_capture_targets,
+            existing_evidence=evidence,
+            failure_message=failure_message,
+        )
+    )
+    return evidence
 
 
 def _first_release_service_url(release_service_urls: list[dict[str, str]], *, service_kind: str) -> str:
@@ -2560,6 +2645,7 @@ def execute_qa_demo_stage(
             preview_release=preview_release,
             release_service_urls=recorder_release_service_urls,
             release_commit_sha=release_commit_sha,
+            required_capture_targets=required_targets,
             failure_message=message,
         )
         if not local_failure_evidence:
@@ -2571,20 +2657,25 @@ def execute_qa_demo_stage(
             )
         except RuntimeError:
             raise exc
-        uploaded_failure_evidence = _upload_failure_evidence(
-            storage=storage_config_from_settings(settings),
-            tenant=tenant,
-            project=project,
-            run=run,
-            local_evidence=local_failure_evidence,
-            release_commit_sha=release_commit_sha,
-            release_context_sha256=release_context_sha256,
-        )
-        for item in uploaded_failure_evidence:
-            ensure_artifact_url_reachable(
-                item.artifact_url,
-                timeout_seconds=qa_demo_artifact_url_timeout_seconds(settings),
+        try:
+            uploaded_failure_evidence = _upload_failure_evidence(
+                storage=storage_config_from_settings(settings),
+                tenant=tenant,
+                project=project,
+                run=run,
+                local_evidence=local_failure_evidence,
+                release_commit_sha=release_commit_sha,
+                release_context_sha256=release_context_sha256,
             )
+            for item in uploaded_failure_evidence:
+                ensure_artifact_url_reachable(
+                    item.artifact_url,
+                    timeout_seconds=qa_demo_artifact_url_timeout_seconds(settings),
+                )
+        except RuntimeError as upload_exc:
+            raise RuntimeError(
+                f"{message} QA demo release failure evidence could not be uploaded: {upload_exc}"
+            ) from upload_exc
         if uploaded_failure_evidence:
             return QaResult(
                 summary=[message],
