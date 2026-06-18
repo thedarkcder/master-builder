@@ -1835,6 +1835,64 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
             else:  # pragma: no cover
                 raise AssertionError("expected demo proof completion to require PR evidence artifact URL metadata")
 
+    def test_demo_proof_rejects_success_completion_when_pr_evidence_targets_another_pr(self) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-a")
+            workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
+            request = _demo_proof_request(tenant=tenant)
+            execute_workflow_advance(
+                session=session,
+                settings=SimpleNamespace(),
+                workflow_type=workflow_type,
+                request=request,
+                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+            )
+
+            for event in (
+                "ProofLeaseAcquired",
+                "ReleaseRequested",
+                "ReleaseProvisioning",
+                "ReleaseLive",
+                "RouteReady",
+                "ServiceVerificationPassed",
+                "RecordingStarted",
+                "RecordingCompleted",
+                "EvidenceUploadStarted",
+                "EvidenceUploaded",
+                "PREvidenceAttachStarted",
+                "PREvidenceAttached",
+                "PreviewCleanupRequested",
+            ):
+                event_request = _demo_proof_request_for_event(request, event)
+                if event == "PREvidenceAttached":
+                    payload = dict(event_request.payload)
+                    metadata = dict(payload["event_metadata"])
+                    metadata["pr_url"] = "https://github.com/acme/project-a/pull/9"
+                    payload["event_metadata"] = metadata
+                    event_request = replace(event_request, payload=payload)
+                execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=event_request,
+                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                )
+
+            try:
+                execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=_demo_proof_request_for_event(request, "PreviewCleanupCompleted"),
+                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                )
+            except RuntimeError as exc:
+                assert "PREvidenceAttached.pr_url must match workflow pr_url" in str(exc)
+                assert "pull/8" in str(exc)
+                assert "pull/9" in str(exc)
+            else:  # pragma: no cover
+                raise AssertionError("expected demo proof completion to reject PR evidence for another PR")
+
     def test_demo_proof_rejects_success_completion_when_required_recording_count_is_missing(self) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
@@ -2106,6 +2164,64 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 assert "FailureEvidenceUploaded.capture_targets" in str(exc)
             else:  # pragma: no cover
                 raise AssertionError("expected demo proof failure completion to require capture target metadata")
+
+    def test_demo_proof_rejects_failure_completion_when_pr_failure_evidence_targets_another_pr(self) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-a")
+            workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
+            request = _demo_proof_request(tenant=tenant)
+            execute_workflow_advance(
+                session=session,
+                settings=SimpleNamespace(),
+                workflow_type=workflow_type,
+                request=request,
+                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+            )
+
+            for event in (
+                "ProofLeaseAcquired",
+                "ReleaseRequested",
+                "ReleaseProvisioning",
+                "ReleaseLive",
+                "RouteReady",
+                "ServiceVerificationPassed",
+                "RecordingStarted",
+                "RecordingFailureEvidenceCaptured",
+                "FailureEvidenceUploadStarted",
+                "FailureEvidenceUploaded",
+                "PRFailureEvidenceAttachStarted",
+                "PRFailureEvidenceAttached",
+                "FailurePreviewCleanupRequested",
+            ):
+                event_request = _demo_proof_request_for_event(request, event)
+                if event == "PRFailureEvidenceAttached":
+                    payload = dict(event_request.payload)
+                    metadata = dict(payload["event_metadata"])
+                    metadata["pr_url"] = "https://github.com/acme/project-a/pull/9"
+                    payload["event_metadata"] = metadata
+                    event_request = replace(event_request, payload=payload)
+                execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=event_request,
+                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                )
+
+            try:
+                execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=_demo_proof_request_for_event(request, "FailurePreviewCleanupCompleted"),
+                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                )
+            except RuntimeError as exc:
+                assert "PRFailureEvidenceAttached.pr_url must match workflow pr_url" in str(exc)
+                assert "pull/8" in str(exc)
+                assert "pull/9" in str(exc)
+            else:  # pragma: no cover
+                raise AssertionError("expected demo proof failure completion to reject PR evidence for another PR")
 
     def test_demo_proof_rejects_failure_completion_without_diagnostic_evidence_metadata(self) -> None:
         with self.session_factory() as session:
