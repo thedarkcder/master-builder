@@ -2666,14 +2666,7 @@ class DemoProofWorkflowAdvanceHandler:
                 evidence_field="recordings",
                 proof_scope_id=proof_scope_id,
             )
-            _require_evidence_uploaded_capture_targets_metadata(
-                description=description,
-                proof_scope_id=proof_scope_id,
-            )
-            _require_evidence_uploaded_lineage_matches_recording(
-                description=description,
-                proof_scope_id=proof_scope_id,
-            )
+            _require_evidence_uploaded_metadata(description=description, proof_scope_id=proof_scope_id)
         if event == "FailureEvidenceUploaded":
             metadata = _metadata_by_event(description)
             required_targets = set(_normalized_capture_targets(list(description.get("required_capture_targets") or [])))
@@ -2695,6 +2688,22 @@ class DemoProofWorkflowAdvanceHandler:
             )
             _require_failure_evidence_uploaded_lineage_matches_captured(
                 description=description,
+                proof_scope_id=proof_scope_id,
+            )
+        if event == "PREvidenceAttached":
+            metadata = _metadata_by_event(description)
+            evidence_metadata = metadata.get("EvidenceUploaded", {})
+            pr_metadata = metadata.get("PREvidenceAttached", {})
+            _require_pr_evidence_matches_uploaded_artifacts(
+                uploaded_metadata=evidence_metadata,
+                pr_metadata=pr_metadata,
+                pr_event="PREvidenceAttached",
+                proof_scope_id=proof_scope_id,
+            )
+            _require_pr_artifact_url_checks(
+                uploaded_metadata=evidence_metadata,
+                pr_metadata=pr_metadata,
+                pr_event="PREvidenceAttached",
                 proof_scope_id=proof_scope_id,
             )
         _require_terminal_proof_metadata(event=event, description=description, proof_scope_id=proof_scope_id)
