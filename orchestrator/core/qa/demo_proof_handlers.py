@@ -1852,6 +1852,23 @@ def _require_failure_evidence_target_metadata(
     return evidence_by_target
 
 
+def _require_failure_evidence_uploaded_capture_targets_metadata(
+    *,
+    description: dict[str, object],
+    proof_scope_id: str,
+) -> None:
+    metadata = _metadata_by_event(description)
+    required_targets = set(_normalized_capture_targets(list(description.get("required_capture_targets") or [])))
+    failure_metadata = metadata.get("FailureEvidenceUploaded", {})
+    failure_targets = _metadata_string_set(failure_metadata.get("capture_targets"))
+    missing_targets = sorted(required_targets - failure_targets)
+    if missing_targets:
+        raise RuntimeError(
+            f"Demo proof scope {proof_scope_id} failure evidence metadata is missing required capture target(s): "
+            + ", ".join(missing_targets)
+        )
+
+
 def _failure_evidence_source_metadata(
     *,
     metadata: dict[str, dict[str, object]],
@@ -2665,6 +2682,10 @@ class DemoProofWorkflowAdvanceHandler:
                 event_metadata=metadata.get("FailureEvidenceUploaded", {}),
                 metadata_label="failure evidence metadata",
                 evidence_field="failure_evidence",
+                proof_scope_id=proof_scope_id,
+            )
+            _require_failure_evidence_uploaded_capture_targets_metadata(
+                description=description,
                 proof_scope_id=proof_scope_id,
             )
             _require_failure_evidence_problem_details(
