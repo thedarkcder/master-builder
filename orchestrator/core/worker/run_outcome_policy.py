@@ -8,9 +8,11 @@ from types import SimpleNamespace
 from orchestrator.core.deployment_previews import create_run_preview_deployment, destroy_project_deployment_preview_release
 from orchestrator.core.qa.demo_proof_start import advance_demo_proof_workflow_event, start_demo_proof_workflow
 from orchestrator.core.qa.demo_service import (
+    ensure_artifact_url_reachable,
     execute_qa_demo_stage,
     mark_pull_request_ready_after_demo_proof,
     next_required_qa_demo_worker_capability,
+    qa_demo_artifact_url_timeout_seconds,
     qa_demo_recording_enabled,
     recorded_capture_targets,
     remaining_capture_targets,
@@ -720,6 +722,11 @@ class RunOutcomePolicy:
                         proof_context=proof_context,
                         events=_QA_DEMO_FAILURE_PROOF_EVENTS_BEFORE_PR,
                     )
+                    proof_context.pr_failure_evidence_artifact_urls = _qa_failure_evidence_artifact_urls(qa_result)
+                    proof_context.pr_failure_evidence_checked_artifact_urls = _check_qa_demo_artifact_urls_reachable(
+                        settings=self._settings,
+                        artifact_urls=proof_context.pr_failure_evidence_artifact_urls,
+                    )
                     updated_pr_body = update_pull_request_with_demo_failure_evidence(
                         session=self._session,
                         settings=self._settings,
@@ -730,7 +737,6 @@ class RunOutcomePolicy:
                         qa_result=qa_result,
                         required_capture_targets=required_capture_targets(plan),
                     )
-                    proof_context.pr_failure_evidence_artifact_urls = _qa_failure_evidence_artifact_urls(qa_result)
                     proof_context.pr_failure_evidence_body_sha256 = _sha256_text(updated_pr_body)
                     self._advance_qa_demo_proof_events(
                         proof_context=proof_context,
@@ -882,6 +888,11 @@ class RunOutcomePolicy:
                 message=message,
             )
         try:
+            proof_context.pr_evidence_artifact_urls = _qa_recording_artifact_urls(qa_result)
+            proof_context.pr_evidence_checked_artifact_urls = _check_qa_demo_artifact_urls_reachable(
+                settings=self._settings,
+                artifact_urls=proof_context.pr_evidence_artifact_urls,
+            )
             updated_pr_body = update_pull_request_with_demo_evidence(
                 session=self._session,
                 settings=self._settings,
@@ -893,7 +904,6 @@ class RunOutcomePolicy:
                 required_capture_targets=required_capture_targets(plan),
                 required_recording_counts=required_recording_counts_by_target(plan),
             )
-            proof_context.pr_evidence_artifact_urls = _qa_recording_artifact_urls(qa_result)
             proof_context.pr_evidence_body_sha256 = _sha256_text(updated_pr_body)
         except Exception as exc:  # noqa: BLE001
             message = f"QA demo evidence PR update failed: {type(exc).__name__}: {exc}"
@@ -1493,6 +1503,18 @@ def _qa_failure_evidence_artifact_urls(result: QaResult) -> list[str]:
     ]
 
 
+def _check_qa_demo_artifact_urls_reachable(*, settings, artifact_urls: list[str]) -> list[str]:  # noqa: ANN001
+    checked_urls: list[str] = []
+    timeout_seconds = qa_demo_artifact_url_timeout_seconds(settings)
+    for artifact_url in artifact_urls:
+        normalized = str(artifact_url or "").strip()
+        if not normalized:
+            continue
+        ensure_artifact_url_reachable(normalized, timeout_seconds=timeout_seconds)
+        checked_urls.append(normalized)
+    return checked_urls
+
+
 def _missing_qa_demo_failure_proof_targets(*, plan, qa_result: QaResult) -> tuple[str, ...]:  # noqa: ANN001
     evidence_targets = {
         str(getattr(item, "capture_target", "") or "").strip()
@@ -1746,29 +1768,41 @@ def _qa_demo_proof_event_metadata(*, proof_context, event: str) -> dict[str, obj
         metadata["pr_url"] = str(getattr(proof_context, "pr_url", "") or "").strip()
         if event == "PREvidenceAttached":
             artifact_urls = list(getattr(proof_context, "pr_evidence_artifact_urls", ()) or ())
+            checked_artifact_urls = list(getattr(proof_context, "pr_evidence_checked_artifact_urls", ()) or ())
             metadata["artifact_urls"] = artifact_urls
-            metadata["artifact_url_check_status"] = "passed"
-            metadata["checked_artifact_urls"] = artifact_urls
+            if checked_artifact_urls:
+                metadata["artifact_url_check_status"] = "passed"
+                metadata["checked_artifact_urls"] = checked_artifact_urls
             metadata["pr_body_sha256"] = str(getattr(proof_context, "pr_evidence_body_sha256", "") or "").strip()
         if event == "PREvidenceAttachFailed":
             artifact_urls = _qa_recording_artifact_urls(getattr(proof_context, "qa_result", None))
+            checked_artifact_urls = list(getattr(proof_context, "pr_evidence_checked_artifact_urls", ()) or ())
             metadata["artifact_urls"] = artifact_urls
-            metadata["artifact_url_check_status"] = "passed"
-            metadata["checked_artifact_urls"] = artifact_urls
+            if checked_artifact_urls:
+                metadata["artifact_url_check_status"] = "passed"
+                metadata["checked_artifact_urls"] = checked_artifact_urls
             metadata["error_message"] = str(getattr(proof_context, "pr_evidence_failure_message", "") or "").strip()
         if event == "PRFailureEvidenceAttached":
             artifact_urls = list(getattr(proof_context, "pr_failure_evidence_artifact_urls", ()) or ())
+            checked_artifact_urls = list(
+                getattr(proof_context, "pr_failure_evidence_checked_artifact_urls", ()) or ()
+            )
             metadata["artifact_urls"] = artifact_urls
-            metadata["artifact_url_check_status"] = "passed"
-            metadata["checked_artifact_urls"] = artifact_urls
+            if checked_artifact_urls:
+                metadata["artifact_url_check_status"] = "passed"
+                metadata["checked_artifact_urls"] = checked_artifact_urls
             metadata["pr_body_sha256"] = str(
                 getattr(proof_context, "pr_failure_evidence_body_sha256", "") or ""
             ).strip()
         if event == "PRFailureEvidenceAttachFailed":
             artifact_urls = list(getattr(proof_context, "pr_failure_evidence_artifact_urls", ()) or ())
+            checked_artifact_urls = list(
+                getattr(proof_context, "pr_failure_evidence_checked_artifact_urls", ()) or ()
+            )
             metadata["artifact_urls"] = artifact_urls
-            metadata["artifact_url_check_status"] = "passed"
-            metadata["checked_artifact_urls"] = artifact_urls
+            if checked_artifact_urls:
+                metadata["artifact_url_check_status"] = "passed"
+                metadata["checked_artifact_urls"] = checked_artifact_urls
             metadata["error_message"] = str(
                 getattr(proof_context, "pr_failure_evidence_failure_message", "") or ""
             ).strip()
