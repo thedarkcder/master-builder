@@ -1574,8 +1574,116 @@ def test_complete_persists_blocked_qa_checkpoint_when_pr_evidence_update_fails()
     assert "QA demo evidence PR update failed: RuntimeError: GitHub rejected PR update" in str(
         final_checkpoint.qa_result.blocker_message
     )
+    assert [
+        call.kwargs["event"] for call in deps.execution.advance_demo_proof_workflow_event_fn.call_args_list
+    ] == [
+        "ProofLeaseAcquired",
+        "ReleaseRequested",
+        "ReleaseProvisioning",
+        "ReleaseLive",
+        "RouteReady",
+        "ServiceVerificationPassed",
+        "RecordingStarted",
+        "RecordingCompleted",
+        "EvidenceUploadStarted",
+        "EvidenceUploaded",
+        "PREvidenceAttachStarted",
+        "PREvidenceAttachFailed",
+    ]
     assert finalizer_calls["workflow_result"].outcome == "blocked"
     assert "GitHub rejected PR update" in str(finalizer_calls["workflow_result"].blocker_message)
+
+
+def test_complete_records_qa_failure_evidence_pr_attach_failure_before_blocking_ready_review() -> None:
+    session = SimpleNamespace(refresh=lambda _run: None)
+    deps = _deps()
+    prepared = _prepared(_build_snapshot(), effective_policy={"qa_demo_recording_enabled": True})
+    workflow_result = _workflow_result()
+    failure_evidence = _qa_failure_evidence()
+    qa_result = QaResult(
+        summary=["QA demo recording failed after 1 attempts"],
+        scenarios=[],
+        recordings=[],
+        failure_evidence=[failure_evidence],
+        outcome="blocked",
+        blocker_message="QA demo recording failed after 1 attempts: app did not load",
+    )
+    preview_release = SimpleNamespace(
+        release_id="release-1",
+        release_kind="run_preview",
+        status="live",
+        service_urls=[],
+        commit_sha="b" * 40,
+    )
+    finalizer_calls: dict[str, object] = {}
+
+    class _Finalizer:
+        def __init__(self, **_kwargs):
+            pass
+
+        def finalize(self, **kwargs):
+            finalizer_calls.update(kwargs)
+            return SimpleNamespace(
+                run=prepared.run,
+                workflow_result=kwargs["workflow_result"],
+                persisted_status="blocked",
+                last_error=kwargs["workflow_result"].blocker_message,
+                persisted_plan=prepared.run.plan,
+                event_types=(),
+                tail_steps=(),
+            )
+
+    with (
+        patch(
+            "orchestrator.core.worker.run_outcome_policy.create_run_preview_deployment",
+            return_value=SimpleNamespace(created=False, reason="existing", release=preview_release),
+        ),
+        patch("orchestrator.core.worker.run_outcome_policy.execute_qa_demo_stage", return_value=qa_result),
+        patch(
+            "orchestrator.core.worker.run_outcome_policy.update_pull_request_with_demo_failure_evidence",
+            side_effect=RuntimeError("GitHub rejected failure evidence update"),
+        ) as update_failure_pr_mock,
+        patch("orchestrator.core.worker.run_outcome_policy.update_pull_request_with_demo_evidence") as update_pr_mock,
+        patch("orchestrator.core.worker.run_outcome_policy.destroy_project_deployment_preview_release") as destroy_mock,
+        patch("orchestrator.core.worker.run_outcome_policy.WorkflowFinalizer", _Finalizer),
+        patch("orchestrator.core.worker.run_outcome_policy.CompletionTailExecutor") as tail_executor_cls,
+    ):
+        tail_executor_cls.return_value.execute.return_value = None
+        RunOutcomePolicy(
+            session=session,
+            settings=SimpleNamespace(project_repo_checkout_base_dir="/tmp/workdirs"),
+            deps=deps,
+            cleanup_run_workspaces_safe_fn=MagicMock(),
+        ).complete(
+            prepared=prepared,
+            workflow_result=workflow_result,
+            execution_context={"execution_branch": "run/MAB-400/run-1"},
+        )
+
+    update_failure_pr_mock.assert_called_once()
+    update_pr_mock.assert_not_called()
+    destroy_mock.assert_called_once()
+    assert destroy_mock.call_args.kwargs["reason"] == "qa_demo_failed"
+    assert [
+        call.kwargs["event"] for call in deps.execution.advance_demo_proof_workflow_event_fn.call_args_list
+    ] == [
+        "ProofLeaseAcquired",
+        "ReleaseRequested",
+        "ReleaseProvisioning",
+        "ReleaseLive",
+        "RouteReady",
+        "ServiceVerificationPassed",
+        "RecordingStarted",
+        "RecordingFailureEvidenceCaptured",
+        "FailureEvidenceUploadStarted",
+        "FailureEvidenceUploaded",
+        "PRFailureEvidenceAttachStarted",
+        "PRFailureEvidenceAttachFailed",
+    ]
+    assert finalizer_calls["workflow_result"].outcome == "blocked"
+    assert "app did not load" in str(finalizer_calls["workflow_result"].blocker_message)
+    assert "GitHub rejected failure evidence update" in str(finalizer_calls["workflow_result"].blocker_message)
+    assert failure_evidence.error_message in str(finalizer_calls["workflow_result"].blocker_message)
 
 
 def test_complete_attaches_qa_failure_evidence_to_pr_before_blocking_ready_review() -> None:
