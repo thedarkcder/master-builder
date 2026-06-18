@@ -431,6 +431,7 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                         "run_id": "run-1",
                         "pr_url": "https://github.com/acme/project-a/pull/8",
                         "required_capture_targets": ["browser", "ios", "android"],
+                        "required_recording_counts": {"browser": 1, "ios": 1, "android": 1},
                     },
                 ),
                 resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
@@ -494,6 +495,7 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     run_id="run-1",
                     pr_url="https://github.com/acme/project-a/pull/8",
                     required_capture_targets=["browser", "ios", "android"],
+                    required_recording_counts={"browser": 1, "ios": 1, "android": 1},
                 )
 
             assert result.workflow_id == "demo_proof:run-1-main-abcdef1"
@@ -535,6 +537,7 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                         run_id="run-1",
                         pr_url=None,
                         required_capture_targets=["browser", "ios", "android"],
+                        required_recording_counts={"browser": 3, "ios": 3, "android": 3},
                     )
                 except ValueError as exc:
                     assert "pr_url" in str(exc)
@@ -573,6 +576,67 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
             runtime_mock.assert_not_called()
             assert session.execute(select(WorkflowExecution)).scalar_one_or_none() is None
 
+    def test_start_demo_proof_workflow_rejects_missing_required_recording_counts_before_creating_workflow(
+        self,
+    ) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-a")
+            project = session.get(Project, "project-a")
+
+            with patch("orchestrator.core.qa.demo_proof_start.build_workflow_runtime") as runtime_mock:
+                try:
+                    start_demo_proof_workflow(
+                        session=session,
+                        settings=SimpleNamespace(),
+                        tenant=tenant,
+                        project=project,
+                        proof_scope_id="run-1-main-abcdef1",
+                        commit_sha="abcdef1",
+                        trigger_mode="from_run",
+                        trigger_event="admin_workflow_start",
+                        run_id="run-1",
+                        pr_url="https://github.com/acme/project-a/pull/8",
+                        required_capture_targets=["browser", "ios", "android"],
+                    )
+                except ValueError as exc:
+                    assert "required_recording_counts must be provided by PM demo requirements" in str(exc)
+                else:  # pragma: no cover
+                    raise AssertionError("expected demo proof start to require explicit recording counts")
+
+            runtime_mock.assert_not_called()
+            assert session.execute(select(WorkflowExecution)).scalar_one_or_none() is None
+
+    def test_start_demo_proof_workflow_rejects_incomplete_required_recording_counts_before_creating_workflow(
+        self,
+    ) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-a")
+            project = session.get(Project, "project-a")
+
+            with patch("orchestrator.core.qa.demo_proof_start.build_workflow_runtime") as runtime_mock:
+                try:
+                    start_demo_proof_workflow(
+                        session=session,
+                        settings=SimpleNamespace(),
+                        tenant=tenant,
+                        project=project,
+                        proof_scope_id="run-1-main-abcdef1",
+                        commit_sha="abcdef1",
+                        trigger_mode="from_run",
+                        trigger_event="admin_workflow_start",
+                        run_id="run-1",
+                        pr_url="https://github.com/acme/project-a/pull/8",
+                        required_capture_targets=["browser", "ios", "android"],
+                        required_recording_counts={"browser": 3},
+                    )
+                except ValueError as exc:
+                    assert "required_recording_counts is missing required target(s): ios, android" in str(exc)
+                else:  # pragma: no cover
+                    raise AssertionError("expected demo proof start to require counts for every capture target")
+
+            runtime_mock.assert_not_called()
+            assert session.execute(select(WorkflowExecution)).scalar_one_or_none() is None
+
     def test_start_demo_proof_workflow_rejects_from_release_without_release_id_before_creating_workflow(
         self,
     ) -> None:
@@ -593,6 +657,7 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                         trigger_event="admin_workflow_start",
                         pr_url="https://github.com/acme/project-a/pull/8",
                         required_capture_targets=["browser", "ios", "android"],
+                        required_recording_counts={"browser": 3, "ios": 3, "android": 3},
                     )
                 except ValueError as exc:
                     assert "from_release requires release_id" in str(exc)
@@ -634,6 +699,7 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                         run_id="run-1",
                         pr_url="https://github.com/acme/project-a/pull/8",
                         required_capture_targets=["browser", "ios", "android"],
+                        required_recording_counts={"browser": 3, "ios": 3, "android": 3},
                     )
                 except RuntimeError as exc:
                     assert "retry_recording requires an existing demo proof workflow" in str(exc)
@@ -714,6 +780,7 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     run_id="run-1",
                     pr_url="https://github.com/acme/project-a/pull/8",
                     required_capture_targets=["browser", "ios", "android"],
+                    required_recording_counts={"browser": 1, "ios": 1, "android": 1},
                 )
 
             assert result.status == "waiting_for_input"
@@ -768,6 +835,7 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     run_id=None,
                     pr_url=None,
                     required_capture_targets=["browser", "ios", "android"],
+                    required_recording_counts={"browser": 3, "ios": 3, "android": 3},
                 )
                 cleanup_result = advance_demo_proof_workflow_event(
                     session=session,
@@ -781,6 +849,7 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     run_id=None,
                     pr_url=None,
                     required_capture_targets=["browser", "ios", "android"],
+                    required_recording_counts={"browser": 3, "ios": 3, "android": 3},
                     event_metadata=_demo_proof_event_metadata("CleanupOnlyCompleted"),
                 )
 
@@ -944,6 +1013,50 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
             else:  # pragma: no cover
                 raise AssertionError("expected demo proof handler to require explicit capture targets")
 
+    def test_demo_proof_handler_rejects_missing_required_recording_counts(self) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-a")
+            workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
+            request = _demo_proof_request(tenant=tenant)
+            payload = dict(request.payload)
+            payload.pop("required_recording_counts")
+
+            try:
+                execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=replace(request, payload=payload),
+                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                )
+            except RuntimeError as exc:
+                assert "required_recording_counts must be provided by PM demo requirements" in str(exc)
+            else:  # pragma: no cover
+                raise AssertionError("expected demo proof handler to require explicit recording counts")
+
+    def test_demo_proof_handler_rejects_incomplete_required_recording_counts(self) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-a")
+            workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
+            request = _demo_proof_request(tenant=tenant)
+            payload = {
+                **request.payload,
+                "required_recording_counts": {"browser": 3},
+            }
+
+            try:
+                execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=replace(request, payload=payload),
+                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                )
+            except RuntimeError as exc:
+                assert "required_recording_counts is missing required target(s): ios, android" in str(exc)
+            else:  # pragma: no cover
+                raise AssertionError("expected demo proof handler to require counts for every capture target")
+
     def test_demo_proof_handler_rejects_required_recording_count_changes_for_existing_scope(self) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
@@ -1044,6 +1157,7 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     run_id="run-1",
                     pr_url="https://github.com/acme/project-a/pull/8",
                     required_capture_targets=["browser", "ios", "android"],
+                    required_recording_counts={"browser": 3, "ios": 3, "android": 3},
                 )
                 result = advance_demo_proof_workflow_event(
                     session=session,
@@ -1057,6 +1171,7 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     run_id="run-1",
                     pr_url="https://github.com/acme/project-a/pull/8",
                     required_capture_targets=["browser", "ios", "android"],
+                    required_recording_counts={"browser": 3, "ios": 3, "android": 3},
                     event_metadata=_demo_proof_event_metadata("ProofLeaseAcquired"),
                 )
 
