@@ -1593,7 +1593,10 @@ def test_complete_attaches_qa_failure_evidence_to_pr_before_blocking_ready_revie
             return_value="updated-body",
         ) as update_failure_pr_mock,
         patch("orchestrator.core.worker.run_outcome_policy.update_pull_request_with_demo_evidence") as update_pr_mock,
-        patch("orchestrator.core.worker.run_outcome_policy.destroy_project_deployment_preview_release") as destroy_mock,
+        patch(
+            "orchestrator.core.worker.run_outcome_policy.destroy_project_deployment_preview_release",
+            side_effect=RuntimeError("provider deletion failed"),
+        ) as destroy_mock,
         patch("orchestrator.core.worker.run_outcome_policy.WorkflowFinalizer", _Finalizer),
         patch("orchestrator.core.worker.run_outcome_policy.CompletionTailExecutor") as tail_executor_cls,
     ):
@@ -1637,11 +1640,12 @@ def test_complete_attaches_qa_failure_evidence_to_pr_before_blocking_ready_revie
         "PRFailureEvidenceAttachStarted",
         "PRFailureEvidenceAttached",
         "FailurePreviewCleanupRequested",
-        "FailurePreviewCleanupCompleted",
+        "FailurePreviewCleanupFailed",
     ]
     deps.execution.mark_pull_request_ready_after_demo_proof_fn.assert_not_called()
     assert finalizer_calls["workflow_result"].outcome == "blocked"
     assert "app did not load" in str(finalizer_calls["workflow_result"].blocker_message)
+    assert "provider deletion failed" in str(finalizer_calls["workflow_result"].blocker_message)
 
 
 def test_complete_blocks_when_qa_continue_result_is_missing_required_capture_target_proof() -> None:
