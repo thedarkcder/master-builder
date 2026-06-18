@@ -8,6 +8,7 @@ from orchestrator.core.deployment_previews import create_run_preview_deployment,
 from orchestrator.core.qa.demo_proof_start import advance_demo_proof_workflow_event, start_demo_proof_workflow
 from orchestrator.core.qa.demo_service import (
     execute_qa_demo_stage,
+    mark_pull_request_ready_after_demo_proof,
     next_required_qa_demo_worker_capability,
     qa_demo_recording_enabled,
     remaining_capture_targets,
@@ -31,6 +32,12 @@ _QA_DEMO_SUCCESS_PROOF_EVENTS_BEFORE_PR = (
     "ServiceVerificationPassed",
     "RecordingCompleted",
     "EvidenceUploaded",
+)
+_QA_DEMO_FAILURE_PROOF_EVENTS_BEFORE_PR = (
+    "ProofLeaseAcquired",
+    "ServiceVerificationPassed",
+    "RecordingFailureEvidenceCaptured",
+    "FailureEvidenceUploaded",
 )
 
 
@@ -489,8 +496,23 @@ class RunOutcomePolicy:
                 ],
             )
         if qa_result.outcome != "continue":
+            proof_context = None
             if qa_result.failure_evidence:
                 try:
+                    proof_context = _qa_demo_proof_context(
+                        prepared=prepared,
+                        qa_result=qa_result,
+                        plan=plan,
+                        workflow_result=workflow_result,
+                    )
+                    self._start_qa_demo_proof_workflow(
+                        proof_context=proof_context,
+                        trigger_event="run_failed_with_demo_failure_evidence",
+                    )
+                    self._advance_qa_demo_proof_events(
+                        proof_context=proof_context,
+                        events=_QA_DEMO_FAILURE_PROOF_EVENTS_BEFORE_PR,
+                    )
                     update_pull_request_with_demo_failure_evidence(
                         session=self._session,
                         settings=self._settings,
@@ -499,6 +521,10 @@ class RunOutcomePolicy:
                         run=prepared.run,
                         workflow_result=workflow_result,
                         qa_result=qa_result,
+                    )
+                    self._advance_qa_demo_proof_events(
+                        proof_context=proof_context,
+                        events=("PRFailureEvidenceAttached",),
                     )
                 except Exception as exc:  # noqa: BLE001
                     message = f"QA demo failure evidence PR update failed: {type(exc).__name__}: {exc}"
@@ -530,6 +556,28 @@ class RunOutcomePolicy:
                     ),
                     summary=[*list(qa_result.summary or []), cleanup_error],
                 )
+            elif proof_context is not None:
+                try:
+                    self._advance_qa_demo_proof_events(
+                        proof_context=proof_context,
+                        events=("FailurePreviewCleanupCompleted",),
+                    )
+                except Exception as exc:  # noqa: BLE001
+                    message = f"QA demo failure proof cleanup event failed: {type(exc).__name__}: {exc}"
+                    qa_result = replace(
+                        qa_result,
+                        blocker_message=(
+                            (qa_result.blocker_message or qa_result.feedback or _summarize_qa_result(qa_result))
+                            + f" {message}"
+                        ),
+                        summary=[*list(qa_result.summary or []), message],
+                    )
+                    self._persist_qa_stage_checkpoint(
+                        prepared=prepared,
+                        qa_result=qa_result,
+                        attempt=attempt,
+                        execution_context=execution_context,
+                    )
             return _workflow_result_with_qa_blocker(
                 workflow_result=workflow_result,
                 attempt=attempt,
@@ -670,8 +718,12 @@ class RunOutcomePolicy:
                 proof_context=proof_context,
                 events=("PreviewCleanupCompleted",),
             )
+            self._mark_pull_request_ready_after_demo_proof(
+                prepared=prepared,
+                workflow_result=workflow_result,
+            )
         except Exception as exc:  # noqa: BLE001
-            message = f"QA demo proof workflow cleanup event failed: {type(exc).__name__}: {exc}"
+            message = f"QA demo proof completion failed: {type(exc).__name__}: {exc}"
             blocked_qa_result = replace(
                 qa_result,
                 outcome="blocked",
@@ -700,9 +752,28 @@ class RunOutcomePolicy:
                     summary=_summarize_qa_result(qa_result),
                 ),
             ],
+            )
+
+    def _mark_pull_request_ready_after_demo_proof(self, *, prepared, workflow_result) -> None:  # noqa: ANN001
+        ready_fn = getattr(
+            self._deps.execution,
+            "mark_pull_request_ready_after_demo_proof_fn",
+            mark_pull_request_ready_after_demo_proof,
+        )
+        ready_fn(
+            session=self._session,
+            settings=self._settings,
+            tenant=prepared.tenant,
+            project=prepared.project,
+            workflow_result=workflow_result,
         )
 
-    def _start_qa_demo_proof_workflow(self, *, proof_context) -> None:  # noqa: ANN001
+    def _start_qa_demo_proof_workflow(
+        self,
+        *,
+        proof_context,  # noqa: ANN001
+        trigger_event: str = "run_success_before_ready_for_review",
+    ) -> None:
         start_fn = getattr(self._deps.execution, "start_demo_proof_workflow_fn", start_demo_proof_workflow)
         start_fn(
             session=self._session,
@@ -711,7 +782,7 @@ class RunOutcomePolicy:
             project=proof_context.project,
             proof_scope_id=proof_context.proof_scope_id,
             commit_sha=proof_context.commit_sha,
-            trigger_event="run_success_before_ready_for_review",
+            trigger_event=trigger_event,
             run_id=proof_context.run_id,
             pr_url=proof_context.pr_url,
             required_capture_targets=list(proof_context.required_capture_targets),

@@ -194,6 +194,7 @@ def _deps() -> SimpleNamespace:
                     status="waiting_for_input",
                 )
             ),
+            mark_pull_request_ready_after_demo_proof_fn=MagicMock(),
         ),
     )
 
@@ -299,6 +300,12 @@ def test_complete_runs_qa_demo_stage_before_finalization() -> None:
         "PREvidenceAttached",
         "PreviewCleanupCompleted",
     ]
+    deps.execution.mark_pull_request_ready_after_demo_proof_fn.assert_called_once()
+    ready_kwargs = deps.execution.mark_pull_request_ready_after_demo_proof_fn.call_args.kwargs
+    assert ready_kwargs["session"] is session
+    assert ready_kwargs["tenant"] is prepared.tenant
+    assert ready_kwargs["project"] is prepared.project
+    assert ready_kwargs["workflow_result"] is workflow_result
     checkpoint = deps.execution.persist_stage_checkpoint_fn.call_args.kwargs["checkpoint"]
     assert checkpoint.stage == "qa"
     assert checkpoint.status == "completed"
@@ -1597,6 +1604,21 @@ def test_complete_attaches_qa_failure_evidence_to_pr_before_blocking_ready_revie
     update_pr_mock.assert_not_called()
     destroy_mock.assert_called_once()
     assert destroy_mock.call_args.kwargs["reason"] == "qa_demo_failed"
+    deps.execution.start_demo_proof_workflow_fn.assert_called_once()
+    assert deps.execution.start_demo_proof_workflow_fn.call_args.kwargs["trigger_event"] == (
+        "run_failed_with_demo_failure_evidence"
+    )
+    assert [
+        call.kwargs["event"] for call in deps.execution.advance_demo_proof_workflow_event_fn.call_args_list
+    ] == [
+        "ProofLeaseAcquired",
+        "ServiceVerificationPassed",
+        "RecordingFailureEvidenceCaptured",
+        "FailureEvidenceUploaded",
+        "PRFailureEvidenceAttached",
+        "FailurePreviewCleanupCompleted",
+    ]
+    deps.execution.mark_pull_request_ready_after_demo_proof_fn.assert_not_called()
     assert finalizer_calls["workflow_result"].outcome == "blocked"
     assert "app did not load" in str(finalizer_calls["workflow_result"].blocker_message)
 

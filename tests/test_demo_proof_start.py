@@ -391,3 +391,47 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 "pr_evidence_update": "completed",
                 "preview_cleanup": "completed",
             }
+
+    def test_demo_proof_failure_evidence_events_complete_operations_in_order(self) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-a")
+            workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
+            request = _demo_proof_request(tenant=tenant)
+            execute_workflow_advance(
+                session=session,
+                settings=SimpleNamespace(),
+                workflow_type=workflow_type,
+                request=request,
+                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+            )
+
+            for event in (
+                "ProofLeaseAcquired",
+                "ServiceVerificationPassed",
+                "RecordingFailureEvidenceCaptured",
+                "FailureEvidenceUploaded",
+                "PRFailureEvidenceAttached",
+                "FailurePreviewCleanupCompleted",
+            ):
+                execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=replace(request, trigger=WorkflowTrigger(event=event)),
+                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                )
+
+            workflow = session.execute(select(WorkflowExecution)).scalar_one()
+            assert workflow.status == "completed"
+            operations = session.execute(
+                select(WorkflowOperation).where(WorkflowOperation.workflow_id == workflow.workflow_id)
+            ).scalars().all()
+            status_by_type = {operation.operation_type: operation.status for operation in operations}
+            assert status_by_type == {
+                "preview_lease": "completed",
+                "release": "completed",
+                "recording": "completed",
+                "evidence_upload": "completed",
+                "pr_evidence_update": "completed",
+                "preview_cleanup": "completed",
+            }
