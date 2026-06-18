@@ -99,6 +99,33 @@ def _normalize_required_capture_targets(value: object) -> tuple[str, ...]:
     return targets
 
 
+def _normalize_required_recording_counts(
+    *,
+    value: object,
+    required_capture_targets: tuple[str, ...],
+) -> dict[str, int]:
+    required_targets = set(required_capture_targets)
+    if value is None:
+        return {target: 1 for target in required_capture_targets}
+    if not isinstance(value, dict):
+        raise ValueError("Demo proof required_recording_counts must be a JSON object")
+    counts: dict[str, int] = {target: 1 for target in required_capture_targets}
+    for raw_target, raw_count in value.items():
+        target = str(raw_target or "").strip()
+        if target not in required_targets:
+            raise ValueError(f"Demo proof required_recording_counts contains unsupported target: {target}")
+        if isinstance(raw_count, bool):
+            raise ValueError(f"Demo proof required_recording_counts.{target} must be a positive integer")
+        try:
+            count = int(raw_count)
+        except (TypeError, ValueError) as exc:
+            raise ValueError(f"Demo proof required_recording_counts.{target} must be a positive integer") from exc
+        if count < 1:
+            raise ValueError(f"Demo proof required_recording_counts.{target} must be a positive integer")
+        counts[target] = count
+    return counts
+
+
 def _normalize_event_metadata(value: object) -> dict[str, object] | None:
     if value is None:
         return None
@@ -140,6 +167,7 @@ def start_demo_proof_workflow(
     run_id: str | None = None,
     pr_url: str | None = None,
     required_capture_targets: list[object] | None = None,
+    required_recording_counts: dict[str, object] | None = None,
 ) -> DemoProofWorkflowStartResult:
     result = _advance_demo_proof_workflow(
         session=session,
@@ -153,6 +181,7 @@ def start_demo_proof_workflow(
         run_id=run_id,
         pr_url=pr_url,
         required_capture_targets=required_capture_targets,
+        required_recording_counts=required_recording_counts,
         event=None,
     )
     return DemoProofWorkflowStartResult(
@@ -177,6 +206,7 @@ def advance_demo_proof_workflow_event(
     run_id: str | None = None,
     pr_url: str | None = None,
     required_capture_targets: list[object] | None = None,
+    required_recording_counts: dict[str, object] | None = None,
     event_metadata: dict[str, object] | None = None,
 ) -> DemoProofWorkflowEventResult:
     normalized_event = str(event or "").strip()
@@ -195,6 +225,7 @@ def advance_demo_proof_workflow_event(
         run_id=run_id,
         pr_url=pr_url,
         required_capture_targets=required_capture_targets,
+        required_recording_counts=required_recording_counts,
         event=normalized_event,
         event_metadata=normalized_event_metadata,
     )
@@ -220,6 +251,7 @@ def _advance_demo_proof_workflow(
     run_id: str | None,
     pr_url: str | None,
     required_capture_targets: list[object] | None,
+    required_recording_counts: dict[str, object] | None,
     event: str | None,
     event_metadata: dict[str, object] | None = None,
 ) -> DemoProofWorkflowEventResult:
@@ -236,6 +268,10 @@ def _advance_demo_proof_workflow(
     normalized_commit_sha = _normalize_commit_sha(commit_sha)
     normalized_trigger_mode = _normalize_trigger_mode(trigger_mode)
     normalized_targets = _normalize_required_capture_targets(required_capture_targets)
+    normalized_required_recording_counts = _normalize_required_recording_counts(
+        value=required_recording_counts,
+        required_capture_targets=normalized_targets,
+    )
     normalized_run_id = str(run_id or "").strip() or None
     normalized_pr_url = _normalize_pr_url(pr_url)
     normalized_request_reason = str(request_reason or "").strip() or "demo_proof_start"
@@ -269,6 +305,7 @@ def _advance_demo_proof_workflow(
         "run_id": normalized_run_id,
         "pr_url": normalized_pr_url,
         "required_capture_targets": list(normalized_targets),
+        "required_recording_counts": normalized_required_recording_counts,
     }
     if normalized_event_metadata is not None:
         payload["event_metadata"] = normalized_event_metadata

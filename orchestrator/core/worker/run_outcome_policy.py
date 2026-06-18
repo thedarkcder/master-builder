@@ -914,6 +914,7 @@ class RunOutcomePolicy:
             run_id=proof_context.run_id,
             pr_url=proof_context.pr_url,
             required_capture_targets=list(proof_context.required_capture_targets),
+            required_recording_counts=dict(proof_context.required_recording_counts),
         )
 
     def _advance_qa_demo_proof_events(self, *, proof_context, events: tuple[str, ...]) -> None:  # noqa: ANN001
@@ -936,6 +937,7 @@ class RunOutcomePolicy:
                 run_id=proof_context.run_id,
                 pr_url=proof_context.pr_url,
                 required_capture_targets=list(proof_context.required_capture_targets),
+                required_recording_counts=dict(proof_context.required_recording_counts),
                 event_metadata=event_metadata,
             )
 
@@ -1287,6 +1289,7 @@ def _qa_demo_proof_context(*, prepared, qa_result: QaResult, preview_release, pl
         trigger_mode="from_run",
         proof_scope_id=f"run:{run_id}:{commit_sha}",
         required_capture_targets=tuple(required_capture_targets(plan)),
+        required_recording_counts=required_recording_counts_by_target(plan),
         preview_release=preview_release,
         qa_result=qa_result,
     )
@@ -1308,6 +1311,7 @@ def _qa_demo_pre_release_proof_context(*, prepared, plan, workflow_result):  # n
         trigger_mode="from_run",
         proof_scope_id=f"run:{run_id}:pending-release-commit",
         required_capture_targets=tuple(required_capture_targets(plan)),
+        required_recording_counts=required_recording_counts_by_target(plan),
         preview_release=None,
         qa_result=None,
     )
@@ -1332,6 +1336,7 @@ def _qa_demo_release_proof_context(*, prepared, preview_release, plan, workflow_
         trigger_mode="from_run",
         proof_scope_id=f"run:{run_id}:{commit_sha}",
         required_capture_targets=tuple(required_capture_targets(plan)),
+        required_recording_counts=required_recording_counts_by_target(plan),
         preview_release=preview_release,
         qa_result=None,
     )

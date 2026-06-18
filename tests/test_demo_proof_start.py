@@ -85,6 +85,7 @@ def _demo_proof_request(*, tenant) -> WorkflowAdvanceRequest:  # noqa: ANN001
             "run_id": "run-1",
             "pr_url": "https://github.com/acme/project-a/pull/8",
             "required_capture_targets": ["browser", "ios", "android"],
+            "required_recording_counts": {"browser": 1, "ios": 1, "android": 1},
         },
     )
 
@@ -1368,6 +1369,62 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 assert "browser.webm" in str(exc)
             else:  # pragma: no cover
                 raise AssertionError("expected demo proof completion to require PR evidence artifact URL metadata")
+
+    def test_demo_proof_rejects_success_completion_when_required_recording_count_is_missing(self) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-a")
+            workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
+            request = _demo_proof_request(tenant=tenant)
+            request = replace(
+                request,
+                payload={
+                    **request.payload,
+                    "required_recording_counts": {"browser": 2, "ios": 1, "android": 1},
+                },
+            )
+            execute_workflow_advance(
+                session=session,
+                settings=SimpleNamespace(),
+                workflow_type=workflow_type,
+                request=request,
+                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+            )
+
+            for event in (
+                "ProofLeaseAcquired",
+                "ReleaseRequested",
+                "ReleaseProvisioning",
+                "ReleaseLive",
+                "RouteReady",
+                "ServiceVerificationPassed",
+                "RecordingStarted",
+                "RecordingCompleted",
+                "EvidenceUploadStarted",
+                "EvidenceUploaded",
+                "PREvidenceAttachStarted",
+                "PREvidenceAttached",
+                "PreviewCleanupRequested",
+            ):
+                execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=_demo_proof_request_for_event(request, event),
+                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                )
+
+            try:
+                execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=_demo_proof_request_for_event(request, "PreviewCleanupCompleted"),
+                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                )
+            except RuntimeError as exc:
+                assert "requires 2 recording artifact(s) for capture target browser, got 1" in str(exc)
+            else:  # pragma: no cover
+                raise AssertionError("expected demo proof completion to enforce required recording counts")
 
     def test_demo_proof_rejects_failure_completion_without_failure_capture_target_metadata(self) -> None:
         with self.session_factory() as session:

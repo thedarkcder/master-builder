@@ -309,6 +309,7 @@ def test_complete_runs_qa_demo_stage_before_finalization() -> None:
         "run:run-1:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
     )
     assert deps.execution.start_demo_proof_workflow_fn.call_args.kwargs["commit_sha"] == "b" * 40
+    assert deps.execution.start_demo_proof_workflow_fn.call_args.kwargs["required_recording_counts"] == {"browser": 3}
     event_calls = deps.execution.advance_demo_proof_workflow_event_fn.call_args_list
     assert [call.kwargs["event"] for call in event_calls] == [
         "ProofLeaseAcquired",
@@ -326,6 +327,7 @@ def test_complete_runs_qa_demo_stage_before_finalization() -> None:
         "PreviewCleanupRequested",
         "PreviewCleanupCompleted",
     ]
+    assert all(call.kwargs["required_recording_counts"] == {"browser": 3} for call in event_calls)
     metadata_by_event = {
         call.kwargs["event"]: call.kwargs.get("event_metadata")
         for call in event_calls
