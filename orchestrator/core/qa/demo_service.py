@@ -1791,6 +1791,7 @@ def _upload_failure_evidence(
     tenant,  # noqa: ANN001
     project,  # noqa: ANN001
     run,  # noqa: ANN001
+    proof_scope_id: str | None = None,
     local_evidence: list[LocalQaFailureEvidence],
     release_commit_sha: str,
     release_context_sha256: str,
@@ -1802,6 +1803,7 @@ def _upload_failure_evidence(
             tenant=tenant,
             project=project,
             run=run,
+            proof_scope_id=proof_scope_id,
             index=index,
             suffix=suffix,
         )
@@ -2032,12 +2034,9 @@ def _copy_recordings(recordings: list[LocalQaRecording], *, request: WorkflowReq
         field_name="project_id",
         scope_name="recording copy scope",
     )
-    run_id = _require_safe_recording_scope_segment(
-        request.run_id,
-        field_name="run_id",
-        scope_name="recording copy scope",
-    )
-    persisted_dir = Path.cwd() / "tmp" / "qa-demos" / tenant_id / project_id / run_id
+    persisted_dir = Path.cwd() / "tmp" / "qa-demos" / tenant_id / project_id
+    for segment in _artifact_scope_dir(request=request, scope_name="recording copy scope"):
+        persisted_dir /= segment
     persisted_dir.mkdir(parents=True, exist_ok=True)
     copied: list[LocalQaRecording] = []
     for index, recording in enumerate(recordings, start=1):
@@ -2072,12 +2071,10 @@ def _copy_failure_evidence(
         field_name="project_id",
         scope_name="failure evidence copy scope",
     )
-    run_id = _require_safe_recording_scope_segment(
-        request.run_id,
-        field_name="run_id",
-        scope_name="failure evidence copy scope",
-    )
-    persisted_dir = Path.cwd() / "tmp" / "qa-demos" / tenant_id / project_id / run_id / "failures"
+    persisted_dir = Path.cwd() / "tmp" / "qa-demos" / tenant_id / project_id
+    for segment in _artifact_scope_dir(request=request, scope_name="failure evidence copy scope"):
+        persisted_dir /= segment
+    persisted_dir /= "failures"
     persisted_dir.mkdir(parents=True, exist_ok=True)
     copied: list[LocalQaFailureEvidence] = []
     for index, item in enumerate(evidence, start=1):
@@ -2114,12 +2111,11 @@ def _capture_recording_terminal_failure_evidence(
         field_name="project_id",
         scope_name="failure evidence diagnostic scope",
     )
-    run_id = _require_safe_recording_scope_segment(
-        request.run_id,
-        field_name="run_id",
-        scope_name="failure evidence diagnostic scope",
-    )
-    persisted_dir = Path.cwd() / "tmp" / "qa-demos" / tenant_id / project_id / run_id / "failures"
+    artifact_scope = _artifact_scope_dir(request=request, scope_name="failure evidence diagnostic scope")
+    persisted_dir = Path.cwd() / "tmp" / "qa-demos" / tenant_id / project_id
+    for segment in artifact_scope:
+        persisted_dir /= segment
+    persisted_dir /= "failures"
     persisted_dir.mkdir(parents=True, exist_ok=True)
 
     evidence: list[LocalQaFailureEvidence] = []
@@ -2130,7 +2126,7 @@ def _capture_recording_terminal_failure_evidence(
                 "QA demo recording failed before video evidence was produced.",
                 f"tenant_id: {tenant_id}",
                 f"project_id: {project_id}",
-                f"run_id: {run_id}",
+                f"artifact_scope: {'/'.join(artifact_scope)}",
                 f"capture_target: {capture_target.capture_target}",
                 f"capture_reference: {capture_target.capture_reference}",
                 "error:",
@@ -2365,7 +2361,64 @@ def _require_safe_recording_scope_segment(value: str | None, *, field_name: str,
     return raw
 
 
-def _demo_artifact_object_key(*, tenant, project, run, index: int, suffix: str) -> str:  # noqa: ANN001
+def _require_safe_demo_proof_scope_segment(value: str | None, *, scope_name: str) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        raise RuntimeError(f"QA demo {scope_name} requires run_id or proof_scope_id")
+    if raw in {".", ".."} or "/" in raw or "\\" in raw or not re.fullmatch(r"[A-Za-z0-9._:-]+", raw):
+        raise RuntimeError(f"QA demo {scope_name} has unsafe proof_scope_id: {raw!r}")
+    return raw
+
+
+def _demo_proof_scope_id_from_request(request: WorkflowRequest) -> str | None:
+    context = request.trigger_context if isinstance(request.trigger_context, dict) else {}
+    demo_context = context.get("demo_proof")
+    if isinstance(demo_context, dict):
+        raw_value = demo_context.get("proof_scope_id")
+    else:
+        raw_value = context.get("demo_proof_scope_id") or context.get("proof_scope_id")
+    normalized = str(raw_value or "").strip()
+    return normalized or None
+
+
+def _artifact_scope_path(*, run, proof_scope_id: str | None, scope_name: str) -> str:  # noqa: ANN001
+    raw_run_id = str(getattr(run, "run_id", None) or "").strip()
+    if raw_run_id:
+        return _require_safe_recording_scope_segment(
+            raw_run_id,
+            field_name="run_id",
+            scope_name=scope_name,
+        )
+    proof_scope = _require_safe_demo_proof_scope_segment(proof_scope_id, scope_name=scope_name)
+    return f"proofs/{proof_scope}"
+
+
+def _artifact_scope_dir(*, request: WorkflowRequest, scope_name: str) -> tuple[str, ...]:
+    raw_run_id = str(request.run_id or "").strip()
+    if raw_run_id:
+        return (
+            _require_safe_recording_scope_segment(
+                raw_run_id,
+                field_name="run_id",
+                scope_name=scope_name,
+            ),
+        )
+    proof_scope = _require_safe_demo_proof_scope_segment(
+        _demo_proof_scope_id_from_request(request),
+        scope_name=scope_name,
+    )
+    return ("proofs", proof_scope)
+
+
+def _demo_artifact_object_key(
+    *,
+    tenant,
+    project,
+    run,
+    index: int,
+    suffix: str,
+    proof_scope_id: str | None = None,
+) -> str:  # noqa: ANN001
     tenant_id = _require_safe_recording_scope_segment(
         getattr(tenant, "tenant_id", None),
         field_name="tenant_id",
@@ -2376,15 +2429,23 @@ def _demo_artifact_object_key(*, tenant, project, run, index: int, suffix: str) 
         field_name="project_id",
         scope_name="artifact object key scope",
     )
-    run_id = _require_safe_recording_scope_segment(
-        getattr(run, "run_id", None),
-        field_name="run_id",
+    artifact_scope = _artifact_scope_path(
+        run=run,
+        proof_scope_id=proof_scope_id,
         scope_name="artifact object key scope",
     )
-    return f"{tenant_id}/{project_id}/{run_id}/qa-demo-{index}{suffix}"
+    return f"{tenant_id}/{project_id}/{artifact_scope}/qa-demo-{index}{suffix}"
 
 
-def _demo_failure_artifact_object_key(*, tenant, project, run, index: int, suffix: str) -> str:  # noqa: ANN001
+def _demo_failure_artifact_object_key(
+    *,
+    tenant,
+    project,
+    run,
+    index: int,
+    suffix: str,
+    proof_scope_id: str | None = None,
+) -> str:  # noqa: ANN001
     tenant_id = _require_safe_recording_scope_segment(
         getattr(tenant, "tenant_id", None),
         field_name="tenant_id",
@@ -2395,12 +2456,12 @@ def _demo_failure_artifact_object_key(*, tenant, project, run, index: int, suffi
         field_name="project_id",
         scope_name="failure artifact object key scope",
     )
-    run_id = _require_safe_recording_scope_segment(
-        getattr(run, "run_id", None),
-        field_name="run_id",
+    artifact_scope = _artifact_scope_path(
+        run=run,
+        proof_scope_id=proof_scope_id,
         scope_name="failure artifact object key scope",
     )
-    return f"{tenant_id}/{project_id}/{run_id}/qa-failure-{index}{suffix}"
+    return f"{tenant_id}/{project_id}/{artifact_scope}/qa-failure-{index}{suffix}"
 
 
 def _validate_recordings_cover_scenarios(
@@ -2744,6 +2805,7 @@ def execute_qa_demo_stage(
         _validate_recorded_qa_result_covers_plan(plan=plan, qa_result=previous_qa_result)
     previous_recordings = list(previous_qa_result.recordings if previous_qa_result is not None else [])
     previous_scenarios = list(previous_qa_result.scenarios if previous_qa_result is not None else [])
+    proof_scope_id = _demo_proof_scope_id_from_request(request)
     release_service_urls = _release_service_urls_payload(preview_release)
     recorder_release_service_urls = _release_service_urls_payload(
         preview_release,
@@ -2786,6 +2848,7 @@ def execute_qa_demo_stage(
                 tenant=tenant,
                 project=project,
                 run=run,
+                proof_scope_id=proof_scope_id,
                 local_evidence=local_failure_evidence,
                 release_commit_sha=release_commit_sha,
                 release_context_sha256=release_context_sha256,
@@ -2949,6 +3012,7 @@ def execute_qa_demo_stage(
                     tenant=tenant,
                     project=project,
                     run=run,
+                    proof_scope_id=proof_scope_id,
                     index=len(previous_recordings) + index,
                     suffix=suffix,
                 )
@@ -3030,6 +3094,7 @@ def execute_qa_demo_stage(
         tenant=tenant,
         project=project,
         run=run,
+        proof_scope_id=proof_scope_id,
         local_evidence=last_failure_evidence,
         release_commit_sha=release_commit_sha,
         release_context_sha256=release_context_sha256,
