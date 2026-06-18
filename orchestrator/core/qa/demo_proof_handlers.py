@@ -73,13 +73,8 @@ _DEMO_PROOF_EVENTS: dict[str, tuple[str, str | None, str]] = {
     ),
     "ServiceVerificationFailed": (
         DEMO_PROOF_STEP_RELEASE,
-        DEMO_PROOF_STEP_PREVIEW_CLEANUP,
-        "service_verification_failed_cleanup_requested",
-    ),
-    "ServiceVerificationFailedPreviewCleanupCompleted": (
-        DEMO_PROOF_STEP_PREVIEW_CLEANUP,
-        None,
-        "demo_proof_blocked_after_service_verification_failure_cleanup",
+        DEMO_PROOF_STEP_EVIDENCE_UPLOAD,
+        "service_verification_failed_evidence_upload_requested",
     ),
     "RecordingCompleted": (
         DEMO_PROOF_STEP_RECORDING,
@@ -208,11 +203,6 @@ _DEMO_PROOF_FAILURE_EVENTS: dict[str, tuple[str, str, str]] = {
         "release_failed_preview_cleanup_failed",
         "release_failed_preview_cleanup_failed",
     ),
-    "ServiceVerificationFailedPreviewCleanupFailed": (
-        DEMO_PROOF_STEP_PREVIEW_CLEANUP,
-        "service_verification_failed_preview_cleanup_failed",
-        "service_verification_failed_preview_cleanup_failed",
-    ),
     "RecordingFailedPreviewCleanupFailed": (
         DEMO_PROOF_STEP_PREVIEW_CLEANUP,
         "recording_failed_preview_cleanup_failed",
@@ -240,7 +230,6 @@ _DEMO_PROOF_BLOCKING_COMPLETION_EVENTS = frozenset(
         "FailurePreviewCleanupCompleted",
         "ReleaseFailedPreviewCleanupCompleted",
         "RecordingFailedPreviewCleanupCompleted",
-        "ServiceVerificationFailedPreviewCleanupCompleted",
         "PREvidenceAttachFailedPreviewCleanupCompleted",
         "PRFailureEvidenceAttachFailedPreviewCleanupCompleted",
     }
@@ -263,13 +252,6 @@ _SUCCESS_TERMINAL_METADATA_REQUIREMENTS: dict[str, tuple[str, ...]] = {
 _FAILURE_TERMINAL_METADATA_REQUIREMENTS: dict[str, tuple[str, ...]] = {
     "ProofLeaseAcquired": ("release_id", "release_commit_sha", "demo_proof_lease"),
     "ReleaseLive": ("release_id", "release_commit_sha", "demo_proof_lease"),
-    "ServiceVerificationPassed": (
-        "release_id",
-        "release_commit_sha",
-        "required_service_kinds",
-        "service_urls",
-    ),
-    "RecordingFailureEvidenceCaptured": ("artifact_urls", "capture_targets", "failure_evidence"),
     "FailureEvidenceUploaded": ("artifact_urls", "capture_targets", "failure_evidence"),
     "PRFailureEvidenceAttached": ("pr_url", "pr_body_sha256"),
     "FailurePreviewCleanupCompleted": ("release_id", "cleanup_status", "cleanup_mode", "cleanup_evidence"),
@@ -295,23 +277,6 @@ _RELEASE_FAILED_TERMINAL_METADATA_REQUIREMENTS: dict[str, tuple[str, ...]] = {
     "ProofLeaseAcquired": ("release_id", "release_commit_sha", "demo_proof_lease"),
     "ReleaseFailed": ("release_id", "release_commit_sha", "demo_proof_lease", "error_message"),
     "ReleaseFailedPreviewCleanupCompleted": (
-        "release_id",
-        "cleanup_status",
-        "cleanup_mode",
-        "cleanup_evidence",
-    ),
-}
-_SERVICE_VERIFICATION_FAILED_TERMINAL_METADATA_REQUIREMENTS: dict[str, tuple[str, ...]] = {
-    "ProofLeaseAcquired": ("release_id", "release_commit_sha", "demo_proof_lease"),
-    "ReleaseLive": ("release_id", "release_commit_sha", "demo_proof_lease"),
-    "ServiceVerificationFailed": (
-        "release_id",
-        "release_commit_sha",
-        "required_service_kinds",
-        "service_urls",
-        "error_message",
-    ),
-    "ServiceVerificationFailedPreviewCleanupCompleted": (
         "release_id",
         "cleanup_status",
         "cleanup_mode",
@@ -346,13 +311,6 @@ _PR_EVIDENCE_ATTACH_FAILED_TERMINAL_METADATA_REQUIREMENTS: dict[str, tuple[str, 
 _PR_FAILURE_EVIDENCE_ATTACH_FAILED_TERMINAL_METADATA_REQUIREMENTS: dict[str, tuple[str, ...]] = {
     "ProofLeaseAcquired": ("release_id", "release_commit_sha", "demo_proof_lease"),
     "ReleaseLive": ("release_id", "release_commit_sha", "demo_proof_lease"),
-    "ServiceVerificationPassed": (
-        "release_id",
-        "release_commit_sha",
-        "required_service_kinds",
-        "service_urls",
-    ),
-    "RecordingFailureEvidenceCaptured": ("artifact_urls", "failure_evidence"),
     "FailureEvidenceUploaded": ("artifact_urls", "failure_evidence"),
     "PRFailureEvidenceAttachFailed": (
         "pr_url",
@@ -1657,9 +1615,29 @@ def _require_failure_evidence_target_metadata(
     return evidence_by_target
 
 
+def _failure_evidence_source_metadata(
+    *,
+    metadata: dict[str, dict[str, object]],
+    proof_scope_id: str,
+) -> tuple[str, dict[str, object]]:
+    service_failure_metadata = metadata.get("ServiceVerificationFailed", {})
+    if _metadata_field_is_present(service_failure_metadata.get("failure_evidence")):
+        return "ServiceVerificationFailed", service_failure_metadata
+    recording_failure_metadata = metadata.get("RecordingFailureEvidenceCaptured", {})
+    if _metadata_field_is_present(recording_failure_metadata.get("failure_evidence")):
+        return "RecordingFailureEvidenceCaptured", recording_failure_metadata
+    raise RuntimeError(
+        f"Demo proof scope {proof_scope_id} requires diagnostic failure evidence source metadata from "
+        "ServiceVerificationFailed or RecordingFailureEvidenceCaptured."
+    )
+
+
 def _require_failure_evidence_uploaded_metadata(*, description: dict[str, object], proof_scope_id: str) -> None:
     metadata = _metadata_by_event(description)
-    captured_failure_metadata = metadata.get("RecordingFailureEvidenceCaptured", {})
+    source_event, captured_failure_metadata = _failure_evidence_source_metadata(
+        metadata=metadata,
+        proof_scope_id=proof_scope_id,
+    )
     failure_metadata = metadata.get("FailureEvidenceUploaded", {})
     evidence_by_target = _require_failure_evidence_target_metadata(
         description=description,
@@ -1669,7 +1647,7 @@ def _require_failure_evidence_uploaded_metadata(*, description: dict[str, object
     _require_matching_artifact_lineage(
         source_metadata=captured_failure_metadata,
         downstream_metadata=failure_metadata,
-        source_event="RecordingFailureEvidenceCaptured",
+        source_event=source_event,
         downstream_event="FailureEvidenceUploaded",
         evidence_field="failure_evidence",
         required_fields=_FAILURE_EVIDENCE_REQUIRED_FIELDS,
@@ -1697,7 +1675,13 @@ def _require_failure_evidence_uploaded_lineage_matches_captured(
     proof_scope_id: str,
 ) -> None:
     metadata = _metadata_by_event(description)
-    captured_failure_metadata = metadata.get("RecordingFailureEvidenceCaptured", {})
+    try:
+        source_event, captured_failure_metadata = _failure_evidence_source_metadata(
+            metadata=metadata,
+            proof_scope_id=proof_scope_id,
+        )
+    except RuntimeError:
+        return
     failure_metadata = metadata.get("FailureEvidenceUploaded", {})
     downstream_lineage = _artifact_lineage_by_target(
         value=failure_metadata.get("failure_evidence"),
@@ -1719,7 +1703,7 @@ def _require_failure_evidence_uploaded_lineage_matches_captured(
     _require_matching_artifact_lineage(
         source_metadata=captured_failure_metadata,
         downstream_metadata=failure_metadata,
-        source_event="RecordingFailureEvidenceCaptured",
+        source_event=source_event,
         downstream_event="FailureEvidenceUploaded",
         evidence_field="failure_evidence",
         required_fields=_FAILURE_EVIDENCE_REQUIRED_FIELDS,
@@ -1823,8 +1807,6 @@ def _require_terminal_proof_metadata(
         if event == "RecordingFailedPreviewCleanupCompleted"
         else _RELEASE_FAILED_TERMINAL_METADATA_REQUIREMENTS
         if event == "ReleaseFailedPreviewCleanupCompleted"
-        else _SERVICE_VERIFICATION_FAILED_TERMINAL_METADATA_REQUIREMENTS
-        if event == "ServiceVerificationFailedPreviewCleanupCompleted"
         else _PR_EVIDENCE_ATTACH_FAILED_TERMINAL_METADATA_REQUIREMENTS
         if event == "PREvidenceAttachFailedPreviewCleanupCompleted"
         else _PR_FAILURE_EVIDENCE_ATTACH_FAILED_TERMINAL_METADATA_REQUIREMENTS
@@ -1891,21 +1873,28 @@ def _require_terminal_proof_metadata(
             proof_scope_id=proof_scope_id,
         )
         return
-    if event not in {
-        "ReleaseFailedPreviewCleanupCompleted",
-        "ServiceVerificationFailedPreviewCleanupCompleted",
-    }:
-        _require_service_verification_metadata(
-            release_metadata=release_metadata,
-            service_metadata=metadata.get("ServiceVerificationPassed", {}),
-            proof_scope_id=proof_scope_id,
-        )
+    if event != "ReleaseFailedPreviewCleanupCompleted":
+        service_failure_metadata = metadata.get("ServiceVerificationFailed", {})
+        if event in {
+            "FailurePreviewCleanupCompleted",
+            "PRFailureEvidenceAttachFailedPreviewCleanupCompleted",
+        } and service_failure_metadata:
+            _require_service_verification_failure_metadata(
+                release_metadata=release_metadata,
+                failure_metadata=service_failure_metadata,
+                proof_scope_id=proof_scope_id,
+            )
+        else:
+            _require_service_verification_metadata(
+                release_metadata=release_metadata,
+                service_metadata=metadata.get("ServiceVerificationPassed", {}),
+                proof_scope_id=proof_scope_id,
+            )
     if event in {
         "PreviewCleanupCompleted",
         "FailurePreviewCleanupCompleted",
         "ReleaseFailedPreviewCleanupCompleted",
         "RecordingFailedPreviewCleanupCompleted",
-        "ServiceVerificationFailedPreviewCleanupCompleted",
         "PREvidenceAttachFailedPreviewCleanupCompleted",
         "PRFailureEvidenceAttachFailedPreviewCleanupCompleted",
     }:
@@ -1946,14 +1935,6 @@ def _require_terminal_proof_metadata(
             proof_scope_id=proof_scope_id,
         )
     if event == "ReleaseFailedPreviewCleanupCompleted":
-        return
-    if event == "ServiceVerificationFailedPreviewCleanupCompleted":
-        failure_metadata = metadata.get("ServiceVerificationFailed", {})
-        _require_service_verification_failure_metadata(
-            release_metadata=release_metadata,
-            failure_metadata=failure_metadata,
-            proof_scope_id=proof_scope_id,
-        )
         return
     if event == "PREvidenceAttachFailedPreviewCleanupCompleted":
         _require_evidence_uploaded_metadata(description=description, proof_scope_id=proof_scope_id)
@@ -2422,10 +2403,6 @@ class DemoProofWorkflowAdvanceHandler:
         elif event in _DEMO_PROOF_BLOCKING_COMPLETION_EVENTS:
             if event == "ReleaseFailedPreviewCleanupCompleted":
                 message = f"Demo proof recorded release failure cleanup for proof scope {proof_scope_id}."
-            elif event == "ServiceVerificationFailedPreviewCleanupCompleted":
-                message = (
-                    f"Demo proof recorded service verification failure cleanup for proof scope {proof_scope_id}."
-                )
             elif event == "PREvidenceAttachFailedPreviewCleanupCompleted":
                 message = f"Demo proof recorded PR evidence attach failure cleanup for proof scope {proof_scope_id}."
             elif event == "PRFailureEvidenceAttachFailedPreviewCleanupCompleted":

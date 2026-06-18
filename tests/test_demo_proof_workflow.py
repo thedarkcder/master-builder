@@ -99,7 +99,7 @@ def test_demo_proof_release_failure_waits_for_cleanup_before_blocking() -> None:
     assert is_demo_proof_terminal(state)
 
 
-def test_demo_proof_service_verification_failure_waits_for_cleanup_before_blocking() -> None:
+def test_demo_proof_service_verification_failure_attaches_evidence_before_cleanup() -> None:
     state = transition_demo_proof_state(
         current_state=DEMO_PROOF_STATE_SERVICES_VERIFYING,
         event="ServiceVerificationFailed",
@@ -108,10 +108,15 @@ def test_demo_proof_service_verification_failure_waits_for_cleanup_before_blocki
     assert state != DEMO_PROOF_STATE_BLOCKED
     assert not is_demo_proof_terminal(state)
 
-    state = transition_demo_proof_state(
-        current_state=state,
-        event="ServiceVerificationFailedPreviewCleanupCompleted",
-    )
+    for event in (
+        "FailureEvidenceUploadStarted",
+        "FailureEvidenceUploaded",
+        "PRFailureEvidenceAttachStarted",
+        "PRFailureEvidenceAttached",
+        "FailurePreviewCleanupRequested",
+        "FailurePreviewCleanupCompleted",
+    ):
+        state = transition_demo_proof_state(current_state=state, event=event)
 
     assert state == DEMO_PROOF_STATE_BLOCKED
     assert is_demo_proof_terminal(state)

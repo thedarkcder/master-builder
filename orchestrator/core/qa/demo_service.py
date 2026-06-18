@@ -2870,6 +2870,7 @@ def execute_qa_demo_stage(
                 failure_evidence=uploaded_failure_evidence,
                 outcome="blocked",
                 blocker_message=message,
+                failure_kind="release_readiness",
             )
     release_context_sha256 = release_context_sha256_for_release(
         release=preview_release,
@@ -3111,6 +3112,7 @@ def execute_qa_demo_stage(
         failure_evidence=uploaded_failure_evidence,
         outcome="blocked",
         blocker_message=message,
+        failure_kind="recording",
     )
 
 

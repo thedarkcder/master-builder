@@ -10,6 +10,7 @@ from orchestrator.core.worker.capability_normalization import WorkerCapability
 StageOutcome = Literal["continue", "requeue", "waiting_for_input", "blocked", "failed"]
 WorkflowOutcome = Literal["success", "requeue", "waiting_for_input", "blocked", "failed"]
 QaCaptureTarget = Literal["browser", "ios", "android", "desktop"]
+QaFailureKind = Literal["release_readiness", "recording"]
 TestValidationScope = Literal["targeted_only", "current_head_acceptance", "full_suite"]
 
 
@@ -168,6 +169,7 @@ class QaResult:
     outcome: StageOutcome = "continue"
     feedback: str | None = None
     blocker_message: str | None = None
+    failure_kind: QaFailureKind | None = None
 
 
 @dataclass(frozen=True)
