@@ -509,6 +509,11 @@ def _recording_workflow_descriptions(
                 state = existing_state_by_target.get(capture_target, next_state or "planned")
             workflows.append({"capture_target": capture_target, "state": state})
             continue
+        if normalized_event == "RecordingStarted":
+            existing_state = existing_state_by_target.get(capture_target, "planned")
+            state = existing_state if existing_state in {"recorded", "failed"} else "recording"
+            workflows.append({"capture_target": capture_target, "state": state})
+            continue
         workflows.append(
             {
                 "capture_target": capture_target,
