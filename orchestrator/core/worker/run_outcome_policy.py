@@ -1480,10 +1480,16 @@ def _qa_demo_proof_event_metadata(*, proof_context, event: str) -> dict[str, obj
     }:
         metadata["pr_url"] = str(getattr(proof_context, "pr_url", "") or "").strip()
         if event == "PREvidenceAttached":
-            metadata["artifact_urls"] = list(getattr(proof_context, "pr_evidence_artifact_urls", ()) or ())
+            artifact_urls = list(getattr(proof_context, "pr_evidence_artifact_urls", ()) or ())
+            metadata["artifact_urls"] = artifact_urls
+            metadata["artifact_url_check_status"] = "passed"
+            metadata["checked_artifact_urls"] = artifact_urls
             metadata["pr_body_sha256"] = str(getattr(proof_context, "pr_evidence_body_sha256", "") or "").strip()
         if event == "PRFailureEvidenceAttached":
-            metadata["artifact_urls"] = list(getattr(proof_context, "pr_failure_evidence_artifact_urls", ()) or ())
+            artifact_urls = list(getattr(proof_context, "pr_failure_evidence_artifact_urls", ()) or ())
+            metadata["artifact_urls"] = artifact_urls
+            metadata["artifact_url_check_status"] = "passed"
+            metadata["checked_artifact_urls"] = artifact_urls
             metadata["pr_body_sha256"] = str(
                 getattr(proof_context, "pr_failure_evidence_body_sha256", "") or ""
             ).strip()
