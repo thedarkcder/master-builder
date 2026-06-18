@@ -58,7 +58,7 @@ class ReviewAgentGate:
         demo_artifact_public_base_url: str | None = None,
         demo_evidence_run_id_resolver: Callable[[str], str | None] | None = None,
         demo_evidence_recordings_resolver: Callable[[str], tuple[dict[str, str], ...] | None] | None = None,
-        demo_proof_status_resolver: Callable[[str], dict[str, object] | None] | None = None,
+        demo_proof_status_resolver: Callable[[str, str], dict[str, object] | None] | None = None,
     ):
         self._github_client = github_client
         self._required_workflows = required_workflows
@@ -151,9 +151,13 @@ class ReviewAgentGate:
 
         if self._require_demo_evidence:
             pr_url = str(pr.html_url or "").strip()
+            pr_head_sha = str(pr.head_sha or "").strip().lower()
             if self._demo_proof_status_resolver is not None:
-                demo_proof_status = self._demo_proof_status_resolver(pr_url)
-                if not _demo_proof_status_ready(demo_proof_status):
+                demo_proof_status = self._demo_proof_status_resolver(pr_url, pr_head_sha)
+                if not _demo_proof_status_ready(
+                    demo_proof_status,
+                    expected_release_commit_sha=pr_head_sha,
+                ):
                     return ReviewerSignal(
                         ready=False,
                         state="missing_demo_evidence",
@@ -180,6 +184,7 @@ class ReviewAgentGate:
                 run_id=expected_run_id,
                 artifact_public_base_url=self._demo_artifact_public_base_url,
                 expected_recordings=expected_recordings,
+                expected_release_commit_sha=pr_head_sha,
             ):
                 return ReviewerSignal(
                     ready=False,
@@ -431,6 +436,7 @@ def _demo_evidence_present(
     run_id: str | None = None,
     artifact_public_base_url: str | None = None,
     expected_recordings: tuple[dict[str, str], ...] | None = None,
+    expected_release_commit_sha: str | None = None,
 ) -> bool:
     normalized_body = str(body or "").strip()
     if not normalized_body:
@@ -439,11 +445,13 @@ def _demo_evidence_present(
     normalized_project_id = str(project_id or "").strip()
     normalized_run_id = str(run_id or "").strip()
     normalized_artifact_public_base_url = str(artifact_public_base_url or "").strip().rstrip("/")
+    normalized_expected_release_commit_sha = str(expected_release_commit_sha or "").strip().lower()
     if (
         not normalized_tenant_id
         or not normalized_project_id
         or not normalized_run_id
         or not normalized_artifact_public_base_url
+        or not normalized_expected_release_commit_sha
     ):
         return False
     match = _DEMO_EVIDENCE_SECTION_PATTERN.search(normalized_body)
@@ -480,6 +488,8 @@ def _demo_evidence_present(
     release_commit_sha_counts = Counter(match.group("release_commit_sha") for match in structured_matches)
     if len(release_commit_sha_counts) != 1:
         return False
+    if next(iter(release_commit_sha_counts)).lower() != normalized_expected_release_commit_sha:
+        return False
     required_targets = _normalize_required_demo_targets(required_demo_capture_targets)
     embedded_required_targets = _required_demo_targets_from_section(section)
     if not embedded_required_targets:
@@ -495,8 +505,15 @@ def _demo_evidence_present(
     return all(recorded_counts.get(target, 0) >= count for target, count in embedded_required_counts.items())
 
 
-def _demo_proof_status_ready(status: dict[str, object] | None) -> bool:
+def _demo_proof_status_ready(
+    status: dict[str, object] | None,
+    *,
+    expected_release_commit_sha: str,
+) -> bool:
     if not isinstance(status, dict):
+        return False
+    normalized_expected_release_commit_sha = str(expected_release_commit_sha or "").strip().lower()
+    if not normalized_expected_release_commit_sha:
         return False
     if str(status.get("status") or "").strip() != "completed":
         return False
@@ -505,6 +522,8 @@ def _demo_proof_status_ready(status: dict[str, object] | None) -> bool:
     if str(status.get("terminal_event") or "").strip() != "PreviewCleanupCompleted":
         return False
     if str(status.get("artifact_url_check_status") or "").strip() != "passed":
+        return False
+    if str(status.get("release_commit_sha") or "").strip().lower() != normalized_expected_release_commit_sha:
         return False
     checked_urls = status.get("checked_artifact_urls")
     return isinstance(checked_urls, tuple | list) and bool(checked_urls)
