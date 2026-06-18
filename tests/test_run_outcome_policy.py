@@ -5,6 +5,8 @@ from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
+import pytest
+
 from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
 from orchestrator.core.workflow.runner import (
     DemoRequirement,
@@ -19,6 +21,14 @@ from orchestrator.core.workflow.runner import (
     WorkflowStageCheckpoint,
 )
 from orchestrator.core.worker.run_outcome_policy import RunOutcomePolicy
+
+
+@pytest.fixture(autouse=True)
+def _stub_artifact_url_checks(monkeypatch) -> None:  # noqa: ANN001
+    monkeypatch.setattr(
+        "orchestrator.core.worker.run_outcome_policy.ensure_artifact_url_reachable",
+        lambda *_args, **_kwargs: None,
+    )
 
 
 def _demo_requirement(
@@ -74,6 +84,29 @@ def _qa_failure_evidence(
         release_commit_sha="b" * 40,
         release_context_sha256=f"{999:064x}",
     )
+
+
+def test_pr_evidence_attach_failed_metadata_requires_explicit_checked_artifact_urls() -> None:
+    from orchestrator.core.worker.run_outcome_policy import _qa_demo_proof_event_metadata
+
+    qa_result = QaResult(
+        summary=["Recorded demos"],
+        scenarios=[],
+        recordings=[_qa_recording(name="Happy path", index=1)],
+    )
+    proof_context = SimpleNamespace(
+        pr_url="https://github.com/acme/repo/pull/8",
+        qa_result=qa_result,
+        pr_evidence_failure_message="QA demo evidence PR update failed: RuntimeError: URL probe failed",
+    )
+
+    metadata = _qa_demo_proof_event_metadata(proof_context=proof_context, event="PREvidenceAttachFailed")
+
+    assert metadata is not None
+    assert metadata["artifact_urls"] == ["https://cdn.example/qa-demo-1.webm"]
+    assert metadata["error_message"] == "QA demo evidence PR update failed: RuntimeError: URL probe failed"
+    assert "artifact_url_check_status" not in metadata
+    assert "checked_artifact_urls" not in metadata
 
 
 def _build_snapshot() -> dict[str, object]:
@@ -2143,6 +2176,112 @@ def test_complete_persists_blocked_qa_checkpoint_when_pr_evidence_update_fails()
     assert metadata_by_event["PREvidenceAttachFailedPreviewCleanupCompleted"]["cleanup_mode"] == "destroy_or_ttl"
     assert finalizer_calls["workflow_result"].outcome == "blocked"
     assert "GitHub rejected PR update" in str(finalizer_calls["workflow_result"].blocker_message)
+
+
+def test_complete_blocks_pr_evidence_update_when_artifact_url_check_fails(monkeypatch) -> None:  # noqa: ANN001
+    session = SimpleNamespace(refresh=lambda _run: None)
+    deps = _deps()
+    prepared = _prepared(_build_snapshot(), effective_policy={"qa_demo_recording_enabled": True})
+    workflow_result = _workflow_result()
+    qa_result = QaResult(
+        summary=["Recorded demos"],
+        scenarios=[],
+        recordings=[
+            _qa_recording(name="Happy path", index=1),
+            _qa_recording(name="Invalid input is rejected", index=2),
+            _qa_recording(name="Repeat action remains safe", index=3),
+        ],
+    )
+    preview_release = SimpleNamespace(
+        release_id="release-preview-1",
+        release_kind="run_preview",
+        status="live",
+        commit_sha="b" * 40,
+        service_urls=[],
+        delivery_metadata={
+            "demo_proof_lease": {
+                "lease_id": "lease-1",
+                "proof_scope_id": "run:run-1:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                "commit_sha": "b" * 40,
+                "state": "live",
+                "acquired_at": "2026-06-18T10:00:00+00:00",
+                "expires_at": "2026-06-18T11:00:00+00:00",
+            }
+        },
+        provider_context={
+            "application_uuid": "app-1",
+            "deployment_uuid": "deployment-1",
+        },
+    )
+    finalizer_calls: dict[str, object] = {}
+
+    def _reject_url(*_args, **_kwargs):  # noqa: ANN202
+        raise RuntimeError("QA demo artifact URL is not reachable: https://cdn.example/qa-demo-1.webm: HTTP 404")
+
+    def _destroy_preview(**_kwargs):  # noqa: ANN001
+        preview_release.status = "destroyed"
+        lease = preview_release.delivery_metadata["demo_proof_lease"]
+        lease["state"] = "destroyed"
+        lease["destroy_reason"] = "qa_demo_failed"
+        lease["destroyed_at"] = "2026-06-18T10:30:00+00:00"
+        return preview_release
+
+    class _Finalizer:
+        def __init__(self, **_kwargs):
+            pass
+
+        def finalize(self, **kwargs):
+            finalizer_calls.update(kwargs)
+            return SimpleNamespace(
+                run=prepared.run,
+                workflow_result=kwargs["workflow_result"],
+                persisted_status="blocked",
+                last_error=kwargs["workflow_result"].blocker_message,
+                persisted_plan=prepared.run.plan,
+                event_types=(),
+                tail_steps=(),
+            )
+
+    monkeypatch.setattr("orchestrator.core.worker.run_outcome_policy.ensure_artifact_url_reachable", _reject_url)
+    with (
+        patch(
+            "orchestrator.core.worker.run_outcome_policy.create_run_preview_deployment",
+            return_value=SimpleNamespace(created=False, reason="existing", release=preview_release),
+        ),
+        patch("orchestrator.core.worker.run_outcome_policy.execute_qa_demo_stage", return_value=qa_result),
+        patch("orchestrator.core.worker.run_outcome_policy.update_pull_request_with_demo_evidence") as update_pr_mock,
+        patch(
+            "orchestrator.core.worker.run_outcome_policy.destroy_project_deployment_preview_release",
+            side_effect=_destroy_preview,
+        ),
+        patch("orchestrator.core.worker.run_outcome_policy.WorkflowFinalizer", _Finalizer),
+        patch("orchestrator.core.worker.run_outcome_policy.CompletionTailExecutor") as tail_executor_cls,
+    ):
+        tail_executor_cls.return_value.execute.return_value = None
+        RunOutcomePolicy(
+            session=session,
+            settings=SimpleNamespace(project_repo_checkout_base_dir="/tmp/workdirs"),
+            deps=deps,
+            cleanup_run_workspaces_safe_fn=MagicMock(),
+        ).complete(
+            prepared=prepared,
+            workflow_result=workflow_result,
+            execution_context={"execution_branch": "run/MAB-400/run-1"},
+        )
+
+    update_pr_mock.assert_not_called()
+    metadata_by_event = {
+        call.kwargs["event"]: call.kwargs.get("event_metadata")
+        for call in deps.execution.advance_demo_proof_workflow_event_fn.call_args_list
+    }
+    assert metadata_by_event["PREvidenceAttachFailed"]["artifact_urls"] == [
+        "https://cdn.example/qa-demo-1.webm",
+        "https://cdn.example/qa-demo-2.webm",
+        "https://cdn.example/qa-demo-3.webm",
+    ]
+    assert "artifact_url_check_status" not in metadata_by_event["PREvidenceAttachFailed"]
+    assert "checked_artifact_urls" not in metadata_by_event["PREvidenceAttachFailed"]
+    assert "artifact URL is not reachable" in str(finalizer_calls["workflow_result"].blocker_message)
 
 
 def test_complete_records_qa_failure_evidence_pr_attach_failure_before_blocking_ready_review() -> None:
