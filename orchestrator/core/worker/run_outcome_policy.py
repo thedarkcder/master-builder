@@ -504,11 +504,13 @@ class RunOutcomePolicy:
                     f"{message} QA demo proof release failure event failed: "
                     f"{type(proof_exc).__name__}: {proof_exc}"
                 )
-            cleanup_error = self._cleanup_qa_demo_preview_release(
+            cleanup_release, cleanup_error = self._cleanup_qa_demo_preview_release(
                 prepared=prepared,
                 preview_release=preview_release,
                 reason="qa_demo_failed",
             )
+            if proof_context is not None:
+                proof_context.preview_release = cleanup_release
             if cleanup_error:
                 if proof_context is not None and not proof_terminal_failure_emitted:
                     try:
@@ -753,11 +755,13 @@ class RunOutcomePolicy:
                         attempt=attempt,
                         execution_context=execution_context,
                     )
-            cleanup_error = self._cleanup_qa_demo_preview_release(
+            cleanup_release, cleanup_error = self._cleanup_qa_demo_preview_release(
                 prepared=prepared,
                 preview_release=preview_release,
                 reason="qa_demo_failed",
             )
+            if proof_context is not None:
+                proof_context.preview_release = cleanup_release
             if cleanup_error:
                 if proof_context is not None and not proof_terminal_failure_emitted:
                     try:
@@ -847,11 +851,13 @@ class RunOutcomePolicy:
                 attempt=attempt,
                 execution_context=execution_context,
             )
-            cleanup_error = self._cleanup_qa_demo_preview_release(
+            cleanup_release, cleanup_error = self._cleanup_qa_demo_preview_release(
                 prepared=prepared,
                 preview_release=preview_release,
                 reason="qa_demo_failed",
             )
+            if proof_context is not None:
+                proof_context.preview_release = cleanup_release
             if cleanup_error:
                 message = f"{message} {cleanup_error}"
             return _workflow_result_with_qa_blocker(
@@ -898,11 +904,12 @@ class RunOutcomePolicy:
                 attempt=attempt,
                 execution_context=execution_context,
             )
-            cleanup_error = self._cleanup_qa_demo_preview_release(
+            cleanup_release, cleanup_error = self._cleanup_qa_demo_preview_release(
                 prepared=prepared,
                 preview_release=preview_release,
                 reason="qa_demo_failed",
             )
+            proof_context.preview_release = cleanup_release
             if cleanup_error:
                 try:
                     self._advance_qa_demo_proof_events(
@@ -950,11 +957,12 @@ class RunOutcomePolicy:
                 attempt=attempt,
                 execution_context=execution_context,
             )
-            cleanup_error = self._cleanup_qa_demo_preview_release(
+            cleanup_release, cleanup_error = self._cleanup_qa_demo_preview_release(
                 prepared=prepared,
                 preview_release=preview_release,
                 reason="qa_demo_failed",
             )
+            proof_context.preview_release = cleanup_release
             if cleanup_error:
                 message = f"{message} {cleanup_error}"
             return _workflow_result_with_qa_blocker(
@@ -962,11 +970,12 @@ class RunOutcomePolicy:
                 attempt=attempt,
                 message=message,
             )
-        cleanup_error = self._cleanup_qa_demo_preview_release(
+        cleanup_release, cleanup_error = self._cleanup_qa_demo_preview_release(
             prepared=prepared,
             preview_release=preview_release,
             reason="qa_demo_complete",
         )
+        proof_context.preview_release = cleanup_release
         if cleanup_error:
             try:
                 self._advance_qa_demo_proof_events(
@@ -1124,22 +1133,42 @@ class RunOutcomePolicy:
         prepared,
         preview_release,
         reason: str,
-    ) -> str | None:
+    ) -> tuple[object, str | None]:
         release_id = str(getattr(preview_release, "release_id", "") or "").strip()
         if not release_id:
-            return None
+            return preview_release, None
         if str(getattr(preview_release, "release_kind", "run_preview") or "").strip() != "run_preview":
-            return None
+            return preview_release, None
         if str(getattr(preview_release, "status", "") or "").strip() == "destroyed":
-            return None
+            return preview_release, None
         try:
-            destroy_project_deployment_preview_release(
+            destroyed_release = destroy_project_deployment_preview_release(
                 session=self._session,
                 tenant_id=prepared.run.tenant_id,
                 project_id=prepared.project.project_id,
                 release_id=release_id,
                 reason=reason,
             )
+            destroyed_release_id = str(getattr(destroyed_release, "release_id", "") or "").strip()
+            destroyed_status = str(getattr(destroyed_release, "status", "") or "").strip()
+            if destroyed_release_id != release_id or destroyed_status != "destroyed":
+                message = (
+                    "QA demo preview cleanup failed; destroy service did not return destroyed release proof: "
+                    f"{release_id}: returned release_id={destroyed_release_id or '<missing>'} "
+                    f"status={destroyed_status or '<missing>'}"
+                )
+                self._deps.identity.logger.error(
+                    "qa_demo_preview_cleanup_unproven tenant_id=%s project_id=%s run_id=%s release_id=%s "
+                    "returned_release_id=%s returned_status=%s reason=%s",
+                    prepared.run.tenant_id,
+                    prepared.project.project_id,
+                    prepared.run.run_id,
+                    release_id,
+                    destroyed_release_id,
+                    destroyed_status,
+                    reason,
+                )
+                return preview_release, message
         except Exception as exc:  # noqa: BLE001
             message = (
                 "QA demo preview cleanup failed; run preview release was not proven destroyed: "
@@ -1153,7 +1182,7 @@ class RunOutcomePolicy:
                 release_id,
                 reason,
             )
-            return message
+            return preview_release, message
         self._deps.identity.logger.info(
             "qa_demo_preview_cleanup_completed tenant_id=%s project_id=%s run_id=%s release_id=%s reason=%s",
             prepared.run.tenant_id,
@@ -1162,7 +1191,7 @@ class RunOutcomePolicy:
             release_id,
             reason,
         )
-        return None
+        return destroyed_release, None
 
     def _handle_stale_snapshot(self, *, prepared, workflow_result, execution_context):
         if not (
