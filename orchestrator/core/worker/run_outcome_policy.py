@@ -474,6 +474,65 @@ class RunOutcomePolicy:
             failure_detail = _preview_release_failure_detail(preview_release)
             if failure_detail:
                 message = f"{message} Release failure: {failure_detail}"
+            proof_context = None
+            proof_terminal_failure_emitted = False
+            try:
+                proof_context = _qa_demo_release_proof_context(
+                    prepared=prepared,
+                    preview_release=preview_release,
+                    plan=plan,
+                    workflow_result=workflow_result,
+                )
+                proof_context.release_failure_message = message
+                if not proof_workflow_started:
+                    self._start_qa_demo_proof_workflow(
+                        proof_context=proof_context,
+                        trigger_event="run_failed_before_demo_release_live",
+                    )
+                self._advance_qa_demo_proof_events(
+                    proof_context=proof_context,
+                    events=(
+                        "ProofLeaseAcquired",
+                        "ReleaseRequested",
+                        "ReleaseProvisioning",
+                        "ReleaseFailed",
+                    ),
+                )
+            except Exception as proof_exc:  # noqa: BLE001
+                proof_terminal_failure_emitted = True
+                message = (
+                    f"{message} QA demo proof release failure event failed: "
+                    f"{type(proof_exc).__name__}: {proof_exc}"
+                )
+            cleanup_error = self._cleanup_qa_demo_preview_release(
+                prepared=prepared,
+                preview_release=preview_release,
+                reason="qa_demo_failed",
+            )
+            if cleanup_error:
+                if proof_context is not None and not proof_terminal_failure_emitted:
+                    try:
+                        self._advance_qa_demo_proof_events(
+                            proof_context=proof_context,
+                            events=("ReleaseFailedPreviewCleanupFailed",),
+                        )
+                    except Exception as proof_exc:  # noqa: BLE001
+                        cleanup_error = (
+                            f"{cleanup_error} QA demo release failure proof cleanup failure event failed: "
+                            f"{type(proof_exc).__name__}: {proof_exc}"
+                        )
+                message = f"{message} {cleanup_error}"
+            elif proof_context is not None and not proof_terminal_failure_emitted:
+                try:
+                    self._advance_qa_demo_proof_events(
+                        proof_context=proof_context,
+                        events=("ReleaseFailedPreviewCleanupCompleted",),
+                    )
+                except Exception as proof_exc:  # noqa: BLE001
+                    message = (
+                        f"{message} QA demo release failure proof cleanup event failed: "
+                        f"{type(proof_exc).__name__}: {proof_exc}"
+                    )
             return _workflow_result_with_qa_blocker(
                 workflow_result=workflow_result,
                 attempt=attempt,
@@ -1413,6 +1472,9 @@ def _qa_demo_proof_event_metadata(*, proof_context, event: str) -> dict[str, obj
         "ProofLeaseAcquired",
         "ReleaseRequested",
         "ReleaseProvisioning",
+        "ReleaseFailed",
+        "ReleaseFailedPreviewCleanupCompleted",
+        "ReleaseFailedPreviewCleanupFailed",
         "ReleaseLive",
         "RouteReady",
         "ServiceVerificationPassed",
@@ -1446,6 +1508,10 @@ def _qa_demo_proof_event_metadata(*, proof_context, event: str) -> dict[str, obj
                 metadata["required_service_kinds"] = list(required_service_kinds)
             if service_urls:
                 metadata["service_urls"] = service_urls
+        if event == "ReleaseFailed":
+            error_message = str(getattr(proof_context, "release_failure_message", "") or "").strip()
+            if error_message:
+                metadata["error_message"] = error_message
         if event == "RecordingDeferred":
             recorded_targets = list(getattr(proof_context, "recording_deferred_recorded_capture_targets", ()) or ())
             remaining_targets = list(getattr(proof_context, "recording_deferred_remaining_capture_targets", ()) or ())
@@ -1460,6 +1526,7 @@ def _qa_demo_proof_event_metadata(*, proof_context, event: str) -> dict[str, obj
         if event in {
             "PreviewCleanupCompleted",
             "FailurePreviewCleanupCompleted",
+            "ReleaseFailedPreviewCleanupCompleted",
             "RecordingFailedPreviewCleanupCompleted",
         }:
             metadata["cleanup_status"] = "completed"

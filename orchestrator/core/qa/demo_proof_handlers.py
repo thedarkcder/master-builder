@@ -50,6 +50,16 @@ _DEMO_PROOF_EVENTS: dict[str, tuple[str, str | None, str]] = {
         DEMO_PROOF_STEP_RELEASE,
         "release_requested",
     ),
+    "ReleaseFailed": (
+        DEMO_PROOF_STEP_RELEASE,
+        DEMO_PROOF_STEP_PREVIEW_CLEANUP,
+        "release_failed_cleanup_requested",
+    ),
+    "ReleaseFailedPreviewCleanupCompleted": (
+        DEMO_PROOF_STEP_PREVIEW_CLEANUP,
+        None,
+        "demo_proof_blocked_after_release_failure_cleanup",
+    ),
     "ServiceVerificationPassed": (
         DEMO_PROOF_STEP_RELEASE,
         DEMO_PROOF_STEP_RECORDING,
@@ -132,7 +142,6 @@ _DEMO_PROOF_OBSERVATION_EVENTS: dict[str, tuple[str, str]] = {
 }
 
 _DEMO_PROOF_FAILURE_EVENTS: dict[str, tuple[str, str, str]] = {
-    "ReleaseFailed": (DEMO_PROOF_STEP_RELEASE, "release_failed", "release_failed"),
     "ServiceVerificationFailed": (
         DEMO_PROOF_STEP_RELEASE,
         "service_verification_failed",
@@ -152,6 +161,11 @@ _DEMO_PROOF_FAILURE_EVENTS: dict[str, tuple[str, str, str]] = {
         DEMO_PROOF_STEP_PREVIEW_CLEANUP,
         "preview_cleanup_failed",
         "preview_cleanup_failed",
+    ),
+    "ReleaseFailedPreviewCleanupFailed": (
+        DEMO_PROOF_STEP_PREVIEW_CLEANUP,
+        "release_failed_preview_cleanup_failed",
+        "release_failed_preview_cleanup_failed",
     ),
     "RecordingFailedPreviewCleanupFailed": (
         DEMO_PROOF_STEP_PREVIEW_CLEANUP,
@@ -178,6 +192,7 @@ _DEMO_PROOF_FAILURE_EVENTS: dict[str, tuple[str, str, str]] = {
 _DEMO_PROOF_BLOCKING_COMPLETION_EVENTS = frozenset(
     {
         "FailurePreviewCleanupCompleted",
+        "ReleaseFailedPreviewCleanupCompleted",
         "RecordingFailedPreviewCleanupCompleted",
     }
 )
@@ -221,6 +236,16 @@ _RECORDING_FAILED_TERMINAL_METADATA_REQUIREMENTS: dict[str, tuple[str, ...]] = {
     ),
     "RecordingFailed": ("error_message",),
     "RecordingFailedPreviewCleanupCompleted": (
+        "release_id",
+        "cleanup_status",
+        "cleanup_mode",
+        "cleanup_evidence",
+    ),
+}
+_RELEASE_FAILED_TERMINAL_METADATA_REQUIREMENTS: dict[str, tuple[str, ...]] = {
+    "ProofLeaseAcquired": ("release_id", "release_commit_sha", "demo_proof_lease"),
+    "ReleaseFailed": ("release_id", "release_commit_sha", "demo_proof_lease", "error_message"),
+    "ReleaseFailedPreviewCleanupCompleted": (
         "release_id",
         "cleanup_status",
         "cleanup_mode",
@@ -1470,6 +1495,8 @@ def _require_terminal_proof_metadata(
         if event == "FailurePreviewCleanupCompleted"
         else _RECORDING_FAILED_TERMINAL_METADATA_REQUIREMENTS
         if event == "RecordingFailedPreviewCleanupCompleted"
+        else _RELEASE_FAILED_TERMINAL_METADATA_REQUIREMENTS
+        if event == "ReleaseFailedPreviewCleanupCompleted"
         else None
     )
     if requirements is None:
@@ -1486,15 +1513,21 @@ def _require_terminal_proof_metadata(
             f"Demo proof scope {proof_scope_id} requires auditable metadata before terminal completion: "
             + ", ".join(missing)
         )
-    release_metadata = metadata.get("ReleaseLive", {})
-    _require_service_verification_metadata(
-        release_metadata=release_metadata,
-        service_metadata=metadata.get("ServiceVerificationPassed", {}),
-        proof_scope_id=proof_scope_id,
+    release_metadata = (
+        metadata.get("ReleaseFailed", {})
+        if event == "ReleaseFailedPreviewCleanupCompleted"
+        else metadata.get("ReleaseLive", {})
     )
+    if event != "ReleaseFailedPreviewCleanupCompleted":
+        _require_service_verification_metadata(
+            release_metadata=release_metadata,
+            service_metadata=metadata.get("ServiceVerificationPassed", {}),
+            proof_scope_id=proof_scope_id,
+        )
     if event in {
         "PreviewCleanupCompleted",
         "FailurePreviewCleanupCompleted",
+        "ReleaseFailedPreviewCleanupCompleted",
         "RecordingFailedPreviewCleanupCompleted",
     }:
         cleanup_metadata = metadata.get(event, {})
@@ -1509,13 +1542,22 @@ def _require_terminal_proof_metadata(
             event=event,
             proof_scope_id=proof_scope_id,
         )
-        _require_lease_scope_identity(
-            acquired_metadata=metadata.get("ProofLeaseAcquired", {}),
-            release_metadata=release_metadata,
-            cleanup_metadata=cleanup_metadata,
-            event=event,
-            proof_scope_id=proof_scope_id,
-        )
+        if event == "ReleaseFailedPreviewCleanupCompleted":
+            _require_lease_scope_identity(
+                acquired_metadata=metadata.get("ProofLeaseAcquired", {}),
+                release_metadata=metadata.get("ReleaseFailed", {}),
+                cleanup_metadata=cleanup_metadata,
+                event=event,
+                proof_scope_id=proof_scope_id,
+            )
+        else:
+            _require_lease_scope_identity(
+                acquired_metadata=metadata.get("ProofLeaseAcquired", {}),
+                release_metadata=release_metadata,
+                cleanup_metadata=cleanup_metadata,
+                event=event,
+                proof_scope_id=proof_scope_id,
+            )
         cleanup_evidence = cleanup_metadata.get("cleanup_evidence")
         _require_cleanup_resource_refs(
             value=cleanup_evidence.get("resource_refs") if isinstance(cleanup_evidence, dict) else None,
@@ -1524,6 +1566,8 @@ def _require_terminal_proof_metadata(
             event=event,
             proof_scope_id=proof_scope_id,
         )
+    if event == "ReleaseFailedPreviewCleanupCompleted":
+        return
     if event == "PreviewCleanupCompleted":
         _require_evidence_uploaded_metadata(description=description, proof_scope_id=proof_scope_id)
         evidence_metadata = metadata.get("EvidenceUploaded", {})
@@ -1859,7 +1903,9 @@ class DemoProofWorkflowAdvanceHandler:
                 ),
             )
         elif event in _DEMO_PROOF_BLOCKING_COMPLETION_EVENTS:
-            if event == "RecordingFailedPreviewCleanupCompleted":
+            if event == "ReleaseFailedPreviewCleanupCompleted":
+                message = f"Demo proof recorded release failure cleanup for proof scope {proof_scope_id}."
+            elif event == "RecordingFailedPreviewCleanupCompleted":
                 message = f"Demo proof recorded recording failure cleanup for proof scope {proof_scope_id}."
             else:
                 message = f"Demo proof recorded failure evidence for proof scope {proof_scope_id}."
