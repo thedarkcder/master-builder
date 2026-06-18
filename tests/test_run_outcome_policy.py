@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 from dataclasses import replace
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
@@ -375,6 +376,14 @@ def test_complete_runs_qa_demo_stage_before_finalization() -> None:
         },
     ]
     assert metadata_by_event["PREvidenceAttached"]["pr_url"] == workflow_result.pr_url
+    assert metadata_by_event["PREvidenceAttached"]["artifact_urls"] == [
+        "https://cdn.example/qa-demo-1.webm",
+        "https://cdn.example/qa-demo-2.webm",
+        "https://cdn.example/qa-demo-3.webm",
+    ]
+    assert metadata_by_event["PREvidenceAttached"]["pr_body_sha256"] == hashlib.sha256(
+        "updated-body".encode("utf-8")
+    ).hexdigest()
     assert metadata_by_event["PreviewCleanupCompleted"]["release_id"] == "release-preview-1"
     assert metadata_by_event["PreviewCleanupCompleted"]["cleanup_status"] == "completed"
     assert metadata_by_event["PreviewCleanupCompleted"]["cleanup_mode"] == "destroy_or_ttl"
