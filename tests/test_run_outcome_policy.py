@@ -235,7 +235,13 @@ def test_complete_runs_qa_demo_stage_before_finalization() -> None:
             _qa_recording(name="Repeat action remains safe", index=3),
         ],
     )
-    preview_release = SimpleNamespace(release_id="release-preview-1", release_kind="run_preview", status="live", service_urls=[])
+    preview_release = SimpleNamespace(
+        release_id="release-preview-1",
+        release_kind="run_preview",
+        status="live",
+        service_urls=[],
+        commit_sha="b" * 40,
+    )
     finalizer_calls: dict[str, object] = {}
 
     class _Finalizer:
@@ -409,7 +415,13 @@ def test_complete_blocks_success_when_qa_demo_preview_cleanup_fails() -> None:
             _qa_recording(name="Repeat action remains safe", index=3),
         ],
     )
-    preview_release = SimpleNamespace(release_id="release-preview-1", release_kind="run_preview", status="live", service_urls=[])
+    preview_release = SimpleNamespace(
+        release_id="release-preview-1",
+        release_kind="run_preview",
+        status="live",
+        service_urls=[],
+        commit_sha="b" * 40,
+    )
     finalizer_calls: dict[str, object] = {}
 
     class _Finalizer:
@@ -761,7 +773,13 @@ def test_complete_blocks_success_when_qa_demo_stage_cannot_finish() -> None:
     deps = _deps()
     prepared = _prepared(_build_snapshot(), effective_policy={"qa_demo_recording_enabled": True})
     workflow_result = _workflow_result()
-    preview_release = SimpleNamespace(release_id="release-preview-1", release_kind="run_preview", status="live", service_urls=[])
+    preview_release = SimpleNamespace(
+        release_id="release-preview-1",
+        release_kind="run_preview",
+        status="live",
+        service_urls=[],
+        commit_sha="b" * 40,
+    )
     finalizer_calls: dict[str, object] = {}
 
     class _Finalizer:
@@ -810,6 +828,21 @@ def test_complete_blocks_success_when_qa_demo_stage_cannot_finish() -> None:
     assert checkpoint.status == "blocked"
     assert finalizer_calls["workflow_result"].outcome == "blocked"
     assert "upload failed after retries" in finalizer_calls["workflow_result"].blocker_message
+    assert deps.execution.start_demo_proof_workflow_fn.call_args.kwargs["proof_scope_id"] == (
+        "run:run-1:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    )
+    assert [
+        call.kwargs["event"] for call in deps.execution.advance_demo_proof_workflow_event_fn.call_args_list
+    ] == [
+        "ProofLeaseAcquired",
+        "ReleaseRequested",
+        "ReleaseProvisioning",
+        "ReleaseLive",
+        "RouteReady",
+        "ServiceVerificationPassed",
+        "RecordingStarted",
+        "RecordingFailed",
+    ]
     destroy_preview_mock.assert_called_once_with(
         session=session,
         tenant_id="tenant-1",
