@@ -670,6 +670,43 @@ def _artifact_lineage_by_target(*, value: object, required_fields: frozenset[str
     return {target: sorted(lineage) for target, lineage in lineage_by_target.items()}
 
 
+def _artifact_urls_from_metadata_items(value: object) -> set[str]:
+    if not isinstance(value, list):
+        return set()
+    return {
+        artifact_url
+        for item in value
+        if isinstance(item, dict)
+        for artifact_url in [_metadata_string(item.get("artifact_url"))]
+        if artifact_url
+    }
+
+
+def _require_artifact_urls_cover_metadata_items(
+    *,
+    listed_artifact_urls: object,
+    artifact_metadata_items: object,
+    event: str,
+    evidence_field: str,
+    proof_scope_id: str,
+) -> None:
+    listed_urls = set(_metadata_string_list(listed_artifact_urls))
+    metadata_urls = _artifact_urls_from_metadata_items(artifact_metadata_items)
+    missing_urls = sorted(metadata_urls - listed_urls)
+    extra_urls = sorted(listed_urls - metadata_urls)
+    evidence_label = "recording" if evidence_field == "recordings" else evidence_field
+    if missing_urls:
+        raise RuntimeError(
+            f"Demo proof scope {proof_scope_id} {event}.artifact_urls is missing {evidence_label} artifact URL(s): "
+            + ", ".join(missing_urls)
+        )
+    if extra_urls:
+        raise RuntimeError(
+            f"Demo proof scope {proof_scope_id} {event}.artifact_urls contains URL(s) not present in "
+            f"{event}.{evidence_field}: " + ", ".join(extra_urls)
+        )
+
+
 def _require_matching_artifact_lineage(
     *,
     source_metadata: dict[str, object],
@@ -1134,6 +1171,13 @@ def _require_evidence_uploaded_metadata(*, description: dict[str, object], proof
             f"Demo proof scope {proof_scope_id} evidence metadata is missing uploaded artifact metadata "
             "for required capture target(s): " + ", ".join(missing_target_artifacts)
         )
+    _require_artifact_urls_cover_metadata_items(
+        listed_artifact_urls=evidence_metadata.get("artifact_urls"),
+        artifact_metadata_items=evidence_metadata.get("recordings"),
+        event="EvidenceUploaded",
+        evidence_field="recordings",
+        proof_scope_id=proof_scope_id,
+    )
     artifact_urls_by_target = {
         target: artifacts_by_target[target]["artifact_url"]
         for target in required_targets
@@ -1253,6 +1297,13 @@ def _require_failure_evidence_target_metadata(
             "artifact metadata "
             "for required capture target(s): " + ", ".join(missing_diagnostic_targets)
         )
+    _require_artifact_urls_cover_metadata_items(
+        listed_artifact_urls=failure_metadata.get("artifact_urls"),
+        artifact_metadata_items=failure_metadata.get("failure_evidence"),
+        event="FailureEvidenceUploaded",
+        evidence_field="failure_evidence",
+        proof_scope_id=proof_scope_id,
+    )
     artifact_urls_by_target = {
         target: evidence_by_target[target]["artifact_url"]
         for target in required_targets
