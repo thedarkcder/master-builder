@@ -328,11 +328,18 @@ class GitHubWebhookProductionPathTests(ProductionPathApiTestCase):
                             "pr_url": "https://github.com/org/repo/pull/17",
                             "demo_proof_state": "complete",
                             "demo_proof_events": [
+                                "ReleaseLive",
                                 "PREvidenceAttached",
                                 "PreviewCleanupRequested",
                                 "PreviewCleanupCompleted",
                             ],
                             "demo_proof_event_metadata": [
+                                {
+                                    "event": "ReleaseLive",
+                                    "metadata": {
+                                        "release_commit_sha": "b" * 40,
+                                    },
+                                },
                                 {
                                     "event": "PREvidenceAttached",
                                     "metadata": {
@@ -361,6 +368,7 @@ class GitHubWebhookProductionPathTests(ProductionPathApiTestCase):
         self.assertEqual(proof_status["status"], "completed")
         self.assertEqual(proof_status["demo_proof_state"], "complete")
         self.assertEqual(proof_status["terminal_event"], "PreviewCleanupCompleted")
+        self.assertEqual(proof_status["release_commit_sha"], "b" * 40)
         self.assertEqual(proof_status["artifact_url_check_status"], "passed")
         self.assertEqual(proof_status["checked_artifact_urls"], (artifact_url,))
 

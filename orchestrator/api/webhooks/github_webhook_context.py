@@ -292,7 +292,7 @@ def build_github_review_runtime(*, session, settings, tenant, project):
             project_id=project.project_id,
             run_id=run_id,
         ),
-        demo_proof_status_resolver=lambda pr_url: _qa_demo_proof_status_for_pr_url(
+        demo_proof_status_resolver=lambda pr_url, _head_sha: _qa_demo_proof_status_for_pr_url(
             session=session,
             tenant_id=tenant.tenant_id,
             project_id=project.project_id,
@@ -397,12 +397,14 @@ def _qa_demo_proof_status_for_pr_url(
             continue
         events = [str(event or "").strip() for event in list(description.get("demo_proof_events") or [])]
         terminal_event = events[-1] if events else ""
+        release_metadata = _demo_proof_event_metadata(description, "ReleaseLive")
         pr_evidence_metadata = _demo_proof_event_metadata(description, "PREvidenceAttached")
         return {
             "workflow_id": workflow_id,
             "status": str(workflow_status or "").strip(),
             "demo_proof_state": str(description.get("demo_proof_state") or "").strip(),
             "terminal_event": terminal_event,
+            "release_commit_sha": str(release_metadata.get("release_commit_sha") or "").strip().lower(),
             "artifact_url_check_status": str(pr_evidence_metadata.get("artifact_url_check_status") or "").strip(),
             "checked_artifact_urls": tuple(
                 str(url or "").strip()

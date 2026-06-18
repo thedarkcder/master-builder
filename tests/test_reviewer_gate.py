@@ -14,9 +14,11 @@ class _FakeGitHubClient:
         checks: list[WorkflowCheckSuite],
         files: list[PullRequestFileChange] | None = None,
         review_body: str | None = None,
+        head_sha: str = "b" * 40,
     ):
         self._checks = checks
         self._files = files or []
+        self._head_sha = head_sha
         self._review_body = review_body or (
             "Good:\n- implemented\n\n"
             "Risks:\n- low\n\n"
@@ -30,7 +32,7 @@ class _FakeGitHubClient:
         return PullRequestDetails(
             number=pr_number,
             html_url=f"https://github.com/{repo_full_name}/pull/{pr_number}",
-            head_sha="abc123",
+            head_sha=self._head_sha,
             title=f"PR {pr_number}",
             state="open",
             head_ref="feature/test",
@@ -85,7 +87,7 @@ class ReviewerGateTests(unittest.TestCase):
             demo_evidence_recordings_resolver=(lambda _run_id: expected_recordings)
             if expected_recordings is not None or use_recordings_resolver
             else None,
-            demo_proof_status_resolver=(lambda _pr_url: demo_proof_status)
+            demo_proof_status_resolver=(lambda _pr_url, _head_sha: demo_proof_status)
             if demo_proof_status is not None or use_demo_proof_status_resolver
             else None,
         )
@@ -907,6 +909,7 @@ class ReviewerGateTests(unittest.TestCase):
                 "status": "completed",
                 "demo_proof_state": "complete",
                 "terminal_event": "PreviewCleanupCompleted",
+                "release_commit_sha": "b" * 40,
                 "artifact_url_check_status": "passed",
                 "checked_artifact_urls": (artifact_url,),
             },
@@ -919,6 +922,69 @@ class ReviewerGateTests(unittest.TestCase):
 
         self.assertTrue(signal.ready)
         self.assertEqual(signal.state, "ready")
+
+    def test_reviewer_blocks_stale_demo_proof_from_previous_pr_head(self) -> None:
+        artifact_url = "https://cdn.example/qa-demos/route25/route25-default/run-1/qa-demo-1.webm"
+        old_release_commit_sha = "a" * 40
+        current_head_sha = "b" * 40
+        expected_recording = {
+            "name": "Browser happy path",
+            "artifact_url": artifact_url,
+            "object_key": "route25/route25-default/run-1/qa-demo-1.webm",
+            "capture_target": "browser",
+            "capture_reference": "https://preview.example",
+            "content_sha256": f"{1:064x}",
+            "release_commit_sha": old_release_commit_sha,
+            "release_context_sha256": "c" * 64,
+        }
+        gate = self._gate_with_demo_requirement(
+            _FakeGitHubClient(
+                checks=[
+                    WorkflowCheckSuite(name="CI", status="completed", conclusion="success"),
+                    WorkflowCheckSuite(name="Security", status="completed", conclusion="success"),
+                ],
+                files=[
+                    PullRequestFileChange(filename="orchestrator/core/reviewer.py", patch="+ change"),
+                    PullRequestFileChange(filename="tests/test_reviewer_gate.py", patch="+ test"),
+                ],
+                head_sha=current_head_sha,
+                review_body=(
+                    "Good:\n- implemented\n\n"
+                    "Risks:\n- low\n\n"
+                    "Must-fix:\n- none\n\n"
+                    "Tests:\n- pytest -q\n\n"
+                    "Questions:\n- none\n\n"
+                    "Follow-ups:\n- none\n\n"
+                    "## Demo Evidence\n"
+                    "<!-- master-builder:qa-demo-evidence v1 -->\n"
+                    "<!-- master-builder:qa-demo-required-targets browser -->\n"
+                    "<!-- master-builder:qa-demo-required-counts browser=1 -->\n"
+                    "- Browser happy path [target=browser; reference=https://preview.example; "
+                    "object_key=route25/route25-default/run-1/qa-demo-1.webm; "
+                    "sha256=0000000000000000000000000000000000000000000000000000000000000001; "
+                    f"release_commit_sha={old_release_commit_sha}; "
+                    "release_context_sha256=cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc]: "
+                    f"{artifact_url}\n"
+                ),
+            ),
+            expected_recordings=(expected_recording,),
+            demo_proof_status={
+                "status": "completed",
+                "demo_proof_state": "complete",
+                "terminal_event": "PreviewCleanupCompleted",
+                "artifact_url_check_status": "passed",
+                "checked_artifact_urls": (artifact_url,),
+                "release_commit_sha": old_release_commit_sha,
+            },
+        )
+
+        signal = gate.evaluate_pr(
+            repo_full_name="example/repo",
+            pr_number=21,
+        )
+
+        self.assertFalse(signal.ready)
+        self.assertEqual(signal.state, "missing_demo_evidence")
 
     def test_reviewer_blocks_structured_demo_evidence_from_another_project_scope(self) -> None:
         gate = self._gate_with_demo_requirement(
