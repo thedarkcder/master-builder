@@ -191,6 +191,14 @@ _FAILURE_TERMINAL_METADATA_REQUIREMENTS: dict[str, tuple[str, ...]] = {
     "PRFailureEvidenceAttached": ("pr_url", "pr_body_sha256"),
     "FailurePreviewCleanupCompleted": ("release_id", "cleanup_status", "cleanup_mode", "cleanup_evidence"),
 }
+_MANAGED_PREVIEW_CLEANUP_RESOURCE_TYPES = frozenset(
+    {
+        "coolify_application",
+        "coolify_deployment",
+        "coolify_service",
+        "preview_route_binding",
+    }
+)
 _RECORDING_EVENT_STATES = {
     "ServiceVerificationPassed": "waiting_for_recording",
     "RecordingStarted": "recording",
@@ -802,11 +810,19 @@ def _require_cleanup_resource_refs(
             f"Demo proof scope {proof_scope_id} requires {event}.cleanup_evidence.resource_refs to include "
             f"release {release_id}"
         )
-    has_preview_resource_ref = any(ref["resource_type"] != "release" for ref in refs)
-    if not has_preview_resource_ref:
+    managed_resource_types = sorted(
+        {
+            ref["resource_type"]
+            for ref in refs
+            if ref["resource_type"] in _MANAGED_PREVIEW_CLEANUP_RESOURCE_TYPES
+        }
+    )
+    if not managed_resource_types:
+        provided_types = sorted({ref["resource_type"] for ref in refs})
         raise RuntimeError(
             f"Demo proof scope {proof_scope_id} requires {event}.cleanup_evidence.resource_refs to identify "
-            "at least one preview resource outside the release record"
+            "at least one managed preview resource, not only diagnostic refs: "
+            + ", ".join(provided_types)
         )
 
 

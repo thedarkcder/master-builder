@@ -1666,6 +1666,74 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
             else:  # pragma: no cover
                 raise AssertionError("expected demo proof completion to require cleanup resource refs")
 
+    def test_demo_proof_rejects_success_completion_when_cleanup_refs_only_name_service_url(self) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-a")
+            workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
+            request = _demo_proof_request(tenant=tenant)
+            execute_workflow_advance(
+                session=session,
+                settings=SimpleNamespace(),
+                workflow_type=workflow_type,
+                request=request,
+                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+            )
+
+            for event in (
+                "ProofLeaseAcquired",
+                "ReleaseRequested",
+                "ReleaseProvisioning",
+                "ReleaseLive",
+                "RouteReady",
+                "ServiceVerificationPassed",
+                "RecordingStarted",
+                "RecordingCompleted",
+                "EvidenceUploadStarted",
+                "EvidenceUploaded",
+                "PREvidenceAttachStarted",
+                "PREvidenceAttached",
+                "PreviewCleanupRequested",
+            ):
+                execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=_demo_proof_request_for_event(request, event),
+                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                )
+
+            terminal_request = _demo_proof_request_for_event(request, "PreviewCleanupCompleted")
+            payload = dict(terminal_request.payload)
+            metadata = dict(payload["event_metadata"])
+            cleanup_evidence = dict(metadata["cleanup_evidence"])
+            cleanup_evidence["resource_refs"] = [
+                {
+                    "resource_type": "release",
+                    "resource_id": "release-preview-1",
+                    "cleanup_action": "destroyed",
+                },
+                {
+                    "resource_type": "service_url",
+                    "resource_id": "https://preview.example",
+                    "cleanup_action": "destroyed",
+                },
+            ]
+            metadata["cleanup_evidence"] = cleanup_evidence
+            payload["event_metadata"] = metadata
+            try:
+                execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=replace(terminal_request, payload=payload),
+                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                )
+            except RuntimeError as exc:
+                assert "managed preview resource" in str(exc)
+                assert "service_url" in str(exc)
+            else:  # pragma: no cover
+                raise AssertionError("expected demo proof completion to reject service-url-only cleanup refs")
+
     def test_demo_proof_rejects_success_completion_when_cleanup_release_mismatches_live_release(self) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
