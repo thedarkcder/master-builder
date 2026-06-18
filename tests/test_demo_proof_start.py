@@ -112,7 +112,7 @@ def _demo_proof_event_metadata(event: str) -> dict[str, object] | None:
                 else {}
             ),
         }
-    if event == "EvidenceUploaded":
+    if event in {"RecordingCompleted", "EvidenceUploaded"}:
         return {
             "artifact_urls": [
                 "https://cdn.example/qa-demos/tenant-1/project-1/run-1/browser.webm",
@@ -652,11 +652,37 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 "PREvidenceAttached",
                 "PreviewCleanupRequested",
             ):
+                event_request = _demo_proof_request_for_event(request, event)
+                if event == "RecordingCompleted":
+                    metadata = _demo_proof_event_metadata(event)
+                    assert metadata is not None
+                    recordings = list(metadata["recordings"])
+                    recordings.append(
+                        _recording_artifact_metadata(
+                            "browser",
+                            "https://cdn.example/qa-demos/tenant-1/project-1/run-1/browser-variant.webm",
+                        )
+                    )
+                    artifact_urls = list(metadata["artifact_urls"])
+                    artifact_urls.append("https://cdn.example/qa-demos/tenant-1/project-1/run-1/browser-variant.webm")
+                    event_request = replace(
+                        event_request,
+                        payload={
+                            **event_request.payload,
+                            "event_metadata": {
+                                **metadata,
+                                "artifact_urls": artifact_urls,
+                                "recording_count": 4,
+                                "capture_targets": ["browser", "browser", "ios", "android"],
+                                "recordings": recordings,
+                            },
+                        },
+                    )
                 execute_workflow_advance(
                     session=session,
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
-                    request=_demo_proof_request_for_event(request, event),
+                    request=event_request,
                     resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
                 )
 
@@ -1109,11 +1135,37 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 "PREvidenceAttached",
                 "PreviewCleanupRequested",
             ):
+                event_request = _demo_proof_request_for_event(request, event)
+                if event == "RecordingCompleted":
+                    metadata = _demo_proof_event_metadata(event)
+                    assert metadata is not None
+                    recordings = list(metadata["recordings"])
+                    recordings.append(
+                        _recording_artifact_metadata(
+                            "browser",
+                            "https://cdn.example/qa-demos/tenant-1/project-1/run-1/browser-variant.webm",
+                        )
+                    )
+                    artifact_urls = list(metadata["artifact_urls"])
+                    artifact_urls.append("https://cdn.example/qa-demos/tenant-1/project-1/run-1/browser-variant.webm")
+                    event_request = replace(
+                        event_request,
+                        payload={
+                            **event_request.payload,
+                            "event_metadata": {
+                                **metadata,
+                                "artifact_urls": artifact_urls,
+                                "recording_count": 4,
+                                "capture_targets": ["browser", "browser", "ios", "android"],
+                                "recordings": recordings,
+                            },
+                        },
+                    )
                 execute_workflow_advance(
                     session=session,
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
-                    request=_demo_proof_request_for_event(request, event),
+                    request=event_request,
                     resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
                 )
 
@@ -1405,11 +1457,37 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 "PREvidenceAttached",
                 "PreviewCleanupRequested",
             ):
+                event_request = _demo_proof_request_for_event(request, event)
+                if event == "RecordingCompleted":
+                    metadata = _demo_proof_event_metadata(event)
+                    assert metadata is not None
+                    recordings = list(metadata["recordings"])
+                    recordings.append(
+                        _recording_artifact_metadata(
+                            "browser",
+                            "https://cdn.example/qa-demos/tenant-1/project-1/run-1/browser-variant.webm",
+                        )
+                    )
+                    artifact_urls = list(metadata["artifact_urls"])
+                    artifact_urls.append("https://cdn.example/qa-demos/tenant-1/project-1/run-1/browser-variant.webm")
+                    event_request = replace(
+                        event_request,
+                        payload={
+                            **event_request.payload,
+                            "event_metadata": {
+                                **metadata,
+                                "artifact_urls": artifact_urls,
+                                "recording_count": 4,
+                                "capture_targets": ["browser", "browser", "ios", "android"],
+                                "recordings": recordings,
+                            },
+                        },
+                    )
                 execute_workflow_advance(
                     session=session,
                     settings=SimpleNamespace(),
                     workflow_type=workflow_type,
-                    request=_demo_proof_request_for_event(request, event),
+                    request=event_request,
                     resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
                 )
 
@@ -1425,6 +1503,56 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 assert "requires 2 recording artifact(s) for capture target browser, got 1" in str(exc)
             else:  # pragma: no cover
                 raise AssertionError("expected demo proof completion to enforce required recording counts")
+
+    def test_demo_proof_rejects_recording_completed_when_required_recording_count_is_missing(self) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-a")
+            workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
+            request = _demo_proof_request(tenant=tenant)
+            request = replace(
+                request,
+                payload={
+                    **request.payload,
+                    "required_recording_counts": {"browser": 2, "ios": 1, "android": 1},
+                },
+            )
+            execute_workflow_advance(
+                session=session,
+                settings=SimpleNamespace(),
+                workflow_type=workflow_type,
+                request=request,
+                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+            )
+
+            for event in (
+                "ProofLeaseAcquired",
+                "ReleaseRequested",
+                "ReleaseProvisioning",
+                "ReleaseLive",
+                "RouteReady",
+                "ServiceVerificationPassed",
+                "RecordingStarted",
+            ):
+                execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=_demo_proof_request_for_event(request, event),
+                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                )
+
+            try:
+                execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=_demo_proof_request_for_event(request, "RecordingCompleted"),
+                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                )
+            except RuntimeError as exc:
+                assert "requires 2 recording artifact(s) for capture target browser, got 1" in str(exc)
+            else:  # pragma: no cover
+                raise AssertionError("expected recording completion to enforce required recording counts")
 
     def test_demo_proof_rejects_failure_completion_without_failure_capture_target_metadata(self) -> None:
         with self.session_factory() as session:
@@ -1704,6 +1832,7 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     "release_kind": "run_preview",
                     "release_status": "live",
                 },
+                "RecordingCompleted": _demo_proof_event_metadata("RecordingCompleted"),
                 "EvidenceUploaded": {
                     "artifact_urls": ["https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-demo-1.webm"],
                     "recording_count": 1,
@@ -1804,7 +1933,7 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 session=session,
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
-                request=replace(request, trigger=WorkflowTrigger(event="RecordingCompleted")),
+                request=_demo_proof_request_for_event(request, "RecordingCompleted"),
                 resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
             )
             description = json.loads(workflow.source_description or "{}")

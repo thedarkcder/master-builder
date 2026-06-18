@@ -692,6 +692,48 @@ def _require_pr_evidence_matches_uploaded_artifacts(
         )
 
 
+def _require_recording_completion_metadata(*, description: dict[str, object], proof_scope_id: str) -> None:
+    metadata = _metadata_by_event(description)
+    recording_metadata = metadata.get("RecordingCompleted", {})
+    required_targets = set(_normalized_capture_targets(list(description.get("required_capture_targets") or [])))
+    recording_targets = _metadata_string_set(recording_metadata.get("capture_targets"))
+    missing_targets = sorted(required_targets - recording_targets)
+    if missing_targets:
+        raise RuntimeError(
+            f"Demo proof scope {proof_scope_id} recording completion metadata is missing required capture target(s): "
+            + ", ".join(missing_targets)
+        )
+    artifact_urls = _metadata_string_list(recording_metadata.get("artifact_urls"))
+    if len(artifact_urls) < len(required_targets):
+        raise RuntimeError(
+            f"Demo proof scope {proof_scope_id} recording completion requires at least {len(required_targets)} "
+            f"artifact URL(s) for required capture target(s), got {len(artifact_urls)}."
+        )
+    artifacts_by_target = _recording_artifacts_by_target(recording_metadata.get("recordings"))
+    missing_target_artifacts = sorted(target for target in required_targets if target not in artifacts_by_target)
+    if missing_target_artifacts:
+        raise RuntimeError(
+            f"Demo proof scope {proof_scope_id} recording completion metadata is missing artifact metadata "
+            "for required capture target(s): " + ", ".join(missing_target_artifacts)
+        )
+    recording_counts_by_target = _recording_artifact_counts_by_target(recording_metadata.get("recordings"))
+    required_counts = _normalized_required_recording_counts(
+        required_capture_targets=list(required_targets),
+        value=description.get("required_recording_counts"),
+    )
+    missing_count_targets = sorted(
+        (target, required_count, recording_counts_by_target.get(target, 0))
+        for target, required_count in required_counts.items()
+        if recording_counts_by_target.get(target, 0) < required_count
+    )
+    if missing_count_targets:
+        target, required_count, actual_count = missing_count_targets[0]
+        raise RuntimeError(
+            f"Demo proof scope {proof_scope_id} requires {required_count} recording artifact(s) "
+            f"for capture target {target}, got {actual_count}."
+        )
+
+
 def _require_terminal_proof_metadata(
     *,
     event: str,
@@ -1089,6 +1131,8 @@ class DemoProofWorkflowAdvanceHandler:
             raise RuntimeError(f"Unsupported demo proof workflow event: {event}")
         completed_operation_type, next_operation_type, reason = event_spec
         _require_pr_url_for_pr_evidence_event(event=event, pr_url=pr_url, proof_scope_id=proof_scope_id)
+        if event == "RecordingCompleted":
+            _require_recording_completion_metadata(description=description, proof_scope_id=proof_scope_id)
         _require_terminal_proof_metadata(event=event, description=description, proof_scope_id=proof_scope_id)
         lifecycle.complete_waiting_operation_attempt(
             operation_type=completed_operation_type,
