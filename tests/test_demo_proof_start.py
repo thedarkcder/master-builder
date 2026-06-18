@@ -62,6 +62,7 @@ def _cleanup_resource_refs() -> list[dict[str, str]]:
 def _cleanup_evidence_metadata() -> dict[str, object]:
     return {
         "release_id": "release-preview-1",
+        "lease_id": "demo-proof-lease:run-1-main-abcdef1:" + "b" * 40,
         "proof_scope_id": "run-1-main-abcdef1",
         "commit_sha": "b" * 40,
         "cleanup_status": "completed",
@@ -77,6 +78,7 @@ def _cleanup_evidence_metadata() -> dict[str, object]:
 
 def _demo_proof_lease_metadata() -> dict[str, str]:
     return {
+        "lease_id": "demo-proof-lease:run-1-main-abcdef1:" + "b" * 40,
         "proof_scope_id": "run-1-main-abcdef1",
         "commit_sha": "b" * 40,
         "state": "active",
@@ -1480,6 +1482,66 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 assert "ServiceVerificationPassed.service_urls" in str(exc)
             else:  # pragma: no cover
                 raise AssertionError("expected demo proof completion to require service verification metadata")
+
+    def test_demo_proof_rejects_success_completion_without_lease_identity_metadata(self) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-a")
+            workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
+            request = _demo_proof_request(tenant=tenant)
+            execute_workflow_advance(
+                session=session,
+                settings=SimpleNamespace(),
+                workflow_type=workflow_type,
+                request=request,
+                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+            )
+
+            for event in (
+                "ProofLeaseAcquired",
+                "ReleaseRequested",
+                "ReleaseProvisioning",
+                "ReleaseLive",
+                "RouteReady",
+                "ServiceVerificationPassed",
+                "RecordingStarted",
+                "RecordingCompleted",
+                "EvidenceUploadStarted",
+                "EvidenceUploaded",
+                "PREvidenceAttachStarted",
+                "PREvidenceAttached",
+                "PreviewCleanupRequested",
+            ):
+                event_request = _demo_proof_request_for_event(request, event)
+                if event == "ReleaseLive":
+                    payload = dict(event_request.payload)
+                    metadata = dict(payload["event_metadata"])
+                    demo_proof_lease = dict(metadata["demo_proof_lease"])
+                    demo_proof_lease.pop("lease_id", None)
+                    metadata["demo_proof_lease"] = demo_proof_lease
+                    payload["event_metadata"] = metadata
+                    event_request = replace(event_request, payload=payload)
+                execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=event_request,
+                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                )
+
+            terminal_request = _demo_proof_request_for_event(request, "PreviewCleanupCompleted")
+            try:
+                execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=terminal_request,
+                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                )
+            except RuntimeError as exc:
+                assert "ReleaseLive.demo_proof_lease" in str(exc)
+                assert "lease_id" in str(exc)
+            else:  # pragma: no cover
+                raise AssertionError("expected demo proof completion to require lease identity metadata")
 
     def test_demo_proof_rejects_success_completion_without_cleanup_resource_refs(self) -> None:
         with self.session_factory() as session:

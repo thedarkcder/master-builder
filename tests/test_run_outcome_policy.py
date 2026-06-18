@@ -256,6 +256,7 @@ def test_complete_runs_qa_demo_stage_before_finalization() -> None:
         },
         delivery_metadata={
             "demo_proof_lease": {
+                "lease_id": "demo-proof-lease:run:run-1:" + "b" * 40 + ":" + "b" * 40,
                 "proof_scope_id": "run:run-1:" + "b" * 40,
                 "commit_sha": "b" * 40,
                 "state": "destroyed",
@@ -346,6 +347,7 @@ def test_complete_runs_qa_demo_stage_before_finalization() -> None:
     }
     assert metadata_by_event["ReleaseLive"]["release_id"] == "release-preview-1"
     assert metadata_by_event["ReleaseLive"]["demo_proof_lease"] == {
+        "lease_id": "demo-proof-lease:run:run-1:" + "b" * 40 + ":" + "b" * 40,
         "proof_scope_id": "run:run-1:" + "b" * 40,
         "commit_sha": "b" * 40,
         "state": "destroyed",
@@ -413,6 +415,7 @@ def test_complete_runs_qa_demo_stage_before_finalization() -> None:
     assert metadata_by_event["PreviewCleanupCompleted"]["cleanup_mode"] == "destroy_or_ttl"
     assert metadata_by_event["PreviewCleanupCompleted"]["cleanup_evidence"] == {
         "release_id": "release-preview-1",
+        "lease_id": "demo-proof-lease:run:run-1:" + "b" * 40 + ":" + "b" * 40,
         "proof_scope_id": "run:run-1:" + "b" * 40,
         "commit_sha": "b" * 40,
         "cleanup_status": "completed",
