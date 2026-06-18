@@ -467,6 +467,13 @@ def _register_builtin_workflows() -> None:
                 "independent_trigger": True,
                 "preview_lease": True,
                 "required_capture_targets": ("browser", "ios", "android"),
+                "supported_trigger_modes": (
+                    "from_run",
+                    "from_pr",
+                    "from_release",
+                    "retry_recording",
+                    "cleanup_only",
+                ),
             },
             steps=infer_workflow_steps(DemoProofWorkflowDefinition),
             work_units=infer_workflow_work_units(DemoProofWorkflowDefinition),

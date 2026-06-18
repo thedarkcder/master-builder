@@ -43,6 +43,7 @@ def _demo_proof_request(*, tenant) -> WorkflowAdvanceRequest:  # noqa: ANN001
             "request_id": "request-1",
             "proof_scope_id": "run-1-main-abcdef1",
             "commit_sha": "abcdef1",
+            "trigger_mode": "from_run",
             "run_id": "run-1",
             "pr_url": "https://github.com/acme/project-a/pull/8",
             "required_capture_targets": ["browser", "ios", "android"],
@@ -184,6 +185,7 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                         "request_id": "request-1",
                         "proof_scope_id": "run-1-main-abcdef1",
                         "commit_sha": "abcdef1",
+                        "trigger_mode": "from_run",
                         "run_id": "run-1",
                         "pr_url": "https://github.com/acme/project-a/pull/8",
                         "required_capture_targets": ["browser", "ios", "android"],
@@ -245,6 +247,7 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     project=project,
                     proof_scope_id="run-1-main-abcdef1",
                     commit_sha="abcdef1",
+                    trigger_mode="from_run",
                     trigger_event="run_success_before_ready_for_review",
                     run_id="run-1",
                     pr_url="https://github.com/acme/project-a/pull/8",
@@ -254,9 +257,13 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
             assert result.workflow_id == "demo_proof:run-1-main-abcdef1"
             assert result.status == "waiting_for_input"
             assert captured_requests[0].trigger.event is None
+            assert captured_requests[0].payload["trigger_mode"] == "from_run"
+            assert captured_requests[0].execution.source.attributes["trigger_mode"] == "from_run"
             assert captured_requests[0].payload["request_id"].startswith(
                 "demo-proof:tenant-a:project-a:run-1-main-abcdef1:run_success_before_ready_for_review:"
             )
+            description = json.loads(session.execute(select(WorkflowExecution)).scalar_one().source_description or "{}")
+            assert description["trigger_mode"] == "from_run"
             workflow = session.execute(select(WorkflowExecution)).scalar_one()
             operation = session.execute(
                 select(WorkflowOperation).where(
@@ -281,6 +288,7 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                         project=project,
                         proof_scope_id="run-1-main-abcdef1",
                         commit_sha="abcdef1",
+                        trigger_mode="from_run",
                         trigger_event="admin_workflow_start",
                         run_id="run-1",
                         pr_url=None,
@@ -293,6 +301,56 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
 
             runtime_mock.assert_not_called()
             assert session.execute(select(WorkflowExecution)).scalar_one_or_none() is None
+
+    def test_demo_proof_handler_rejects_missing_trigger_mode_before_creating_workflow(self) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-a")
+            workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
+            request = _demo_proof_request(tenant=tenant)
+            payload = dict(request.payload)
+            payload.pop("trigger_mode")
+
+            try:
+                execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=replace(request, payload=payload),
+                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                )
+            except RuntimeError as exc:
+                assert "trigger_mode" in str(exc)
+            else:  # pragma: no cover
+                raise AssertionError("expected demo proof to require trigger_mode")
+
+            assert session.execute(select(WorkflowExecution)).scalar_one_or_none() is None
+
+    def test_demo_proof_handler_rejects_trigger_mode_changes_for_existing_scope(self) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-a")
+            workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
+            request = _demo_proof_request(tenant=tenant)
+            execute_workflow_advance(
+                session=session,
+                settings=SimpleNamespace(),
+                workflow_type=workflow_type,
+                request=request,
+                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+            )
+            changed_payload = {**request.payload, "trigger_mode": "from_pr"}
+
+            try:
+                execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=replace(request, payload=changed_payload, trigger=WorkflowTrigger(event="ProofLeaseAcquired")),
+                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                )
+            except RuntimeError as exc:
+                assert "trigger_mode cannot change" in str(exc)
+            else:  # pragma: no cover
+                raise AssertionError("expected demo proof to reject trigger_mode mutation")
 
     def test_advance_demo_proof_workflow_event_uses_explicit_lifecycle_event(self) -> None:
         with self.session_factory() as session:
@@ -320,6 +378,7 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     project=project,
                     proof_scope_id="run-1-main-abcdef1",
                     commit_sha="abcdef1",
+                    trigger_mode="from_run",
                     trigger_event="run_success_before_ready_for_review",
                     run_id="run-1",
                     pr_url="https://github.com/acme/project-a/pull/8",
@@ -332,6 +391,7 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     project=project,
                     proof_scope_id="run-1-main-abcdef1",
                     commit_sha="abcdef1",
+                    trigger_mode="from_run",
                     event="ProofLeaseAcquired",
                     run_id="run-1",
                     pr_url="https://github.com/acme/project-a/pull/8",

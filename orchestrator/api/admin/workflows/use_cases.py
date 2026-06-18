@@ -365,6 +365,7 @@ def _start_demo_proof_workflow(
     settings = get_settings()
     proof_scope_id = str(payload.input.get("proof_scope_id") or "").strip()
     commit_sha = str(payload.input.get("commit_sha") or "").strip()
+    trigger_mode = str(payload.input.get("trigger_mode") or "").strip()
     run_id = str(payload.input.get("run_id") or "").strip() or None
     pr_url = str(payload.input.get("pr_url") or "").strip() or None
     required_capture_targets = payload.input.get("required_capture_targets")
@@ -381,6 +382,7 @@ def _start_demo_proof_workflow(
             project=project,
             proof_scope_id=proof_scope_id,
             commit_sha=commit_sha,
+            trigger_mode=trigger_mode,
             run_id=run_id,
             pr_url=pr_url,
             required_capture_targets=required_capture_targets,

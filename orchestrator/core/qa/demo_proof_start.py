@@ -18,6 +18,15 @@ from orchestrator.core.workflow.runtime import WorkflowAdvanceRequest, WorkflowT
 from orchestrator.storage.models import Project, Tenant, WorkflowExecution, WorkflowOperation, WorkflowOperationAttempt
 
 DEMO_PROOF_WORKFLOW_TYPE_KEY = "demo_proof"
+DEMO_PROOF_TRIGGER_MODES = frozenset(
+    {
+        "from_run",
+        "from_pr",
+        "from_release",
+        "retry_recording",
+        "cleanup_only",
+    }
+)
 
 
 @dataclass(frozen=True)
@@ -65,6 +74,15 @@ def _normalize_pr_url(value: object) -> str:
     if not re.fullmatch(r"https://github\.com/[^/\s]+/[^/\s]+/pull/[0-9]+/?", normalized):
         raise ValueError("Demo proof start requires pr_url to be a GitHub pull request URL")
     return normalized.rstrip("/")
+
+
+def _normalize_trigger_mode(value: object) -> str:
+    normalized = str(value or "").strip()
+    if normalized not in DEMO_PROOF_TRIGGER_MODES:
+        raise ValueError(
+            "Demo proof trigger_mode must be one of: " + ", ".join(sorted(DEMO_PROOF_TRIGGER_MODES))
+        )
+    return normalized
 
 
 def _normalize_required_capture_targets(value: object) -> tuple[str, ...]:
@@ -117,6 +135,7 @@ def start_demo_proof_workflow(
     project: Project,
     proof_scope_id: str,
     commit_sha: str,
+    trigger_mode: str,
     trigger_event: str,
     run_id: str | None = None,
     pr_url: str | None = None,
@@ -129,6 +148,7 @@ def start_demo_proof_workflow(
         project=project,
         proof_scope_id=proof_scope_id,
         commit_sha=commit_sha,
+        trigger_mode=trigger_mode,
         request_reason=trigger_event,
         run_id=run_id,
         pr_url=pr_url,
@@ -152,6 +172,7 @@ def advance_demo_proof_workflow_event(
     project: Project,
     proof_scope_id: str,
     commit_sha: str,
+    trigger_mode: str,
     event: str,
     run_id: str | None = None,
     pr_url: str | None = None,
@@ -169,6 +190,7 @@ def advance_demo_proof_workflow_event(
         project=project,
         proof_scope_id=proof_scope_id,
         commit_sha=commit_sha,
+        trigger_mode=trigger_mode,
         request_reason=normalized_event,
         run_id=run_id,
         pr_url=pr_url,
@@ -193,6 +215,7 @@ def _advance_demo_proof_workflow(
     project: Project,
     proof_scope_id: str,
     commit_sha: str,
+    trigger_mode: str,
     request_reason: str,
     run_id: str | None,
     pr_url: str | None,
@@ -211,6 +234,7 @@ def _advance_demo_proof_workflow(
 
     normalized_scope = _normalize_proof_scope_id(proof_scope_id)
     normalized_commit_sha = _normalize_commit_sha(commit_sha)
+    normalized_trigger_mode = _normalize_trigger_mode(trigger_mode)
     normalized_targets = _normalize_required_capture_targets(required_capture_targets)
     normalized_run_id = str(run_id or "").strip() or None
     normalized_pr_url = _normalize_pr_url(pr_url)
@@ -241,6 +265,7 @@ def _advance_demo_proof_workflow(
         ),
         "proof_scope_id": normalized_scope,
         "commit_sha": normalized_commit_sha,
+        "trigger_mode": normalized_trigger_mode,
         "run_id": normalized_run_id,
         "pr_url": normalized_pr_url,
         "required_capture_targets": list(normalized_targets),
@@ -264,6 +289,7 @@ def _advance_demo_proof_workflow(
                     attributes={
                         "proof_scope_id": normalized_scope,
                         "commit_sha": normalized_commit_sha,
+                        "trigger_mode": normalized_trigger_mode,
                     },
                 ),
             ),

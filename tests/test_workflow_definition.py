@@ -115,6 +115,13 @@ def test_registered_demo_proof_workflow_matches_required_proof_chain() -> None:
     assert workflow_type.handler_key == "demo_proof"
     assert workflow_type.capabilities["independent_trigger"] is True
     assert workflow_type.capabilities["required_capture_targets"] == ("browser", "ios", "android")
+    assert workflow_type.capabilities["supported_trigger_modes"] == (
+        "from_run",
+        "from_pr",
+        "from_release",
+        "retry_recording",
+        "cleanup_only",
+    )
     assert binding.workflow_name == "HandlerBackedWorkflow"
     assert binding.execution_mode == "handler"
     assert [step.key for step in workflow_type.steps] == [
