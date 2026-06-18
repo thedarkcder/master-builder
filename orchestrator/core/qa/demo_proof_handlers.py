@@ -1336,6 +1336,19 @@ def _require_lease_scope_identity(
             "completion: "
             + ", ".join(f"ReleaseLive.demo_proof_lease.{field}" for field in sorted(_DEMO_PROOF_LEASE_REQUIRED_FIELDS))
         )
+    release_event = "ReleaseFailed" if event == "ReleaseFailedPreviewCleanupCompleted" else "ReleaseLive"
+    _require_demo_proof_lease_state(
+        lease_metadata=acquired_lease,
+        event="ProofLeaseAcquired",
+        expected_state="active",
+        proof_scope_id=proof_scope_id,
+    )
+    _require_demo_proof_lease_state(
+        lease_metadata=release_lease,
+        event=release_event,
+        expected_state="active",
+        proof_scope_id=proof_scope_id,
+    )
     release_id = _metadata_string(release_metadata.get("release_id"))
     acquired_release_id = _metadata_string(acquired_metadata.get("release_id"))
     if acquired_release_id != release_id:
