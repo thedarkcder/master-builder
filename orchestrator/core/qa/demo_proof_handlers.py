@@ -65,6 +65,16 @@ _DEMO_PROOF_EVENTS: dict[str, tuple[str, str | None, str]] = {
         DEMO_PROOF_STEP_RECORDING,
         "recording_requested",
     ),
+    "ServiceVerificationFailed": (
+        DEMO_PROOF_STEP_RELEASE,
+        DEMO_PROOF_STEP_PREVIEW_CLEANUP,
+        "service_verification_failed_cleanup_requested",
+    ),
+    "ServiceVerificationFailedPreviewCleanupCompleted": (
+        DEMO_PROOF_STEP_PREVIEW_CLEANUP,
+        None,
+        "demo_proof_blocked_after_service_verification_failure_cleanup",
+    ),
     "RecordingCompleted": (
         DEMO_PROOF_STEP_RECORDING,
         DEMO_PROOF_STEP_EVIDENCE_UPLOAD,
@@ -142,11 +152,6 @@ _DEMO_PROOF_OBSERVATION_EVENTS: dict[str, tuple[str, str]] = {
 }
 
 _DEMO_PROOF_FAILURE_EVENTS: dict[str, tuple[str, str, str]] = {
-    "ServiceVerificationFailed": (
-        DEMO_PROOF_STEP_RELEASE,
-        "service_verification_failed",
-        "service_verification_failed",
-    ),
     "EvidenceUploadFailed": (
         DEMO_PROOF_STEP_EVIDENCE_UPLOAD,
         "evidence_upload_failed",
@@ -166,6 +171,11 @@ _DEMO_PROOF_FAILURE_EVENTS: dict[str, tuple[str, str, str]] = {
         DEMO_PROOF_STEP_PREVIEW_CLEANUP,
         "release_failed_preview_cleanup_failed",
         "release_failed_preview_cleanup_failed",
+    ),
+    "ServiceVerificationFailedPreviewCleanupFailed": (
+        DEMO_PROOF_STEP_PREVIEW_CLEANUP,
+        "service_verification_failed_preview_cleanup_failed",
+        "service_verification_failed_preview_cleanup_failed",
     ),
     "RecordingFailedPreviewCleanupFailed": (
         DEMO_PROOF_STEP_PREVIEW_CLEANUP,
@@ -194,6 +204,7 @@ _DEMO_PROOF_BLOCKING_COMPLETION_EVENTS = frozenset(
         "FailurePreviewCleanupCompleted",
         "ReleaseFailedPreviewCleanupCompleted",
         "RecordingFailedPreviewCleanupCompleted",
+        "ServiceVerificationFailedPreviewCleanupCompleted",
     }
 )
 _PR_EVIDENCE_REQUEST_EVENTS = frozenset({"EvidenceUploaded", "FailureEvidenceUploaded"})
@@ -246,6 +257,23 @@ _RELEASE_FAILED_TERMINAL_METADATA_REQUIREMENTS: dict[str, tuple[str, ...]] = {
     "ProofLeaseAcquired": ("release_id", "release_commit_sha", "demo_proof_lease"),
     "ReleaseFailed": ("release_id", "release_commit_sha", "demo_proof_lease", "error_message"),
     "ReleaseFailedPreviewCleanupCompleted": (
+        "release_id",
+        "cleanup_status",
+        "cleanup_mode",
+        "cleanup_evidence",
+    ),
+}
+_SERVICE_VERIFICATION_FAILED_TERMINAL_METADATA_REQUIREMENTS: dict[str, tuple[str, ...]] = {
+    "ProofLeaseAcquired": ("release_id", "release_commit_sha", "demo_proof_lease"),
+    "ReleaseLive": ("release_id", "release_commit_sha", "demo_proof_lease"),
+    "ServiceVerificationFailed": (
+        "release_id",
+        "release_commit_sha",
+        "required_service_kinds",
+        "service_urls",
+        "error_message",
+    ),
+    "ServiceVerificationFailedPreviewCleanupCompleted": (
         "release_id",
         "cleanup_status",
         "cleanup_mode",
@@ -1482,6 +1510,52 @@ def _require_service_verification_metadata(
         )
 
 
+def _require_service_verification_failure_metadata(
+    *,
+    release_metadata: dict[str, object],
+    failure_metadata: dict[str, object],
+    proof_scope_id: str,
+) -> None:
+    release_id = _metadata_string(release_metadata.get("release_id"))
+    failure_release_id = _metadata_string(failure_metadata.get("release_id"))
+    if failure_release_id != release_id:
+        raise RuntimeError(
+            f"Demo proof scope {proof_scope_id} service verification failure must reference ReleaseLive.release_id "
+            f"{release_id}: ServiceVerificationFailed.release_id={failure_release_id or '<missing>'}"
+        )
+    release_commit_sha = _metadata_string(release_metadata.get("release_commit_sha")).lower()
+    failure_commit_sha = _metadata_string(failure_metadata.get("release_commit_sha")).lower()
+    if failure_commit_sha != release_commit_sha:
+        raise RuntimeError(
+            f"Demo proof scope {proof_scope_id} service verification failure must reference "
+            f"ReleaseLive.release_commit_sha {release_commit_sha}: "
+            f"ServiceVerificationFailed.release_commit_sha={failure_commit_sha or '<missing>'}"
+        )
+    required_kinds = set(_metadata_string_list(failure_metadata.get("required_service_kinds")))
+    if not required_kinds:
+        raise RuntimeError(
+            f"Demo proof scope {proof_scope_id} requires ServiceVerificationFailed.required_service_kinds "
+            "before terminal completion"
+        )
+    service_urls = list(failure_metadata.get("service_urls") or [])
+    if not service_urls:
+        raise RuntimeError(
+            f"Demo proof scope {proof_scope_id} requires ServiceVerificationFailed.service_urls before terminal "
+            "completion"
+        )
+    observed_kinds = {
+        _metadata_string(item.get("service_kind"))
+        for item in service_urls
+        if isinstance(item, dict) and _metadata_string(item.get("service_kind"))
+    }
+    missing_kinds = sorted(required_kinds - observed_kinds)
+    if missing_kinds:
+        raise RuntimeError(
+            f"Demo proof scope {proof_scope_id} ServiceVerificationFailed.service_urls is missing service kind(s): "
+            + ", ".join(missing_kinds)
+        )
+
+
 def _require_terminal_proof_metadata(
     *,
     event: str,
@@ -1497,6 +1571,8 @@ def _require_terminal_proof_metadata(
         if event == "RecordingFailedPreviewCleanupCompleted"
         else _RELEASE_FAILED_TERMINAL_METADATA_REQUIREMENTS
         if event == "ReleaseFailedPreviewCleanupCompleted"
+        else _SERVICE_VERIFICATION_FAILED_TERMINAL_METADATA_REQUIREMENTS
+        if event == "ServiceVerificationFailedPreviewCleanupCompleted"
         else None
     )
     if requirements is None:
@@ -1518,7 +1594,10 @@ def _require_terminal_proof_metadata(
         if event == "ReleaseFailedPreviewCleanupCompleted"
         else metadata.get("ReleaseLive", {})
     )
-    if event != "ReleaseFailedPreviewCleanupCompleted":
+    if event not in {
+        "ReleaseFailedPreviewCleanupCompleted",
+        "ServiceVerificationFailedPreviewCleanupCompleted",
+    }:
         _require_service_verification_metadata(
             release_metadata=release_metadata,
             service_metadata=metadata.get("ServiceVerificationPassed", {}),
@@ -1529,6 +1608,7 @@ def _require_terminal_proof_metadata(
         "FailurePreviewCleanupCompleted",
         "ReleaseFailedPreviewCleanupCompleted",
         "RecordingFailedPreviewCleanupCompleted",
+        "ServiceVerificationFailedPreviewCleanupCompleted",
     }:
         cleanup_metadata = metadata.get(event, {})
         _require_cleanup_evidence_metadata(
@@ -1567,6 +1647,14 @@ def _require_terminal_proof_metadata(
             proof_scope_id=proof_scope_id,
         )
     if event == "ReleaseFailedPreviewCleanupCompleted":
+        return
+    if event == "ServiceVerificationFailedPreviewCleanupCompleted":
+        failure_metadata = metadata.get("ServiceVerificationFailed", {})
+        _require_service_verification_failure_metadata(
+            release_metadata=release_metadata,
+            failure_metadata=failure_metadata,
+            proof_scope_id=proof_scope_id,
+        )
         return
     if event == "PreviewCleanupCompleted":
         _require_evidence_uploaded_metadata(description=description, proof_scope_id=proof_scope_id)
@@ -1905,6 +1993,10 @@ class DemoProofWorkflowAdvanceHandler:
         elif event in _DEMO_PROOF_BLOCKING_COMPLETION_EVENTS:
             if event == "ReleaseFailedPreviewCleanupCompleted":
                 message = f"Demo proof recorded release failure cleanup for proof scope {proof_scope_id}."
+            elif event == "ServiceVerificationFailedPreviewCleanupCompleted":
+                message = (
+                    f"Demo proof recorded service verification failure cleanup for proof scope {proof_scope_id}."
+                )
             elif event == "RecordingFailedPreviewCleanupCompleted":
                 message = f"Demo proof recorded recording failure cleanup for proof scope {proof_scope_id}."
             else:

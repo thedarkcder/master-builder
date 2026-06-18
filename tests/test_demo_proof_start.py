@@ -198,6 +198,28 @@ def _demo_proof_event_metadata(event: str) -> dict[str, object] | None:
         }
     if event == "ServiceVerificationPassed":
         return _service_verification_metadata()
+    if event == "ServiceVerificationFailed":
+        metadata = _service_verification_metadata()
+        metadata["error_message"] = "Website service returned HTTP 502 during verification"
+        metadata["service_urls"] = [
+            {
+                "service_kind": "website",
+                "url": "https://preview.example",
+                "status": "failed",
+            }
+        ]
+        return metadata
+    if event == "ServiceVerificationFailedPreviewCleanupCompleted":
+        return {
+            "release_id": "release-preview-1",
+            "release_kind": "run_preview",
+            "release_status": "destroyed",
+            "release_commit_sha": "b" * 40,
+            "demo_proof_lease": _demo_proof_lease_metadata(),
+            "cleanup_status": "completed",
+            "cleanup_mode": "destroy_or_ttl",
+            "cleanup_evidence": _cleanup_evidence_metadata(),
+        }
     if event in {"RecordingCompleted", "EvidenceUploaded"}:
         return {
             "artifact_urls": [
@@ -3531,6 +3553,76 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
             assert release_operation.status == "completed"
             assert cleanup_operation.status == "completed"
             assert release_attempt.status == "completed"
+
+    def test_demo_proof_service_verification_failed_event_waits_for_cleanup_before_blocking_workflow(self) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-a")
+            workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
+            request = _demo_proof_request(tenant=tenant)
+            execute_workflow_advance(
+                session=session,
+                settings=SimpleNamespace(),
+                workflow_type=workflow_type,
+                request=request,
+                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+            )
+            for event in (
+                "ProofLeaseAcquired",
+                "ReleaseRequested",
+                "ReleaseProvisioning",
+                "ReleaseLive",
+                "RouteReady",
+            ):
+                execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=_demo_proof_request_for_event(request, event),
+                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                )
+
+            result = execute_workflow_advance(
+                session=session,
+                settings=SimpleNamespace(),
+                workflow_type=workflow_type,
+                request=_demo_proof_request_for_event(request, "ServiceVerificationFailed"),
+                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+            )
+
+            assert result.reason == "service_verification_failed_cleanup_requested"
+            assert result.failed is False
+            cleanup_result = execute_workflow_advance(
+                session=session,
+                settings=SimpleNamespace(),
+                workflow_type=workflow_type,
+                request=_demo_proof_request_for_event(request, "ServiceVerificationFailedPreviewCleanupCompleted"),
+                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+            )
+
+            assert cleanup_result.reason == "demo_proof_blocked_after_service_verification_failure_cleanup"
+            assert cleanup_result.failed is True
+            workflow = session.execute(select(WorkflowExecution)).scalar_one()
+            release_operation = session.execute(
+                select(WorkflowOperation).where(
+                    WorkflowOperation.workflow_id == workflow.workflow_id,
+                    WorkflowOperation.operation_type == "release",
+                )
+            ).scalar_one()
+            cleanup_operation = session.execute(
+                select(WorkflowOperation).where(
+                    WorkflowOperation.workflow_id == workflow.workflow_id,
+                    WorkflowOperation.operation_type == "preview_cleanup",
+                )
+            ).scalar_one()
+            description = json.loads(workflow.source_description or "{}")
+            assert workflow.status == "failed"
+            assert workflow.last_error == (
+                "Demo proof recorded service verification failure cleanup for proof scope run-1-main-abcdef1."
+            )
+            assert description["demo_proof_state"] == "blocked"
+            assert description["demo_proof_events"][-1] == "ServiceVerificationFailedPreviewCleanupCompleted"
+            assert release_operation.status == "completed"
+            assert cleanup_operation.status == "completed"
 
     def test_demo_proof_pr_attach_failed_event_fails_waiting_pr_update_operation_and_blocks_workflow(self) -> None:
         with self.session_factory() as session:

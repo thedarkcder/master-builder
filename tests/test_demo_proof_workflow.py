@@ -12,6 +12,7 @@ from orchestrator.core.qa.demo_proof_workflow import (
     DEMO_PROOF_STATE_REQUESTED,
     DEMO_PROOF_STATE_RECORDING,
     DEMO_PROOF_STATE_RECORDING_DEFERRED,
+    DEMO_PROOF_STATE_SERVICES_VERIFYING,
     PREVIEW_LEASE_STATE_DESTROYED,
     PREVIEW_LEASE_STATE_LIVE,
     PREVIEW_LEASE_STATE_RECORDING,
@@ -89,6 +90,24 @@ def test_demo_proof_release_failure_waits_for_cleanup_before_blocking() -> None:
     state = transition_demo_proof_state(
         current_state=state,
         event="ReleaseFailedPreviewCleanupCompleted",
+    )
+
+    assert state == DEMO_PROOF_STATE_BLOCKED
+    assert is_demo_proof_terminal(state)
+
+
+def test_demo_proof_service_verification_failure_waits_for_cleanup_before_blocking() -> None:
+    state = transition_demo_proof_state(
+        current_state=DEMO_PROOF_STATE_SERVICES_VERIFYING,
+        event="ServiceVerificationFailed",
+    )
+
+    assert state != DEMO_PROOF_STATE_BLOCKED
+    assert not is_demo_proof_terminal(state)
+
+    state = transition_demo_proof_state(
+        current_state=state,
+        event="ServiceVerificationFailedPreviewCleanupCompleted",
     )
 
     assert state == DEMO_PROOF_STATE_BLOCKED
