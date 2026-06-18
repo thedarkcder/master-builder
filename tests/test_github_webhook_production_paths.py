@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+import json
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -8,6 +9,7 @@ import pytest
 
 from orchestrator.api.webhooks.github_webhook_context import (
     _latest_run_id_for_pr_url,
+    _qa_demo_proof_status_for_pr_url,
     _qa_demo_recordings_for_run,
     build_github_review_runtime,
 )
@@ -238,6 +240,7 @@ class GitHubWebhookProductionPathTests(ProductionPathApiTestCase):
             "https://cdn.example/qa-demos",
         )
         self.assertIn("demo_evidence_recordings_resolver", gate_cls.call_args.kwargs)
+        self.assertIn("demo_proof_status_resolver", gate_cls.call_args.kwargs)
 
     def test_qa_demo_review_runtime_resolves_persisted_qa_recordings_for_run(self) -> None:
         snapshot = _qa_demo_recording_snapshot()
@@ -302,6 +305,64 @@ class GitHubWebhookProductionPathTests(ProductionPathApiTestCase):
                 },
             ),
         )
+
+    def test_qa_demo_review_runtime_resolves_completed_demo_proof_status_for_pr_url(self) -> None:
+        artifact_url = "https://cdn.example/qa-demos/example/example-default/run-1/qa-demo-1.webm"
+        with self.session_factory() as session:
+            session.add(
+                WorkflowExecution(
+                    workflow_id="demo-proof-pr-17",
+                    workflow_type_key="demo_proof",
+                    tenant_id="example",
+                    project_id="example-default",
+                    source_system="demo_proof",
+                    source_ref="run-1-main-abcdef1",
+                    repo_url="https://github.com/org/repo",
+                    branch="feature/GP-123",
+                    pr_url="https://github.com/org/repo/pull/17",
+                    orchestration_backend="database",
+                    dedupe_scope="issue_execution",
+                    status="completed",
+                    source_description=json.dumps(
+                        {
+                            "pr_url": "https://github.com/org/repo/pull/17",
+                            "demo_proof_state": "complete",
+                            "demo_proof_events": [
+                                "PREvidenceAttached",
+                                "PreviewCleanupRequested",
+                                "PreviewCleanupCompleted",
+                            ],
+                            "demo_proof_event_metadata": [
+                                {
+                                    "event": "PREvidenceAttached",
+                                    "metadata": {
+                                        "artifact_url_check_status": "passed",
+                                        "checked_artifact_urls": [artifact_url],
+                                    },
+                                }
+                            ],
+                        },
+                        sort_keys=True,
+                    ),
+                    created_at=datetime.now(timezone.utc),
+                    updated_at=datetime.now(timezone.utc),
+                )
+            )
+            session.commit()
+
+            proof_status = _qa_demo_proof_status_for_pr_url(
+                session=session,
+                tenant_id="example",
+                project_id="example-default",
+                pr_url="https://github.com/org/repo/pull/17",
+            )
+
+        assert proof_status is not None
+        self.assertEqual(proof_status["status"], "completed")
+        self.assertEqual(proof_status["demo_proof_state"], "complete")
+        self.assertEqual(proof_status["terminal_event"], "PreviewCleanupCompleted")
+        self.assertEqual(proof_status["artifact_url_check_status"], "passed")
+        self.assertEqual(proof_status["checked_artifact_urls"], (artifact_url,))
 
     def test_qa_demo_review_runtime_ignores_persisted_qa_recordings_from_blocked_run(self) -> None:
         snapshot = _qa_demo_recording_snapshot()

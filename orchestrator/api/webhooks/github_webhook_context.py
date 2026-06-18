@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import json
 from uuid import uuid4
 
 from fastapi import HTTPException, Request, status
@@ -28,7 +29,7 @@ from orchestrator.core.platform.tenant_secret_service import resolve_scoped_secr
 from orchestrator.core.projects.policy import resolve_effective_policy
 from orchestrator.core.review.reviewer import ReviewAgentGate
 from orchestrator.core.workflow.execution_snapshot import ExecutionSnapshot
-from orchestrator.storage.models import Run
+from orchestrator.storage.models import Run, WorkflowExecution
 from orchestrator.tools.github_app import github_client_from_tenant_config
 
 
@@ -291,6 +292,12 @@ def build_github_review_runtime(*, session, settings, tenant, project):
             project_id=project.project_id,
             run_id=run_id,
         ),
+        demo_proof_status_resolver=lambda pr_url: _qa_demo_proof_status_for_pr_url(
+            session=session,
+            tenant_id=tenant.tenant_id,
+            project_id=project.project_id,
+            pr_url=pr_url,
+        ),
     )
     return github_client, reviewer_gate
 
@@ -358,6 +365,77 @@ def _qa_demo_recordings_for_run(
         }
         for recording in qa_result.recordings
     )
+
+
+def _qa_demo_proof_status_for_pr_url(
+    *,
+    session,
+    tenant_id: str,
+    project_id: str,
+    pr_url: str | None,
+) -> dict[str, object] | None:
+    normalized_pr_url = str(pr_url or "").strip()
+    if not normalized_pr_url:
+        return None
+    statement = (
+        select(
+            WorkflowExecution.workflow_id,
+            WorkflowExecution.status,
+            WorkflowExecution.source_description,
+            WorkflowExecution.updated_at,
+        )
+        .where(
+            WorkflowExecution.tenant_id == tenant_id,
+            WorkflowExecution.project_id == project_id,
+            WorkflowExecution.workflow_type_key == "demo_proof",
+        )
+        .order_by(WorkflowExecution.updated_at.desc(), WorkflowExecution.workflow_id.desc())
+    )
+    for workflow_id, workflow_status, raw_description, updated_at in session.execute(statement):
+        description = _decode_workflow_description(raw_description)
+        if str(description.get("pr_url") or "").strip() != normalized_pr_url:
+            continue
+        events = [str(event or "").strip() for event in list(description.get("demo_proof_events") or [])]
+        terminal_event = events[-1] if events else ""
+        pr_evidence_metadata = _demo_proof_event_metadata(description, "PREvidenceAttached")
+        return {
+            "workflow_id": workflow_id,
+            "status": str(workflow_status or "").strip(),
+            "demo_proof_state": str(description.get("demo_proof_state") or "").strip(),
+            "terminal_event": terminal_event,
+            "artifact_url_check_status": str(pr_evidence_metadata.get("artifact_url_check_status") or "").strip(),
+            "checked_artifact_urls": tuple(
+                str(url or "").strip()
+                for url in list(pr_evidence_metadata.get("checked_artifact_urls") or [])
+                if str(url or "").strip()
+            ),
+            "updated_at": updated_at,
+        }
+    return None
+
+
+def _decode_workflow_description(raw_description: object) -> dict[str, object]:
+    if isinstance(raw_description, dict):
+        return dict(raw_description)
+    normalized = str(raw_description or "").strip()
+    if not normalized:
+        return {}
+    try:
+        parsed = json.loads(normalized)
+    except json.JSONDecodeError:
+        return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _demo_proof_event_metadata(description: dict[str, object], event_name: str) -> dict[str, object]:
+    for entry in list(description.get("demo_proof_event_metadata") or []):
+        if not isinstance(entry, dict):
+            continue
+        if str(entry.get("event") or "").strip() != event_name:
+            continue
+        metadata = entry.get("metadata")
+        return dict(metadata) if isinstance(metadata, dict) else {}
+    return {}
 
 
 async def prepare_github_webhook_runtime(
