@@ -140,6 +140,37 @@ class JiraProjectReconciliationTriggerTests(AdminApiTestHarness):
         self.assertEqual(start_kwargs["required_capture_targets"], ["browser", "ios", "android"])
         self.assertEqual(start_kwargs["trigger_event"], "admin_workflow_start")
 
+    def test_generic_workflow_start_route_rejects_demo_proof_without_pr_url(self) -> None:
+        payload = self._tenant_payload()
+        create_response = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_response.status_code, 201)
+        project_id = self._first_project_id()
+
+        with patch("orchestrator.core.qa.demo_proof_start.build_workflow_runtime") as runtime_mock:
+            response = self.client.post(
+                "/api/admin/workflows",
+                json={
+                    "workflow_type_key": "demo_proof",
+                    "tenant_id": "tenant-a",
+                    "project_id": project_id,
+                    "input": {
+                        "proof_scope_id": "run-1-main-abcdef1",
+                        "commit_sha": "abcdef1",
+                        "run_id": "run-1",
+                        "required_capture_targets": ["browser", "ios", "android"],
+                    },
+                },
+                auth=("admin", "secret"),
+            )
+
+        self.assertEqual(response.status_code, 422, response.text)
+        self.assertIn("pr_url", response.json()["detail"])
+        runtime_mock.assert_not_called()
+
     def test_generic_workflow_start_route_returns_reauth_required_when_jira_token_is_invalid(self) -> None:
         payload = self._tenant_payload()
         self._insert_jira_connection(connection_id="conn-1")

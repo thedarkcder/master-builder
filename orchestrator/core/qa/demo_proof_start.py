@@ -58,6 +58,15 @@ def _normalize_commit_sha(value: object) -> str:
     return normalized
 
 
+def _normalize_pr_url(value: object) -> str:
+    normalized = str(value or "").strip()
+    if not normalized:
+        raise ValueError("Demo proof start requires pr_url before PR evidence can be attached")
+    if not re.fullmatch(r"https://github\.com/[^/\s]+/[^/\s]+/pull/[0-9]+/?", normalized):
+        raise ValueError("Demo proof start requires pr_url to be a GitHub pull request URL")
+    return normalized.rstrip("/")
+
+
 def _normalize_required_capture_targets(value: object) -> tuple[str, ...]:
     if value is None:
         return ("browser", "ios", "android")
@@ -192,7 +201,7 @@ def _advance_demo_proof_workflow(
     normalized_commit_sha = _normalize_commit_sha(commit_sha)
     normalized_targets = _normalize_required_capture_targets(required_capture_targets)
     normalized_run_id = str(run_id or "").strip() or None
-    normalized_pr_url = str(pr_url or "").strip() or None
+    normalized_pr_url = _normalize_pr_url(pr_url)
     normalized_request_reason = str(request_reason or "").strip() or "demo_proof_start"
 
     handler_registry = build_workflow_handler_registry(
