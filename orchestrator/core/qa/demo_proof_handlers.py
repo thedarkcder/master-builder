@@ -2024,7 +2024,6 @@ class DemoProofWorkflowAdvanceHandler:
             raise RuntimeError("Demo proof workflow cannot run for an archived project")
 
         run_id = str(request.payload.get("run_id") or "").strip() or None
-        requested_release_id = _requested_release_id(request.payload, trigger_mode=trigger_mode)
         pr_url = str(request.payload.get("pr_url") or "").strip() or None
         required_capture_targets = request.payload.get("required_capture_targets")
         if not isinstance(required_capture_targets, list) or not required_capture_targets:
@@ -2036,16 +2035,32 @@ class DemoProofWorkflowAdvanceHandler:
         workflow_id = _workflow_id(workflow_type=workflow_type, request=request)
         current_state = _current_demo_proof_state(session=session, workflow_id=workflow_id)
         existing_workflow = session.get(WorkflowExecution, workflow_id)
+        if trigger_mode == "retry_recording" and existing_workflow is None:
+            raise RuntimeError(
+                f"Demo proof retry_recording requires an existing demo proof workflow for proof scope {proof_scope_id}"
+            )
         previous_description = (
             _decode_demo_proof_description(existing_workflow.source_description)
             if existing_workflow is not None
             else {}
         )
+        requested_release_id = _requested_release_id(request.payload, trigger_mode=trigger_mode)
+        durable_trigger_mode = trigger_mode
+        if trigger_mode == "retry_recording":
+            durable_trigger_mode = str(previous_description.get("trigger_mode") or "").strip()
+            if not durable_trigger_mode:
+                raise RuntimeError(
+                    f"Demo proof retry_recording requires existing trigger_mode for proof scope {proof_scope_id}"
+                )
+            if requested_release_id is None:
+                requested_release_id = str(previous_description.get("requested_release_id") or "").strip() or None
         trigger_event = str(getattr(request.trigger, "event", "") or "").strip()
         if trigger_event:
             state_event = trigger_event
         elif trigger_mode == "cleanup_only":
             state_event = "DemoProofCleanupRequested"
+        elif trigger_mode == "retry_recording":
+            state_event = "RecordingStarted"
         else:
             state_event = "DemoProofRequested"
         event_metadata = _event_metadata(request.payload)
@@ -2057,7 +2072,7 @@ class DemoProofWorkflowAdvanceHandler:
             previous_description=previous_description,
             proof_scope_id=proof_scope_id,
             commit_sha=commit_sha,
-            trigger_mode=trigger_mode,
+            trigger_mode=durable_trigger_mode,
             requested_release_id=requested_release_id,
             run_id=run_id,
             pr_url=pr_url,
@@ -2068,6 +2083,8 @@ class DemoProofWorkflowAdvanceHandler:
             event=state_event,
             event_metadata=event_metadata,
         )
+        if trigger_mode != durable_trigger_mode:
+            next_description["last_trigger_mode"] = trigger_mode
         lifecycle.ensure_execution(
             display_name=f"Demo proof {proof_scope_id}",
             description=next_description,
@@ -2077,6 +2094,24 @@ class DemoProofWorkflowAdvanceHandler:
                 session=session,
                 lifecycle=lifecycle,
                 event=trigger_event,
+                proof_scope_id=proof_scope_id,
+                run_id=run_id,
+                pr_url=pr_url,
+                required_capture_targets=required_capture_targets,
+                description=next_description,
+            )
+            _persist_demo_proof_state(
+                session=session,
+                workflow_id=workflow_id,
+                description=next_description,
+            )
+            session.commit()
+            return result
+        if trigger_mode == "retry_recording":
+            result = self._advance_event(
+                session=session,
+                lifecycle=lifecycle,
+                event="RecordingStarted",
                 proof_scope_id=proof_scope_id,
                 run_id=run_id,
                 pr_url=pr_url,

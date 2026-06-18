@@ -602,6 +602,141 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
             runtime_mock.assert_not_called()
             assert session.execute(select(WorkflowExecution)).scalar_one_or_none() is None
 
+    def test_start_demo_proof_workflow_rejects_retry_recording_without_existing_workflow(self) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-a")
+            project = session.get(Project, "project-a")
+            workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
+
+            def _advance(request: WorkflowAdvanceRequest):  # noqa: ANN202
+                return execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=request,
+                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                )
+
+            with patch(
+                "orchestrator.core.qa.demo_proof_start.build_workflow_runtime",
+                return_value=SimpleNamespace(advance=_advance),
+            ):
+                try:
+                    start_demo_proof_workflow(
+                        session=session,
+                        settings=SimpleNamespace(),
+                        tenant=tenant,
+                        project=project,
+                        proof_scope_id="run-1-main-abcdef1",
+                        commit_sha="abcdef1",
+                        trigger_mode="retry_recording",
+                        trigger_event="admin_recording_retry",
+                        run_id="run-1",
+                        pr_url="https://github.com/acme/project-a/pull/8",
+                        required_capture_targets=["browser", "ios", "android"],
+                    )
+                except RuntimeError as exc:
+                    assert "retry_recording requires an existing demo proof workflow" in str(exc)
+                else:  # pragma: no cover
+                    raise AssertionError("expected recording retry to require an existing workflow")
+
+            assert session.execute(select(WorkflowExecution)).scalar_one_or_none() is None
+
+    def test_start_demo_proof_workflow_retry_recording_reuses_existing_deferred_recording(self) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-a")
+            project = session.get(Project, "project-a")
+            workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
+            request = _demo_proof_request(tenant=tenant)
+
+            def _advance(request: WorkflowAdvanceRequest):  # noqa: ANN202
+                return execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=request,
+                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                )
+
+            execute_workflow_advance(
+                session=session,
+                settings=SimpleNamespace(),
+                workflow_type=workflow_type,
+                request=request,
+                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+            )
+            for event in (
+                "ProofLeaseAcquired",
+                "ReleaseRequested",
+                "ReleaseProvisioning",
+                "ReleaseLive",
+                "RouteReady",
+                "ServiceVerificationPassed",
+            ):
+                execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=_demo_proof_request_for_event(request, event),
+                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                )
+            execute_workflow_advance(
+                session=session,
+                settings=SimpleNamespace(),
+                workflow_type=workflow_type,
+                request=replace(
+                    request,
+                    payload={
+                        **request.payload,
+                        "event_metadata": {
+                            "recorded_capture_targets": ["browser"],
+                            "remaining_capture_targets": ["ios", "android"],
+                        },
+                    },
+                    trigger=WorkflowTrigger(event="RecordingDeferred"),
+                ),
+                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+            )
+
+            with patch(
+                "orchestrator.core.qa.demo_proof_start.build_workflow_runtime",
+                return_value=SimpleNamespace(advance=_advance),
+            ):
+                result = start_demo_proof_workflow(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    tenant=tenant,
+                    project=project,
+                    proof_scope_id="run-1-main-abcdef1",
+                    commit_sha="abcdef1",
+                    trigger_mode="retry_recording",
+                    trigger_event="admin_recording_retry",
+                    run_id="run-1",
+                    pr_url="https://github.com/acme/project-a/pull/8",
+                    required_capture_targets=["browser", "ios", "android"],
+                )
+
+            assert result.status == "waiting_for_input"
+            workflow = session.execute(select(WorkflowExecution)).scalar_one()
+            description = json.loads(workflow.source_description or "{}")
+            assert description["trigger_mode"] == "from_run"
+            assert description["last_trigger_mode"] == "retry_recording"
+            assert description["demo_proof_state"] == "recording"
+            preview_lease_operations = session.execute(
+                select(WorkflowOperation).where(
+                    WorkflowOperation.workflow_id == workflow.workflow_id,
+                    WorkflowOperation.operation_type == "preview_lease",
+                )
+            ).scalars().all()
+            assert len(preview_lease_operations) == 1
+            recording_operation = session.execute(
+                select(WorkflowOperation).where(
+                    WorkflowOperation.workflow_id == workflow.workflow_id,
+                    WorkflowOperation.operation_type == "recording",
+                )
+            ).scalar_one()
+            assert recording_operation.status == "waiting_for_input"
+
     def test_start_demo_proof_cleanup_only_starts_cleanup_without_pr_or_preview_lease(self) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
