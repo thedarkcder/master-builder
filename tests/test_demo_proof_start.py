@@ -219,18 +219,19 @@ def _demo_proof_event_metadata(event: str) -> dict[str, object] | None:
                 "status": "failed",
             }
         ]
+        artifact_urls = [
+            "https://cdn.example/qa-demos/tenant-1/project-1/run-1/browser-failure.webm",
+            "https://cdn.example/qa-demos/tenant-1/project-1/run-1/ios-failure.webm",
+            "https://cdn.example/qa-demos/tenant-1/project-1/run-1/android-failure.webm",
+        ]
+        metadata["artifact_urls"] = artifact_urls
+        metadata["capture_targets"] = ["browser", "ios", "android"]
+        metadata["failure_evidence"] = [
+            _failure_evidence_metadata("browser", artifact_urls[0]),
+            _failure_evidence_metadata("ios", artifact_urls[1]),
+            _failure_evidence_metadata("android", artifact_urls[2]),
+        ]
         return metadata
-    if event == "ServiceVerificationFailedPreviewCleanupCompleted":
-        return {
-            "release_id": "release-preview-1",
-            "release_kind": "run_preview",
-            "release_status": "destroyed",
-            "release_commit_sha": "b" * 40,
-            "demo_proof_lease": _demo_proof_lease_metadata(),
-            "cleanup_status": "completed",
-            "cleanup_mode": "destroy_or_ttl",
-            "cleanup_evidence": _cleanup_evidence_metadata(),
-        }
     if event in {"RecordingCompleted", "EvidenceUploaded"}:
         return {
             "artifact_urls": [
@@ -4489,7 +4490,7 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
             assert cleanup_operation.status == "completed"
             assert release_attempt.status == "completed"
 
-    def test_demo_proof_service_verification_failed_event_waits_for_cleanup_before_blocking_workflow(self) -> None:
+    def test_demo_proof_service_verification_failed_event_attaches_diagnostics_before_cleanup(self) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
             workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
@@ -4524,17 +4525,25 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
             )
 
-            assert result.reason == "service_verification_failed_cleanup_requested"
+            assert result.reason == "service_verification_failed_evidence_upload_requested"
             assert result.failed is False
-            cleanup_result = execute_workflow_advance(
-                session=session,
-                settings=SimpleNamespace(),
-                workflow_type=workflow_type,
-                request=_demo_proof_request_for_event(request, "ServiceVerificationFailedPreviewCleanupCompleted"),
-                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
-            )
+            for event in (
+                "FailureEvidenceUploadStarted",
+                "FailureEvidenceUploaded",
+                "PRFailureEvidenceAttachStarted",
+                "PRFailureEvidenceAttached",
+                "FailurePreviewCleanupRequested",
+                "FailurePreviewCleanupCompleted",
+            ):
+                cleanup_result = execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=_demo_proof_request_for_event(request, event),
+                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                )
 
-            assert cleanup_result.reason == "demo_proof_blocked_after_service_verification_failure_cleanup"
+            assert cleanup_result.reason == "demo_proof_blocked_with_failure_evidence"
             assert cleanup_result.failed is True
             workflow = session.execute(select(WorkflowExecution)).scalar_one()
             release_operation = session.execute(
@@ -4552,10 +4561,10 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
             description = json.loads(workflow.source_description or "{}")
             assert workflow.status == "failed"
             assert workflow.last_error == (
-                "Demo proof recorded service verification failure cleanup for proof scope run-1-main-abcdef1."
+                "Demo proof recorded failure evidence for proof scope run-1-main-abcdef1."
             )
             assert description["demo_proof_state"] == "blocked"
-            assert description["demo_proof_events"][-1] == "ServiceVerificationFailedPreviewCleanupCompleted"
+            assert description["demo_proof_events"][-1] == "FailurePreviewCleanupCompleted"
             assert release_operation.status == "completed"
             assert cleanup_operation.status == "completed"
 

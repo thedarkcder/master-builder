@@ -2437,6 +2437,7 @@ def test_complete_attaches_qa_failure_evidence_to_pr_before_blocking_ready_revie
         failure_evidence=[_qa_failure_evidence()],
         outcome="blocked",
         blocker_message="QA demo recording failed after 1 attempts: app did not load",
+        failure_kind="release_readiness",
     )
     preview_release = SimpleNamespace(
         release_id="release-1",
@@ -2512,9 +2513,7 @@ def test_complete_attaches_qa_failure_evidence_to_pr_before_blocking_ready_revie
         "ReleaseProvisioning",
         "ReleaseLive",
         "RouteReady",
-        "ServiceVerificationPassed",
-        "RecordingStarted",
-        "RecordingFailureEvidenceCaptured",
+        "ServiceVerificationFailed",
         "FailureEvidenceUploadStarted",
         "FailureEvidenceUploaded",
         "PRFailureEvidenceAttachStarted",
@@ -2523,6 +2522,19 @@ def test_complete_attaches_qa_failure_evidence_to_pr_before_blocking_ready_revie
         "FailurePreviewCleanupFailed",
     ]
     metadata_by_event = {call.kwargs["event"]: call.kwargs.get("event_metadata") for call in event_calls}
+    assert metadata_by_event["ServiceVerificationFailed"]["failure_evidence"] == [
+        {
+            "capture_target": "browser",
+            "artifact_url": "https://cdn.example/qa-failure-1.webm",
+            "object_key": "tenant-1/project-1/run-1/qa-failure-1.webm",
+            "capture_reference": "https://preview.example",
+            "content_sha256": f"{101:064x}",
+            "release_commit_sha": "b" * 40,
+            "release_context_sha256": f"{999:064x}",
+            "error_message": "QA Demo Ready was not visible\nBrowser diagnostics:\npageerror: process is not defined",
+        }
+    ]
+    assert "did not load" in metadata_by_event["ServiceVerificationFailed"]["error_message"]
     assert metadata_by_event["FailureEvidenceUploaded"]["failure_evidence"] == [
         {
             "capture_target": "browser",

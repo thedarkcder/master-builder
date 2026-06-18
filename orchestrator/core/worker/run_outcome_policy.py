@@ -56,6 +56,16 @@ _QA_DEMO_FAILURE_PROOF_EVENTS_BEFORE_PR = (
     "FailureEvidenceUploadStarted",
     "FailureEvidenceUploaded",
 )
+_QA_DEMO_RELEASE_READINESS_FAILURE_PROOF_EVENTS_BEFORE_PR = (
+    "ProofLeaseAcquired",
+    "ReleaseRequested",
+    "ReleaseProvisioning",
+    "ReleaseLive",
+    "RouteReady",
+    "ServiceVerificationFailed",
+    "FailureEvidenceUploadStarted",
+    "FailureEvidenceUploaded",
+)
 _QA_DEMO_DEFERRED_PROOF_EVENTS_BEFORE_RECORDING = (
     "ProofLeaseAcquired",
     "ReleaseRequested",
@@ -720,7 +730,7 @@ class RunOutcomePolicy:
                     )
                     self._advance_qa_demo_proof_events(
                         proof_context=proof_context,
-                        events=_QA_DEMO_FAILURE_PROOF_EVENTS_BEFORE_PR,
+                        events=_qa_demo_failure_proof_events_before_pr(qa_result),
                     )
                     proof_context.pr_failure_evidence_artifact_urls = _qa_failure_evidence_artifact_urls(qa_result)
                     proof_context.pr_failure_evidence_checked_artifact_urls = _check_qa_demo_artifact_urls_reachable(
@@ -1529,6 +1539,12 @@ def _missing_qa_demo_failure_proof_targets(*, plan, qa_result: QaResult) -> tupl
     )
 
 
+def _qa_demo_failure_proof_events_before_pr(qa_result: QaResult) -> tuple[str, ...]:
+    if qa_result.failure_kind == "release_readiness":
+        return _QA_DEMO_RELEASE_READINESS_FAILURE_PROOF_EVENTS_BEFORE_PR
+    return _QA_DEMO_FAILURE_PROOF_EVENTS_BEFORE_PR
+
+
 def _qa_demo_proof_context(*, prepared, qa_result: QaResult, preview_release, plan, workflow_result):  # noqa: ANN001
     commit_sha = _qa_demo_proof_commit_sha(qa_result)
     run_id = str(getattr(prepared.run, "run_id", "") or "").strip()
@@ -1602,6 +1618,7 @@ def _qa_demo_release_proof_context(*, prepared, preview_release, plan, workflow_
 def _qa_demo_proof_event_metadata(*, proof_context, event: str) -> dict[str, object] | None:  # noqa: ANN001
     metadata: dict[str, object] = {}
     preview_release = getattr(proof_context, "preview_release", None)
+    qa_result = getattr(proof_context, "qa_result", None)
     if event in {
         "ProofLeaseAcquired",
         "ReleaseRequested",
@@ -1612,6 +1629,7 @@ def _qa_demo_proof_event_metadata(*, proof_context, event: str) -> dict[str, obj
         "ReleaseLive",
         "RouteReady",
         "ServiceVerificationPassed",
+        "ServiceVerificationFailed",
         "RecordingStarted",
         "RecordingDeferred",
         "RecordingFailed",
@@ -1639,13 +1657,20 @@ def _qa_demo_proof_event_metadata(*, proof_context, event: str) -> dict[str, obj
         )
         if demo_proof_lease:
             metadata["demo_proof_lease"] = demo_proof_lease
-        if event == "ServiceVerificationPassed":
+        if event in {"ServiceVerificationPassed", "ServiceVerificationFailed"}:
             required_service_kinds = _qa_demo_required_service_kinds(proof_context=proof_context)
             service_urls = _qa_demo_release_service_urls(preview_release=preview_release)
             if required_service_kinds:
                 metadata["required_service_kinds"] = list(required_service_kinds)
             if service_urls:
                 metadata["service_urls"] = service_urls
+            if event == "ServiceVerificationFailed":
+                error_message = (
+                    str(getattr(qa_result, "blocker_message", "") or "").strip()
+                    or str(getattr(qa_result, "feedback", "") or "").strip()
+                    or "QA demo service verification failed before recording could start."
+                )
+                metadata["error_message"] = error_message
         if event == "ReleaseFailed":
             error_message = str(getattr(proof_context, "release_failure_message", "") or "").strip()
             if error_message:
@@ -1677,7 +1702,6 @@ def _qa_demo_proof_event_metadata(*, proof_context, event: str) -> dict[str, obj
             cleanup_evidence = _qa_demo_cleanup_evidence_metadata(preview_release=preview_release)
             if cleanup_evidence:
                 metadata["cleanup_evidence"] = cleanup_evidence
-    qa_result = getattr(proof_context, "qa_result", None)
     if event in {"RecordingCompleted", "EvidenceUploadStarted", "EvidenceUploaded"} and qa_result is not None:
         recordings = list(getattr(qa_result, "recordings", ()) or ())
         metadata.update(
@@ -1717,6 +1741,7 @@ def _qa_demo_proof_event_metadata(*, proof_context, event: str) -> dict[str, obj
             }
         )
     if event in {
+        "ServiceVerificationFailed",
         "RecordingFailureEvidenceCaptured",
         "FailureEvidenceUploadStarted",
         "FailureEvidenceUploaded",
