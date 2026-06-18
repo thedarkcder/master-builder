@@ -706,6 +706,7 @@ def _wait_for_operation_once(
     run_id: str | None,
     proof_scope_id: str,
     summary: str,
+    description: dict[str, object],
 ) -> None:
     current_status = _workflow_operation_status(
         session=session,
@@ -734,17 +735,50 @@ def _wait_for_operation_once(
         workflow_type=lifecycle.workflow_type,
         operation=operation,
         operation_attempt=attempt,
-        input_payload={
-            "proof_scope_id": proof_scope_id,
-            "run_id": run_id,
-            "summary": summary,
-        },
+        input_payload=demo_proof_operation_input_payload(description=description, summary=summary),
     )
     lifecycle.wait_started_operation(
         operation=operation,
         attempt=attempt,
         summary=summary,
     )
+
+
+def demo_proof_operation_input_payload(
+    *,
+    description: dict[str, object],
+    summary: str,
+) -> dict[str, object]:
+    proof_scope_id = _metadata_string(description.get("proof_scope_id"))
+    commit_sha = _metadata_string(description.get("commit_sha"))
+    trigger_mode = _metadata_string(description.get("trigger_mode"))
+    if not proof_scope_id:
+        raise RuntimeError("Demo proof operation input requires proof_scope_id")
+    if not commit_sha:
+        raise RuntimeError(f"Demo proof operation input requires commit_sha for proof scope {proof_scope_id}")
+    if not trigger_mode:
+        raise RuntimeError(f"Demo proof operation input requires trigger_mode for proof scope {proof_scope_id}")
+    required_capture_targets = description.get("required_capture_targets")
+    if not isinstance(required_capture_targets, list) or not required_capture_targets:
+        raise RuntimeError(
+            f"Demo proof operation input requires required_capture_targets for proof scope {proof_scope_id}"
+        )
+    required_recording_counts = description.get("required_recording_counts")
+    if not isinstance(required_recording_counts, dict) or not required_recording_counts:
+        raise RuntimeError(
+            f"Demo proof operation input requires required_recording_counts for proof scope {proof_scope_id}"
+        )
+    return {
+        "proof_scope_id": proof_scope_id,
+        "commit_sha": commit_sha,
+        "trigger_mode": trigger_mode,
+        "run_id": _metadata_string(description.get("run_id")) or None,
+        "release_id": _metadata_string(description.get("requested_release_id")) or None,
+        "pr_url": _metadata_string(description.get("pr_url")) or None,
+        "required_capture_targets": [str(target) for target in required_capture_targets],
+        "required_recording_counts": dict(required_recording_counts),
+        "summary": summary,
+    }
 
 
 def _wait_summary(
@@ -2240,6 +2274,7 @@ class DemoProofWorkflowAdvanceHandler:
                 run_id=run_id,
                 proof_scope_id=proof_scope_id,
                 summary=f"Cleanup preview resources for demo proof scope {proof_scope_id}.",
+                description=next_description,
             )
             _persist_demo_proof_state(
                 session=session,
@@ -2263,6 +2298,7 @@ class DemoProofWorkflowAdvanceHandler:
             run_id=run_id,
             proof_scope_id=proof_scope_id,
             summary=f"Acquire preview lease for demo proof scope {proof_scope_id}.",
+            description=next_description,
         )
         _persist_demo_proof_state(
             session=session,
@@ -2381,6 +2417,7 @@ class DemoProofWorkflowAdvanceHandler:
                     proof_scope_id=proof_scope_id,
                     required_capture_targets=required_capture_targets,
                 ),
+                description=description,
             )
         elif event in _DEMO_PROOF_BLOCKING_COMPLETION_EVENTS:
             if event == "ReleaseFailedPreviewCleanupCompleted":

@@ -21,6 +21,7 @@ from orchestrator.core.workflow.type_catalog import (
     DEMO_PROOF_STEP_RELEASE,
 )
 from orchestrator.core.workflow.work_units import seed_declared_work_units_for_operation_attempt
+from orchestrator.core.qa.demo_proof_handlers import demo_proof_operation_input_payload
 from orchestrator.storage.models import Project, Tenant
 
 
@@ -117,6 +118,7 @@ class DemoProofWorkflowOperationRetryHandler:
         if project is None or project.tenant_id != tenant.tenant_id:
             raise InvalidWorkflowOperationRetryError(f"Project {project_id} was not found for tenant {tenant.tenant_id}")
         proof_scope_id = _proof_scope_id(request=request)
+        description = _description_payload(getattr(request.workflow, "source_description", None))
         lifecycle = DurableWorkflowLifecycle(
             session=request.session,
             workflow_type=request.workflow_type,
@@ -145,11 +147,10 @@ class DemoProofWorkflowOperationRetryHandler:
             workflow_type=request.workflow_type,
             operation=operation,
             operation_attempt=attempt,
-            input_payload={
-                "proof_scope_id": proof_scope_id,
-                "run_id": _run_id(request=request),
-                "summary": f"Retry demo proof operation {operation_type} for proof scope {proof_scope_id}.",
-            },
+            input_payload=demo_proof_operation_input_payload(
+                description=description,
+                summary=f"Retry demo proof operation {operation_type} for proof scope {proof_scope_id}.",
+            ),
         )
         lifecycle.wait_started_operation(
             operation=operation,
