@@ -485,6 +485,36 @@ class RunOutcomePolicy:
             )
         except Exception as exc:  # noqa: BLE001
             message = f"QA demo recording failed: {type(exc).__name__}: {exc}"
+            try:
+                proof_context = _qa_demo_release_proof_context(
+                    prepared=prepared,
+                    preview_release=preview_release,
+                    plan=plan,
+                    workflow_result=workflow_result,
+                )
+                if not proof_workflow_started:
+                    self._start_qa_demo_proof_workflow(
+                        proof_context=proof_context,
+                        trigger_event="run_failed_before_demo_recording_complete",
+                    )
+                self._advance_qa_demo_proof_events(
+                    proof_context=proof_context,
+                    events=(
+                        "ProofLeaseAcquired",
+                        "ReleaseRequested",
+                        "ReleaseProvisioning",
+                        "ReleaseLive",
+                        "RouteReady",
+                        "ServiceVerificationPassed",
+                        "RecordingStarted",
+                        "RecordingFailed",
+                    ),
+                )
+            except Exception as proof_exc:  # noqa: BLE001
+                message = (
+                    f"{message} QA demo proof recording failure event failed: "
+                    f"{type(proof_exc).__name__}: {proof_exc}"
+                )
             qa_result = QaResult(
                 summary=[message],
                 scenarios=[],
@@ -1198,6 +1228,27 @@ def _qa_demo_pre_release_proof_context(*, prepared, plan, workflow_result):  # n
         pr_url=pr_url,
         commit_sha="pending-release-commit",
         proof_scope_id=f"run:{run_id}:pending-release-commit",
+        required_capture_targets=tuple(required_capture_targets(plan)),
+    )
+
+
+def _qa_demo_release_proof_context(*, prepared, preview_release, plan, workflow_result):  # noqa: ANN001
+    commit_sha = str(getattr(preview_release, "commit_sha", "") or "").strip().lower()
+    if not commit_sha:
+        raise RuntimeError("QA demo proof workflow requires preview release commit SHA")
+    run_id = str(getattr(prepared.run, "run_id", "") or "").strip()
+    if not run_id:
+        raise RuntimeError("QA demo proof workflow requires run_id")
+    pr_url = str(getattr(workflow_result, "pr_url", "") or getattr(prepared.run, "pr_url", "") or "").strip()
+    if not pr_url:
+        raise RuntimeError("QA demo proof workflow requires PR URL")
+    return SimpleNamespace(
+        tenant=prepared.tenant,
+        project=prepared.project,
+        run_id=run_id,
+        pr_url=pr_url,
+        commit_sha=commit_sha,
+        proof_scope_id=f"run:{run_id}:{commit_sha}",
         required_capture_targets=tuple(required_capture_targets(plan)),
     )
 
