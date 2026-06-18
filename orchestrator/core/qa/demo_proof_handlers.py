@@ -419,6 +419,13 @@ def _metadata_string_set(value: object) -> set[str]:
     return {normalized} if normalized else set()
 
 
+def _metadata_string_list(value: object) -> list[str]:
+    if isinstance(value, list):
+        return [str(item or "").strip() for item in value if str(item or "").strip()]
+    normalized = str(value or "").strip()
+    return [normalized] if normalized else []
+
+
 def _require_terminal_proof_metadata(
     *,
     event: str,
@@ -448,12 +455,19 @@ def _require_terminal_proof_metadata(
         )
     if event == "PreviewCleanupCompleted":
         required_targets = set(_normalized_capture_targets(list(description.get("required_capture_targets") or [])))
-        evidence_targets = _metadata_string_set(metadata.get("EvidenceUploaded", {}).get("capture_targets"))
+        evidence_metadata = metadata.get("EvidenceUploaded", {})
+        evidence_targets = _metadata_string_set(evidence_metadata.get("capture_targets"))
         missing_targets = sorted(required_targets - evidence_targets)
         if missing_targets:
             raise RuntimeError(
                 f"Demo proof scope {proof_scope_id} evidence metadata is missing required capture target(s): "
                 + ", ".join(missing_targets)
+            )
+        artifact_urls = _metadata_string_list(evidence_metadata.get("artifact_urls"))
+        if len(artifact_urls) < len(required_targets):
+            raise RuntimeError(
+                f"Demo proof scope {proof_scope_id} requires at least {len(required_targets)} playable artifact URL(s) "
+                f"for required capture target(s), got {len(artifact_urls)}."
             )
 
 
