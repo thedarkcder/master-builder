@@ -67,9 +67,11 @@ def _normalize_commit_sha(value: object) -> str:
     return normalized
 
 
-def _normalize_pr_url(value: object) -> str:
+def _normalize_pr_url(value: object, *, trigger_mode: str) -> str | None:
     normalized = str(value or "").strip()
     if not normalized:
+        if trigger_mode == "cleanup_only":
+            return None
         raise ValueError("Demo proof start requires pr_url before PR evidence can be attached")
     if not re.fullmatch(r"https://github\.com/[^/\s]+/[^/\s]+/pull/[0-9]+/?", normalized):
         raise ValueError("Demo proof start requires pr_url to be a GitHub pull request URL")
@@ -273,7 +275,7 @@ def _advance_demo_proof_workflow(
         required_capture_targets=normalized_targets,
     )
     normalized_run_id = str(run_id or "").strip() or None
-    normalized_pr_url = _normalize_pr_url(pr_url)
+    normalized_pr_url = _normalize_pr_url(pr_url, trigger_mode=normalized_trigger_mode)
     normalized_request_reason = str(request_reason or "").strip() or "demo_proof_start"
     normalized_event_metadata = _normalize_event_metadata(event_metadata)
 

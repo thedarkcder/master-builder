@@ -51,6 +51,19 @@ def mark_workflow_failed(
     return workflow
 
 
+def mark_workflow_completed(
+    *,
+    workflow: WorkflowExecution,
+    now: datetime | None = None,
+) -> WorkflowExecution:
+    timestamp = now or _now()
+    workflow.status = "completed"
+    workflow.last_error = None
+    workflow.finished_at = timestamp
+    workflow.updated_at = timestamp
+    return workflow
+
+
 def recompute_workflow_status(
     *,
     session: Session,
@@ -89,10 +102,6 @@ def recompute_workflow_status(
         status_by_type.get(definition.key) == OPERATION_STATUS_COMPLETED
         for definition in required_definitions
     ):
-        workflow.status = "completed"
-        workflow.last_error = None
-        workflow.finished_at = timestamp
-        workflow.updated_at = timestamp
-        return workflow
+        return mark_workflow_completed(workflow=workflow, now=timestamp)
 
     return mark_workflow_running(workflow=workflow, now=timestamp)

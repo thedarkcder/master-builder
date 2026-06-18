@@ -102,6 +102,10 @@ _DEMO_PROOF_TRANSITIONS: dict[str, _EventTransition] = {
         frozenset({DEMO_PROOF_STATE_REQUESTED}),
         DEMO_PROOF_STATE_LEASE_ACQUIRING,
     ),
+    "DemoProofCleanupRequested": _EventTransition(
+        frozenset({DEMO_PROOF_STATE_REQUESTED}),
+        DEMO_PROOF_STATE_CLEANUP_SCHEDULED,
+    ),
     "ProofLeaseAcquired": _EventTransition(
         frozenset({DEMO_PROOF_STATE_LEASE_ACQUIRING}),
         DEMO_PROOF_STATE_LEASE_ACQUIRED,
@@ -240,6 +244,14 @@ _DEMO_PROOF_TRANSITIONS: dict[str, _EventTransition] = {
         DEMO_PROOF_STATE_COMPLETE,
     ),
     "PreviewCleanupFailed": _EventTransition(
+        frozenset({DEMO_PROOF_STATE_CLEANUP_SCHEDULED}),
+        DEMO_PROOF_STATE_BLOCKED,
+    ),
+    "CleanupOnlyCompleted": _EventTransition(
+        frozenset({DEMO_PROOF_STATE_CLEANUP_SCHEDULED}),
+        DEMO_PROOF_STATE_COMPLETE,
+    ),
+    "CleanupOnlyFailed": _EventTransition(
         frozenset({DEMO_PROOF_STATE_CLEANUP_SCHEDULED}),
         DEMO_PROOF_STATE_BLOCKED,
     ),
