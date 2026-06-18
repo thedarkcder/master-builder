@@ -98,6 +98,13 @@ def _normalize_release_id(value: object, *, trigger_mode: str) -> str | None:
     return normalized
 
 
+def _normalize_run_id(value: object, *, trigger_mode: str) -> str | None:
+    normalized = str(value or "").strip()
+    if trigger_mode == "from_run" and not normalized:
+        raise ValueError("Demo proof from_run requires run_id")
+    return normalized or None
+
+
 def _normalize_required_capture_targets(value: object) -> tuple[str, ...]:
     if value is None:
         raise ValueError("Demo proof required_capture_targets must be provided by PM demo requirements")
@@ -295,7 +302,7 @@ def _advance_demo_proof_workflow(
         value=required_recording_counts,
         required_capture_targets=normalized_targets,
     )
-    normalized_run_id = str(run_id or "").strip() or None
+    normalized_run_id = _normalize_run_id(run_id, trigger_mode=normalized_trigger_mode)
     normalized_release_id = _normalize_release_id(release_id, trigger_mode=normalized_trigger_mode)
     normalized_pr_url = _normalize_pr_url(pr_url, trigger_mode=normalized_trigger_mode)
     normalized_request_reason = str(request_reason or "").strip() or "demo_proof_start"
