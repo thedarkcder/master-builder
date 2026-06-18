@@ -85,6 +85,25 @@ def _demo_proof_lease_metadata() -> dict[str, str]:
     }
 
 
+def _service_verification_metadata() -> dict[str, object]:
+    return {
+        "release_id": "release-preview-1",
+        "release_kind": "run_preview",
+        "release_status": "live",
+        "release_commit_sha": "b" * 40,
+        "required_service_kinds": ["website"],
+        "service_urls": [
+            {
+                "service_kind": "website",
+                "url": "https://preview.example",
+                "status": "active",
+                "service_name": "web",
+                "service_key": "web",
+            }
+        ],
+    }
+
+
 def _demo_proof_request(*, tenant) -> WorkflowAdvanceRequest:  # noqa: ANN001
     return WorkflowAdvanceRequest(
         workflow_handler_key="demo_proof",
@@ -134,6 +153,8 @@ def _demo_proof_event_metadata(event: str) -> dict[str, object] | None:
                 else {}
             ),
         }
+    if event == "ServiceVerificationPassed":
+        return _service_verification_metadata()
     if event in {"RecordingCompleted", "EvidenceUploaded"}:
         return {
             "artifact_urls": [
@@ -1404,6 +1425,61 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 assert "PreviewCleanupCompleted.cleanup_evidence" in str(exc)
             else:  # pragma: no cover
                 raise AssertionError("expected demo proof completion to require cleanup evidence metadata")
+
+    def test_demo_proof_rejects_success_completion_without_service_verification_metadata(self) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-a")
+            workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
+            request = _demo_proof_request(tenant=tenant)
+            execute_workflow_advance(
+                session=session,
+                settings=SimpleNamespace(),
+                workflow_type=workflow_type,
+                request=request,
+                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+            )
+
+            for event in (
+                "ProofLeaseAcquired",
+                "ReleaseRequested",
+                "ReleaseProvisioning",
+                "ReleaseLive",
+                "RouteReady",
+                "ServiceVerificationPassed",
+                "RecordingStarted",
+                "RecordingCompleted",
+                "EvidenceUploadStarted",
+                "EvidenceUploaded",
+                "PREvidenceAttachStarted",
+                "PREvidenceAttached",
+                "PreviewCleanupRequested",
+            ):
+                event_request = _demo_proof_request_for_event(request, event)
+                if event == "ServiceVerificationPassed":
+                    payload = dict(event_request.payload)
+                    payload.pop("event_metadata", None)
+                    event_request = replace(event_request, payload=payload)
+                execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=event_request,
+                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                )
+
+            terminal_request = _demo_proof_request_for_event(request, "PreviewCleanupCompleted")
+            try:
+                execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=terminal_request,
+                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                )
+            except RuntimeError as exc:
+                assert "ServiceVerificationPassed.service_urls" in str(exc)
+            else:  # pragma: no cover
+                raise AssertionError("expected demo proof completion to require service verification metadata")
 
     def test_demo_proof_rejects_success_completion_without_cleanup_resource_refs(self) -> None:
         with self.session_factory() as session:

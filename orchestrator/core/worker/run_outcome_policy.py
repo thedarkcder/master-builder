@@ -15,6 +15,7 @@ from orchestrator.core.qa.demo_service import (
     remaining_capture_targets,
     required_capture_targets,
     required_recording_counts_by_target,
+    required_release_service_kinds,
     update_pull_request_with_demo_failure_evidence,
     update_pull_request_with_demo_evidence,
 )
@@ -1373,6 +1374,13 @@ def _qa_demo_proof_event_metadata(*, proof_context, event: str) -> dict[str, obj
         )
         if demo_proof_lease:
             metadata["demo_proof_lease"] = demo_proof_lease
+        if event == "ServiceVerificationPassed":
+            required_service_kinds = _qa_demo_required_service_kinds(proof_context=proof_context)
+            service_urls = _qa_demo_release_service_urls(preview_release=preview_release)
+            if required_service_kinds:
+                metadata["required_service_kinds"] = list(required_service_kinds)
+            if service_urls:
+                metadata["service_urls"] = service_urls
         if event in {"PreviewCleanupCompleted", "FailurePreviewCleanupCompleted"}:
             metadata["cleanup_status"] = "completed"
             metadata["cleanup_mode"] = "destroy_or_ttl"
@@ -1485,6 +1493,37 @@ def _qa_demo_proof_event_metadata(*, proof_context, event: str) -> dict[str, obj
             continue
         compacted[key] = value
     return compacted or None
+
+
+def _qa_demo_required_service_kinds(*, proof_context) -> tuple[str, ...]:  # noqa: ANN001
+    preview_release = getattr(proof_context, "preview_release", None)
+    project = getattr(proof_context, "project", None)
+    if preview_release is None or project is None:
+        return ()
+    return required_release_service_kinds(project=project, preview_release=preview_release)
+
+
+def _qa_demo_release_service_urls(*, preview_release) -> list[dict[str, str]]:  # noqa: ANN001
+    payload: list[dict[str, str]] = []
+    for service_url in list(getattr(preview_release, "service_urls", []) or []):
+        service_kind = str(getattr(service_url, "service_kind", "") or "").strip()
+        url = str(getattr(service_url, "url", "") or "").strip()
+        status = str(getattr(service_url, "status", "") or "").strip()
+        if not service_kind or not url:
+            continue
+        item = {
+            "service_kind": service_kind,
+            "url": url,
+            "status": status,
+        }
+        service_name = str(getattr(service_url, "service_name", "") or "").strip()
+        if service_name:
+            item["service_name"] = service_name
+        service_key = str(getattr(service_url, "service_key", "") or "").strip()
+        if service_key:
+            item["service_key"] = service_key
+        payload.append(item)
+    return payload
 
 
 def _qa_demo_lease_metadata(*, preview_release) -> dict[str, str]:  # noqa: ANN001
