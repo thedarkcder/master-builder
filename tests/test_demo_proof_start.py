@@ -4478,7 +4478,7 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
             description = json.loads(workflow.source_description or "{}")
             assert description["demo_proof_state"] == "recording"
             assert description["recording_workflows"] == [
-                {"capture_target": "browser", "state": "recording"},
+                {"capture_target": "browser", "state": "recorded"},
                 {"capture_target": "ios", "state": "recording"},
                 {"capture_target": "android", "state": "recording"},
             ]
