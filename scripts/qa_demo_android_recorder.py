@@ -8,7 +8,6 @@ import signal
 import shutil
 import subprocess
 import sys
-import time
 import xml.etree.ElementTree as ET
 from dataclasses import dataclass
 from pathlib import Path
@@ -206,21 +205,32 @@ def ensure_preferred_android_device(*, timeout_seconds: int = DEFAULT_ANDROID_EM
         stderr=subprocess.DEVNULL,
         text=True,
     )
-    _run(["adb", "wait-for-device"], capture_output=True, timeout=timeout_seconds)
-    deadline = time.monotonic() + timeout_seconds
-    while time.monotonic() < deadline:
-        ready_devices = _ready_adb_devices(_run(["adb", "devices"], capture_output=True, check=False).stdout)
-        if ready_devices:
-            boot_completed = _run(
-                ["adb", "-s", ready_devices[0], "shell", "getprop", "sys.boot_completed"],
-                capture_output=True,
-                check=False,
-                timeout=10,
-            ).stdout.strip()
-            if boot_completed == "1":
-                return ready_devices[0]
-        time.sleep(2)
-    raise RuntimeError(f"Android emulator did not boot within {timeout_seconds} seconds: {avd}")
+    _run(["adb", "wait-for-device"], capture_output=True, timeout_seconds=timeout_seconds)
+    ready_devices = _ready_adb_devices(_run(["adb", "devices"], capture_output=True, check=False).stdout)
+    if not ready_devices:
+        raise RuntimeError(f"Android emulator did not become available after adb wait-for-device: {avd}")
+    device_id = ready_devices[0]
+    _wait_for_android_boot_completed(device_id=device_id, avd=avd, timeout_seconds=timeout_seconds)
+    return device_id
+
+
+def _wait_for_android_boot_completed(*, device_id: str, avd: str, timeout_seconds: int) -> None:
+    try:
+        _run(
+            [
+                "adb",
+                "-s",
+                device_id,
+                "shell",
+                "sh",
+                "-c",
+                'until [ "$(getprop sys.boot_completed)" = "1" ]; do true; done',
+            ],
+            capture_output=True,
+            timeout_seconds=timeout_seconds,
+        )
+    except RuntimeError as exc:
+        raise RuntimeError(f"Android emulator did not boot within {timeout_seconds} seconds: {avd}") from exc
 
 
 def _ready_adb_devices(adb_devices_output: str) -> list[str]:
@@ -673,8 +683,9 @@ def _run(
     cwd: Path | None = None,
     capture_output: bool,
     check: bool = True,
+    timeout_seconds: int | None = None,
 ) -> subprocess.CompletedProcess[str]:
-    timeout_seconds = _adb_command_timeout_seconds()
+    effective_timeout_seconds = timeout_seconds if timeout_seconds is not None else _adb_command_timeout_seconds()
     try:
         return subprocess.run(
             args,
@@ -682,11 +693,11 @@ def _run(
             check=check,
             capture_output=capture_output,
             text=True,
-            timeout=timeout_seconds,
+            timeout=effective_timeout_seconds,
         )
     except subprocess.TimeoutExpired as exc:
         raise RuntimeError(
-            f"Android QA recorder command timed out after {timeout_seconds} seconds: {' '.join(args)}"
+            f"Android QA recorder command timed out after {effective_timeout_seconds} seconds: {' '.join(args)}"
         ) from exc
     except subprocess.CalledProcessError as exc:
         stdout = str(exc.stdout or "").strip()
