@@ -942,6 +942,33 @@ def _require_pr_evidence_matches_uploaded_artifacts(
         )
 
 
+def _require_pr_artifact_url_checks(
+    *,
+    uploaded_metadata: dict[str, object],
+    pr_metadata: dict[str, object],
+    pr_event: str,
+    proof_scope_id: str,
+) -> None:
+    if _metadata_string(pr_metadata.get("artifact_url_check_status")) != "passed":
+        raise RuntimeError(
+            f"Demo proof scope {proof_scope_id} {pr_event} artifact URL checks must pass before terminal completion"
+        )
+    uploaded_urls = set(_metadata_string_list(uploaded_metadata.get("artifact_urls")))
+    checked_urls = set(_metadata_string_list(pr_metadata.get("checked_artifact_urls")))
+    missing_urls = sorted(uploaded_urls - checked_urls)
+    extra_urls = sorted(checked_urls - uploaded_urls)
+    if missing_urls:
+        raise RuntimeError(
+            f"Demo proof scope {proof_scope_id} {pr_event}.checked_artifact_urls is missing checked uploaded "
+            "artifact URL(s): " + ", ".join(missing_urls)
+        )
+    if extra_urls:
+        raise RuntimeError(
+            f"Demo proof scope {proof_scope_id} {pr_event}.checked_artifact_urls contains URL(s) that were "
+            "not uploaded: " + ", ".join(extra_urls)
+        )
+
+
 def _require_pr_evidence_targets_workflow_pr(
     *,
     description: dict[str, object],
@@ -1204,6 +1231,12 @@ def _require_terminal_proof_metadata(
             pr_event="PREvidenceAttached",
             proof_scope_id=proof_scope_id,
         )
+        _require_pr_artifact_url_checks(
+            uploaded_metadata=evidence_metadata,
+            pr_metadata=metadata.get("PREvidenceAttached", {}),
+            pr_event="PREvidenceAttached",
+            proof_scope_id=proof_scope_id,
+        )
         _require_pr_evidence_targets_workflow_pr(
             description=description,
             pr_metadata=metadata.get("PREvidenceAttached", {}),
@@ -1273,6 +1306,12 @@ def _require_terminal_proof_metadata(
                 + ", ".join(mismatched_commit_targets)
             )
         _require_pr_evidence_matches_uploaded_artifacts(
+            uploaded_metadata=failure_metadata,
+            pr_metadata=metadata.get("PRFailureEvidenceAttached", {}),
+            pr_event="PRFailureEvidenceAttached",
+            proof_scope_id=proof_scope_id,
+        )
+        _require_pr_artifact_url_checks(
             uploaded_metadata=failure_metadata,
             pr_metadata=metadata.get("PRFailureEvidenceAttached", {}),
             pr_event="PRFailureEvidenceAttached",

@@ -407,6 +407,12 @@ def test_complete_runs_qa_demo_stage_before_finalization() -> None:
         "https://cdn.example/qa-demo-2.webm",
         "https://cdn.example/qa-demo-3.webm",
     ]
+    assert metadata_by_event["PREvidenceAttached"]["artifact_url_check_status"] == "passed"
+    assert metadata_by_event["PREvidenceAttached"]["checked_artifact_urls"] == [
+        "https://cdn.example/qa-demo-1.webm",
+        "https://cdn.example/qa-demo-2.webm",
+        "https://cdn.example/qa-demo-3.webm",
+    ]
     assert metadata_by_event["PREvidenceAttached"]["pr_body_sha256"] == hashlib.sha256(
         "updated-body".encode("utf-8")
     ).hexdigest()
@@ -1930,6 +1936,10 @@ def test_complete_attaches_qa_failure_evidence_to_pr_before_blocking_ready_revie
             "release_context_sha256": f"{999:064x}",
             "error_message": "QA Demo Ready was not visible\nBrowser diagnostics:\npageerror: process is not defined",
         }
+    ]
+    assert metadata_by_event["PRFailureEvidenceAttached"]["artifact_url_check_status"] == "passed"
+    assert metadata_by_event["PRFailureEvidenceAttached"]["checked_artifact_urls"] == [
+        "https://cdn.example/qa-failure-1.webm"
     ]
     deps.execution.mark_pull_request_ready_after_demo_proof_fn.assert_not_called()
     assert finalizer_calls["workflow_result"].outcome == "blocked"
