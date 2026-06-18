@@ -6,7 +6,7 @@ import sys
 from dataclasses import replace
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import ANY, MagicMock, patch
 
 import pytest
 
@@ -5170,6 +5170,107 @@ def test_execute_qa_demo_stage_uploads_failure_evidence_when_release_readiness_f
     assert "connection refused" in result.failure_evidence[0].error_message
     record_mock.assert_called_once()
     upload_mock.assert_called_once()
+    runtime_mock.assert_not_called()
+
+
+def test_execute_qa_demo_stage_includes_provider_logs_when_release_readiness_fails() -> None:
+    tenant = SimpleNamespace(tenant_id="tenant-1", github_config={})
+    project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo")
+    run = SimpleNamespace(run_id="run-1")
+    release = SimpleNamespace(
+        release_id="release-preview-1",
+        app_id="app-1",
+        provider="internal_coolify",
+        status="failed",
+        commit_sha="b" * 40,
+        service_urls=[SimpleNamespace(service_kind="website", status="active", url="https://preview.example")],
+    )
+    plan = PmPlan(
+        plan_steps=["Implement"],
+        acceptance_criteria=["Feature works"],
+        risks=[],
+        demo_requirements=[_demo_requirement()],
+    )
+    failure_evidence = LocalQaFailureEvidence(
+        name="Release readiness failure",
+        path="/tmp/release-readiness-failure.webm",
+        capture_target="browser",
+        capture_reference="https://preview.example",
+        content_type="video/webm",
+        content_sha256="c" * 64,
+        error_message=(
+            "QA demo browser scenario failed: Release readiness failure\n"
+            "QA demo recording requires reachable release service URL(s); not reachable: website "
+            "(https://preview.example): HTTP 502"
+        ),
+    )
+
+    with (
+        patch("orchestrator.core.qa.demo_service.build_codex_runtime") as runtime_mock,
+        patch("orchestrator.core.qa.demo_service._default_service_url_probe", return_value=502),
+        patch(
+            "orchestrator.core.qa.demo_service.get_project_deployment_release_logs",
+            return_value=SimpleNamespace(
+                deployment_uuid="deployment-1",
+                application_uuid="application-1",
+                status="failed",
+                logs="Error: process is not defined\nnpm start exited with code 1",
+                truncated=False,
+            ),
+        ) as logs_mock,
+        patch(
+            "orchestrator.core.qa.demo_service.record_demo_scenarios",
+            side_effect=QaDemoRecordingFailure(
+                "QA demo recorder command failed (1): node qa_demo_recorder.mjs\n"
+                + failure_evidence.error_message,
+                failure_evidence=[failure_evidence],
+            ),
+        ) as record_mock,
+        patch(
+            "orchestrator.core.qa.demo_service.storage_config_from_settings",
+            return_value=SimpleNamespace(
+                endpoint="minio:9000",
+                access_key="key",
+                secret_key="secret",
+                bucket="qa-demos",
+                public_base_url="https://cdn.example/qa-demos",
+                secure=False,
+            ),
+        ),
+        patch(
+            "orchestrator.core.qa.demo_service.upload_recording",
+            return_value="https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-failure-1.webm",
+        ),
+        patch("orchestrator.core.qa.demo_service._default_artifact_url_probe", return_value=200),
+    ):
+        result = execute_qa_demo_stage(
+            session=SimpleNamespace(),
+            settings=SimpleNamespace(qa_demo_playwright_module_dir="", qa_demo_max_attempts=1),
+            tenant=tenant,
+            project=project,
+            run=run,
+            request=_request(),
+            plan=plan,
+            dev_result=DevResult(change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8"),
+            test_result=TestResult(guidance=["pytest -q"]),
+            review_result=ReviewResult(summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8"),
+            preview_release=release,
+        )
+
+    assert result.outcome == "blocked"
+    assert result.recordings == []
+    assert "provider_logs_status: available" in result.failure_evidence[0].error_message
+    assert "Error: process is not defined" in result.failure_evidence[0].error_message
+    assert "npm start exited with code 1" in result.failure_evidence[0].error_message
+    assert "provider_deployment_uuid: deployment-1" in result.failure_evidence[0].error_message
+    logs_mock.assert_called_once_with(
+        session=ANY,
+        tenant_id="tenant-1",
+        project_id="project-1",
+        release_id="release-preview-1",
+        app_id="app-1",
+    )
+    assert "Error: process is not defined" in record_mock.call_args.kwargs["qa_result"].scenarios[0].expected_outcomes[0]
     runtime_mock.assert_not_called()
 
 
