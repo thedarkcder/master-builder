@@ -133,6 +133,7 @@ def main(argv: list[str]) -> int:
             combined_error = _combined_recording_failure(primary_error=primary_error, stop_error=stop_error)
             if combined_error is not None:
                 _validate_mp4_recording(video_path)
+                diagnostics = _ios_failure_diagnostics(result_bundle_path=result_bundle_path)
                 output_path.write_text(
                     json.dumps(
                         {
@@ -141,7 +142,11 @@ def main(argv: list[str]) -> int:
                                 {
                                     "name": scenario.name,
                                     "path": str(video_path),
-                                    "error_message": f"QA demo iOS scenario failed: {scenario.name}\n{combined_error}",
+                                    "error_message": _ios_failure_message(
+                                        scenario_name=scenario.name,
+                                        error=combined_error,
+                                        diagnostics=diagnostics,
+                                    ),
                                     "capture_target": "ios",
                                     "capture_reference": capture_reference,
                                 }
@@ -165,6 +170,69 @@ def main(argv: list[str]) -> int:
 def sanitize_recording_name(name: str) -> str:
     normalized = re.sub(r"[^a-z0-9]+", "-", str(name or "demo").strip().lower()).strip("-")
     return normalized or "demo"
+
+
+def _ios_failure_message(*, scenario_name: str, error: Exception, diagnostics: str) -> str:
+    parts = [f"QA demo iOS scenario failed: {scenario_name}", str(error)]
+    if diagnostics:
+        parts.append(diagnostics)
+    return "\n".join(parts)
+
+
+def _ios_failure_diagnostics(*, result_bundle_path: Path) -> str:
+    try:
+        result = _run(
+            [
+                "xcrun",
+                "xcresulttool",
+                "get",
+                "--legacy",
+                "--path",
+                str(result_bundle_path),
+                "--format",
+                "json",
+            ],
+            capture_output=True,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return f"iOS diagnostics unavailable: {exc}"
+    try:
+        payload = json.loads(result.stdout or "{}")
+    except json.JSONDecodeError as exc:
+        return f"iOS diagnostics unavailable: xcresult payload was not valid JSON: {exc}"
+    messages = _xcresult_failure_messages(payload)
+    if not messages:
+        return ""
+    return "iOS diagnostics:\n" + _bounded_diagnostic_text(messages)
+
+
+def _xcresult_failure_messages(value: object) -> list[str]:
+    messages: list[str] = []
+
+    def visit(node: object, *, key: str | None = None) -> None:
+        if isinstance(node, dict):
+            for child_key, child_value in node.items():
+                visit(child_value, key=str(child_key))
+            return
+        if isinstance(node, list):
+            for item in node:
+                visit(item, key=key)
+            return
+        if key not in {"message", "testCaseName", "failureText", "issueType"}:
+            return
+        text = str(node or "").strip()
+        if text:
+            messages.append(text)
+
+    visit(value)
+    return list(dict.fromkeys(messages))[-40:]
+
+
+def _bounded_diagnostic_text(lines: list[str], *, max_chars: int = 4000) -> str:
+    text = "\n".join(lines).strip()
+    if len(text) <= max_chars:
+        return text
+    return text[-max_chars:]
 
 
 def _validate_mp4_recording(path: Path) -> None:

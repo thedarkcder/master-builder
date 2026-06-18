@@ -95,6 +95,7 @@ def main(argv: list[str]) -> int:
             )
         except Exception as exc:  # noqa: BLE001
             validate_mp4_recording(local_video_path)
+            diagnostics = android_failure_diagnostics(device_id=device_id, package_name=package_name)
             output_path.write_text(
                 json.dumps(
                     {
@@ -103,7 +104,11 @@ def main(argv: list[str]) -> int:
                             {
                                 "name": scenario.name,
                                 "path": str(local_video_path),
-                                "error_message": f"QA demo Android scenario failed: {scenario.name}\n{exc}",
+                                "error_message": android_failure_message(
+                                    scenario_name=scenario.name,
+                                    error=exc,
+                                    diagnostics=diagnostics,
+                                ),
                                 "capture_target": "android",
                                 "capture_reference": capture_reference,
                             }
@@ -118,6 +123,59 @@ def main(argv: list[str]) -> int:
 
     output_path.write_text(json.dumps({"recordings": recordings}, indent=2), encoding="utf-8")
     return 0
+
+
+def android_failure_message(*, scenario_name: str, error: Exception, diagnostics: str) -> str:
+    parts = [f"QA demo Android scenario failed: {scenario_name}", str(error)]
+    if diagnostics:
+        parts.append(diagnostics)
+    return "\n".join(parts)
+
+
+def android_failure_diagnostics(*, device_id: str, package_name: str) -> str:
+    try:
+        result = _run(
+            ["adb", "-s", device_id, "logcat", "-d", "-t", "300"],
+            capture_output=True,
+            check=False,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return f"Android diagnostics unavailable: {exc}"
+    selected = _select_android_failure_log_lines(logcat_output=result.stdout, package_name=package_name)
+    if not selected:
+        return ""
+    return "Android diagnostics:\n" + _bounded_diagnostic_text(selected)
+
+
+def _select_android_failure_log_lines(*, logcat_output: str, package_name: str) -> list[str]:
+    normalized_package = str(package_name or "").strip()
+    crash_markers = (
+        "AndroidRuntime",
+        "FATAL EXCEPTION",
+        "Process:",
+        "Exception",
+        "ANR",
+        "crash",
+        "CRASH",
+    )
+    selected: list[str] = []
+    for raw_line in logcat_output.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if normalized_package and normalized_package in line:
+            selected.append(line)
+            continue
+        if any(marker in line for marker in crash_markers):
+            selected.append(line)
+    return selected[-40:]
+
+
+def _bounded_diagnostic_text(lines: list[str], *, max_chars: int = 4000) -> str:
+    text = "\n".join(lines).strip()
+    if len(text) <= max_chars:
+        return text
+    return text[-max_chars:]
 
 
 def preferred_adb_device(adb_devices_output: str) -> str:

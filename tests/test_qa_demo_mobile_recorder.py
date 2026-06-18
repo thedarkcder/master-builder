@@ -255,6 +255,27 @@ def test_ios_recorder_writes_failure_evidence_when_app_does_not_load(
     def _fake_run(args, **_kwargs):  # noqa: ANN001
         if "test-without-building" in args:
             raise RuntimeError("XCTAssert failed: Ready was not visible")
+        if "xcresulttool" in args:
+            return type(
+                "Result",
+                (),
+                {
+                    "stdout": json.dumps(
+                        {
+                            "issues": {
+                                "testFailureSummaries": [
+                                    {
+                                        "testCaseName": "App load",
+                                        "message": "App crashed before Ready screen",
+                                    }
+                                ]
+                            }
+                        }
+                    ),
+                    "stderr": "",
+                    "returncode": 0,
+                },
+            )()
         return type("Result", (), {"stdout": "", "stderr": "", "returncode": 0})()
 
     monkeypatch.setenv("QA_DEMO_IOS_BUNDLE_ID", "com.example.app")
@@ -276,6 +297,8 @@ def test_ios_recorder_writes_failure_evidence_when_app_does_not_load(
     assert output["failure_evidence"][0]["capture_target"] == "ios"
     assert output["failure_evidence"][0]["capture_reference"] == "ios-simulator://configured"
     assert "Ready was not visible" in output["failure_evidence"][0]["error_message"]
+    assert "iOS diagnostics:" in output["failure_evidence"][0]["error_message"]
+    assert "App crashed before Ready screen" in output["failure_evidence"][0]["error_message"]
     assert Path(output["failure_evidence"][0]["path"]).exists()
 
 
