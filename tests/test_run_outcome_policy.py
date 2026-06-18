@@ -243,7 +243,11 @@ def test_complete_runs_qa_demo_stage_before_finalization() -> None:
         commit_sha="b" * 40,
         delivery_metadata={
             "demo_proof_lease": {
+                "proof_scope_id": "run:run-1:" + "b" * 40,
+                "commit_sha": "b" * 40,
                 "state": "destroyed",
+                "acquired_at": "2026-06-18T11:00:00+00:00",
+                "expires_at": "2026-06-19T11:00:00+00:00",
                 "destroy_reason": "qa_demo_complete",
                 "destroyed_at": "2026-06-18T12:00:00+00:00",
             }
@@ -326,6 +330,15 @@ def test_complete_runs_qa_demo_stage_before_finalization() -> None:
         for call in event_calls
     }
     assert metadata_by_event["ReleaseLive"]["release_id"] == "release-preview-1"
+    assert metadata_by_event["ReleaseLive"]["demo_proof_lease"] == {
+        "proof_scope_id": "run:run-1:" + "b" * 40,
+        "commit_sha": "b" * 40,
+        "state": "destroyed",
+        "acquired_at": "2026-06-18T11:00:00+00:00",
+        "expires_at": "2026-06-19T11:00:00+00:00",
+        "destroy_reason": "qa_demo_complete",
+        "destroyed_at": "2026-06-18T12:00:00+00:00",
+    }
     assert metadata_by_event["RecordingCompleted"]["recording_count"] == 3
     assert metadata_by_event["EvidenceUploaded"]["artifact_urls"] == [
         "https://cdn.example/qa-demo-1.webm",
@@ -367,9 +380,13 @@ def test_complete_runs_qa_demo_stage_before_finalization() -> None:
     assert metadata_by_event["PreviewCleanupCompleted"]["cleanup_mode"] == "destroy_or_ttl"
     assert metadata_by_event["PreviewCleanupCompleted"]["cleanup_evidence"] == {
         "release_id": "release-preview-1",
+        "proof_scope_id": "run:run-1:" + "b" * 40,
+        "commit_sha": "b" * 40,
         "cleanup_status": "completed",
         "cleanup_mode": "qa_demo_complete",
         "lease_state": "destroyed",
+        "acquired_at": "2026-06-18T11:00:00+00:00",
+        "expires_at": "2026-06-19T11:00:00+00:00",
         "destroy_reason": "qa_demo_complete",
         "destroyed_at": "2026-06-18T12:00:00+00:00",
     }

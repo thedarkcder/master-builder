@@ -162,13 +162,13 @@ _DEMO_PROOF_FAILURE_EVENTS: dict[str, tuple[str, str, str]] = {
 _DEMO_PROOF_BLOCKING_COMPLETION_EVENTS = frozenset({"FailurePreviewCleanupCompleted"})
 _PR_EVIDENCE_REQUEST_EVENTS = frozenset({"EvidenceUploaded", "FailureEvidenceUploaded"})
 _SUCCESS_TERMINAL_METADATA_REQUIREMENTS: dict[str, tuple[str, ...]] = {
-    "ReleaseLive": ("release_id", "release_commit_sha"),
+    "ReleaseLive": ("release_id", "release_commit_sha", "demo_proof_lease"),
     "EvidenceUploaded": ("artifact_urls", "recordings"),
     "PREvidenceAttached": ("pr_url",),
     "PreviewCleanupCompleted": ("release_id", "cleanup_status", "cleanup_mode", "cleanup_evidence"),
 }
 _FAILURE_TERMINAL_METADATA_REQUIREMENTS: dict[str, tuple[str, ...]] = {
-    "ReleaseLive": ("release_id", "release_commit_sha"),
+    "ReleaseLive": ("release_id", "release_commit_sha", "demo_proof_lease"),
     "FailureEvidenceUploaded": ("artifact_urls", "capture_targets", "failure_evidence"),
     "PRFailureEvidenceAttached": ("pr_url",),
     "FailurePreviewCleanupCompleted": ("release_id", "cleanup_status", "cleanup_mode", "cleanup_evidence"),
@@ -473,6 +473,15 @@ _FAILURE_EVIDENCE_REQUIRED_FIELDS = frozenset(
         "error_message",
     }
 )
+_DEMO_PROOF_LEASE_REQUIRED_FIELDS = frozenset(
+    {
+        "proof_scope_id",
+        "commit_sha",
+        "state",
+        "acquired_at",
+        "expires_at",
+    }
+)
 
 
 def _recording_artifacts_by_target(value: object) -> dict[str, dict[str, str]]:
@@ -509,12 +518,24 @@ def _failure_evidence_by_target(value: object) -> dict[str, dict[str, str]]:
     return evidence_by_target
 
 
+def _demo_proof_lease_metadata(value: object) -> dict[str, str]:
+    if not isinstance(value, dict):
+        return {}
+    lease_metadata = {
+        field: str(value.get(field) or "").strip()
+        for field in _DEMO_PROOF_LEASE_REQUIRED_FIELDS
+    }
+    if all(lease_metadata.values()):
+        return lease_metadata
+    return {}
+
+
 def _require_cleanup_evidence_metadata(*, value: object, event: str, proof_scope_id: str) -> None:
     if not isinstance(value, dict):
         raise RuntimeError(
             f"Demo proof scope {proof_scope_id} requires {event}.cleanup_evidence to be a JSON object"
         )
-    required = ("release_id", "cleanup_status", "cleanup_mode", "lease_state")
+    required = ("release_id", "proof_scope_id", "commit_sha", "cleanup_status", "cleanup_mode", "lease_state")
     missing = [field for field in required if not str(value.get(field) or "").strip()]
     if missing:
         raise RuntimeError(
@@ -525,6 +546,52 @@ def _require_cleanup_evidence_metadata(*, value: object, event: str, proof_scope
     if lease_state not in {"destroyed", "expired", "ttl_scheduled"}:
         raise RuntimeError(
             f"Demo proof scope {proof_scope_id} cleanup evidence has unsupported lease_state: {lease_state}"
+        )
+
+
+def _require_lease_scope_identity(
+    *,
+    release_metadata: dict[str, object],
+    cleanup_metadata: dict[str, object],
+    event: str,
+    proof_scope_id: str,
+) -> None:
+    release_lease = _demo_proof_lease_metadata(release_metadata.get("demo_proof_lease"))
+    if not release_lease:
+        raise RuntimeError(
+            f"Demo proof scope {proof_scope_id} requires ReleaseLive.demo_proof_lease metadata before terminal "
+            "completion."
+        )
+    release_proof_scope_id = _metadata_string(release_lease.get("proof_scope_id"))
+    if release_proof_scope_id != proof_scope_id:
+        raise RuntimeError(
+            f"Demo proof scope {proof_scope_id} live release lease must reference proof scope {proof_scope_id}: "
+            f"ReleaseLive.demo_proof_lease.proof_scope_id={release_proof_scope_id or '<missing>'}"
+        )
+    cleanup_evidence = cleanup_metadata.get("cleanup_evidence")
+    cleanup_proof_scope_id = (
+        _metadata_string(cleanup_evidence.get("proof_scope_id"))
+        if isinstance(cleanup_evidence, dict)
+        else ""
+    )
+    if cleanup_proof_scope_id != proof_scope_id:
+        raise RuntimeError(
+            f"Demo proof scope {proof_scope_id} cleanup evidence must reference proof scope {proof_scope_id}: "
+            f"{event}.cleanup_evidence.proof_scope_id={cleanup_proof_scope_id or '<missing>'}"
+        )
+    release_commit_sha = _metadata_string(release_metadata.get("release_commit_sha")).lower()
+    lease_commit_sha = _metadata_string(release_lease.get("commit_sha")).lower()
+    cleanup_commit_sha = (
+        _metadata_string(cleanup_evidence.get("commit_sha")).lower()
+        if isinstance(cleanup_evidence, dict)
+        else ""
+    )
+    if lease_commit_sha != release_commit_sha or cleanup_commit_sha != release_commit_sha:
+        raise RuntimeError(
+            f"Demo proof scope {proof_scope_id} lease metadata must reference ReleaseLive.release_commit_sha "
+            f"{release_commit_sha}: "
+            f"ReleaseLive.demo_proof_lease.commit_sha={lease_commit_sha or '<missing>'}, "
+            f"{event}.cleanup_evidence.commit_sha={cleanup_commit_sha or '<missing>'}"
         )
 
 
@@ -591,6 +658,12 @@ def _require_terminal_proof_metadata(
             proof_scope_id=proof_scope_id,
         )
         _require_cleanup_release_identity(
+            release_metadata=release_metadata,
+            cleanup_metadata=cleanup_metadata,
+            event=event,
+            proof_scope_id=proof_scope_id,
+        )
+        _require_lease_scope_identity(
             release_metadata=release_metadata,
             cleanup_metadata=cleanup_metadata,
             event=event,

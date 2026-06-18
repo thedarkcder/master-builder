@@ -41,11 +41,25 @@ def _recording_artifact_metadata(capture_target: str, artifact_url: str) -> dict
 def _cleanup_evidence_metadata() -> dict[str, str]:
     return {
         "release_id": "release-preview-1",
+        "proof_scope_id": "run-1-main-abcdef1",
+        "commit_sha": "b" * 40,
         "cleanup_status": "completed",
         "cleanup_mode": "qa_demo_complete",
         "lease_state": "destroyed",
+        "acquired_at": "2026-06-18T11:00:00+00:00",
+        "expires_at": "2026-06-19T11:00:00+00:00",
         "destroy_reason": "qa_demo_complete",
         "destroyed_at": "2026-06-18T12:00:00+00:00",
+    }
+
+
+def _demo_proof_lease_metadata() -> dict[str, str]:
+    return {
+        "proof_scope_id": "run-1-main-abcdef1",
+        "commit_sha": "b" * 40,
+        "state": "active",
+        "acquired_at": "2026-06-18T11:00:00+00:00",
+        "expires_at": "2026-06-19T11:00:00+00:00",
     }
 
 
@@ -86,6 +100,7 @@ def _demo_proof_event_metadata(event: str) -> dict[str, object] | None:
             "release_kind": "run_preview",
             "release_status": "live",
             "release_commit_sha": "b" * 40,
+            "demo_proof_lease": _demo_proof_lease_metadata(),
             **(
                 {
                     "cleanup_status": "completed",
@@ -1220,6 +1235,63 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 assert "cleanup evidence must reference ReleaseLive.release_id release-preview-1" in str(exc)
             else:  # pragma: no cover
                 raise AssertionError("expected demo proof completion to require matching cleanup release metadata")
+
+    def test_demo_proof_rejects_success_completion_when_cleanup_lease_scope_mismatches_workflow(self) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-a")
+            workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
+            request = _demo_proof_request(tenant=tenant)
+            execute_workflow_advance(
+                session=session,
+                settings=SimpleNamespace(),
+                workflow_type=workflow_type,
+                request=request,
+                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+            )
+
+            for event in (
+                "ProofLeaseAcquired",
+                "ReleaseRequested",
+                "ReleaseProvisioning",
+                "ReleaseLive",
+                "RouteReady",
+                "ServiceVerificationPassed",
+                "RecordingStarted",
+                "RecordingCompleted",
+                "EvidenceUploadStarted",
+                "EvidenceUploaded",
+                "PREvidenceAttachStarted",
+                "PREvidenceAttached",
+                "PreviewCleanupRequested",
+            ):
+                execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=_demo_proof_request_for_event(request, event),
+                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                )
+
+            terminal_request = _demo_proof_request_for_event(request, "PreviewCleanupCompleted")
+            payload = dict(terminal_request.payload)
+            metadata = dict(payload["event_metadata"])
+            cleanup_evidence = dict(metadata["cleanup_evidence"])
+            cleanup_evidence["proof_scope_id"] = "run-2-main-abcdef1"
+            metadata["cleanup_evidence"] = cleanup_evidence
+            payload["event_metadata"] = metadata
+            try:
+                execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=replace(terminal_request, payload=payload),
+                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                )
+            except RuntimeError as exc:
+                assert "cleanup evidence must reference proof scope run-1-main-abcdef1" in str(exc)
+                assert "run-2-main-abcdef1" in str(exc)
+            else:  # pragma: no cover
+                raise AssertionError("expected demo proof completion to require matching cleanup lease scope metadata")
 
     def test_demo_proof_rejects_failure_completion_without_failure_capture_target_metadata(self) -> None:
         with self.session_factory() as session:

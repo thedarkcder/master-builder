@@ -1331,6 +1331,7 @@ def _qa_demo_proof_event_metadata(*, proof_context, event: str) -> dict[str, obj
         "FailurePreviewCleanupCompleted",
         "FailurePreviewCleanupFailed",
     } and preview_release is not None:
+        demo_proof_lease = _qa_demo_lease_metadata(preview_release=preview_release)
         metadata.update(
             {
                 "release_id": str(getattr(preview_release, "release_id", "") or "").strip(),
@@ -1339,6 +1340,8 @@ def _qa_demo_proof_event_metadata(*, proof_context, event: str) -> dict[str, obj
                 "release_commit_sha": str(getattr(preview_release, "commit_sha", "") or "").strip(),
             }
         )
+        if demo_proof_lease:
+            metadata["demo_proof_lease"] = demo_proof_lease
         if event in {"PreviewCleanupCompleted", "FailurePreviewCleanupCompleted"}:
             metadata["cleanup_status"] = "completed"
             metadata["cleanup_mode"] = "destroy_or_ttl"
@@ -1445,6 +1448,26 @@ def _qa_demo_proof_event_metadata(*, proof_context, event: str) -> dict[str, obj
     return compacted or None
 
 
+def _qa_demo_lease_metadata(*, preview_release) -> dict[str, str]:  # noqa: ANN001
+    delivery_metadata = getattr(preview_release, "delivery_metadata", None)
+    lease_metadata = delivery_metadata.get("demo_proof_lease") if isinstance(delivery_metadata, dict) else None
+    if not isinstance(lease_metadata, dict):
+        return {}
+    return {
+        key: value
+        for key, value in {
+            "proof_scope_id": str(lease_metadata.get("proof_scope_id") or "").strip(),
+            "commit_sha": str(lease_metadata.get("commit_sha") or "").strip(),
+            "state": str(lease_metadata.get("state") or "").strip(),
+            "acquired_at": str(lease_metadata.get("acquired_at") or "").strip(),
+            "expires_at": str(lease_metadata.get("expires_at") or "").strip(),
+            "destroy_reason": str(lease_metadata.get("destroy_reason") or "").strip(),
+            "destroyed_at": str(lease_metadata.get("destroyed_at") or "").strip(),
+        }.items()
+        if value
+    }
+
+
 def _qa_demo_cleanup_evidence_metadata(*, preview_release) -> dict[str, str]:  # noqa: ANN001
     delivery_metadata = getattr(preview_release, "delivery_metadata", None)
     lease_metadata = delivery_metadata.get("demo_proof_lease") if isinstance(delivery_metadata, dict) else None
@@ -1458,12 +1481,15 @@ def _qa_demo_cleanup_evidence_metadata(*, preview_release) -> dict[str, str]:  #
         key: value
         for key, value in {
             "release_id": release_id,
+            "proof_scope_id": str(lease_metadata.get("proof_scope_id") or "").strip(),
+            "commit_sha": str(lease_metadata.get("commit_sha") or "").strip(),
             "cleanup_status": cleanup_status,
             "cleanup_mode": cleanup_mode,
             "lease_state": lease_state,
+            "acquired_at": str(lease_metadata.get("acquired_at") or "").strip(),
+            "expires_at": str(lease_metadata.get("expires_at") or "").strip(),
             "destroy_reason": str(lease_metadata.get("destroy_reason") or "").strip(),
             "destroyed_at": str(lease_metadata.get("destroyed_at") or "").strip(),
-            "expires_at": str(lease_metadata.get("expires_at") or "").strip(),
         }.items()
         if value
     }
