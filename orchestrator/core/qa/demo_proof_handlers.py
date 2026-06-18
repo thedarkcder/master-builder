@@ -154,13 +154,13 @@ _DEMO_PROOF_BLOCKING_COMPLETION_EVENTS = frozenset({"FailurePreviewCleanupComple
 _PR_EVIDENCE_REQUEST_EVENTS = frozenset({"EvidenceUploaded", "FailureEvidenceUploaded"})
 _SUCCESS_TERMINAL_METADATA_REQUIREMENTS: dict[str, tuple[str, ...]] = {
     "ReleaseLive": ("release_id",),
-    "EvidenceUploaded": ("artifact_urls",),
+    "EvidenceUploaded": ("artifact_urls", "recordings"),
     "PREvidenceAttached": ("pr_url",),
     "PreviewCleanupCompleted": ("release_id", "cleanup_status"),
 }
 _FAILURE_TERMINAL_METADATA_REQUIREMENTS: dict[str, tuple[str, ...]] = {
     "ReleaseLive": ("release_id",),
-    "FailureEvidenceUploaded": ("artifact_urls", "capture_targets"),
+    "FailureEvidenceUploaded": ("artifact_urls", "capture_targets", "failure_evidence"),
     "PRFailureEvidenceAttached": ("pr_url",),
     "FailurePreviewCleanupCompleted": ("release_id", "cleanup_status"),
 }
@@ -426,6 +426,38 @@ def _metadata_string_list(value: object) -> list[str]:
     return [normalized] if normalized else []
 
 
+def _recording_artifact_urls_by_target(value: object) -> dict[str, str]:
+    if not isinstance(value, list):
+        return {}
+    urls_by_target: dict[str, str] = {}
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        capture_target = str(item.get("capture_target") or "").strip()
+        artifact_url = str(item.get("artifact_url") or "").strip()
+        if capture_target and artifact_url:
+            urls_by_target[capture_target] = artifact_url
+    return urls_by_target
+
+
+def _failure_evidence_by_target(value: object) -> dict[str, dict[str, str]]:
+    if not isinstance(value, list):
+        return {}
+    evidence_by_target: dict[str, dict[str, str]] = {}
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        capture_target = str(item.get("capture_target") or "").strip()
+        artifact_url = str(item.get("artifact_url") or "").strip()
+        error_message = str(item.get("error_message") or "").strip()
+        if capture_target and artifact_url and error_message:
+            evidence_by_target[capture_target] = {
+                "artifact_url": artifact_url,
+                "error_message": error_message,
+            }
+    return evidence_by_target
+
+
 def _require_terminal_proof_metadata(
     *,
     event: str,
@@ -473,6 +505,28 @@ def _require_terminal_proof_metadata(
             raise RuntimeError(
                 f"Demo proof scope {proof_scope_id} requires at least {len(required_targets)} "
                 "distinct playable artifact URL(s) for required capture target(s)."
+            )
+        urls_by_target = _recording_artifact_urls_by_target(evidence_metadata.get("recordings"))
+        missing_target_urls = sorted(target for target in required_targets if target not in urls_by_target)
+        if missing_target_urls:
+            raise RuntimeError(
+                f"Demo proof scope {proof_scope_id} evidence metadata is missing playable artifact URL mapping "
+                "for required capture target(s): " + ", ".join(missing_target_urls)
+            )
+        if len(set(urls_by_target[target] for target in required_targets)) < len(required_targets):
+            raise RuntimeError(
+                f"Demo proof scope {proof_scope_id} requires distinct playable artifact URL mappings for "
+                "required capture target(s)."
+            )
+    if event == "FailurePreviewCleanupCompleted":
+        failure_metadata = metadata.get("FailureEvidenceUploaded", {})
+        failure_targets = _metadata_string_set(failure_metadata.get("capture_targets"))
+        evidence_by_target = _failure_evidence_by_target(failure_metadata.get("failure_evidence"))
+        missing_diagnostic_targets = sorted(target for target in failure_targets if target not in evidence_by_target)
+        if missing_diagnostic_targets:
+            raise RuntimeError(
+                f"Demo proof scope {proof_scope_id} failure evidence metadata is missing diagnostic evidence "
+                "for capture target(s): " + ", ".join(missing_diagnostic_targets)
             )
 
 

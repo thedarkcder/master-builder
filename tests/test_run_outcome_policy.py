@@ -325,6 +325,11 @@ def test_complete_runs_qa_demo_stage_before_finalization() -> None:
         "https://cdn.example/qa-demo-2.webm",
         "https://cdn.example/qa-demo-3.webm",
     ]
+    assert metadata_by_event["EvidenceUploaded"]["recordings"] == [
+        {"capture_target": "browser", "artifact_url": "https://cdn.example/qa-demo-1.webm"},
+        {"capture_target": "browser", "artifact_url": "https://cdn.example/qa-demo-2.webm"},
+        {"capture_target": "browser", "artifact_url": "https://cdn.example/qa-demo-3.webm"},
+    ]
     assert metadata_by_event["PREvidenceAttached"]["pr_url"] == workflow_result.pr_url
     assert metadata_by_event["PreviewCleanupCompleted"]["release_id"] == "release-preview-1"
     assert metadata_by_event["PreviewCleanupCompleted"]["cleanup_status"] == "completed"
@@ -1777,9 +1782,8 @@ def test_complete_attaches_qa_failure_evidence_to_pr_before_blocking_ready_revie
     assert deps.execution.start_demo_proof_workflow_fn.call_args.kwargs["trigger_event"] == (
         "run_failed_with_demo_failure_evidence"
     )
-    assert [
-        call.kwargs["event"] for call in deps.execution.advance_demo_proof_workflow_event_fn.call_args_list
-    ] == [
+    event_calls = deps.execution.advance_demo_proof_workflow_event_fn.call_args_list
+    assert [call.kwargs["event"] for call in event_calls] == [
         "ProofLeaseAcquired",
         "ReleaseRequested",
         "ReleaseProvisioning",
@@ -1794,6 +1798,14 @@ def test_complete_attaches_qa_failure_evidence_to_pr_before_blocking_ready_revie
         "PRFailureEvidenceAttached",
         "FailurePreviewCleanupRequested",
         "FailurePreviewCleanupFailed",
+    ]
+    metadata_by_event = {call.kwargs["event"]: call.kwargs.get("event_metadata") for call in event_calls}
+    assert metadata_by_event["FailureEvidenceUploaded"]["failure_evidence"] == [
+        {
+            "capture_target": "browser",
+            "artifact_url": "https://cdn.example/qa-failure-1.webm",
+            "error_message": "QA Demo Ready was not visible\nBrowser diagnostics:\npageerror: process is not defined",
+        }
     ]
     deps.execution.mark_pull_request_ready_after_demo_proof_fn.assert_not_called()
     assert finalizer_calls["workflow_result"].outcome == "blocked"

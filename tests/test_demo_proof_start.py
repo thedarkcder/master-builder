@@ -71,12 +71,33 @@ def _demo_proof_event_metadata(event: str) -> dict[str, object] | None:
             ],
             "recording_count": 3,
             "capture_targets": ["browser", "ios", "android"],
+            "recordings": [
+                {
+                    "capture_target": "browser",
+                    "artifact_url": "https://cdn.example/qa-demos/tenant-1/project-1/run-1/browser.webm",
+                },
+                {
+                    "capture_target": "ios",
+                    "artifact_url": "https://cdn.example/qa-demos/tenant-1/project-1/run-1/ios.webm",
+                },
+                {
+                    "capture_target": "android",
+                    "artifact_url": "https://cdn.example/qa-demos/tenant-1/project-1/run-1/android.webm",
+                },
+            ],
         }
     if event == "FailureEvidenceUploaded":
         return {
             "artifact_urls": ["https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-failure-1.webm"],
             "failure_evidence_count": 1,
             "capture_targets": ["browser"],
+            "failure_evidence": [
+                {
+                    "capture_target": "browser",
+                    "artifact_url": "https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-failure-1.webm",
+                    "error_message": "QA Demo Ready was not visible; app did not load",
+                }
+            ],
         }
     if event in {"PREvidenceAttached", "PRFailureEvidenceAttached"}:
         return {"pr_url": "https://github.com/acme/project-a/pull/8"}
@@ -558,6 +579,12 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                         "artifact_urls": ["https://cdn.example/qa-demos/tenant-1/project-1/run-1/browser.webm"],
                         "recording_count": 1,
                         "capture_targets": ["browser"],
+                        "recordings": [
+                            {
+                                "capture_target": "browser",
+                                "artifact_url": "https://cdn.example/qa-demos/tenant-1/project-1/run-1/browser.webm",
+                            }
+                        ],
                     }
                     event_request = replace(event_request, payload=payload)
                 execute_workflow_advance(
@@ -616,6 +643,12 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                         "artifact_urls": ["https://cdn.example/qa-demos/tenant-1/project-1/run-1/shared.webm"],
                         "recording_count": 1,
                         "capture_targets": ["browser", "ios", "android"],
+                        "recordings": [
+                            {
+                                "capture_target": "browser",
+                                "artifact_url": "https://cdn.example/qa-demos/tenant-1/project-1/run-1/shared.webm",
+                            }
+                        ],
                     }
                     event_request = replace(event_request, payload=payload)
                 execute_workflow_advance(
@@ -678,6 +711,20 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                         ],
                         "recording_count": 3,
                         "capture_targets": ["browser", "ios", "android"],
+                        "recordings": [
+                            {
+                                "capture_target": "browser",
+                                "artifact_url": "https://cdn.example/qa-demos/tenant-1/project-1/run-1/shared.webm",
+                            },
+                            {
+                                "capture_target": "ios",
+                                "artifact_url": "https://cdn.example/qa-demos/tenant-1/project-1/run-1/shared.webm",
+                            },
+                            {
+                                "capture_target": "android",
+                                "artifact_url": "https://cdn.example/qa-demos/tenant-1/project-1/run-1/shared.webm",
+                            },
+                        ],
                     }
                     event_request = replace(event_request, payload=payload)
                 execute_workflow_advance(
@@ -700,6 +747,68 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 assert "requires at least 3 distinct playable artifact URL(s)" in str(exc)
             else:  # pragma: no cover
                 raise AssertionError("expected demo proof completion to require distinct artifact URLs")
+
+    def test_demo_proof_rejects_success_completion_without_per_target_artifact_url_mappings(self) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-a")
+            workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
+            request = _demo_proof_request(tenant=tenant)
+            execute_workflow_advance(
+                session=session,
+                settings=SimpleNamespace(),
+                workflow_type=workflow_type,
+                request=request,
+                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+            )
+
+            for event in (
+                "ProofLeaseAcquired",
+                "ReleaseRequested",
+                "ReleaseProvisioning",
+                "ReleaseLive",
+                "RouteReady",
+                "ServiceVerificationPassed",
+                "RecordingStarted",
+                "RecordingCompleted",
+                "EvidenceUploadStarted",
+                "EvidenceUploaded",
+                "PREvidenceAttachStarted",
+                "PREvidenceAttached",
+                "PreviewCleanupRequested",
+            ):
+                event_request = _demo_proof_request_for_event(request, event)
+                if event == "EvidenceUploaded":
+                    payload = dict(event_request.payload)
+                    payload["event_metadata"] = {
+                        "artifact_urls": [
+                            "https://cdn.example/qa-demos/tenant-1/project-1/run-1/browser.webm",
+                            "https://cdn.example/qa-demos/tenant-1/project-1/run-1/ios.webm",
+                            "https://cdn.example/qa-demos/tenant-1/project-1/run-1/android.webm",
+                        ],
+                        "recording_count": 3,
+                        "capture_targets": ["browser", "ios", "android"],
+                    }
+                    event_request = replace(event_request, payload=payload)
+                execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=event_request,
+                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                )
+
+            try:
+                execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=_demo_proof_request_for_event(request, "PreviewCleanupCompleted"),
+                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                )
+            except RuntimeError as exc:
+                assert "EvidenceUploaded.recordings" in str(exc)
+            else:  # pragma: no cover
+                raise AssertionError("expected demo proof completion to require per-target artifact URL mappings")
 
     def test_demo_proof_rejects_success_completion_without_cleanup_status_metadata(self) -> None:
         with self.session_factory() as session:
@@ -813,6 +922,75 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 assert "FailureEvidenceUploaded.capture_targets" in str(exc)
             else:  # pragma: no cover
                 raise AssertionError("expected demo proof failure completion to require capture target metadata")
+
+    def test_demo_proof_rejects_failure_completion_without_diagnostic_evidence_metadata(self) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-a")
+            workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
+            request = _demo_proof_request(tenant=tenant)
+            execute_workflow_advance(
+                session=session,
+                settings=SimpleNamespace(),
+                workflow_type=workflow_type,
+                request=request,
+                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+            )
+
+            for event in (
+                "ProofLeaseAcquired",
+                "ReleaseRequested",
+                "ReleaseProvisioning",
+                "ReleaseLive",
+                "RouteReady",
+                "ServiceVerificationPassed",
+                "RecordingStarted",
+                "RecordingFailureEvidenceCaptured",
+                "FailureEvidenceUploadStarted",
+                "FailureEvidenceUploaded",
+                "PRFailureEvidenceAttachStarted",
+                "PRFailureEvidenceAttached",
+                "FailurePreviewCleanupRequested",
+            ):
+                event_request = _demo_proof_request_for_event(request, event)
+                if event == "FailureEvidenceUploaded":
+                    payload = dict(event_request.payload)
+                    payload["event_metadata"] = {
+                        "artifact_urls": [
+                            "https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-failure-1.webm"
+                        ],
+                        "failure_evidence_count": 1,
+                        "capture_targets": ["browser"],
+                        "failure_evidence": [
+                            {
+                                "capture_target": "browser",
+                                "artifact_url": (
+                                    "https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-failure-1.webm"
+                                ),
+                            }
+                        ],
+                    }
+                    event_request = replace(event_request, payload=payload)
+                execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=event_request,
+                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                )
+
+            try:
+                execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=_demo_proof_request_for_event(request, "FailurePreviewCleanupCompleted"),
+                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                )
+            except RuntimeError as exc:
+                assert "failure evidence metadata is missing diagnostic evidence" in str(exc)
+                assert "browser" in str(exc)
+            else:  # pragma: no cover
+                raise AssertionError("expected demo proof failure completion to require diagnostic evidence metadata")
 
     def test_demo_proof_persists_lifecycle_event_metadata_for_auditable_chain(self) -> None:
         with self.session_factory() as session:
