@@ -942,6 +942,23 @@ def _require_pr_evidence_matches_uploaded_artifacts(
         )
 
 
+def _require_pr_evidence_targets_workflow_pr(
+    *,
+    description: dict[str, object],
+    pr_metadata: dict[str, object],
+    pr_event: str,
+    proof_scope_id: str,
+) -> None:
+    workflow_pr_url = _metadata_string(description.get("pr_url"))
+    evidence_pr_url = _metadata_string(pr_metadata.get("pr_url"))
+    if evidence_pr_url == workflow_pr_url:
+        return
+    raise RuntimeError(
+        f"Demo proof scope {proof_scope_id} {pr_event}.pr_url must match workflow pr_url "
+        f"{workflow_pr_url or '<missing>'}: {pr_event}.pr_url={evidence_pr_url or '<missing>'}"
+    )
+
+
 def _require_recording_completion_metadata(*, description: dict[str, object], proof_scope_id: str) -> None:
     metadata = _metadata_by_event(description)
     recording_metadata = metadata.get("RecordingCompleted", {})
@@ -1178,6 +1195,12 @@ def _require_terminal_proof_metadata(
             pr_event="PREvidenceAttached",
             proof_scope_id=proof_scope_id,
         )
+        _require_pr_evidence_targets_workflow_pr(
+            description=description,
+            pr_metadata=metadata.get("PREvidenceAttached", {}),
+            pr_event="PREvidenceAttached",
+            proof_scope_id=proof_scope_id,
+        )
         recording_counts_by_target = _recording_artifact_counts_by_target(evidence_metadata.get("recordings"))
         required_counts = _normalized_required_recording_counts(
             required_capture_targets=list(required_targets),
@@ -1237,6 +1260,12 @@ def _require_terminal_proof_metadata(
             )
         _require_pr_evidence_matches_uploaded_artifacts(
             uploaded_metadata=failure_metadata,
+            pr_metadata=metadata.get("PRFailureEvidenceAttached", {}),
+            pr_event="PRFailureEvidenceAttached",
+            proof_scope_id=proof_scope_id,
+        )
+        _require_pr_evidence_targets_workflow_pr(
+            description=description,
             pr_metadata=metadata.get("PRFailureEvidenceAttached", {}),
             pr_event="PRFailureEvidenceAttached",
             proof_scope_id=proof_scope_id,
