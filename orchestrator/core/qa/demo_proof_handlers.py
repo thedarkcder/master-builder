@@ -160,7 +160,7 @@ _SUCCESS_TERMINAL_METADATA_REQUIREMENTS: dict[str, tuple[str, ...]] = {
 }
 _FAILURE_TERMINAL_METADATA_REQUIREMENTS: dict[str, tuple[str, ...]] = {
     "ReleaseLive": ("release_id",),
-    "FailureEvidenceUploaded": ("artifact_urls",),
+    "FailureEvidenceUploaded": ("artifact_urls", "capture_targets"),
     "PRFailureEvidenceAttached": ("pr_url",),
     "FailurePreviewCleanupCompleted": ("release_id",),
 }
