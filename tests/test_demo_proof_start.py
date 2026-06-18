@@ -181,7 +181,7 @@ def _demo_proof_event_metadata(event: str) -> dict[str, object] | None:
                 ),
             ],
         }
-    if event == "FailureEvidenceUploaded":
+    if event in {"RecordingFailureEvidenceCaptured", "FailureEvidenceUploaded"}:
         artifact_urls = [
             "https://cdn.example/qa-demos/tenant-1/project-1/run-1/browser-failure.webm",
             "https://cdn.example/qa-demos/tenant-1/project-1/run-1/ios-failure.webm",
@@ -1258,7 +1258,7 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 "PreviewCleanupRequested",
             ):
                 event_request = _demo_proof_request_for_event(request, event)
-                if event == "EvidenceUploaded":
+                if event in {"RecordingCompleted", "EvidenceUploaded"}:
                     payload = dict(event_request.payload)
                     metadata = dict(payload["event_metadata"])
                     recordings = [dict(item) for item in metadata["recordings"]]
@@ -1852,9 +1852,10 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
                 )
             except RuntimeError as exc:
-                assert "requires 2 recording artifact(s) for capture target browser, got 1" in str(exc)
+                assert "EvidenceUploaded.recordings must match RecordingCompleted.recordings" in str(exc)
+                assert "browser" in str(exc)
             else:  # pragma: no cover
-                raise AssertionError("expected demo proof completion to enforce required recording counts")
+                raise AssertionError("expected demo proof completion to reject missing uploaded recording lineage")
 
     def test_demo_proof_rejects_recording_completed_when_required_recording_count_is_missing(self) -> None:
         with self.session_factory() as session:
@@ -2239,7 +2240,7 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 "FailurePreviewCleanupRequested",
             ):
                 event_request = _demo_proof_request_for_event(request, event)
-                if event == "FailureEvidenceUploaded":
+                if event in {"RecordingFailureEvidenceCaptured", "FailureEvidenceUploaded"}:
                     metadata = _demo_proof_event_metadata(event)
                     assert metadata is not None
                     failure_evidence = list(metadata["failure_evidence"])
@@ -2270,6 +2271,175 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 assert "browser" in str(exc)
             else:  # pragma: no cover
                 raise AssertionError("expected demo proof failure completion to reject mismatched release commit")
+
+    def test_demo_proof_rejects_success_completion_when_uploaded_recordings_do_not_match_completed_recordings(
+        self,
+    ) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-a")
+            workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
+            request = _demo_proof_request(tenant=tenant)
+            execute_workflow_advance(
+                session=session,
+                settings=SimpleNamespace(),
+                workflow_type=workflow_type,
+                request=request,
+                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+            )
+            mismatched_url = "https://cdn.example/qa-demos/tenant-1/project-1/run-1/browser-uploaded.webm"
+
+            for event in (
+                "ProofLeaseAcquired",
+                "ReleaseRequested",
+                "ReleaseProvisioning",
+                "ReleaseLive",
+                "RouteReady",
+                "ServiceVerificationPassed",
+                "RecordingStarted",
+                "RecordingCompleted",
+                "EvidenceUploadStarted",
+                "EvidenceUploaded",
+                "PREvidenceAttachStarted",
+                "PREvidenceAttached",
+                "PreviewCleanupRequested",
+            ):
+                event_request = _demo_proof_request_for_event(request, event)
+                if event == "EvidenceUploaded":
+                    metadata = _demo_proof_event_metadata(event)
+                    assert metadata is not None
+                    recordings = list(metadata["recordings"])
+                    recordings[0] = _recording_artifact_metadata("browser", mismatched_url)
+                    payload = dict(event_request.payload)
+                    payload["event_metadata"] = {
+                        **metadata,
+                        "artifact_urls": [
+                            mismatched_url,
+                            "https://cdn.example/qa-demos/tenant-1/project-1/run-1/ios.webm",
+                            "https://cdn.example/qa-demos/tenant-1/project-1/run-1/android.webm",
+                        ],
+                        "recordings": recordings,
+                    }
+                    event_request = replace(event_request, payload=payload)
+                if event == "PREvidenceAttached":
+                    metadata = _demo_proof_event_metadata(event)
+                    assert metadata is not None
+                    payload = dict(event_request.payload)
+                    payload["event_metadata"] = {
+                        **metadata,
+                        "artifact_urls": [
+                            mismatched_url,
+                            "https://cdn.example/qa-demos/tenant-1/project-1/run-1/ios.webm",
+                            "https://cdn.example/qa-demos/tenant-1/project-1/run-1/android.webm",
+                        ],
+                    }
+                    event_request = replace(event_request, payload=payload)
+                execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=event_request,
+                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                )
+
+            try:
+                execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=_demo_proof_request_for_event(request, "PreviewCleanupCompleted"),
+                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                )
+            except RuntimeError as exc:
+                assert "EvidenceUploaded.recordings must match RecordingCompleted.recordings" in str(exc)
+                assert "browser" in str(exc)
+            else:  # pragma: no cover
+                raise AssertionError("expected demo proof completion to reject mismatched uploaded recordings")
+
+    def test_demo_proof_rejects_failure_completion_when_uploaded_failure_evidence_does_not_match_captured_evidence(
+        self,
+    ) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-a")
+            workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
+            request = _demo_proof_request(tenant=tenant)
+            execute_workflow_advance(
+                session=session,
+                settings=SimpleNamespace(),
+                workflow_type=workflow_type,
+                request=request,
+                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+            )
+            mismatched_url = "https://cdn.example/qa-demos/tenant-1/project-1/run-1/browser-failure-uploaded.webm"
+
+            for event in (
+                "ProofLeaseAcquired",
+                "ReleaseRequested",
+                "ReleaseProvisioning",
+                "ReleaseLive",
+                "RouteReady",
+                "ServiceVerificationPassed",
+                "RecordingStarted",
+                "RecordingFailureEvidenceCaptured",
+                "FailureEvidenceUploadStarted",
+                "FailureEvidenceUploaded",
+                "PRFailureEvidenceAttachStarted",
+                "PRFailureEvidenceAttached",
+                "FailurePreviewCleanupRequested",
+            ):
+                event_request = _demo_proof_request_for_event(request, event)
+                if event == "FailureEvidenceUploaded":
+                    metadata = _demo_proof_event_metadata(event)
+                    assert metadata is not None
+                    failure_evidence = list(metadata["failure_evidence"])
+                    failure_evidence[0] = _failure_evidence_metadata("browser", mismatched_url)
+                    payload = dict(event_request.payload)
+                    payload["event_metadata"] = {
+                        **metadata,
+                        "artifact_urls": [
+                            mismatched_url,
+                            "https://cdn.example/qa-demos/tenant-1/project-1/run-1/ios-failure.webm",
+                            "https://cdn.example/qa-demos/tenant-1/project-1/run-1/android-failure.webm",
+                        ],
+                        "failure_evidence": failure_evidence,
+                    }
+                    event_request = replace(event_request, payload=payload)
+                if event == "PRFailureEvidenceAttached":
+                    metadata = _demo_proof_event_metadata(event)
+                    assert metadata is not None
+                    payload = dict(event_request.payload)
+                    payload["event_metadata"] = {
+                        **metadata,
+                        "artifact_urls": [
+                            mismatched_url,
+                            "https://cdn.example/qa-demos/tenant-1/project-1/run-1/ios-failure.webm",
+                            "https://cdn.example/qa-demos/tenant-1/project-1/run-1/android-failure.webm",
+                        ],
+                    }
+                    event_request = replace(event_request, payload=payload)
+                execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=event_request,
+                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                )
+
+            try:
+                execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=_demo_proof_request_for_event(request, "FailurePreviewCleanupCompleted"),
+                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                )
+            except RuntimeError as exc:
+                assert (
+                    "FailureEvidenceUploaded.failure_evidence must match "
+                    "RecordingFailureEvidenceCaptured.failure_evidence"
+                ) in str(exc)
+                assert "browser" in str(exc)
+            else:  # pragma: no cover
+                raise AssertionError("expected demo proof failure completion to reject mismatched failure evidence")
 
     def test_demo_proof_persists_lifecycle_event_metadata_for_auditable_chain(self) -> None:
         with self.session_factory() as session:
