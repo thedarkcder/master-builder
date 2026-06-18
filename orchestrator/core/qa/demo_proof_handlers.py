@@ -520,6 +520,16 @@ def _recording_workflow_descriptions(
     remaining_targets = set(_metadata_string_list((event_metadata or {}).get("remaining_capture_targets")))
     workflows: list[dict[str, str]] = []
     for capture_target in _normalized_capture_targets(required_capture_targets):
+        if normalized_event in {"RecordingCompleted", "RecordingFailureEvidenceCaptured"}:
+            evidence_field = "recordings" if normalized_event == "RecordingCompleted" else "failure_evidence"
+            evidence_targets = set(_metadata_string_list((event_metadata or {}).get("capture_targets")))
+            evidence_targets.update(_metadata_capture_targets_from_items((event_metadata or {}).get(evidence_field)))
+            if capture_target in evidence_targets:
+                state = "recorded" if normalized_event == "RecordingCompleted" else "failed"
+            else:
+                state = existing_state_by_target.get(capture_target, "planned")
+            workflows.append({"capture_target": capture_target, "state": state})
+            continue
         if normalized_event == "RecordingDeferred":
             if capture_target in recorded_targets:
                 state = "recorded"
@@ -774,6 +784,18 @@ def _metadata_string_list(value: object) -> list[str]:
         return [str(item or "").strip() for item in value if str(item or "").strip()]
     normalized = str(value or "").strip()
     return [normalized] if normalized else []
+
+
+def _metadata_capture_targets_from_items(value: object) -> set[str]:
+    if not isinstance(value, list):
+        return set()
+    return {
+        capture_target
+        for item in value
+        if isinstance(item, dict)
+        for capture_target in [_metadata_string(item.get("capture_target"))]
+        if capture_target
+    }
 
 
 def _metadata_string(value: object) -> str:

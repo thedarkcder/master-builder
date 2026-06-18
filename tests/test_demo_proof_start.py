@@ -3869,6 +3869,66 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 {"capture_target": "android", "state": "recorded"},
             ]
 
+    def test_demo_proof_failure_evidence_marks_only_evidenced_recording_workflow_targets(self) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-a")
+            workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
+            request = _demo_proof_request(tenant=tenant)
+            execute_workflow_advance(
+                session=session,
+                settings=SimpleNamespace(),
+                workflow_type=workflow_type,
+                request=request,
+                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+            )
+
+            for event in (
+                "ProofLeaseAcquired",
+                "ReleaseRequested",
+                "ReleaseProvisioning",
+                "ReleaseLive",
+                "RouteReady",
+                "ServiceVerificationPassed",
+                "RecordingStarted",
+            ):
+                execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=_demo_proof_request_for_event(request, event),
+                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                )
+
+            artifact_url = "https://cdn.example/qa-demos/tenant-1/project-1/run-1/browser-failure.webm"
+            execute_workflow_advance(
+                session=session,
+                settings=SimpleNamespace(),
+                workflow_type=workflow_type,
+                request=replace(
+                    _demo_proof_request_for_event(request, "RecordingFailureEvidenceCaptured"),
+                    payload={
+                        **request.payload,
+                        "event_metadata": {
+                            "artifact_urls": [artifact_url],
+                            "failure_evidence_count": 1,
+                            "capture_targets": ["browser"],
+                            "failure_evidence": [
+                                _failure_evidence_metadata("browser", artifact_url),
+                            ],
+                        },
+                    },
+                ),
+                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+            )
+
+            workflow = session.execute(select(WorkflowExecution)).scalar_one()
+            description = json.loads(workflow.source_description or "{}")
+            assert description["recording_workflows"] == [
+                {"capture_target": "browser", "state": "failed"},
+                {"capture_target": "ios", "state": "recording"},
+                {"capture_target": "android", "state": "recording"},
+            ]
+
     def test_demo_proof_tracks_deferred_recording_targets_until_next_worker(self) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
