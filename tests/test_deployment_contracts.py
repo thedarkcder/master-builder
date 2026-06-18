@@ -838,6 +838,234 @@ class DeploymentContractTests(unittest.TestCase):
         create_release.assert_not_called()
         destroy_release.assert_not_called()
 
+    def test_run_preview_generation_reuses_existing_demo_proof_lease_for_same_scope_and_commit(self) -> None:
+        now = datetime.now(timezone.utc)
+        with self.session_factory() as session:
+            tenant, project, run = self._seed_preview_run(session=session, now=now, commit_sha="a" * 40)
+            session.add(
+                ProjectDeploymentRelease(
+                    release_id="release-proof-existing",
+                    tenant_id=tenant.tenant_id,
+                    project_id=project.project_id,
+                    app_id="app-1",
+                    provider="internal_coolify",
+                    release_kind="run_preview",
+                    status="live",
+                    environment_name="production",
+                    source_strategy="dockerfile",
+                    git_ref="run/ap-123/run-1",
+                    commit_sha="a" * 40,
+                    source_run_id=run.run_id,
+                    pr_number=12,
+                    requested_by_user_id=None,
+                    deployment_snapshot={},
+                    provider_context={},
+                    delivery_metadata={
+                        "demo_proof_lease": {
+                            "proof_scope_id": "run:run-1:" + "a" * 40,
+                            "commit_sha": "a" * 40,
+                            "state": "active",
+                        }
+                    },
+                    last_error=None,
+                    requested_at=now,
+                    started_at=now,
+                    completed_at=now,
+                    destroyed_at=None,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            session.commit()
+
+            with (
+                patch("orchestrator.core.deployment_previews.create_project_deployment_release") as create_release,
+                patch("orchestrator.core.deployment_previews.destroy_project_deployment_preview_release") as destroy_release,
+            ):
+                result = create_run_preview_deployment(
+                    session=session,
+                    tenant=tenant,
+                    project=project,
+                    run=run,
+                    settings=SimpleNamespace(project_repo_checkout_base_dir="/tmp/unused", secrets_encryption_key="unused"),
+                    pr_url="https://github.com/example/repo/pull/12",
+                    proof_scope_id="run:run-1:" + "a" * 40,
+                )
+
+        self.assertFalse(result.created)
+        self.assertEqual(result.reason, "existing")
+        self.assertEqual(result.release.release_id, "release-proof-existing")
+        create_release.assert_not_called()
+        destroy_release.assert_not_called()
+
+    def test_run_preview_generation_derives_demo_proof_lease_scope_when_required(self) -> None:
+        now = datetime.now(timezone.utc)
+        with self.session_factory() as session:
+            tenant, project, run = self._seed_preview_run(session=session, now=now, commit_sha="b" * 40)
+            session.commit()
+
+            with patch(
+                "orchestrator.core.deployment_previews.create_project_deployment_release",
+                return_value=SimpleNamespace(release_id="release-proof-new"),
+            ) as create_release:
+                result = create_run_preview_deployment(
+                    session=session,
+                    tenant=tenant,
+                    project=project,
+                    run=run,
+                    settings=SimpleNamespace(project_repo_checkout_base_dir="/tmp/unused", secrets_encryption_key="unused"),
+                    pr_url="https://github.com/example/repo/pull/12",
+                    demo_proof_lease_required=True,
+                )
+
+        self.assertTrue(result.created)
+        payload = create_release.call_args.kwargs["payload"]
+        self.assertEqual(payload.delivery_metadata["demo_proof_lease"]["proof_scope_id"], "run:run-1:" + "b" * 40)
+        self.assertEqual(payload.delivery_metadata["demo_proof_lease"]["commit_sha"], "b" * 40)
+        self.assertEqual(payload.delivery_metadata["demo_proof_lease"]["state"], "active")
+
+    def test_run_preview_generation_replaces_conflicting_demo_proof_lease_before_create(self) -> None:
+        now = datetime.now(timezone.utc)
+        with self.session_factory() as session:
+            tenant, project, first_run = self._seed_preview_run(session=session, now=now, commit_sha="a" * 40)
+            second_run = self._add_preview_run_on_same_branch(
+                session=session,
+                now=now + timedelta(seconds=1),
+                tenant=tenant,
+                project=project,
+                run_id="run-2",
+                commit_sha="b" * 40,
+            )
+            session.add(
+                ProjectDeploymentRelease(
+                    release_id="release-proof-conflict",
+                    tenant_id=tenant.tenant_id,
+                    project_id=project.project_id,
+                    app_id="app-1",
+                    provider="internal_coolify",
+                    release_kind="run_preview",
+                    status="live",
+                    environment_name="production",
+                    source_strategy="dockerfile",
+                    git_ref="run/ap-123/run-1",
+                    commit_sha="a" * 40,
+                    source_run_id=first_run.run_id,
+                    pr_number=12,
+                    requested_by_user_id=None,
+                    deployment_snapshot={},
+                    provider_context={"application_uuid": "proof-conflict-app"},
+                    delivery_metadata={
+                        "demo_proof_lease": {
+                            "proof_scope_id": "run:run-2:" + "b" * 40,
+                            "commit_sha": "a" * 40,
+                            "state": "active",
+                        }
+                    },
+                    last_error=None,
+                    requested_at=now,
+                    started_at=now,
+                    completed_at=now,
+                    destroyed_at=None,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            session.commit()
+
+            with (
+                patch(
+                    "orchestrator.core.deployment_previews.destroy_project_deployment_preview_release",
+                    return_value=SimpleNamespace(release_id="release-proof-conflict"),
+                ) as destroy_release,
+                patch(
+                    "orchestrator.core.deployment_previews.create_project_deployment_release",
+                    return_value=SimpleNamespace(release_id="release-proof-new"),
+                ) as create_release,
+            ):
+                result = create_run_preview_deployment(
+                    session=session,
+                    tenant=tenant,
+                    project=project,
+                    run=second_run,
+                    settings=SimpleNamespace(project_repo_checkout_base_dir="/tmp/unused", secrets_encryption_key="unused"),
+                    pr_url="https://github.com/example/repo/pull/12",
+                    proof_scope_id="run:run-2:" + "b" * 40,
+                )
+
+        self.assertTrue(result.created)
+        self.assertEqual(result.release.release_id, "release-proof-new")
+        destroy_release.assert_called_once_with(
+            session=session,
+            tenant_id=tenant.tenant_id,
+            project_id=project.project_id,
+            release_id="release-proof-conflict",
+            reason="demo_proof_lease_superseded",
+        )
+        payload = create_release.call_args.kwargs["payload"]
+        self.assertEqual(payload.delivery_metadata["demo_proof_lease"]["proof_scope_id"], "run:run-2:" + "b" * 40)
+        self.assertEqual(payload.delivery_metadata["demo_proof_lease"]["commit_sha"], "b" * 40)
+        self.assertEqual(payload.delivery_metadata["demo_proof_lease"]["state"], "active")
+
+    def test_run_preview_generation_blocks_when_demo_proof_scope_has_multiple_active_leases(self) -> None:
+        now = datetime.now(timezone.utc)
+        proof_scope_id = "run:run-1:" + "a" * 40
+        with self.session_factory() as session:
+            tenant, project, run = self._seed_preview_run(session=session, now=now, commit_sha="a" * 40)
+            for release_id in ("release-proof-a", "release-proof-b"):
+                session.add(
+                    ProjectDeploymentRelease(
+                        release_id=release_id,
+                        tenant_id=tenant.tenant_id,
+                        project_id=project.project_id,
+                        app_id="app-1",
+                        provider="internal_coolify",
+                        release_kind="run_preview",
+                        status="live",
+                        environment_name="production",
+                        source_strategy="dockerfile",
+                        git_ref="run/ap-123/run-1",
+                        commit_sha="a" * 40,
+                        source_run_id=run.run_id,
+                        pr_number=12,
+                        requested_by_user_id=None,
+                        deployment_snapshot={},
+                        provider_context={"application_uuid": release_id},
+                        delivery_metadata={
+                            "demo_proof_lease": {
+                                "proof_scope_id": proof_scope_id,
+                                "commit_sha": "a" * 40,
+                                "state": "active",
+                            }
+                        },
+                        last_error=None,
+                        requested_at=now,
+                        started_at=now,
+                        completed_at=now,
+                        destroyed_at=None,
+                        created_at=now,
+                        updated_at=now,
+                    )
+                )
+            session.commit()
+
+            with (
+                patch("orchestrator.core.deployment_previews.create_project_deployment_release") as create_release,
+                patch("orchestrator.core.deployment_previews.destroy_project_deployment_preview_release") as destroy_release,
+            ):
+                with self.assertRaisesRegex(RuntimeError, "multiple active releases"):
+                    create_run_preview_deployment(
+                        session=session,
+                        tenant=tenant,
+                        project=project,
+                        run=run,
+                        settings=SimpleNamespace(project_repo_checkout_base_dir="/tmp/unused", secrets_encryption_key="unused"),
+                        pr_url="https://github.com/example/repo/pull/12",
+                        proof_scope_id=proof_scope_id,
+                    )
+
+        create_release.assert_not_called()
+        destroy_release.assert_not_called()
+
     def test_run_preview_generation_replaces_existing_branch_preview_for_new_commit(self) -> None:
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
