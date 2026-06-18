@@ -162,13 +162,13 @@ _DEMO_PROOF_FAILURE_EVENTS: dict[str, tuple[str, str, str]] = {
 _DEMO_PROOF_BLOCKING_COMPLETION_EVENTS = frozenset({"FailurePreviewCleanupCompleted"})
 _PR_EVIDENCE_REQUEST_EVENTS = frozenset({"EvidenceUploaded", "FailureEvidenceUploaded"})
 _SUCCESS_TERMINAL_METADATA_REQUIREMENTS: dict[str, tuple[str, ...]] = {
-    "ReleaseLive": ("release_id",),
+    "ReleaseLive": ("release_id", "release_commit_sha"),
     "EvidenceUploaded": ("artifact_urls", "recordings"),
     "PREvidenceAttached": ("pr_url",),
     "PreviewCleanupCompleted": ("release_id", "cleanup_status", "cleanup_mode", "cleanup_evidence"),
 }
 _FAILURE_TERMINAL_METADATA_REQUIREMENTS: dict[str, tuple[str, ...]] = {
-    "ReleaseLive": ("release_id",),
+    "ReleaseLive": ("release_id", "release_commit_sha"),
     "FailureEvidenceUploaded": ("artifact_urls", "capture_targets", "failure_evidence"),
     "PRFailureEvidenceAttached": ("pr_url",),
     "FailurePreviewCleanupCompleted": ("release_id", "cleanup_status", "cleanup_mode", "cleanup_evidence"),
@@ -453,6 +453,10 @@ def _metadata_string_list(value: object) -> list[str]:
     return [normalized] if normalized else []
 
 
+def _metadata_string(value: object) -> str:
+    return str(value or "").strip()
+
+
 _RECORDING_ARTIFACT_REQUIRED_FIELDS = frozenset(
     {
         "artifact_url",
@@ -519,6 +523,33 @@ def _require_cleanup_evidence_metadata(*, value: object, event: str, proof_scope
         )
 
 
+def _require_cleanup_release_identity(
+    *,
+    release_metadata: dict[str, object],
+    cleanup_metadata: dict[str, object],
+    event: str,
+    proof_scope_id: str,
+) -> None:
+    release_id = _metadata_string(release_metadata.get("release_id"))
+    cleanup_release_id = _metadata_string(cleanup_metadata.get("release_id"))
+    cleanup_evidence = cleanup_metadata.get("cleanup_evidence")
+    cleanup_evidence_release_id = (
+        _metadata_string(cleanup_evidence.get("release_id"))
+        if isinstance(cleanup_evidence, dict)
+        else ""
+    )
+    mismatched = [
+        f"{event}.release_id={cleanup_release_id or '<missing>'}",
+        f"{event}.cleanup_evidence.release_id={cleanup_evidence_release_id or '<missing>'}",
+    ]
+    if cleanup_release_id == release_id and cleanup_evidence_release_id == release_id:
+        return
+    raise RuntimeError(
+        f"Demo proof scope {proof_scope_id} cleanup evidence must reference ReleaseLive.release_id {release_id}: "
+        + ", ".join(mismatched)
+    )
+
+
 def _require_terminal_proof_metadata(
     *,
     event: str,
@@ -546,9 +577,17 @@ def _require_terminal_proof_metadata(
             f"Demo proof scope {proof_scope_id} requires auditable metadata before terminal completion: "
             + ", ".join(missing)
         )
+    release_metadata = metadata.get("ReleaseLive", {})
     if event in {"PreviewCleanupCompleted", "FailurePreviewCleanupCompleted"}:
+        cleanup_metadata = metadata.get(event, {})
         _require_cleanup_evidence_metadata(
-            value=metadata.get(event, {}).get("cleanup_evidence"),
+            value=cleanup_metadata.get("cleanup_evidence"),
+            event=event,
+            proof_scope_id=proof_scope_id,
+        )
+        _require_cleanup_release_identity(
+            release_metadata=release_metadata,
+            cleanup_metadata=cleanup_metadata,
             event=event,
             proof_scope_id=proof_scope_id,
         )
@@ -588,6 +627,18 @@ def _require_terminal_proof_metadata(
             raise RuntimeError(
                 f"Demo proof scope {proof_scope_id} requires distinct playable artifact URL mappings for "
                 "required capture target(s)."
+            )
+        release_commit_sha = _metadata_string(release_metadata.get("release_commit_sha"))
+        mismatched_commit_targets = sorted(
+            target
+            for target in required_targets
+            if artifacts_by_target[target]["release_commit_sha"].lower() != release_commit_sha.lower()
+        )
+        if mismatched_commit_targets:
+            raise RuntimeError(
+                f"Demo proof scope {proof_scope_id} recording metadata release commit does not match "
+                "ReleaseLive.release_commit_sha for capture target(s): "
+                + ", ".join(mismatched_commit_targets)
             )
     if event == "FailurePreviewCleanupCompleted":
         failure_metadata = metadata.get("FailureEvidenceUploaded", {})
