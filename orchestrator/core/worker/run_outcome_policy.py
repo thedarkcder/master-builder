@@ -570,6 +570,7 @@ class RunOutcomePolicy:
             )
         if qa_result.outcome != "continue":
             proof_context = None
+            proof_terminal_failure_emitted = False
             if qa_result.failure_evidence:
                 try:
                     proof_context = _qa_demo_proof_context(
@@ -601,6 +602,21 @@ class RunOutcomePolicy:
                     )
                 except Exception as exc:  # noqa: BLE001
                     message = f"QA demo failure evidence PR update failed: {type(exc).__name__}: {exc}"
+                    diagnostics = _qa_failure_evidence_diagnostics(qa_result)
+                    if diagnostics:
+                        message = f"{message} QA failure evidence diagnostics: {diagnostics}"
+                    if proof_context is not None:
+                        try:
+                            self._advance_qa_demo_proof_events(
+                                proof_context=proof_context,
+                                events=("PRFailureEvidenceAttachStarted", "PRFailureEvidenceAttachFailed"),
+                            )
+                            proof_terminal_failure_emitted = True
+                        except Exception as proof_exc:  # noqa: BLE001
+                            message = (
+                                f"{message} QA demo failure proof PR evidence failure event failed: "
+                                f"{type(proof_exc).__name__}: {proof_exc}"
+                            )
                     qa_result = replace(
                         qa_result,
                         blocker_message=(
@@ -621,7 +637,7 @@ class RunOutcomePolicy:
                 reason="qa_demo_failed",
             )
             if cleanup_error:
-                if proof_context is not None:
+                if proof_context is not None and not proof_terminal_failure_emitted:
                     try:
                         self._advance_qa_demo_proof_events(
                             proof_context=proof_context,
@@ -640,7 +656,7 @@ class RunOutcomePolicy:
                     ),
                     summary=[*list(qa_result.summary or []), cleanup_error],
                 )
-            elif proof_context is not None:
+            elif proof_context is not None and not proof_terminal_failure_emitted:
                 try:
                     self._advance_qa_demo_proof_events(
                         proof_context=proof_context,
@@ -720,6 +736,16 @@ class RunOutcomePolicy:
             )
         except Exception as exc:  # noqa: BLE001
             message = f"QA demo evidence PR update failed: {type(exc).__name__}: {exc}"
+            try:
+                self._advance_qa_demo_proof_events(
+                    proof_context=proof_context,
+                    events=("PREvidenceAttachStarted", "PREvidenceAttachFailed"),
+                )
+            except Exception as proof_exc:  # noqa: BLE001
+                message = (
+                    f"{message} QA demo proof PR evidence failure event failed: "
+                    f"{type(proof_exc).__name__}: {proof_exc}"
+                )
             blocked_qa_result = replace(
                 qa_result,
                 outcome="blocked",
@@ -1193,6 +1219,24 @@ def _summarize_qa_result(result: QaResult) -> str:
     if result.summary:
         return "; ".join(result.summary[:2])
     return "QA demo recording completed."
+
+
+def _qa_failure_evidence_diagnostics(result: QaResult) -> str:
+    diagnostics: list[str] = []
+    seen: set[str] = set()
+    for item in list(result.failure_evidence or []):
+        error_message = str(getattr(item, "error_message", "") or "").strip()
+        if not error_message:
+            continue
+        name = str(getattr(item, "name", "") or "").strip()
+        capture_target = str(getattr(item, "capture_target", "") or "").strip()
+        label_parts = [part for part in (capture_target, name) if part]
+        diagnostic = f"{' '.join(label_parts)}: {error_message}" if label_parts else error_message
+        if diagnostic in seen:
+            continue
+        seen.add(diagnostic)
+        diagnostics.append(diagnostic)
+    return " | ".join(diagnostics)
 
 
 def _qa_demo_proof_context(*, prepared, qa_result: QaResult, plan, workflow_result):  # noqa: ANN001
