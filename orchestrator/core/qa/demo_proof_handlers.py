@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import json
+
 from sqlalchemy import select
 
+from orchestrator.core.qa.demo_proof_workflow import DEMO_PROOF_STATE_REQUESTED, transition_demo_proof_state
+from orchestrator.core.workflow.execution_projection import workflow_execution_id
 from orchestrator.core.workflow.operation_service import (
     OPERATION_STATUS_COMPLETED,
     OPERATION_STATUS_PENDING,
@@ -17,10 +21,12 @@ from orchestrator.core.workflow.type_catalog import (
     DEMO_PROOF_STEP_RELEASE,
 )
 from orchestrator.storage.models import Project, Tenant
-from orchestrator.storage.models import WorkflowOperation
+from orchestrator.storage.models import WorkflowExecution, WorkflowOperation
 
 DEMO_PROOF_HANDLER_KEY = "demo_proof"
 DEMO_PROOF_STEP_PREVIEW_LEASE = "preview_lease"
+_DEMO_PROOF_STATE_DESCRIPTION_KEY = "demo_proof_state"
+_DEMO_PROOF_EVENT_HISTORY_DESCRIPTION_KEY = "demo_proof_events"
 
 
 _DEMO_PROOF_EVENTS: dict[str, tuple[str, str | None, str]] = {
@@ -105,6 +111,85 @@ def _required_payload_string(payload: dict[str, object], field_name: str) -> str
     if not value:
         raise RuntimeError(f"Demo proof workflow requires {field_name}")
     return value
+
+
+def _workflow_id(*, workflow_type, request) -> str:  # noqa: ANN001
+    return workflow_execution_id(
+        workflow_type_key=workflow_type.workflow_type_key,
+        execution_key=request.execution.key,
+    )
+
+
+def _decode_demo_proof_description(raw_value: object) -> dict[str, object]:
+    if raw_value is None:
+        return {}
+    if isinstance(raw_value, dict):
+        return dict(raw_value)
+    normalized = str(raw_value or "").strip()
+    if not normalized:
+        return {}
+    try:
+        decoded = json.loads(normalized)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError("Demo proof workflow description is not valid JSON") from exc
+    if not isinstance(decoded, dict):
+        raise RuntimeError("Demo proof workflow description must be a JSON object")
+    return dict(decoded)
+
+
+def _current_demo_proof_state(*, session, workflow_id: str) -> str:  # noqa: ANN001
+    workflow = session.get(WorkflowExecution, workflow_id)
+    if workflow is None:
+        return DEMO_PROOF_STATE_REQUESTED
+    payload = _decode_demo_proof_description(workflow.source_description)
+    state = str(payload.get(_DEMO_PROOF_STATE_DESCRIPTION_KEY) or "").strip()
+    if not state:
+        raise RuntimeError("Existing demo proof workflow is missing durable demo_proof_state")
+    return state
+
+
+def _demo_proof_description(
+    *,
+    previous_description: dict[str, object],
+    proof_scope_id: str,
+    commit_sha: str,
+    run_id: str | None,
+    pr_url: str | None,
+    required_capture_targets: list[object],
+    request_id: str,
+    state: str,
+    event: str | None,
+) -> dict[str, object]:
+    payload = dict(previous_description)
+    events = list(payload.get(_DEMO_PROOF_EVENT_HISTORY_DESCRIPTION_KEY) or [])
+    if event and (not events or str(events[-1]) != event):
+        events.append(event)
+    payload.update(
+        {
+            "proof_scope_id": proof_scope_id,
+            "commit_sha": commit_sha,
+            "run_id": run_id,
+            "pr_url": pr_url,
+            "required_capture_targets": [str(target) for target in required_capture_targets],
+            "request_id": request_id,
+            _DEMO_PROOF_STATE_DESCRIPTION_KEY: state,
+            _DEMO_PROOF_EVENT_HISTORY_DESCRIPTION_KEY: events[-100:],
+        }
+    )
+    return payload
+
+
+def _persist_demo_proof_state(
+    *,
+    session,  # noqa: ANN001
+    workflow_id: str,
+    description: dict[str, object],
+) -> None:
+    workflow = session.get(WorkflowExecution, workflow_id)
+    if workflow is None:
+        raise RuntimeError("Demo proof workflow did not create a durable workflow execution")
+    workflow.source_description = json.dumps(description, sort_keys=True)
+    session.flush()
 
 
 def _workflow_operation_status(*, session, workflow_id: str, operation_type: str) -> str | None:  # noqa: ANN001
@@ -207,27 +292,50 @@ class DemoProofWorkflowAdvanceHandler:
         required_capture_targets = request.payload.get("required_capture_targets")
         if not isinstance(required_capture_targets, list) or not required_capture_targets:
             required_capture_targets = ["browser", "ios", "android"]
-
-        lifecycle.ensure_execution(
-            display_name=f"Demo proof {proof_scope_id}",
-            description={
-                "proof_scope_id": proof_scope_id,
-                "commit_sha": commit_sha,
-                "run_id": run_id,
-                "pr_url": pr_url,
-                "required_capture_targets": [str(target) for target in required_capture_targets],
-                "request_id": request_id,
-            },
+        workflow_id = _workflow_id(workflow_type=workflow_type, request=request)
+        current_state = _current_demo_proof_state(session=session, workflow_id=workflow_id)
+        existing_workflow = session.get(WorkflowExecution, workflow_id)
+        previous_description = (
+            _decode_demo_proof_description(existing_workflow.source_description)
+            if existing_workflow is not None
+            else {}
         )
         trigger_event = str(getattr(request.trigger, "event", "") or "").strip()
+        state_event = trigger_event or "DemoProofRequested"
+        try:
+            next_state = transition_demo_proof_state(current_state=current_state, event=state_event)
+        except Exception as exc:  # noqa: BLE001
+            raise RuntimeError(str(exc)) from exc
+        next_description = _demo_proof_description(
+            previous_description=previous_description,
+            proof_scope_id=proof_scope_id,
+            commit_sha=commit_sha,
+            run_id=run_id,
+            pr_url=pr_url,
+            required_capture_targets=required_capture_targets,
+            request_id=request_id,
+            state=next_state,
+            event=state_event,
+        )
+        lifecycle.ensure_execution(
+            display_name=f"Demo proof {proof_scope_id}",
+            description=next_description,
+        )
         if trigger_event:
-            return self._advance_event(
+            result = self._advance_event(
                 session=session,
                 lifecycle=lifecycle,
                 event=trigger_event,
                 proof_scope_id=proof_scope_id,
                 run_id=run_id,
             )
+            _persist_demo_proof_state(
+                session=session,
+                workflow_id=workflow_id,
+                description=next_description,
+            )
+            session.commit()
+            return result
         _wait_for_operation_once(
             session=session,
             lifecycle=lifecycle,
@@ -236,6 +344,12 @@ class DemoProofWorkflowAdvanceHandler:
             proof_scope_id=proof_scope_id,
             summary=f"Acquire preview lease for demo proof scope {proof_scope_id}.",
         )
+        _persist_demo_proof_state(
+            session=session,
+            workflow_id=workflow_id,
+            description=next_description,
+        )
+        session.commit()
         return WorkflowAdvanceOutcome(
             handled=True,
             reason="preview_lease_requested",
