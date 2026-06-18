@@ -1075,26 +1075,28 @@ def _normalized_release_reference(value: object) -> str:
     return _metadata_string(value).rstrip("/")
 
 
-def _require_recordings_match_verified_release_context(
+def _require_artifacts_match_verified_release_context(
     *,
     metadata: dict[str, dict[str, object]],
-    recordings: object,
+    artifacts: object,
     event: str,
+    evidence_field: str,
+    evidence_label: str,
     proof_scope_id: str,
 ) -> None:
-    if not isinstance(recordings, list):
+    if not isinstance(artifacts, list):
         return
     expected_context_sha256 = _expected_release_context_sha256(metadata=metadata)
     if expected_context_sha256:
         mismatched_targets = sorted(
             _metadata_string(item.get("capture_target")) or "<missing>"
-            for item in recordings
+            for item in artifacts
             if isinstance(item, dict)
             and _metadata_string(item.get("release_context_sha256")).lower() != expected_context_sha256.lower()
         )
         if mismatched_targets:
             raise RuntimeError(
-                f"Demo proof scope {proof_scope_id} {event}.recordings release context does not match verified "
+                f"Demo proof scope {proof_scope_id} {event}.{evidence_field} release context does not match verified "
                 "release context for capture target(s): " + ", ".join(mismatched_targets)
             )
     browser_release_url = _verified_release_service_url(metadata=metadata, service_kind="website")
@@ -1102,14 +1104,14 @@ def _require_recordings_match_verified_release_context(
         expected_browser_reference = _normalized_release_reference(browser_release_url)
         mismatched_browser_references = sorted(
             _normalized_release_reference(item.get("capture_reference")) or "<missing>"
-            for item in recordings
+            for item in artifacts
             if isinstance(item, dict)
             and _metadata_string(item.get("capture_target")) == "browser"
             and _normalized_release_reference(item.get("capture_reference")) != expected_browser_reference
         )
         if mismatched_browser_references:
             raise RuntimeError(
-                f"Demo proof scope {proof_scope_id} browser recording capture_reference must match verified "
+                f"Demo proof scope {proof_scope_id} browser {evidence_label} capture_reference must match verified "
                 f"release URL {expected_browser_reference}: " + ", ".join(mismatched_browser_references)
             )
 
@@ -1711,10 +1713,12 @@ def _require_recording_completion_metadata(*, description: dict[str, object], pr
             f"Demo proof scope {proof_scope_id} recording completion metadata is missing artifact metadata "
             "for required capture target(s): " + ", ".join(missing_target_artifacts)
         )
-    _require_recordings_match_verified_release_context(
+    _require_artifacts_match_verified_release_context(
         metadata=metadata,
-        recordings=recording_metadata.get("recordings"),
+        artifacts=recording_metadata.get("recordings"),
         event="RecordingCompleted",
+        evidence_field="recordings",
+        evidence_label="recording",
         proof_scope_id=proof_scope_id,
     )
     recording_counts_by_target = _recording_artifact_counts_by_target(recording_metadata.get("recordings"))
@@ -2748,6 +2752,17 @@ class DemoProofWorkflowAdvanceHandler:
         )
         if event == "RecordingCompleted":
             _require_recording_completion_metadata(description=description, proof_scope_id=proof_scope_id)
+        if event == "RecordingFailureEvidenceCaptured":
+            metadata = _metadata_by_event(description)
+            failure_metadata = metadata.get("RecordingFailureEvidenceCaptured", {})
+            _require_artifacts_match_verified_release_context(
+                metadata=metadata,
+                artifacts=failure_metadata.get("failure_evidence"),
+                event="RecordingFailureEvidenceCaptured",
+                evidence_field="failure_evidence",
+                evidence_label="failure_evidence",
+                proof_scope_id=proof_scope_id,
+            )
         if event == "RecordingFailed":
             _require_recording_failed_metadata(description=description, proof_scope_id=proof_scope_id)
         if event == "EvidenceUploaded":

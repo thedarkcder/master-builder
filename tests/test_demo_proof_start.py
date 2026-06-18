@@ -3945,6 +3945,106 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
                 )
 
+    def test_demo_proof_rejects_failure_evidence_capture_with_mismatched_release_context(self) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-a")
+            workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
+            request = _demo_proof_request(tenant=tenant)
+            execute_workflow_advance(
+                session=session,
+                settings=SimpleNamespace(),
+                workflow_type=workflow_type,
+                request=request,
+                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+            )
+
+            for event in (
+                "ProofLeaseAcquired",
+                "ReleaseRequested",
+                "ReleaseProvisioning",
+                "ReleaseLive",
+                "RouteReady",
+                "ServiceVerificationPassed",
+                "RecordingStarted",
+            ):
+                execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=_demo_proof_request_for_event(request, event),
+                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                )
+
+            event_request = _demo_proof_request_for_event(request, "RecordingFailureEvidenceCaptured")
+            payload = dict(event_request.payload)
+            metadata = dict(payload["event_metadata"])
+            failure_evidence = [dict(item) for item in metadata["failure_evidence"]]
+            failure_evidence[0]["release_context_sha256"] = "d" * 64
+            metadata["failure_evidence"] = failure_evidence
+            payload["event_metadata"] = metadata
+
+            with pytest.raises(
+                RuntimeError,
+                match="RecordingFailureEvidenceCaptured.failure_evidence release context does not match",
+            ):
+                execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=replace(event_request, payload=payload),
+                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                )
+
+    def test_demo_proof_rejects_browser_failure_evidence_capture_for_non_verified_release_url(self) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-a")
+            workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
+            request = _demo_proof_request(tenant=tenant)
+            execute_workflow_advance(
+                session=session,
+                settings=SimpleNamespace(),
+                workflow_type=workflow_type,
+                request=request,
+                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+            )
+
+            for event in (
+                "ProofLeaseAcquired",
+                "ReleaseRequested",
+                "ReleaseProvisioning",
+                "ReleaseLive",
+                "RouteReady",
+                "ServiceVerificationPassed",
+                "RecordingStarted",
+            ):
+                execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=_demo_proof_request_for_event(request, event),
+                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                )
+
+            event_request = _demo_proof_request_for_event(request, "RecordingFailureEvidenceCaptured")
+            payload = dict(event_request.payload)
+            metadata = dict(payload["event_metadata"])
+            failure_evidence = [dict(item) for item in metadata["failure_evidence"]]
+            failure_evidence[0]["capture_reference"] = "https://fake-proof.example/browser"
+            metadata["failure_evidence"] = failure_evidence
+            payload["event_metadata"] = metadata
+
+            with pytest.raises(
+                RuntimeError,
+                match="browser failure_evidence capture_reference must match verified release URL",
+            ):
+                execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=replace(event_request, payload=payload),
+                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                )
+
     def test_demo_proof_rejects_failure_evidence_upload_with_unplanned_capture_target(self) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
