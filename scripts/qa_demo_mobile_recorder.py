@@ -132,8 +132,28 @@ def main(argv: list[str]) -> int:
                     stop_error = exc
             combined_error = _combined_recording_failure(primary_error=primary_error, stop_error=stop_error)
             if combined_error is not None:
-                _validate_mp4_recording(video_path)
                 diagnostics = _ios_failure_diagnostics(result_bundle_path=result_bundle_path)
+                failure_path = video_path
+                try:
+                    _validate_mp4_recording(video_path)
+                except Exception as recording_exc:  # noqa: BLE001
+                    diagnostics = "\n".join(
+                        part
+                        for part in (
+                            diagnostics,
+                            f"screen-recording-error: {recording_exc}",
+                        )
+                        if part
+                    )
+                    failure_path = output_dir / f"{sanitized_name}-failure.txt"
+                    failure_path.write_text(
+                        _ios_failure_message(
+                            scenario_name=scenario.name,
+                            error=combined_error,
+                            diagnostics=diagnostics,
+                        ),
+                        encoding="utf-8",
+                    )
                 output_path.write_text(
                     json.dumps(
                         {
@@ -141,7 +161,7 @@ def main(argv: list[str]) -> int:
                             "failure_evidence": [
                                 {
                                     "name": scenario.name,
-                                    "path": str(video_path),
+                                    "path": str(failure_path),
                                     "error_message": _ios_failure_message(
                                         scenario_name=scenario.name,
                                         error=combined_error,

@@ -534,6 +534,72 @@ def test_android_recorder_writes_failure_evidence_when_app_does_not_load(monkeyp
     assert Path(output["failure_evidence"][0]["path"]).exists()
 
 
+def test_android_recorder_writes_text_diagnostics_when_failure_video_is_missing(monkeypatch, tmp_path) -> None:
+    repo_dir = tmp_path / "repo"
+    repo_dir.mkdir()
+    apk_path = tmp_path / "app-debug.apk"
+    apk_path.write_bytes(b"apk")
+    input_path = tmp_path / "input.json"
+    output_path = tmp_path / "output.json"
+    output_dir = tmp_path / "videos"
+    input_path.write_text(
+        json.dumps(
+            {
+                "execution_repo_dir": str(repo_dir),
+                "output_dir": str(output_dir),
+                "capture_reference": "android-emulator://configured",
+                "scenarios": [
+                    {
+                        "name": "App load",
+                        "objective": "Prove the app opens",
+                        "capture_target": "android",
+                        "expected_outcomes": ["Ready screen appears"],
+                        "steps": [{"action": "assert_visible", "selector": "text=Ready"}],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    def _record_failure(**_kwargs):  # noqa: ANN001
+        raise RuntimeError("Missing Android element: text=Ready")
+
+    def _fake_run(args, **_kwargs):  # noqa: ANN001
+        class _Result:
+            stdout = (
+                "06-18 12:00:00.000 123 456 E AndroidRuntime: FATAL EXCEPTION: main\n"
+                "06-18 12:00:00.001 123 456 E AndroidRuntime: Process: com.example.app\n"
+                "06-18 12:00:00.002 123 456 E AndroidRuntime: java.lang.RuntimeException: API base URL missing\n"
+            )
+
+        return _Result()
+
+    monkeypatch.setattr("scripts.qa_demo_android_recorder.ensure_preferred_android_device", lambda **_kwargs: "device-1")
+    monkeypatch.setattr("scripts.qa_demo_android_recorder.build_debug_apk", lambda **_kwargs: apk_path)
+    monkeypatch.setattr("scripts.qa_demo_android_recorder.resolve_package_name", lambda **_kwargs: "com.example.app")
+    monkeypatch.setattr("scripts.qa_demo_android_recorder.install_apk", lambda **_kwargs: None)
+    monkeypatch.setattr(
+        "scripts.qa_demo_android_recorder.resolve_launch_activity",
+        lambda **_kwargs: "com.example.app/.MainActivity",
+    )
+    monkeypatch.setattr("scripts.qa_demo_android_recorder.reset_app_state", lambda **_kwargs: None)
+    monkeypatch.setattr("scripts.qa_demo_android_recorder.launch_app", lambda **_kwargs: None)
+    monkeypatch.setattr("scripts.qa_demo_android_recorder.record_live_screen_demo", _record_failure)
+    monkeypatch.setattr("scripts.qa_demo_android_recorder._run", _fake_run)
+
+    result = main(["qa_demo_android_recorder.py", str(input_path), str(output_path)])
+
+    output = json.loads(output_path.read_text(encoding="utf-8"))
+    failure_path = Path(output["failure_evidence"][0]["path"])
+    assert result == 1
+    assert failure_path.suffix == ".txt"
+    assert failure_path.is_file()
+    assert "Missing Android element: text=Ready" in output["failure_evidence"][0]["error_message"]
+    assert "FATAL EXCEPTION: main" in output["failure_evidence"][0]["error_message"]
+    assert "screen-recording-error:" in failure_path.read_text(encoding="utf-8")
+
+
 def test_validate_mp4_recording_rejects_incomplete_mp4(tmp_path) -> None:
     invalid_video = tmp_path / "invalid.mp4"
     invalid_video.write_bytes(b"\x00\x00\x00\x18ftypmp42incomplete")
