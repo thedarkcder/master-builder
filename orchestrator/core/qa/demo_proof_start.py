@@ -7,7 +7,11 @@ from datetime import datetime, timezone
 from sqlalchemy import desc, select
 from sqlalchemy.orm import Session
 
-from orchestrator.core.qa.demo_proof_handlers import DEMO_PROOF_HANDLER_KEY, DemoProofWorkflowAdvanceHandler
+from orchestrator.core.qa.demo_proof_handlers import (
+    DEMO_PROOF_HANDLER_KEY,
+    DEMO_PROOF_SUPPORTED_CAPTURE_TARGETS,
+    DemoProofWorkflowAdvanceHandler,
+)
 from orchestrator.core.workflow.execution_projection import (
     WorkflowExecutionReference,
     WorkflowSourceReference,
@@ -117,7 +121,7 @@ def _normalize_required_capture_targets(value: object) -> tuple[str, ...]:
     targets = tuple(str(item or "").strip() for item in value if str(item or "").strip())
     if not targets:
         raise ValueError("Demo proof required_capture_targets must not be empty")
-    unsupported = [target for target in targets if target not in {"browser", "ios", "android"}]
+    unsupported = [target for target in targets if target not in DEMO_PROOF_SUPPORTED_CAPTURE_TARGETS]
     if unsupported:
         raise ValueError("Demo proof required_capture_targets contains unsupported target(s): " + ", ".join(unsupported))
     return targets

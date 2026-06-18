@@ -48,6 +48,7 @@ _SUPPORTED_TRIGGER_MODES = frozenset(
         "cleanup_only",
     }
 )
+DEMO_PROOF_SUPPORTED_CAPTURE_TARGETS = frozenset({"browser", "ios", "android"})
 
 
 _DEMO_PROOF_EVENTS: dict[str, tuple[str, str | None, str]] = {
@@ -420,6 +421,12 @@ def _normalized_capture_targets(required_capture_targets: list[object]) -> list[
         targets.append(target)
     if not targets:
         raise RuntimeError("Demo proof required_capture_targets must be provided by PM demo requirements")
+    unsupported_targets = [target for target in targets if target not in DEMO_PROOF_SUPPORTED_CAPTURE_TARGETS]
+    if unsupported_targets:
+        raise RuntimeError(
+            "Demo proof required_capture_targets contains unsupported target(s): "
+            + ", ".join(unsupported_targets)
+        )
     return targets
 
 
