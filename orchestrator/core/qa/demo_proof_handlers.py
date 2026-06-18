@@ -7,11 +7,14 @@ from sqlalchemy import select
 from orchestrator.core.qa.demo_proof_workflow import DEMO_PROOF_STATE_REQUESTED, transition_demo_proof_state
 from orchestrator.core.workflow.execution_projection import workflow_execution_id
 from orchestrator.core.workflow.operation_service import (
+    OPERATION_STATUS_FAILED,
     OPERATION_STATUS_COMPLETED,
     OPERATION_STATUS_PENDING,
     OPERATION_STATUS_RUNNING,
     OPERATION_STATUS_WAITING_FOR_INPUT,
+    fail_workflow_operation,
 )
+from orchestrator.core.workflow.execution_status import mark_workflow_failed
 from orchestrator.core.workflow.runtime import WorkflowAdvanceOutcome
 from orchestrator.core.workflow.type_catalog import (
     DEMO_PROOF_STEP_EVIDENCE_UPLOAD,
@@ -21,7 +24,7 @@ from orchestrator.core.workflow.type_catalog import (
     DEMO_PROOF_STEP_RELEASE,
 )
 from orchestrator.storage.models import Project, Tenant
-from orchestrator.storage.models import WorkflowExecution, WorkflowOperation
+from orchestrator.storage.models import WorkflowExecution, WorkflowOperation, WorkflowOperationAttempt
 
 DEMO_PROOF_HANDLER_KEY = "demo_proof"
 DEMO_PROOF_STEP_PREVIEW_LEASE = "preview_lease"
@@ -102,6 +105,46 @@ _DEMO_PROOF_OBSERVATION_EVENTS: dict[str, tuple[str, str]] = {
     "FailurePreviewCleanupRequested": (
         DEMO_PROOF_STEP_PREVIEW_CLEANUP,
         "failure_preview_cleanup_requested_observed",
+    ),
+}
+
+_DEMO_PROOF_FAILURE_EVENTS: dict[str, tuple[str, str, str]] = {
+    "ReleaseFailed": (DEMO_PROOF_STEP_RELEASE, "release_failed", "release_failed"),
+    "ServiceVerificationFailed": (
+        DEMO_PROOF_STEP_RELEASE,
+        "service_verification_failed",
+        "service_verification_failed",
+    ),
+    "RecordingFailed": (DEMO_PROOF_STEP_RECORDING, "recording_failed", "recording_failed"),
+    "EvidenceUploadFailed": (
+        DEMO_PROOF_STEP_EVIDENCE_UPLOAD,
+        "evidence_upload_failed",
+        "evidence_upload_failed",
+    ),
+    "PREvidenceAttachFailed": (
+        DEMO_PROOF_STEP_PR_EVIDENCE_UPDATE,
+        "pr_evidence_attach_failed",
+        "pr_evidence_attach_failed",
+    ),
+    "PreviewCleanupFailed": (
+        DEMO_PROOF_STEP_PREVIEW_CLEANUP,
+        "preview_cleanup_failed",
+        "preview_cleanup_failed",
+    ),
+    "FailureEvidenceUploadFailed": (
+        DEMO_PROOF_STEP_EVIDENCE_UPLOAD,
+        "failure_evidence_upload_failed",
+        "failure_evidence_upload_failed",
+    ),
+    "PRFailureEvidenceAttachFailed": (
+        DEMO_PROOF_STEP_PR_EVIDENCE_UPDATE,
+        "pr_failure_evidence_attach_failed",
+        "pr_failure_evidence_attach_failed",
+    ),
+    "FailurePreviewCleanupFailed": (
+        DEMO_PROOF_STEP_PREVIEW_CLEANUP,
+        "failure_preview_cleanup_failed",
+        "failure_preview_cleanup_failed",
     ),
 }
 
@@ -261,6 +304,64 @@ def _observe_waiting_operation_event(
     )
 
 
+def _fail_waiting_operation_event(
+    *,
+    session,  # noqa: ANN001
+    lifecycle,  # noqa: ANN001
+    operation_type: str,
+    event: str,
+    proof_scope_id: str,
+    category: str,
+) -> str:
+    current_status = _workflow_operation_status(
+        session=session,
+        workflow_id=lifecycle.workflow.workflow_id,
+        operation_type=operation_type,
+    )
+    message = f"Demo proof event {event} blocked proof scope {proof_scope_id}."
+    if current_status == OPERATION_STATUS_FAILED:
+        return message
+    if current_status != OPERATION_STATUS_WAITING_FOR_INPUT:
+        raise RuntimeError(
+            f"Cannot apply demo proof failure event {event} to operation {operation_type} "
+            f"from current status {current_status} for proof scope {proof_scope_id}."
+        )
+    operation = session.execute(
+        select(WorkflowOperation)
+        .where(
+            WorkflowOperation.workflow_id == lifecycle.workflow.workflow_id,
+            WorkflowOperation.operation_type == operation_type,
+            WorkflowOperation.status == OPERATION_STATUS_WAITING_FOR_INPUT,
+        )
+        .order_by(WorkflowOperation.updated_at.desc())
+        .limit(1)
+    ).scalar_one()
+    attempt = session.execute(
+        select(WorkflowOperationAttempt)
+        .where(
+            WorkflowOperationAttempt.operation_id == operation.operation_id,
+            WorkflowOperationAttempt.status == OPERATION_STATUS_WAITING_FOR_INPUT,
+        )
+        .order_by(WorkflowOperationAttempt.attempt_number.desc())
+        .limit(1)
+    ).scalar_one_or_none()
+    if attempt is None:
+        raise RuntimeError(
+            f"Cannot apply demo proof failure event {event} to operation {operation_type}; "
+            f"no waiting attempt exists for proof scope {proof_scope_id}."
+        )
+    fail_workflow_operation(
+        session,
+        operation=operation,
+        attempt=attempt,
+        category=category,
+        message=message,
+    )
+    mark_workflow_failed(workflow=lifecycle.workflow, message=message)
+    session.flush()
+    return message
+
+
 class DemoProofWorkflowAdvanceHandler:
     def advance(
         self,
@@ -386,6 +487,28 @@ class DemoProofWorkflowAdvanceHandler:
                     "workflow_id": lifecycle.workflow.workflow_id,
                     "execution_id": lifecycle.workflow.execution_id,
                     "proof_scope_id": proof_scope_id,
+                },
+            )
+        failure_spec = _DEMO_PROOF_FAILURE_EVENTS.get(event)
+        if failure_spec is not None:
+            operation_type, category, reason = failure_spec
+            message = _fail_waiting_operation_event(
+                session=session,
+                lifecycle=lifecycle,
+                operation_type=operation_type,
+                event=event,
+                proof_scope_id=proof_scope_id,
+                category=category,
+            )
+            return WorkflowAdvanceOutcome(
+                handled=True,
+                reason=reason,
+                failed=True,
+                extra={
+                    "workflow_id": lifecycle.workflow.workflow_id,
+                    "execution_id": lifecycle.workflow.execution_id,
+                    "proof_scope_id": proof_scope_id,
+                    "error_message": message,
                 },
             )
         event_spec = _DEMO_PROOF_EVENTS.get(event)
