@@ -150,6 +150,7 @@ _DEMO_PROOF_FAILURE_EVENTS: dict[str, tuple[str, str, str]] = {
 }
 
 _DEMO_PROOF_BLOCKING_COMPLETION_EVENTS = frozenset({"FailurePreviewCleanupCompleted"})
+_PR_EVIDENCE_REQUEST_EVENTS = frozenset({"EvidenceUploaded", "FailureEvidenceUploaded"})
 _RECORDING_EVENT_STATES = {
     "ServiceVerificationPassed": "waiting_for_recording",
     "RecordingStarted": "recording",
@@ -351,6 +352,14 @@ def _wait_summary(
     return f"Waiting for {operation_type} event for demo proof scope {proof_scope_id}."
 
 
+def _require_pr_url_for_pr_evidence_event(*, event: str, pr_url: str | None, proof_scope_id: str) -> None:
+    if event not in _PR_EVIDENCE_REQUEST_EVENTS:
+        return
+    if str(pr_url or "").strip():
+        return
+    raise RuntimeError(f"Demo proof scope {proof_scope_id} requires PR URL before PR evidence update.")
+
+
 def _observe_waiting_operation_event(
     *,
     session,  # noqa: ANN001
@@ -497,6 +506,7 @@ class DemoProofWorkflowAdvanceHandler:
                 event=trigger_event,
                 proof_scope_id=proof_scope_id,
                 run_id=run_id,
+                pr_url=pr_url,
                 required_capture_targets=required_capture_targets,
             )
             _persist_demo_proof_state(
@@ -538,6 +548,7 @@ class DemoProofWorkflowAdvanceHandler:
         event: str,
         proof_scope_id: str,
         run_id: str | None,
+        pr_url: str | None,
         required_capture_targets: list[object],
     ) -> WorkflowAdvanceOutcome:
         observation_spec = _DEMO_PROOF_OBSERVATION_EVENTS.get(event)
@@ -585,6 +596,7 @@ class DemoProofWorkflowAdvanceHandler:
         if event_spec is None:
             raise RuntimeError(f"Unsupported demo proof workflow event: {event}")
         completed_operation_type, next_operation_type, reason = event_spec
+        _require_pr_url_for_pr_evidence_event(event=event, pr_url=pr_url, proof_scope_id=proof_scope_id)
         lifecycle.complete_waiting_operation_attempt(
             operation_type=completed_operation_type,
             summary=f"Applied {event} for demo proof scope {proof_scope_id}.",
