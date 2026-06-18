@@ -696,6 +696,68 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
             runtime_mock.assert_not_called()
             assert session.execute(select(WorkflowExecution)).scalar_one_or_none() is None
 
+    def test_start_demo_proof_workflow_rejects_from_pr_with_run_id_before_creating_workflow(
+        self,
+    ) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-a")
+            project = session.get(Project, "project-a")
+
+            with patch("orchestrator.core.qa.demo_proof_start.build_workflow_runtime") as runtime_mock:
+                try:
+                    start_demo_proof_workflow(
+                        session=session,
+                        settings=SimpleNamespace(),
+                        tenant=tenant,
+                        project=project,
+                        proof_scope_id="pr-8-abcdef1",
+                        commit_sha="abcdef1",
+                        trigger_mode="from_pr",
+                        trigger_event="admin_pr_demo_proof_start",
+                        run_id="run-1",
+                        pr_url="https://github.com/acme/project-a/pull/8",
+                        required_capture_targets=["browser", "ios", "android"],
+                        required_recording_counts={"browser": 3, "ios": 3, "android": 3},
+                    )
+                except ValueError as exc:
+                    assert "from_pr must not include run_id" in str(exc)
+                else:  # pragma: no cover
+                    raise AssertionError("expected from_pr demo proof start to reject run_id")
+
+            runtime_mock.assert_not_called()
+            assert session.execute(select(WorkflowExecution)).scalar_one_or_none() is None
+
+    def test_start_demo_proof_workflow_rejects_from_pr_with_release_id_before_creating_workflow(
+        self,
+    ) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-a")
+            project = session.get(Project, "project-a")
+
+            with patch("orchestrator.core.qa.demo_proof_start.build_workflow_runtime") as runtime_mock:
+                try:
+                    start_demo_proof_workflow(
+                        session=session,
+                        settings=SimpleNamespace(),
+                        tenant=tenant,
+                        project=project,
+                        proof_scope_id="pr-8-abcdef1",
+                        commit_sha="abcdef1",
+                        trigger_mode="from_pr",
+                        trigger_event="admin_pr_demo_proof_start",
+                        release_id="release-preview-1",
+                        pr_url="https://github.com/acme/project-a/pull/8",
+                        required_capture_targets=["browser", "ios", "android"],
+                        required_recording_counts={"browser": 3, "ios": 3, "android": 3},
+                    )
+                except ValueError as exc:
+                    assert "from_pr must not include release_id" in str(exc)
+                else:  # pragma: no cover
+                    raise AssertionError("expected from_pr demo proof start to reject release_id")
+
+            runtime_mock.assert_not_called()
+            assert session.execute(select(WorkflowExecution)).scalar_one_or_none() is None
+
     def test_start_demo_proof_workflow_rejects_cleanup_only_without_release_id_before_creating_workflow(
         self,
     ) -> None:
@@ -1059,6 +1121,84 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 assert "cleanup_only requires release_id" in str(exc)
             else:  # pragma: no cover
                 raise AssertionError("expected cleanup_only demo proof handler to require release_id")
+
+            assert session.execute(select(WorkflowExecution)).scalar_one_or_none() is None
+
+    def test_demo_proof_handler_rejects_from_pr_with_run_id_before_creating_workflow(self) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-a")
+            workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
+            request = _demo_proof_request(tenant=tenant)
+            from_pr_payload = {
+                **request.payload,
+                "proof_scope_id": "pr-8-abcdef1",
+                "trigger_mode": "from_pr",
+                "run_id": "run-1",
+                "release_id": None,
+            }
+
+            try:
+                execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=replace(
+                        request,
+                        execution=WorkflowExecutionReference(
+                            key="pr-8-abcdef1",
+                            source=WorkflowSourceReference(
+                                source_system="demo_proof",
+                                source_ref="pr-8-abcdef1",
+                                display_name="Demo proof pr-8-abcdef1",
+                            ),
+                        ),
+                        payload=from_pr_payload,
+                    ),
+                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                )
+            except RuntimeError as exc:
+                assert "from_pr must not include run_id" in str(exc)
+            else:  # pragma: no cover
+                raise AssertionError("expected from_pr demo proof handler to reject run_id")
+
+            assert session.execute(select(WorkflowExecution)).scalar_one_or_none() is None
+
+    def test_demo_proof_handler_rejects_from_pr_with_release_id_before_creating_workflow(self) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-a")
+            workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
+            request = _demo_proof_request(tenant=tenant)
+            from_pr_payload = {
+                **request.payload,
+                "proof_scope_id": "pr-8-abcdef1",
+                "trigger_mode": "from_pr",
+                "run_id": None,
+                "release_id": "release-preview-1",
+            }
+
+            try:
+                execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=replace(
+                        request,
+                        execution=WorkflowExecutionReference(
+                            key="pr-8-abcdef1",
+                            source=WorkflowSourceReference(
+                                source_system="demo_proof",
+                                source_ref="pr-8-abcdef1",
+                                display_name="Demo proof pr-8-abcdef1",
+                            ),
+                        ),
+                        payload=from_pr_payload,
+                    ),
+                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                )
+            except RuntimeError as exc:
+                assert "from_pr must not include release_id" in str(exc)
+            else:  # pragma: no cover
+                raise AssertionError("expected from_pr demo proof handler to reject release_id")
 
             assert session.execute(select(WorkflowExecution)).scalar_one_or_none() is None
 

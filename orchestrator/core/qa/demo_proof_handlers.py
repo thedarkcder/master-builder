@@ -410,6 +410,8 @@ def _requested_release_id(payload: dict[str, object], *, trigger_mode: str) -> s
     release_id = str(payload.get("release_id") or "").strip()
     if trigger_mode in {"from_release", "cleanup_only"} and not release_id:
         raise RuntimeError(f"Demo proof {trigger_mode} requires release_id")
+    if trigger_mode == "from_pr" and release_id:
+        raise RuntimeError("Demo proof from_pr must not include release_id")
     if release_id and not re.fullmatch(r"[A-Za-z0-9._:-]+", release_id):
         raise RuntimeError("Demo proof release_id contains unsupported characters")
     return release_id or None
@@ -2103,6 +2105,14 @@ class DemoProofWorkflowAdvanceHandler:
             if existing_workflow is not None
             else {}
         )
+        previous_trigger_mode = str(previous_description.get("trigger_mode") or "").strip()
+        if trigger_mode != "retry_recording" and previous_trigger_mode and previous_trigger_mode != trigger_mode:
+            raise RuntimeError(
+                f"Demo proof workflow trigger_mode cannot change for proof scope {proof_scope_id}: "
+                f"{previous_trigger_mode} != {trigger_mode}"
+            )
+        if trigger_mode == "from_pr" and run_id is not None:
+            raise RuntimeError(f"Demo proof from_pr must not include run_id for proof scope {proof_scope_id}")
         requested_release_id = _requested_release_id(request.payload, trigger_mode=trigger_mode)
         durable_trigger_mode = trigger_mode
         if trigger_mode == "retry_recording":
