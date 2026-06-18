@@ -91,6 +91,8 @@ def _normalize_release_id(value: object, *, trigger_mode: str) -> str | None:
     normalized = str(value or "").strip()
     if trigger_mode in {"from_release", "cleanup_only"} and not normalized:
         raise ValueError(f"Demo proof {trigger_mode} requires release_id")
+    if trigger_mode == "from_pr" and normalized:
+        raise ValueError("Demo proof from_pr must not include release_id")
     if not normalized:
         return None
     if not re.fullmatch(r"[A-Za-z0-9._:-]+", normalized):
@@ -102,6 +104,8 @@ def _normalize_run_id(value: object, *, trigger_mode: str) -> str | None:
     normalized = str(value or "").strip()
     if trigger_mode == "from_run" and not normalized:
         raise ValueError("Demo proof from_run requires run_id")
+    if trigger_mode == "from_pr" and normalized:
+        raise ValueError("Demo proof from_pr must not include run_id")
     return normalized or None
 
 
