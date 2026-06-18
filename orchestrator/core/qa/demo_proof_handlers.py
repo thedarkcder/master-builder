@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 import json
+import re
 
 from sqlalchemy import select
 
@@ -405,6 +406,15 @@ def _required_trigger_mode(payload: dict[str, object]) -> str:
     return trigger_mode
 
 
+def _requested_release_id(payload: dict[str, object], *, trigger_mode: str) -> str | None:
+    release_id = str(payload.get("release_id") or "").strip()
+    if trigger_mode == "from_release" and not release_id:
+        raise RuntimeError("Demo proof from_release requires release_id")
+    if release_id and not re.fullmatch(r"[A-Za-z0-9._:-]+", release_id):
+        raise RuntimeError("Demo proof release_id contains unsupported characters")
+    return release_id or None
+
+
 def _workflow_id(*, workflow_type, request) -> str:  # noqa: ANN001
     return workflow_execution_id(
         workflow_type_key=workflow_type.workflow_type_key,
@@ -558,6 +568,7 @@ def _demo_proof_description(
     proof_scope_id: str,
     commit_sha: str,
     trigger_mode: str,
+    requested_release_id: str | None,
     run_id: str | None,
     pr_url: str | None,
     required_capture_targets: list[object],
@@ -581,6 +592,12 @@ def _demo_proof_description(
         previous_description=previous_description,
         field="commit_sha",
         next_value=commit_sha,
+        proof_scope_id=proof_scope_id,
+    )
+    _require_immutable_description_value(
+        previous_description=previous_description,
+        field="requested_release_id",
+        next_value=requested_release_id,
         proof_scope_id=proof_scope_id,
     )
     _require_immutable_description_value(
@@ -616,6 +633,7 @@ def _demo_proof_description(
             "proof_scope_id": proof_scope_id,
             "commit_sha": commit_sha,
             "trigger_mode": trigger_mode,
+            "requested_release_id": requested_release_id,
             "run_id": run_id,
             "pr_url": pr_url,
             "required_capture_targets": [str(target) for target in required_capture_targets],
@@ -755,6 +773,28 @@ def _metadata_string_list(value: object) -> list[str]:
 
 def _metadata_string(value: object) -> str:
     return str(value or "").strip()
+
+
+def _require_from_release_event_matches_requested_release(
+    *,
+    description: dict[str, object],
+    event: str,
+    proof_scope_id: str,
+) -> None:
+    if _metadata_string(description.get("trigger_mode")) != "from_release":
+        return
+    requested_release_id = _metadata_string(description.get("requested_release_id"))
+    if not requested_release_id:
+        raise RuntimeError(f"Demo proof scope {proof_scope_id} from_release requires release_id")
+    event_metadata = _metadata_by_event(description).get(event, {})
+    event_release_id = _metadata_string(event_metadata.get("release_id"))
+    if not event_release_id:
+        return
+    if event_release_id != requested_release_id:
+        raise RuntimeError(
+            f"Demo proof scope {proof_scope_id} from_release requested release_id "
+            f"{requested_release_id}, but {event}.release_id={event_release_id}"
+        )
 
 
 _RECORDING_ARTIFACT_REQUIRED_FIELDS = frozenset(
@@ -1984,6 +2024,7 @@ class DemoProofWorkflowAdvanceHandler:
             raise RuntimeError("Demo proof workflow cannot run for an archived project")
 
         run_id = str(request.payload.get("run_id") or "").strip() or None
+        requested_release_id = _requested_release_id(request.payload, trigger_mode=trigger_mode)
         pr_url = str(request.payload.get("pr_url") or "").strip() or None
         required_capture_targets = request.payload.get("required_capture_targets")
         if not isinstance(required_capture_targets, list) or not required_capture_targets:
@@ -2017,6 +2058,7 @@ class DemoProofWorkflowAdvanceHandler:
             proof_scope_id=proof_scope_id,
             commit_sha=commit_sha,
             trigger_mode=trigger_mode,
+            requested_release_id=requested_release_id,
             run_id=run_id,
             pr_url=pr_url,
             required_capture_targets=required_capture_targets,
@@ -2156,6 +2198,11 @@ class DemoProofWorkflowAdvanceHandler:
         _require_pr_url_for_pr_evidence_event(event=event, pr_url=pr_url, proof_scope_id=proof_scope_id)
         if event == "ProofLeaseAcquired":
             _require_proof_lease_acquired_metadata(description=description, proof_scope_id=proof_scope_id)
+        _require_from_release_event_matches_requested_release(
+            description=description,
+            event=event,
+            proof_scope_id=proof_scope_id,
+        )
         if event == "RecordingCompleted":
             _require_recording_completion_metadata(description=description, proof_scope_id=proof_scope_id)
         if event == "EvidenceUploaded":

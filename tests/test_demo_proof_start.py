@@ -573,6 +573,35 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
             runtime_mock.assert_not_called()
             assert session.execute(select(WorkflowExecution)).scalar_one_or_none() is None
 
+    def test_start_demo_proof_workflow_rejects_from_release_without_release_id_before_creating_workflow(
+        self,
+    ) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-a")
+            project = session.get(Project, "project-a")
+
+            with patch("orchestrator.core.qa.demo_proof_start.build_workflow_runtime") as runtime_mock:
+                try:
+                    start_demo_proof_workflow(
+                        session=session,
+                        settings=SimpleNamespace(),
+                        tenant=tenant,
+                        project=project,
+                        proof_scope_id="release-proof-1",
+                        commit_sha="abcdef1",
+                        trigger_mode="from_release",
+                        trigger_event="admin_workflow_start",
+                        pr_url="https://github.com/acme/project-a/pull/8",
+                        required_capture_targets=["browser", "ios", "android"],
+                    )
+                except ValueError as exc:
+                    assert "from_release requires release_id" in str(exc)
+                else:  # pragma: no cover
+                    raise AssertionError("expected from_release demo proof start to require release_id")
+
+            runtime_mock.assert_not_called()
+            assert session.execute(select(WorkflowExecution)).scalar_one_or_none() is None
+
     def test_start_demo_proof_cleanup_only_starts_cleanup_without_pr_or_preview_lease(self) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
@@ -932,6 +961,74 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 assert "ProofLeaseAcquired.demo_proof_lease.lease_id" in str(exc)
             else:  # pragma: no cover
                 raise AssertionError("expected lease acquisition to require scoped lease metadata")
+
+            workflow = session.execute(select(WorkflowExecution)).scalar_one()
+            release_operation = session.execute(
+                select(WorkflowOperation).where(
+                    WorkflowOperation.workflow_id == workflow.workflow_id,
+                    WorkflowOperation.operation_type == "release",
+                )
+            ).scalar_one_or_none()
+            if release_operation is not None:
+                assert release_operation.status != "waiting_for_input"
+
+    def test_demo_proof_from_release_rejects_lease_for_different_release(self) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-a")
+            workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
+            request = _demo_proof_request(tenant=tenant)
+            from_release_payload = {
+                **request.payload,
+                "proof_scope_id": "release-proof-1",
+                "trigger_mode": "from_release",
+                "run_id": None,
+                "release_id": "release-preview-1",
+            }
+            from_release_request = replace(
+                request,
+                execution=WorkflowExecutionReference(
+                    key="release-proof-1",
+                    source=WorkflowSourceReference(
+                        source_system="demo_proof",
+                        source_ref="release-proof-1",
+                        display_name="Demo proof release-proof-1",
+                    ),
+                ),
+                payload=from_release_payload,
+            )
+            execute_workflow_advance(
+                session=session,
+                settings=SimpleNamespace(),
+                workflow_type=workflow_type,
+                request=from_release_request,
+                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+            )
+            event_request = _demo_proof_request_for_event(from_release_request, "ProofLeaseAcquired")
+            event_metadata = dict(_demo_proof_event_metadata("ProofLeaseAcquired") or {})
+            event_metadata["release_id"] = "release-preview-other"
+            event_metadata["demo_proof_lease"] = {
+                **dict(event_metadata["demo_proof_lease"]),
+                "proof_scope_id": "release-proof-1",
+            }
+
+            try:
+                execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=replace(
+                        event_request,
+                        payload={
+                            **event_request.payload,
+                            "event_metadata": event_metadata,
+                        },
+                    ),
+                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                )
+            except RuntimeError as exc:
+                assert "from_release requested release_id release-preview-1" in str(exc)
+            else:  # pragma: no cover
+                raise AssertionError("expected from_release demo proof to reject a different release")
 
             workflow = session.execute(select(WorkflowExecution)).scalar_one()
             release_operation = session.execute(

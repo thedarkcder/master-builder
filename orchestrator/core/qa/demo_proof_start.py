@@ -87,6 +87,17 @@ def _normalize_trigger_mode(value: object) -> str:
     return normalized
 
 
+def _normalize_release_id(value: object, *, trigger_mode: str) -> str | None:
+    normalized = str(value or "").strip()
+    if trigger_mode == "from_release" and not normalized:
+        raise ValueError("Demo proof from_release requires release_id")
+    if not normalized:
+        return None
+    if not re.fullmatch(r"[A-Za-z0-9._:-]+", normalized):
+        raise ValueError("Demo proof release_id contains unsupported characters")
+    return normalized
+
+
 def _normalize_required_capture_targets(value: object) -> tuple[str, ...]:
     if value is None:
         raise ValueError("Demo proof required_capture_targets must be provided by PM demo requirements")
@@ -167,6 +178,7 @@ def start_demo_proof_workflow(
     trigger_mode: str,
     trigger_event: str,
     run_id: str | None = None,
+    release_id: str | None = None,
     pr_url: str | None = None,
     required_capture_targets: list[object] | None = None,
     required_recording_counts: dict[str, object] | None = None,
@@ -181,6 +193,7 @@ def start_demo_proof_workflow(
         trigger_mode=trigger_mode,
         request_reason=trigger_event,
         run_id=run_id,
+        release_id=release_id,
         pr_url=pr_url,
         required_capture_targets=required_capture_targets,
         required_recording_counts=required_recording_counts,
@@ -206,6 +219,7 @@ def advance_demo_proof_workflow_event(
     trigger_mode: str,
     event: str,
     run_id: str | None = None,
+    release_id: str | None = None,
     pr_url: str | None = None,
     required_capture_targets: list[object] | None = None,
     required_recording_counts: dict[str, object] | None = None,
@@ -225,6 +239,7 @@ def advance_demo_proof_workflow_event(
         trigger_mode=trigger_mode,
         request_reason=normalized_event,
         run_id=run_id,
+        release_id=release_id,
         pr_url=pr_url,
         required_capture_targets=required_capture_targets,
         required_recording_counts=required_recording_counts,
@@ -251,6 +266,7 @@ def _advance_demo_proof_workflow(
     trigger_mode: str,
     request_reason: str,
     run_id: str | None,
+    release_id: str | None,
     pr_url: str | None,
     required_capture_targets: list[object] | None,
     required_recording_counts: dict[str, object] | None,
@@ -275,6 +291,7 @@ def _advance_demo_proof_workflow(
         required_capture_targets=normalized_targets,
     )
     normalized_run_id = str(run_id or "").strip() or None
+    normalized_release_id = _normalize_release_id(release_id, trigger_mode=normalized_trigger_mode)
     normalized_pr_url = _normalize_pr_url(pr_url, trigger_mode=normalized_trigger_mode)
     normalized_request_reason = str(request_reason or "").strip() or "demo_proof_start"
     normalized_event_metadata = _normalize_event_metadata(event_metadata)
@@ -305,6 +322,7 @@ def _advance_demo_proof_workflow(
         "commit_sha": normalized_commit_sha,
         "trigger_mode": normalized_trigger_mode,
         "run_id": normalized_run_id,
+        "release_id": normalized_release_id,
         "pr_url": normalized_pr_url,
         "required_capture_targets": list(normalized_targets),
         "required_recording_counts": normalized_required_recording_counts,
@@ -329,6 +347,7 @@ def _advance_demo_proof_workflow(
                         "proof_scope_id": normalized_scope,
                         "commit_sha": normalized_commit_sha,
                         "trigger_mode": normalized_trigger_mode,
+                        "release_id": normalized_release_id,
                     },
                 ),
             ),
