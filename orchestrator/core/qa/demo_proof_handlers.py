@@ -453,18 +453,33 @@ def _metadata_string_list(value: object) -> list[str]:
     return [normalized] if normalized else []
 
 
-def _recording_artifact_urls_by_target(value: object) -> dict[str, str]:
+_RECORDING_ARTIFACT_REQUIRED_FIELDS = frozenset(
+    {
+        "artifact_url",
+        "object_key",
+        "capture_reference",
+        "content_sha256",
+        "release_commit_sha",
+        "release_context_sha256",
+    }
+)
+
+
+def _recording_artifacts_by_target(value: object) -> dict[str, dict[str, str]]:
     if not isinstance(value, list):
         return {}
-    urls_by_target: dict[str, str] = {}
+    artifacts_by_target: dict[str, dict[str, str]] = {}
     for item in value:
         if not isinstance(item, dict):
             continue
         capture_target = str(item.get("capture_target") or "").strip()
-        artifact_url = str(item.get("artifact_url") or "").strip()
-        if capture_target and artifact_url:
-            urls_by_target[capture_target] = artifact_url
-    return urls_by_target
+        artifact_metadata = {
+            field: str(item.get(field) or "").strip()
+            for field in _RECORDING_ARTIFACT_REQUIRED_FIELDS
+        }
+        if capture_target and all(artifact_metadata.values()):
+            artifacts_by_target[capture_target] = artifact_metadata
+    return artifacts_by_target
 
 
 def _failure_evidence_by_target(value: object) -> dict[str, dict[str, str]]:
@@ -533,14 +548,18 @@ def _require_terminal_proof_metadata(
                 f"Demo proof scope {proof_scope_id} requires at least {len(required_targets)} "
                 "distinct playable artifact URL(s) for required capture target(s)."
             )
-        urls_by_target = _recording_artifact_urls_by_target(evidence_metadata.get("recordings"))
-        missing_target_urls = sorted(target for target in required_targets if target not in urls_by_target)
-        if missing_target_urls:
+        artifacts_by_target = _recording_artifacts_by_target(evidence_metadata.get("recordings"))
+        missing_target_artifacts = sorted(target for target in required_targets if target not in artifacts_by_target)
+        if missing_target_artifacts:
             raise RuntimeError(
-                f"Demo proof scope {proof_scope_id} evidence metadata is missing playable artifact URL mapping "
-                "for required capture target(s): " + ", ".join(missing_target_urls)
+                f"Demo proof scope {proof_scope_id} evidence metadata is missing uploaded artifact metadata "
+                "for required capture target(s): " + ", ".join(missing_target_artifacts)
             )
-        if len(set(urls_by_target[target] for target in required_targets)) < len(required_targets):
+        artifact_urls_by_target = {
+            target: artifacts_by_target[target]["artifact_url"]
+            for target in required_targets
+        }
+        if len(set(artifact_urls_by_target.values())) < len(required_targets):
             raise RuntimeError(
                 f"Demo proof scope {proof_scope_id} requires distinct playable artifact URL mappings for "
                 "required capture target(s)."

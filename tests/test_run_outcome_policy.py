@@ -326,9 +326,33 @@ def test_complete_runs_qa_demo_stage_before_finalization() -> None:
         "https://cdn.example/qa-demo-3.webm",
     ]
     assert metadata_by_event["EvidenceUploaded"]["recordings"] == [
-        {"capture_target": "browser", "artifact_url": "https://cdn.example/qa-demo-1.webm"},
-        {"capture_target": "browser", "artifact_url": "https://cdn.example/qa-demo-2.webm"},
-        {"capture_target": "browser", "artifact_url": "https://cdn.example/qa-demo-3.webm"},
+        {
+            "capture_target": "browser",
+            "artifact_url": "https://cdn.example/qa-demo-1.webm",
+            "object_key": "tenant-1/project-1/run-1/qa-demo-1.webm",
+            "capture_reference": "https://preview.example",
+            "content_sha256": f"{1:064x}",
+            "release_commit_sha": "b" * 40,
+            "release_context_sha256": f"{999:064x}",
+        },
+        {
+            "capture_target": "browser",
+            "artifact_url": "https://cdn.example/qa-demo-2.webm",
+            "object_key": "tenant-1/project-1/run-1/qa-demo-2.webm",
+            "capture_reference": "https://preview.example",
+            "content_sha256": f"{2:064x}",
+            "release_commit_sha": "b" * 40,
+            "release_context_sha256": f"{999:064x}",
+        },
+        {
+            "capture_target": "browser",
+            "artifact_url": "https://cdn.example/qa-demo-3.webm",
+            "object_key": "tenant-1/project-1/run-1/qa-demo-3.webm",
+            "capture_reference": "https://preview.example",
+            "content_sha256": f"{3:064x}",
+            "release_commit_sha": "b" * 40,
+            "release_context_sha256": f"{999:064x}",
+        },
     ]
     assert metadata_by_event["PREvidenceAttached"]["pr_url"] == workflow_result.pr_url
     assert metadata_by_event["PreviewCleanupCompleted"]["release_id"] == "release-preview-1"

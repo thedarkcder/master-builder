@@ -25,6 +25,19 @@ def _now() -> datetime:
     return datetime.now(timezone.utc)
 
 
+def _recording_artifact_metadata(capture_target: str, artifact_url: str) -> dict[str, str]:
+    object_name = artifact_url.rsplit("/", 1)[-1]
+    return {
+        "capture_target": capture_target,
+        "artifact_url": artifact_url,
+        "object_key": f"tenant-1/project-1/run-1/{object_name}",
+        "capture_reference": f"https://preview.example/{capture_target}",
+        "content_sha256": "a" * 64,
+        "release_commit_sha": "b" * 40,
+        "release_context_sha256": "c" * 64,
+    }
+
+
 def _demo_proof_request(*, tenant) -> WorkflowAdvanceRequest:  # noqa: ANN001
     return WorkflowAdvanceRequest(
         workflow_handler_key="demo_proof",
@@ -73,18 +86,18 @@ def _demo_proof_event_metadata(event: str) -> dict[str, object] | None:
             "recording_count": 3,
             "capture_targets": ["browser", "ios", "android"],
             "recordings": [
-                {
-                    "capture_target": "browser",
-                    "artifact_url": "https://cdn.example/qa-demos/tenant-1/project-1/run-1/browser.webm",
-                },
-                {
-                    "capture_target": "ios",
-                    "artifact_url": "https://cdn.example/qa-demos/tenant-1/project-1/run-1/ios.webm",
-                },
-                {
-                    "capture_target": "android",
-                    "artifact_url": "https://cdn.example/qa-demos/tenant-1/project-1/run-1/android.webm",
-                },
+                _recording_artifact_metadata(
+                    "browser",
+                    "https://cdn.example/qa-demos/tenant-1/project-1/run-1/browser.webm",
+                ),
+                _recording_artifact_metadata(
+                    "ios",
+                    "https://cdn.example/qa-demos/tenant-1/project-1/run-1/ios.webm",
+                ),
+                _recording_artifact_metadata(
+                    "android",
+                    "https://cdn.example/qa-demos/tenant-1/project-1/run-1/android.webm",
+                ),
             ],
         }
     if event == "FailureEvidenceUploaded":
@@ -640,10 +653,10 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                         "recording_count": 1,
                         "capture_targets": ["browser"],
                         "recordings": [
-                            {
-                                "capture_target": "browser",
-                                "artifact_url": "https://cdn.example/qa-demos/tenant-1/project-1/run-1/browser.webm",
-                            }
+                            _recording_artifact_metadata(
+                                "browser",
+                                "https://cdn.example/qa-demos/tenant-1/project-1/run-1/browser.webm",
+                            )
                         ],
                     }
                     event_request = replace(event_request, payload=payload)
@@ -704,10 +717,10 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                         "recording_count": 1,
                         "capture_targets": ["browser", "ios", "android"],
                         "recordings": [
-                            {
-                                "capture_target": "browser",
-                                "artifact_url": "https://cdn.example/qa-demos/tenant-1/project-1/run-1/shared.webm",
-                            }
+                            _recording_artifact_metadata(
+                                "browser",
+                                "https://cdn.example/qa-demos/tenant-1/project-1/run-1/shared.webm",
+                            )
                         ],
                     }
                     event_request = replace(event_request, payload=payload)
@@ -772,18 +785,18 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                         "recording_count": 3,
                         "capture_targets": ["browser", "ios", "android"],
                         "recordings": [
-                            {
-                                "capture_target": "browser",
-                                "artifact_url": "https://cdn.example/qa-demos/tenant-1/project-1/run-1/shared.webm",
-                            },
-                            {
-                                "capture_target": "ios",
-                                "artifact_url": "https://cdn.example/qa-demos/tenant-1/project-1/run-1/shared.webm",
-                            },
-                            {
-                                "capture_target": "android",
-                                "artifact_url": "https://cdn.example/qa-demos/tenant-1/project-1/run-1/shared.webm",
-                            },
+                            _recording_artifact_metadata(
+                                "browser",
+                                "https://cdn.example/qa-demos/tenant-1/project-1/run-1/shared.webm",
+                            ),
+                            _recording_artifact_metadata(
+                                "ios",
+                                "https://cdn.example/qa-demos/tenant-1/project-1/run-1/shared.webm",
+                            ),
+                            _recording_artifact_metadata(
+                                "android",
+                                "https://cdn.example/qa-demos/tenant-1/project-1/run-1/shared.webm",
+                            ),
                         ],
                     }
                     event_request = replace(event_request, payload=payload)
@@ -869,6 +882,89 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 assert "EvidenceUploaded.recordings" in str(exc)
             else:  # pragma: no cover
                 raise AssertionError("expected demo proof completion to require per-target artifact URL mappings")
+
+    def test_demo_proof_rejects_success_completion_without_uploaded_artifact_metadata(self) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-a")
+            workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
+            request = _demo_proof_request(tenant=tenant)
+            execute_workflow_advance(
+                session=session,
+                settings=SimpleNamespace(),
+                workflow_type=workflow_type,
+                request=request,
+                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+            )
+
+            for event in (
+                "ProofLeaseAcquired",
+                "ReleaseRequested",
+                "ReleaseProvisioning",
+                "ReleaseLive",
+                "RouteReady",
+                "ServiceVerificationPassed",
+                "RecordingStarted",
+                "RecordingCompleted",
+                "EvidenceUploadStarted",
+                "EvidenceUploaded",
+                "PREvidenceAttachStarted",
+                "PREvidenceAttached",
+                "PreviewCleanupRequested",
+            ):
+                event_request = _demo_proof_request_for_event(request, event)
+                if event == "EvidenceUploaded":
+                    payload = dict(event_request.payload)
+                    payload["event_metadata"] = {
+                        "artifact_urls": [
+                            "https://cdn.example/qa-demos/tenant-1/project-1/run-1/browser.webm",
+                            "https://cdn.example/qa-demos/tenant-1/project-1/run-1/ios.webm",
+                            "https://cdn.example/qa-demos/tenant-1/project-1/run-1/android.webm",
+                        ],
+                        "recording_count": 3,
+                        "capture_targets": ["browser", "ios", "android"],
+                        "recordings": [
+                            {
+                                "capture_target": "browser",
+                                "artifact_url": (
+                                    "https://cdn.example/qa-demos/tenant-1/project-1/run-1/browser.webm"
+                                ),
+                            },
+                            {
+                                "capture_target": "ios",
+                                "artifact_url": "https://cdn.example/qa-demos/tenant-1/project-1/run-1/ios.webm",
+                            },
+                            {
+                                "capture_target": "android",
+                                "artifact_url": (
+                                    "https://cdn.example/qa-demos/tenant-1/project-1/run-1/android.webm"
+                                ),
+                            },
+                        ],
+                    }
+                    event_request = replace(event_request, payload=payload)
+                execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=event_request,
+                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                )
+
+            try:
+                execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=_demo_proof_request_for_event(request, "PreviewCleanupCompleted"),
+                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                )
+            except RuntimeError as exc:
+                assert "missing uploaded artifact metadata" in str(exc)
+                assert "browser" in str(exc)
+                assert "ios" in str(exc)
+                assert "android" in str(exc)
+            else:  # pragma: no cover
+                raise AssertionError("expected demo proof completion to require uploaded artifact metadata")
 
     def test_demo_proof_rejects_success_completion_without_cleanup_status_metadata(self) -> None:
         with self.session_factory() as session:
