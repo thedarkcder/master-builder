@@ -12,6 +12,7 @@ from orchestrator.core.qa.demo_service import (
     mark_pull_request_ready_after_demo_proof,
     next_required_qa_demo_worker_capability,
     qa_demo_recording_enabled,
+    recorded_capture_targets,
     remaining_capture_targets,
     required_capture_targets,
     required_recording_counts_by_target,
@@ -52,6 +53,14 @@ _QA_DEMO_FAILURE_PROOF_EVENTS_BEFORE_PR = (
     "RecordingFailureEvidenceCaptured",
     "FailureEvidenceUploadStarted",
     "FailureEvidenceUploaded",
+)
+_QA_DEMO_DEFERRED_PROOF_EVENTS_BEFORE_RECORDING = (
+    "ProofLeaseAcquired",
+    "ReleaseRequested",
+    "ReleaseProvisioning",
+    "ReleaseLive",
+    "RouteReady",
+    "ServiceVerificationPassed",
 )
 
 
@@ -543,6 +552,46 @@ class RunOutcomePolicy:
             execution_context=execution_context,
         )
         if qa_result.outcome == "requeue":
+            try:
+                if qa_result.recordings or qa_result.failure_evidence:
+                    proof_context = _qa_demo_proof_context(
+                        prepared=prepared,
+                        qa_result=qa_result,
+                        preview_release=preview_release,
+                        plan=plan,
+                        workflow_result=workflow_result,
+                    )
+                else:
+                    proof_context = _qa_demo_release_proof_context(
+                        prepared=prepared,
+                        preview_release=preview_release,
+                        plan=plan,
+                        workflow_result=workflow_result,
+                    )
+                    proof_context.qa_result = qa_result
+                recorded_targets = recorded_capture_targets(qa_result.recordings)
+                remaining_targets = remaining_capture_targets(plan, qa_result.recordings)
+                proof_context.recording_deferred_recorded_capture_targets = recorded_targets
+                proof_context.recording_deferred_remaining_capture_targets = remaining_targets
+                events: list[str] = []
+                if previous_qa_result is None:
+                    if not proof_workflow_started:
+                        self._start_qa_demo_proof_workflow(
+                            proof_context=proof_context,
+                            trigger_event="run_success_before_demo_recording_deferred",
+                        )
+                    events.extend(_QA_DEMO_DEFERRED_PROOF_EVENTS_BEFORE_RECORDING)
+                previous_recording_count = len(list(previous_qa_result.recordings or [])) if previous_qa_result else 0
+                if len(list(qa_result.recordings or [])) > previous_recording_count:
+                    events.append("RecordingStarted")
+                events.append("RecordingDeferred")
+                self._advance_qa_demo_proof_events(proof_context=proof_context, events=tuple(events))
+            except Exception as exc:  # noqa: BLE001
+                return _workflow_result_with_qa_blocker(
+                    workflow_result=workflow_result,
+                    attempt=attempt,
+                    message=f"QA demo proof deferred-recording event failed: {type(exc).__name__}: {exc}",
+                )
             requeue_target = next_required_qa_demo_worker_capability(
                 settings=self._settings,
                 plan=plan,
@@ -1355,6 +1404,7 @@ def _qa_demo_proof_event_metadata(*, proof_context, event: str) -> dict[str, obj
         "RouteReady",
         "ServiceVerificationPassed",
         "RecordingStarted",
+        "RecordingDeferred",
         "RecordingFailed",
         "PreviewCleanupRequested",
         "PreviewCleanupCompleted",
@@ -1381,6 +1431,13 @@ def _qa_demo_proof_event_metadata(*, proof_context, event: str) -> dict[str, obj
                 metadata["required_service_kinds"] = list(required_service_kinds)
             if service_urls:
                 metadata["service_urls"] = service_urls
+        if event == "RecordingDeferred":
+            recorded_targets = list(getattr(proof_context, "recording_deferred_recorded_capture_targets", ()) or ())
+            remaining_targets = list(getattr(proof_context, "recording_deferred_remaining_capture_targets", ()) or ())
+            if recorded_targets:
+                metadata["recorded_capture_targets"] = recorded_targets
+            if remaining_targets:
+                metadata["remaining_capture_targets"] = remaining_targets
         if event in {"PreviewCleanupCompleted", "FailurePreviewCleanupCompleted"}:
             metadata["cleanup_status"] = "completed"
             metadata["cleanup_mode"] = "destroy_or_ttl"

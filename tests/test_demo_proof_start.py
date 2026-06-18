@@ -2982,6 +2982,82 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 {"capture_target": "android", "state": "recorded"},
             ]
 
+    def test_demo_proof_tracks_deferred_recording_targets_until_next_worker(self) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-a")
+            workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
+            request = _demo_proof_request(tenant=tenant)
+            execute_workflow_advance(
+                session=session,
+                settings=SimpleNamespace(),
+                workflow_type=workflow_type,
+                request=request,
+                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+            )
+
+            for event in (
+                "ProofLeaseAcquired",
+                "ReleaseRequested",
+                "ReleaseProvisioning",
+                "ReleaseLive",
+                "RouteReady",
+                "ServiceVerificationPassed",
+            ):
+                execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=_demo_proof_request_for_event(request, event),
+                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                )
+
+            execute_workflow_advance(
+                session=session,
+                settings=SimpleNamespace(),
+                workflow_type=workflow_type,
+                request=replace(
+                    request,
+                    payload={
+                        **request.payload,
+                        "event_metadata": {
+                            "recorded_capture_targets": ["browser"],
+                            "remaining_capture_targets": ["ios", "android"],
+                        },
+                    },
+                    trigger=WorkflowTrigger(event="RecordingDeferred"),
+                ),
+                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+            )
+
+            workflow = session.execute(select(WorkflowExecution)).scalar_one()
+            description = json.loads(workflow.source_description or "{}")
+            assert description["demo_proof_state"] == "recording_deferred"
+            assert description["recording_workflows"] == [
+                {"capture_target": "browser", "state": "recorded"},
+                {"capture_target": "ios", "state": "deferred"},
+                {"capture_target": "android", "state": "deferred"},
+            ]
+            metadata_by_event = {
+                item["event"]: item["metadata"]
+                for item in description["demo_proof_event_metadata"]
+            }
+            assert metadata_by_event["RecordingDeferred"]["remaining_capture_targets"] == ["ios", "android"]
+
+            execute_workflow_advance(
+                session=session,
+                settings=SimpleNamespace(),
+                workflow_type=workflow_type,
+                request=replace(request, trigger=WorkflowTrigger(event="RecordingStarted")),
+                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+            )
+            description = json.loads(workflow.source_description or "{}")
+            assert description["demo_proof_state"] == "recording"
+            assert description["recording_workflows"] == [
+                {"capture_target": "browser", "state": "recording"},
+                {"capture_target": "ios", "state": "recording"},
+                {"capture_target": "android", "state": "recording"},
+            ]
+
     def test_demo_proof_rejects_pr_evidence_update_without_pr_url(self) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
