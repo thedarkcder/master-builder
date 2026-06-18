@@ -1735,6 +1735,23 @@ def _require_evidence_uploaded_metadata(*, description: dict[str, object], proof
             )
 
 
+def _require_evidence_uploaded_capture_targets_metadata(
+    *,
+    description: dict[str, object],
+    proof_scope_id: str,
+) -> None:
+    metadata = _metadata_by_event(description)
+    required_targets = set(_normalized_capture_targets(list(description.get("required_capture_targets") or [])))
+    evidence_metadata = metadata.get("EvidenceUploaded", {})
+    evidence_targets = _metadata_string_set(evidence_metadata.get("capture_targets"))
+    missing_targets = sorted(required_targets - evidence_targets)
+    if missing_targets:
+        raise RuntimeError(
+            f"Demo proof scope {proof_scope_id} evidence metadata is missing required capture target(s): "
+            + ", ".join(missing_targets)
+        )
+
+
 def _require_evidence_uploaded_lineage_matches_recording(
     *,
     description: dict[str, object],
@@ -2630,6 +2647,10 @@ class DemoProofWorkflowAdvanceHandler:
                 event_metadata=metadata.get("EvidenceUploaded", {}),
                 metadata_label="evidence metadata",
                 evidence_field="recordings",
+                proof_scope_id=proof_scope_id,
+            )
+            _require_evidence_uploaded_capture_targets_metadata(
+                description=description,
                 proof_scope_id=proof_scope_id,
             )
             _require_evidence_uploaded_lineage_matches_recording(
