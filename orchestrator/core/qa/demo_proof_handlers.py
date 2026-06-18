@@ -32,6 +32,15 @@ _DEMO_PROOF_STATE_DESCRIPTION_KEY = "demo_proof_state"
 _DEMO_PROOF_EVENT_HISTORY_DESCRIPTION_KEY = "demo_proof_events"
 _DEMO_PROOF_EVENT_METADATA_DESCRIPTION_KEY = "demo_proof_event_metadata"
 _RECORDING_WORKFLOW_DESCRIPTION_KEY = "recording_workflows"
+_SUPPORTED_TRIGGER_MODES = frozenset(
+    {
+        "from_run",
+        "from_pr",
+        "from_release",
+        "retry_recording",
+        "cleanup_only",
+    }
+)
 
 
 _DEMO_PROOF_EVENTS: dict[str, tuple[str, str | None, str]] = {
@@ -180,6 +189,16 @@ def _required_payload_string(payload: dict[str, object], field_name: str) -> str
     return value
 
 
+def _required_trigger_mode(payload: dict[str, object]) -> str:
+    trigger_mode = _required_payload_string(payload, "trigger_mode")
+    if trigger_mode not in _SUPPORTED_TRIGGER_MODES:
+        raise RuntimeError(
+            "Demo proof workflow requires trigger_mode to be one of: "
+            + ", ".join(sorted(_SUPPORTED_TRIGGER_MODES))
+        )
+    return trigger_mode
+
+
 def _workflow_id(*, workflow_type, request) -> str:  # noqa: ANN001
     return workflow_execution_id(
         workflow_type_key=workflow_type.workflow_type_key,
@@ -271,6 +290,7 @@ def _demo_proof_description(
     previous_description: dict[str, object],
     proof_scope_id: str,
     commit_sha: str,
+    trigger_mode: str,
     run_id: str | None,
     pr_url: str | None,
     required_capture_targets: list[object],
@@ -283,6 +303,12 @@ def _demo_proof_description(
     events = list(payload.get(_DEMO_PROOF_EVENT_HISTORY_DESCRIPTION_KEY) or [])
     metadata_entries = list(payload.get(_DEMO_PROOF_EVENT_METADATA_DESCRIPTION_KEY) or [])
     previous_last_event = str(events[-1]) if events else ""
+    previous_trigger_mode = str(payload.get("trigger_mode") or "").strip()
+    if previous_trigger_mode and previous_trigger_mode != trigger_mode:
+        raise RuntimeError(
+            f"Demo proof workflow trigger_mode cannot change for proof scope {proof_scope_id}: "
+            f"{previous_trigger_mode} != {trigger_mode}"
+        )
     if event and (not events or str(events[-1]) != event):
         events.append(event)
     if event and event_metadata and previous_last_event != event:
@@ -291,6 +317,7 @@ def _demo_proof_description(
         {
             "proof_scope_id": proof_scope_id,
             "commit_sha": commit_sha,
+            "trigger_mode": trigger_mode,
             "run_id": run_id,
             "pr_url": pr_url,
             "required_capture_targets": [str(target) for target in required_capture_targets],
@@ -623,6 +650,7 @@ class DemoProofWorkflowAdvanceHandler:
         request_id = _required_payload_string(request.payload, "request_id")
         proof_scope_id = _required_payload_string(request.payload, "proof_scope_id")
         commit_sha = _required_payload_string(request.payload, "commit_sha")
+        trigger_mode = _required_trigger_mode(request.payload)
         project_id = str(request.project_id or "").strip()
         if not project_id:
             raise RuntimeError("Demo proof workflow requires project_id")
@@ -659,6 +687,7 @@ class DemoProofWorkflowAdvanceHandler:
             previous_description=previous_description,
             proof_scope_id=proof_scope_id,
             commit_sha=commit_sha,
+            trigger_mode=trigger_mode,
             run_id=run_id,
             pr_url=pr_url,
             required_capture_targets=required_capture_targets,
