@@ -923,10 +923,17 @@ _RECORDING_ARTIFACT_REQUIRED_FIELDS = frozenset(
         "release_context_sha256",
     }
 )
+_FAILURE_EVIDENCE_PROBLEM_REQUIRED_FIELDS = frozenset(
+    {
+        "error_message",
+        "failure_phase",
+        "observed_behavior",
+    }
+)
 _FAILURE_EVIDENCE_REQUIRED_FIELDS = frozenset(
     {
         *_RECORDING_ARTIFACT_REQUIRED_FIELDS,
-        "error_message",
+        *_FAILURE_EVIDENCE_PROBLEM_REQUIRED_FIELDS,
     }
 )
 _DEMO_PROOF_LEASE_REQUIRED_FIELDS = frozenset(
@@ -1761,6 +1768,11 @@ def _require_failure_evidence_target_metadata(
             f"Demo proof scope {proof_scope_id} requires at least {len(required_targets)} distinct failure "
             "artifact URL(s) for required capture target(s)."
         )
+    _require_failure_evidence_problem_details(
+        event="FailureEvidenceUploaded",
+        failure_metadata=failure_metadata,
+        proof_scope_id=proof_scope_id,
+    )
     evidence_by_target = _failure_evidence_by_target(failure_metadata.get("failure_evidence"))
     missing_diagnostic_targets = sorted(target for target in required_targets if target not in evidence_by_target)
     if missing_diagnostic_targets:
@@ -1803,6 +1815,36 @@ def _failure_evidence_source_metadata(
         f"Demo proof scope {proof_scope_id} requires diagnostic failure evidence source metadata from "
         "ServiceVerificationFailed or RecordingFailureEvidenceCaptured."
     )
+
+
+def _require_failure_evidence_problem_details(
+    *,
+    event: str,
+    failure_metadata: dict[str, object],
+    proof_scope_id: str,
+) -> None:
+    raw_evidence = failure_metadata.get("failure_evidence")
+    if not isinstance(raw_evidence, list):
+        return
+    missing: list[str] = []
+    for item in raw_evidence:
+        if not isinstance(item, dict):
+            continue
+        capture_target = _metadata_string(item.get("capture_target")) or "<missing>"
+        artifact_metadata = {
+            field: _metadata_string(item.get(field))
+            for field in _RECORDING_ARTIFACT_REQUIRED_FIELDS
+        }
+        if not capture_target or not all(artifact_metadata.values()):
+            continue
+        for field in sorted(_FAILURE_EVIDENCE_PROBLEM_REQUIRED_FIELDS):
+            if not _metadata_field_is_present(item.get(field)):
+                missing.append(f"{event}.failure_evidence.{capture_target}.{field}")
+    if missing:
+        raise RuntimeError(
+            f"Demo proof scope {proof_scope_id} requires QA failure problem details before failure evidence "
+            "can be used: " + ", ".join(missing)
+        )
 
 
 def _require_failure_evidence_uploaded_metadata(*, description: dict[str, object], proof_scope_id: str) -> None:
@@ -2567,6 +2609,11 @@ class DemoProofWorkflowAdvanceHandler:
                 event_metadata=metadata.get("FailureEvidenceUploaded", {}),
                 metadata_label="failure evidence metadata",
                 evidence_field="failure_evidence",
+                proof_scope_id=proof_scope_id,
+            )
+            _require_failure_evidence_problem_details(
+                event="FailureEvidenceUploaded",
+                failure_metadata=metadata.get("FailureEvidenceUploaded", {}),
                 proof_scope_id=proof_scope_id,
             )
             _require_failure_evidence_uploaded_lineage_matches_captured(

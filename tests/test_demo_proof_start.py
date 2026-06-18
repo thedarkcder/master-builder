@@ -51,6 +51,8 @@ def _recording_artifact_metadata(capture_target: str, artifact_url: str) -> dict
 def _failure_evidence_metadata(capture_target: str, artifact_url: str) -> dict[str, str]:
     metadata = _recording_artifact_metadata(capture_target, artifact_url)
     metadata["error_message"] = f"QA Demo Ready was not visible for {capture_target}; app did not load"
+    metadata["failure_phase"] = "app_load"
+    metadata["observed_behavior"] = f"{capture_target} app did not load; QA Demo Ready marker was not visible"
     return metadata
 
 
@@ -3660,6 +3662,90 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 )
             else:  # pragma: no cover
                 raise AssertionError("expected failure evidence upload to reject unplanned capture target evidence")
+
+    def test_demo_proof_rejects_failure_evidence_without_observed_problem_detail(self) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-a")
+            workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
+            request = _demo_proof_request(tenant=tenant)
+            request = replace(
+                request,
+                payload={
+                    **request.payload,
+                    "required_capture_targets": ["browser"],
+                    "required_recording_counts": {"browser": 1},
+                },
+            )
+            execute_workflow_advance(
+                session=session,
+                settings=SimpleNamespace(),
+                workflow_type=workflow_type,
+                request=request,
+                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+            )
+
+            for event in (
+                "ProofLeaseAcquired",
+                "ReleaseRequested",
+                "ReleaseProvisioning",
+                "ReleaseLive",
+                "RouteReady",
+                "ServiceVerificationPassed",
+                "RecordingStarted",
+                "RecordingFailureEvidenceCaptured",
+                "FailureEvidenceUploadStarted",
+            ):
+                event_request = _demo_proof_request_for_event(request, event)
+                if event == "RecordingFailureEvidenceCaptured":
+                    artifact_url = "https://cdn.example/qa-demos/tenant-1/project-1/run-1/browser-failure.webm"
+                    event_request = replace(
+                        event_request,
+                        payload={
+                            **event_request.payload,
+                            "event_metadata": {
+                                "artifact_urls": [artifact_url],
+                                "failure_evidence_count": 1,
+                                "capture_targets": ["browser"],
+                                "failure_evidence": [
+                                    _failure_evidence_metadata("browser", artifact_url),
+                                ],
+                            },
+                        },
+                    )
+                execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=event_request,
+                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                )
+
+            artifact_url = "https://cdn.example/qa-demos/tenant-1/project-1/run-1/browser-failure.webm"
+            failure_metadata = _failure_evidence_metadata("browser", artifact_url)
+            failure_metadata.pop("observed_behavior", None)
+
+            with pytest.raises(
+                RuntimeError,
+                match="FailureEvidenceUploaded.failure_evidence.browser.observed_behavior",
+            ):
+                execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=replace(
+                        _demo_proof_request_for_event(request, "FailureEvidenceUploaded"),
+                        payload={
+                            **request.payload,
+                            "event_metadata": {
+                                "artifact_urls": [artifact_url],
+                                "failure_evidence_count": 1,
+                                "capture_targets": ["browser"],
+                                "failure_evidence": [failure_metadata],
+                            },
+                        },
+                    ),
+                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                )
 
     def test_demo_proof_rejects_failure_completion_without_failure_capture_target_metadata(self) -> None:
         with self.session_factory() as session:
