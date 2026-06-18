@@ -93,8 +93,28 @@ def main(argv: list[str]) -> int:
                 launch_extras=launch_extras,
             )
         except Exception as exc:  # noqa: BLE001
-            validate_mp4_recording(local_video_path)
             diagnostics = android_failure_diagnostics(device_id=device_id, package_name=package_name)
+            failure_path = local_video_path
+            try:
+                validate_mp4_recording(local_video_path)
+            except Exception as recording_exc:  # noqa: BLE001
+                diagnostics = "\n".join(
+                    part
+                    for part in (
+                        diagnostics,
+                        f"screen-recording-error: {recording_exc}",
+                    )
+                    if part
+                )
+                failure_path = output_dir / f"{sanitized_name}-failure.txt"
+                failure_path.write_text(
+                    android_failure_message(
+                        scenario_name=scenario.name,
+                        error=exc,
+                        diagnostics=diagnostics,
+                    ),
+                    encoding="utf-8",
+                )
             output_path.write_text(
                 json.dumps(
                     {
@@ -102,7 +122,7 @@ def main(argv: list[str]) -> int:
                         "failure_evidence": [
                             {
                                 "name": scenario.name,
-                                "path": str(local_video_path),
+                                "path": str(failure_path),
                                 "error_message": android_failure_message(
                                     scenario_name=scenario.name,
                                     error=exc,
