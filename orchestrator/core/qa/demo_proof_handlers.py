@@ -30,6 +30,7 @@ DEMO_PROOF_HANDLER_KEY = "demo_proof"
 DEMO_PROOF_STEP_PREVIEW_LEASE = "preview_lease"
 _DEMO_PROOF_STATE_DESCRIPTION_KEY = "demo_proof_state"
 _DEMO_PROOF_EVENT_HISTORY_DESCRIPTION_KEY = "demo_proof_events"
+_RECORDING_WORKFLOW_DESCRIPTION_KEY = "recording_workflows"
 
 
 _DEMO_PROOF_EVENTS: dict[str, tuple[str, str | None, str]] = {
@@ -149,6 +150,13 @@ _DEMO_PROOF_FAILURE_EVENTS: dict[str, tuple[str, str, str]] = {
 }
 
 _DEMO_PROOF_BLOCKING_COMPLETION_EVENTS = frozenset({"FailurePreviewCleanupCompleted"})
+_RECORDING_EVENT_STATES = {
+    "ServiceVerificationPassed": "waiting_for_recording",
+    "RecordingStarted": "recording",
+    "RecordingCompleted": "recorded",
+    "RecordingFailed": "failed",
+    "RecordingFailureEvidenceCaptured": "failed",
+}
 
 
 def _required_payload_string(payload: dict[str, object], field_name: str) -> str:
@@ -180,6 +188,44 @@ def _decode_demo_proof_description(raw_value: object) -> dict[str, object]:
     if not isinstance(decoded, dict):
         raise RuntimeError("Demo proof workflow description must be a JSON object")
     return dict(decoded)
+
+
+def _normalized_capture_targets(required_capture_targets: list[object]) -> list[str]:
+    targets: list[str] = []
+    seen: set[str] = set()
+    for item in required_capture_targets:
+        target = str(item or "").strip()
+        if not target or target in seen:
+            continue
+        seen.add(target)
+        targets.append(target)
+    return targets or ["browser", "ios", "android"]
+
+
+def _recording_workflow_descriptions(
+    *,
+    previous_description: dict[str, object],
+    required_capture_targets: list[object],
+    event: str | None,
+) -> list[dict[str, str]]:
+    existing_state_by_target: dict[str, str] = {}
+    for item in list(previous_description.get(_RECORDING_WORKFLOW_DESCRIPTION_KEY) or []):
+        if not isinstance(item, dict):
+            continue
+        capture_target = str(item.get("capture_target") or "").strip()
+        state = str(item.get("state") or "").strip()
+        if capture_target and state:
+            existing_state_by_target[capture_target] = state
+    next_state = _RECORDING_EVENT_STATES.get(str(event or "").strip())
+    workflows: list[dict[str, str]] = []
+    for capture_target in _normalized_capture_targets(required_capture_targets):
+        workflows.append(
+            {
+                "capture_target": capture_target,
+                "state": next_state or existing_state_by_target.get(capture_target, "planned"),
+            }
+        )
+    return workflows
 
 
 def _current_demo_proof_state(*, session, workflow_id: str) -> str:  # noqa: ANN001
@@ -216,6 +262,11 @@ def _demo_proof_description(
             "run_id": run_id,
             "pr_url": pr_url,
             "required_capture_targets": [str(target) for target in required_capture_targets],
+            _RECORDING_WORKFLOW_DESCRIPTION_KEY: _recording_workflow_descriptions(
+                previous_description=previous_description,
+                required_capture_targets=required_capture_targets,
+                event=event,
+            ),
             "request_id": request_id,
             _DEMO_PROOF_STATE_DESCRIPTION_KEY: state,
             _DEMO_PROOF_EVENT_HISTORY_DESCRIPTION_KEY: events[-100:],
@@ -283,6 +334,21 @@ def _wait_for_operation_once(
         attempt=attempt,
         summary=summary,
     )
+
+
+def _wait_summary(
+    *,
+    operation_type: str,
+    proof_scope_id: str,
+    required_capture_targets: list[object],
+) -> str:
+    if operation_type == DEMO_PROOF_STEP_RECORDING:
+        targets = ", ".join(_normalized_capture_targets(required_capture_targets))
+        return (
+            f"Waiting for recording event for demo proof scope {proof_scope_id} "
+            f"across required capture target(s): {targets}."
+        )
+    return f"Waiting for {operation_type} event for demo proof scope {proof_scope_id}."
 
 
 def _observe_waiting_operation_event(
@@ -431,6 +497,7 @@ class DemoProofWorkflowAdvanceHandler:
                 event=trigger_event,
                 proof_scope_id=proof_scope_id,
                 run_id=run_id,
+                required_capture_targets=required_capture_targets,
             )
             _persist_demo_proof_state(
                 session=session,
@@ -471,6 +538,7 @@ class DemoProofWorkflowAdvanceHandler:
         event: str,
         proof_scope_id: str,
         run_id: str | None,
+        required_capture_targets: list[object],
     ) -> WorkflowAdvanceOutcome:
         observation_spec = _DEMO_PROOF_OBSERVATION_EVENTS.get(event)
         if observation_spec is not None:
@@ -528,7 +596,11 @@ class DemoProofWorkflowAdvanceHandler:
                 operation_type=next_operation_type,
                 run_id=run_id,
                 proof_scope_id=proof_scope_id,
-                summary=f"Waiting for {next_operation_type} event for demo proof scope {proof_scope_id}.",
+                summary=_wait_summary(
+                    operation_type=next_operation_type,
+                    proof_scope_id=proof_scope_id,
+                    required_capture_targets=required_capture_targets,
+                ),
             )
         elif event in _DEMO_PROOF_BLOCKING_COMPLETION_EVENTS:
             message = f"Demo proof recorded failure evidence for proof scope {proof_scope_id}."
