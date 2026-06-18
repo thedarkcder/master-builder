@@ -9,6 +9,7 @@ DEMO_PROOF_STATE_LEASE_ACQUIRING = "lease_acquiring"
 DEMO_PROOF_STATE_LEASE_ACQUIRED = "lease_acquired"
 DEMO_PROOF_STATE_RELEASE_REQUESTED = "release_requested"
 DEMO_PROOF_STATE_RELEASE_PROVISIONING = "release_provisioning"
+DEMO_PROOF_STATE_RELEASE_FAILED_CLEANUP_SCHEDULED = "release_failed_cleanup_scheduled"
 DEMO_PROOF_STATE_RELEASE_LIVE = "release_live"
 DEMO_PROOF_STATE_SERVICES_VERIFYING = "services_verifying"
 DEMO_PROOF_STATE_SERVICES_VERIFIED = "services_verified"
@@ -70,6 +71,7 @@ _ALL_DEMO_PROOF_NON_TERMINAL_STATES = frozenset(
         DEMO_PROOF_STATE_LEASE_ACQUIRED,
         DEMO_PROOF_STATE_RELEASE_REQUESTED,
         DEMO_PROOF_STATE_RELEASE_PROVISIONING,
+        DEMO_PROOF_STATE_RELEASE_FAILED_CLEANUP_SCHEDULED,
         DEMO_PROOF_STATE_RELEASE_LIVE,
         DEMO_PROOF_STATE_SERVICES_VERIFYING,
         DEMO_PROOF_STATE_SERVICES_VERIFIED,
@@ -133,6 +135,14 @@ _DEMO_PROOF_TRANSITIONS: dict[str, _EventTransition] = {
                 DEMO_PROOF_STATE_RELEASE_LIVE,
             }
         ),
+        DEMO_PROOF_STATE_RELEASE_FAILED_CLEANUP_SCHEDULED,
+    ),
+    "ReleaseFailedPreviewCleanupCompleted": _EventTransition(
+        frozenset({DEMO_PROOF_STATE_RELEASE_FAILED_CLEANUP_SCHEDULED}),
+        DEMO_PROOF_STATE_BLOCKED,
+    ),
+    "ReleaseFailedPreviewCleanupFailed": _EventTransition(
+        frozenset({DEMO_PROOF_STATE_RELEASE_FAILED_CLEANUP_SCHEDULED}),
         DEMO_PROOF_STATE_BLOCKED,
     ),
     "RouteReady": _EventTransition(

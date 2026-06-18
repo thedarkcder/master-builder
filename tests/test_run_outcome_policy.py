@@ -1110,7 +1110,36 @@ def test_complete_blocks_demo_required_success_when_preview_release_failed() -> 
     deps = _deps()
     prepared = _prepared(_build_snapshot(), effective_policy={"qa_demo_recording_enabled": True})
     workflow_result = _workflow_result()
+    preview_release = SimpleNamespace(
+        release_id="release-preview-1",
+        release_kind="run_preview",
+        status="failed",
+        commit_sha="b" * 40,
+        service_urls=[],
+        last_error='[{"output":"Deployment failed: certificate has expired","hidden":false}]',
+        delivery_metadata={
+            "demo_proof_lease": {
+                "lease_id": "lease-1",
+                "proof_scope_id": "run:run-1:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                "commit_sha": "b" * 40,
+                "state": "failed",
+                "acquired_at": "2026-06-18T10:00:00+00:00",
+                "expires_at": "2026-06-18T11:00:00+00:00",
+            }
+        },
+        provider_context={
+            "application_uuid": "app-1",
+            "deployment_uuid": "deployment-1",
+        },
+    )
     finalizer_calls: dict[str, object] = {}
+
+    def _destroy_preview(**_kwargs):  # noqa: ANN001
+        preview_release.status = "destroyed"
+        lease = preview_release.delivery_metadata["demo_proof_lease"]
+        lease["state"] = "destroyed"
+        lease["destroy_reason"] = "qa_demo_failed"
+        lease["destroyed_at"] = "2026-06-18T10:30:00+00:00"
 
     class _Finalizer:
         def __init__(self, **_kwargs):
@@ -1134,15 +1163,15 @@ def test_complete_blocks_demo_required_success_when_preview_release_failed() -> 
             return_value=SimpleNamespace(
                 created=False,
                 reason="existing",
-                release=SimpleNamespace(
-                    status="failed",
-                    service_urls=[],
-                    last_error='[{"output":"Deployment failed: certificate has expired","hidden":false}]',
-                ),
+                release=preview_release,
             ),
         ),
         patch("orchestrator.core.worker.run_outcome_policy.execute_qa_demo_stage") as qa_mock,
         patch("orchestrator.core.worker.run_outcome_policy.update_pull_request_with_demo_evidence") as update_pr_mock,
+        patch(
+            "orchestrator.core.worker.run_outcome_policy.destroy_project_deployment_preview_release",
+            side_effect=_destroy_preview,
+        ) as destroy_preview_mock,
         patch("orchestrator.core.worker.run_outcome_policy.WorkflowFinalizer", _Finalizer),
         patch("orchestrator.core.worker.run_outcome_policy.CompletionTailExecutor") as tail_executor_cls,
     ):
@@ -1160,6 +1189,32 @@ def test_complete_blocks_demo_required_success_when_preview_release_failed() -> 
 
     qa_mock.assert_not_called()
     update_pr_mock.assert_not_called()
+    destroy_preview_mock.assert_called_once_with(
+        session=session,
+        tenant_id="tenant-1",
+        project_id="project-1",
+        release_id="release-preview-1",
+        reason="qa_demo_failed",
+    )
+    assert [
+        call.kwargs["event"] for call in deps.execution.advance_demo_proof_workflow_event_fn.call_args_list
+    ] == [
+        "ProofLeaseAcquired",
+        "ReleaseRequested",
+        "ReleaseProvisioning",
+        "ReleaseFailed",
+        "ReleaseFailedPreviewCleanupCompleted",
+    ]
+    metadata_by_event = {
+        call.kwargs["event"]: call.kwargs.get("event_metadata")
+        for call in deps.execution.advance_demo_proof_workflow_event_fn.call_args_list
+    }
+    assert metadata_by_event["ReleaseFailed"]["error_message"] == (
+        "QA demo recording requires a live run preview deployment/release before recording; "
+        "preview release is failed. Release failure: Deployment failed: certificate has expired"
+    )
+    assert metadata_by_event["ReleaseFailedPreviewCleanupCompleted"]["cleanup_status"] == "completed"
+    assert metadata_by_event["ReleaseFailedPreviewCleanupCompleted"]["cleanup_mode"] == "destroy_or_ttl"
     assert finalizer_calls["workflow_result"].outcome == "blocked"
     assert "preview release is failed" in finalizer_calls["workflow_result"].blocker_message
     assert "certificate has expired" in finalizer_calls["workflow_result"].blocker_message
