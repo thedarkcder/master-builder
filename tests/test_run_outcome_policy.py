@@ -182,6 +182,18 @@ def _deps() -> SimpleNamespace:
             requeue_workflow_result_for_capability_fn=MagicMock(),
             requeue_workflow_result_for_stale_snapshot_fn=MagicMock(),
             check_run_snapshot_freshness_fn=MagicMock(return_value=SimpleNamespace(stale=False, message=None)),
+            start_demo_proof_workflow_fn=MagicMock(
+                return_value=SimpleNamespace(
+                    workflow_id="demo_proof:run:run-1:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                    status="waiting_for_input",
+                )
+            ),
+            advance_demo_proof_workflow_event_fn=MagicMock(
+                return_value=SimpleNamespace(
+                    workflow_id="demo_proof:run:run-1:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                    status="waiting_for_input",
+                )
+            ),
         ),
     )
 
@@ -271,6 +283,22 @@ def test_complete_runs_qa_demo_stage_before_finalization() -> None:
         )
 
     assert result is prepared.run
+    deps.execution.start_demo_proof_workflow_fn.assert_called_once()
+    assert deps.execution.start_demo_proof_workflow_fn.call_args.kwargs["proof_scope_id"] == (
+        "run:run-1:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+    )
+    assert deps.execution.start_demo_proof_workflow_fn.call_args.kwargs["commit_sha"] == "b" * 40
+    assert [
+        call.kwargs["event"]
+        for call in deps.execution.advance_demo_proof_workflow_event_fn.call_args_list
+    ] == [
+        "ProofLeaseAcquired",
+        "ServiceVerificationPassed",
+        "RecordingCompleted",
+        "EvidenceUploaded",
+        "PREvidenceAttached",
+        "PreviewCleanupCompleted",
+    ]
     checkpoint = deps.execution.persist_stage_checkpoint_fn.call_args.kwargs["checkpoint"]
     assert checkpoint.stage == "qa"
     assert checkpoint.status == "completed"

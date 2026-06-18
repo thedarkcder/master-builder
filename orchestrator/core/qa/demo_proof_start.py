@@ -29,6 +29,15 @@ class DemoProofWorkflowStartResult:
     started_attempt_id: str | None = None
 
 
+@dataclass(frozen=True)
+class DemoProofWorkflowEventResult:
+    execution_id: str
+    workflow_id: str
+    workflow_type_key: str
+    status: str
+    event: str
+
+
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -96,6 +105,80 @@ def start_demo_proof_workflow(
     pr_url: str | None = None,
     required_capture_targets: list[object] | None = None,
 ) -> DemoProofWorkflowStartResult:
+    result = _advance_demo_proof_workflow(
+        session=session,
+        settings=settings,
+        tenant=tenant,
+        project=project,
+        proof_scope_id=proof_scope_id,
+        commit_sha=commit_sha,
+        request_reason=trigger_event,
+        run_id=run_id,
+        pr_url=pr_url,
+        required_capture_targets=required_capture_targets,
+        event=None,
+    )
+    return DemoProofWorkflowStartResult(
+        execution_id=result.execution_id,
+        workflow_id=result.workflow_id,
+        workflow_type_key=result.workflow_type_key,
+        status=result.status,
+        started_attempt_id=_latest_attempt_id(session=session, workflow_id=result.workflow_id),
+    )
+
+
+def advance_demo_proof_workflow_event(
+    *,
+    session: Session,
+    settings,  # noqa: ANN001
+    tenant: Tenant,
+    project: Project,
+    proof_scope_id: str,
+    commit_sha: str,
+    event: str,
+    run_id: str | None = None,
+    pr_url: str | None = None,
+    required_capture_targets: list[object] | None = None,
+) -> DemoProofWorkflowEventResult:
+    normalized_event = str(event or "").strip()
+    if not normalized_event:
+        raise ValueError("Demo proof event advance requires event")
+    result = _advance_demo_proof_workflow(
+        session=session,
+        settings=settings,
+        tenant=tenant,
+        project=project,
+        proof_scope_id=proof_scope_id,
+        commit_sha=commit_sha,
+        request_reason=normalized_event,
+        run_id=run_id,
+        pr_url=pr_url,
+        required_capture_targets=required_capture_targets,
+        event=normalized_event,
+    )
+    return DemoProofWorkflowEventResult(
+        execution_id=result.execution_id,
+        workflow_id=result.workflow_id,
+        workflow_type_key=result.workflow_type_key,
+        status=result.status,
+        event=normalized_event,
+    )
+
+
+def _advance_demo_proof_workflow(
+    *,
+    session: Session,
+    settings,  # noqa: ANN001
+    tenant: Tenant,
+    project: Project,
+    proof_scope_id: str,
+    commit_sha: str,
+    request_reason: str,
+    run_id: str | None,
+    pr_url: str | None,
+    required_capture_targets: list[object] | None,
+    event: str | None,
+) -> DemoProofWorkflowEventResult:
     if tenant is None:
         raise ValueError("Demo proof start requires tenant")
     if project is None:
@@ -110,7 +193,7 @@ def start_demo_proof_workflow(
     normalized_targets = _normalize_required_capture_targets(required_capture_targets)
     normalized_run_id = str(run_id or "").strip() or None
     normalized_pr_url = str(pr_url or "").strip() or None
-    normalized_trigger_event = str(trigger_event or "").strip() or "demo_proof_start"
+    normalized_request_reason = str(request_reason or "").strip() or "demo_proof_start"
 
     handler_registry = build_workflow_handler_registry(
         advance_handlers={
@@ -152,7 +235,7 @@ def start_demo_proof_workflow(
                     tenant=tenant,
                     project=project,
                     proof_scope_id=normalized_scope,
-                    trigger_event=normalized_trigger_event,
+                    trigger_event=normalized_request_reason,
                 ),
                 "proof_scope_id": normalized_scope,
                 "commit_sha": normalized_commit_sha,
@@ -160,7 +243,7 @@ def start_demo_proof_workflow(
                 "pr_url": normalized_pr_url,
                 "required_capture_targets": list(normalized_targets),
             },
-            trigger=WorkflowTrigger(event=normalized_trigger_event),
+            trigger=WorkflowTrigger(event=event),
         )
     )
     workflow_id = workflow_execution_id(
@@ -170,10 +253,10 @@ def start_demo_proof_workflow(
     workflow = session.get(WorkflowExecution, workflow_id)
     if workflow is None:
         raise RuntimeError("Demo proof workflow did not create a durable workflow execution")
-    return DemoProofWorkflowStartResult(
+    return DemoProofWorkflowEventResult(
         execution_id=workflow.execution_id,
         workflow_id=workflow.workflow_id,
         workflow_type_key=workflow.workflow_type_key,
         status=workflow.status,
-        started_attempt_id=_latest_attempt_id(session=session, workflow_id=workflow.workflow_id),
+        event=event or "",
     )

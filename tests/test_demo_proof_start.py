@@ -3,10 +3,12 @@ from __future__ import annotations
 from dataclasses import replace
 from datetime import datetime, timezone
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from sqlalchemy import select
 
 from orchestrator.core.qa.demo_proof_handlers import DemoProofWorkflowAdvanceHandler
+from orchestrator.core.qa.demo_proof_start import advance_demo_proof_workflow_event, start_demo_proof_workflow
 from orchestrator.core.workflow.advance import WorkflowAdvanceRequest, WorkflowTrigger, execute_workflow_advance
 from orchestrator.core.workflow.execution_projection import WorkflowExecutionReference, WorkflowSourceReference
 from orchestrator.core.workflow.type_catalog import get_workflow_type
@@ -148,6 +150,110 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 )
             ).scalar_one()
             assert attempt.status == "waiting_for_input"
+
+    def test_start_demo_proof_workflow_treats_trigger_event_as_start_metadata(self) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-a")
+            project = session.get(Project, "project-a")
+            captured_requests: list[WorkflowAdvanceRequest] = []
+            workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
+
+            def _advance(request: WorkflowAdvanceRequest):  # noqa: ANN202
+                captured_requests.append(request)
+                return execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=request,
+                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                )
+
+            with patch(
+                "orchestrator.core.qa.demo_proof_start.build_workflow_runtime",
+                return_value=SimpleNamespace(advance=_advance),
+            ):
+                result = start_demo_proof_workflow(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    tenant=tenant,
+                    project=project,
+                    proof_scope_id="run-1-main-abcdef1",
+                    commit_sha="abcdef1",
+                    trigger_event="run_success_before_ready_for_review",
+                    run_id="run-1",
+                    pr_url="https://github.com/acme/project-a/pull/8",
+                    required_capture_targets=["browser", "ios", "android"],
+                )
+
+            assert result.workflow_id == "demo_proof:run-1-main-abcdef1"
+            assert result.status == "waiting_for_input"
+            assert captured_requests[0].trigger.event is None
+            assert captured_requests[0].payload["request_id"].startswith(
+                "demo-proof:tenant-a:project-a:run-1-main-abcdef1:run_success_before_ready_for_review:"
+            )
+            workflow = session.execute(select(WorkflowExecution)).scalar_one()
+            operation = session.execute(
+                select(WorkflowOperation).where(
+                    WorkflowOperation.workflow_id == workflow.workflow_id,
+                    WorkflowOperation.operation_type == "preview_lease",
+                )
+            ).scalar_one()
+            assert operation.status == "waiting_for_input"
+            assert operation.target_ref == "run-1-main-abcdef1"
+
+    def test_advance_demo_proof_workflow_event_uses_explicit_lifecycle_event(self) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-a")
+            project = session.get(Project, "project-a")
+            workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
+
+            def _advance(request: WorkflowAdvanceRequest):  # noqa: ANN202
+                return execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=request,
+                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                )
+
+            with patch(
+                "orchestrator.core.qa.demo_proof_start.build_workflow_runtime",
+                return_value=SimpleNamespace(advance=_advance),
+            ):
+                start_demo_proof_workflow(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    tenant=tenant,
+                    project=project,
+                    proof_scope_id="run-1-main-abcdef1",
+                    commit_sha="abcdef1",
+                    trigger_event="run_success_before_ready_for_review",
+                    run_id="run-1",
+                    pr_url="https://github.com/acme/project-a/pull/8",
+                    required_capture_targets=["browser", "ios", "android"],
+                )
+                result = advance_demo_proof_workflow_event(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    tenant=tenant,
+                    project=project,
+                    proof_scope_id="run-1-main-abcdef1",
+                    commit_sha="abcdef1",
+                    event="ProofLeaseAcquired",
+                    run_id="run-1",
+                    pr_url="https://github.com/acme/project-a/pull/8",
+                    required_capture_targets=["browser", "ios", "android"],
+                )
+
+            assert result.status == "waiting_for_input"
+            workflow = session.execute(select(WorkflowExecution)).scalar_one()
+            release_operation = session.execute(
+                select(WorkflowOperation).where(
+                    WorkflowOperation.workflow_id == workflow.workflow_id,
+                    WorkflowOperation.operation_type == "release",
+                )
+            ).scalar_one()
+            assert release_operation.status == "waiting_for_input"
 
     def test_demo_proof_lease_acquired_event_completes_lease_and_waits_for_release_once(self) -> None:
         with self.session_factory() as session:
