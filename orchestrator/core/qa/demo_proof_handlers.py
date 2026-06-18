@@ -882,13 +882,33 @@ def _require_recording_failed_metadata(*, description: dict[str, object], proof_
     failure_metadata = metadata.get("RecordingFailed") or {}
     missing = [
         field
-        for field in ("error_message", "failure_evidence_unavailable_reason")
+        for field in (
+            "error_message",
+            "failure_phase",
+            "observed_behavior",
+            "capture_targets",
+            "failure_evidence_unavailable_reason",
+        )
         if not _metadata_field_is_present(failure_metadata.get(field))
     ]
     if missing:
         raise RuntimeError(
             f"Demo proof scope {proof_scope_id} requires auditable no-evidence recording failure metadata: "
             + ", ".join(f"RecordingFailed.{field}" for field in missing)
+        )
+    required_targets = set(_normalized_capture_targets(list(description.get("required_capture_targets") or [])))
+    failure_targets = _metadata_string_set(failure_metadata.get("capture_targets"))
+    missing_targets = sorted(required_targets - failure_targets)
+    if missing_targets:
+        raise RuntimeError(
+            f"Demo proof scope {proof_scope_id} no-evidence recording failure metadata is missing required "
+            "capture target(s): " + ", ".join(missing_targets)
+        )
+    unplanned_targets = sorted(failure_targets - required_targets)
+    if unplanned_targets:
+        raise RuntimeError(
+            f"Demo proof scope {proof_scope_id} no-evidence recording failure metadata contains capture target(s) "
+            "outside the demo plan: " + ", ".join(unplanned_targets)
         )
 
 

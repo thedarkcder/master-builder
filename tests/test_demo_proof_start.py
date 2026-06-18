@@ -222,6 +222,9 @@ def _demo_proof_event_metadata(event: str) -> dict[str, object] | None:
             "release_commit_sha": "b" * 40,
             "demo_proof_lease": _demo_proof_lease_metadata(),
             "error_message": "QA demo recording failed before artifact evidence could be uploaded",
+            "failure_phase": "recording",
+            "observed_behavior": "App failed to load during QA demo recording",
+            "capture_targets": ["browser", "ios", "android"],
             "failure_evidence_unavailable_reason": "recording infrastructure failed before QA failure evidence upload",
         }
     if event == "RecordingFailedPreviewCleanupCompleted":
@@ -6259,6 +6262,96 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
             event_payload["event_metadata"] = event_metadata
 
             with pytest.raises(RuntimeError, match="RecordingFailed.failure_evidence_unavailable_reason"):
+                execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=replace(event_request, payload=event_payload),
+                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                )
+
+    def test_demo_proof_recording_failure_without_evidence_requires_qa_problem_details(self) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-a")
+            workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
+            request = _demo_proof_request(tenant=tenant)
+            execute_workflow_advance(
+                session=session,
+                settings=SimpleNamespace(),
+                workflow_type=workflow_type,
+                request=request,
+                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+            )
+
+            for event in (
+                "ProofLeaseAcquired",
+                "ReleaseRequested",
+                "ReleaseProvisioning",
+                "ReleaseLive",
+                "RouteReady",
+                "ServiceVerificationPassed",
+                "RecordingStarted",
+            ):
+                execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=_demo_proof_request_for_event(request, event),
+                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                )
+
+            event_request = _demo_proof_request_for_event(request, "RecordingFailed")
+            event_payload = dict(event_request.payload)
+            event_metadata = dict(event_payload["event_metadata"])
+            event_metadata.pop("observed_behavior")
+            event_payload["event_metadata"] = event_metadata
+
+            with pytest.raises(RuntimeError, match="RecordingFailed.observed_behavior"):
+                execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=replace(event_request, payload=event_payload),
+                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                )
+
+    def test_demo_proof_recording_failure_without_evidence_requires_all_demo_targets(self) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-a")
+            workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
+            request = _demo_proof_request(tenant=tenant)
+            execute_workflow_advance(
+                session=session,
+                settings=SimpleNamespace(),
+                workflow_type=workflow_type,
+                request=request,
+                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+            )
+
+            for event in (
+                "ProofLeaseAcquired",
+                "ReleaseRequested",
+                "ReleaseProvisioning",
+                "ReleaseLive",
+                "RouteReady",
+                "ServiceVerificationPassed",
+                "RecordingStarted",
+            ):
+                execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=_demo_proof_request_for_event(request, event),
+                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                )
+
+            event_request = _demo_proof_request_for_event(request, "RecordingFailed")
+            event_payload = dict(event_request.payload)
+            event_metadata = dict(event_payload["event_metadata"])
+            event_metadata["capture_targets"] = ["browser"]
+            event_payload["event_metadata"] = event_metadata
+
+            with pytest.raises(RuntimeError, match="android, ios"):
                 execute_workflow_advance(
                     session=session,
                     settings=SimpleNamespace(),
