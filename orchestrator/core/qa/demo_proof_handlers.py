@@ -152,6 +152,18 @@ _DEMO_PROOF_FAILURE_EVENTS: dict[str, tuple[str, str, str]] = {
 
 _DEMO_PROOF_BLOCKING_COMPLETION_EVENTS = frozenset({"FailurePreviewCleanupCompleted"})
 _PR_EVIDENCE_REQUEST_EVENTS = frozenset({"EvidenceUploaded", "FailureEvidenceUploaded"})
+_SUCCESS_TERMINAL_METADATA_REQUIREMENTS: dict[str, tuple[str, ...]] = {
+    "ReleaseLive": ("release_id",),
+    "EvidenceUploaded": ("artifact_urls",),
+    "PREvidenceAttached": ("pr_url",),
+    "PreviewCleanupCompleted": ("release_id",),
+}
+_FAILURE_TERMINAL_METADATA_REQUIREMENTS: dict[str, tuple[str, ...]] = {
+    "ReleaseLive": ("release_id",),
+    "FailureEvidenceUploaded": ("artifact_urls",),
+    "PRFailureEvidenceAttached": ("pr_url",),
+    "FailurePreviewCleanupCompleted": ("release_id",),
+}
 _RECORDING_EVENT_STATES = {
     "ServiceVerificationPassed": "waiting_for_recording",
     "RecordingStarted": "recording",
@@ -380,6 +392,55 @@ def _require_pr_url_for_pr_evidence_event(*, event: str, pr_url: str | None, pro
     raise RuntimeError(f"Demo proof scope {proof_scope_id} requires PR URL before PR evidence update.")
 
 
+def _metadata_by_event(description: dict[str, object]) -> dict[str, dict[str, object]]:
+    metadata: dict[str, dict[str, object]] = {}
+    for item in list(description.get(_DEMO_PROOF_EVENT_METADATA_DESCRIPTION_KEY) or []):
+        if not isinstance(item, dict):
+            continue
+        event = str(item.get("event") or "").strip()
+        raw_metadata = item.get("metadata")
+        if event and isinstance(raw_metadata, dict):
+            metadata[event] = dict(raw_metadata)
+    return metadata
+
+
+def _metadata_field_is_present(value: object) -> bool:
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, list):
+        return any(_metadata_field_is_present(item) for item in value)
+    return value is not None
+
+
+def _require_terminal_proof_metadata(
+    *,
+    event: str,
+    description: dict[str, object],
+    proof_scope_id: str,
+) -> None:
+    requirements = (
+        _SUCCESS_TERMINAL_METADATA_REQUIREMENTS
+        if event == "PreviewCleanupCompleted"
+        else _FAILURE_TERMINAL_METADATA_REQUIREMENTS
+        if event == "FailurePreviewCleanupCompleted"
+        else None
+    )
+    if requirements is None:
+        return
+    metadata = _metadata_by_event(description)
+    missing: list[str] = []
+    for required_event, required_fields in requirements.items():
+        event_metadata = metadata.get(required_event) or {}
+        for field in required_fields:
+            if not _metadata_field_is_present(event_metadata.get(field)):
+                missing.append(f"{required_event}.{field}")
+    if missing:
+        raise RuntimeError(
+            f"Demo proof scope {proof_scope_id} requires auditable metadata before terminal completion: "
+            + ", ".join(missing)
+        )
+
+
 def _observe_waiting_operation_event(
     *,
     session,  # noqa: ANN001
@@ -530,6 +591,7 @@ class DemoProofWorkflowAdvanceHandler:
                 run_id=run_id,
                 pr_url=pr_url,
                 required_capture_targets=required_capture_targets,
+                description=next_description,
             )
             _persist_demo_proof_state(
                 session=session,
@@ -572,6 +634,7 @@ class DemoProofWorkflowAdvanceHandler:
         run_id: str | None,
         pr_url: str | None,
         required_capture_targets: list[object],
+        description: dict[str, object],
     ) -> WorkflowAdvanceOutcome:
         observation_spec = _DEMO_PROOF_OBSERVATION_EVENTS.get(event)
         if observation_spec is not None:
@@ -619,6 +682,7 @@ class DemoProofWorkflowAdvanceHandler:
             raise RuntimeError(f"Unsupported demo proof workflow event: {event}")
         completed_operation_type, next_operation_type, reason = event_spec
         _require_pr_url_for_pr_evidence_event(event=event, pr_url=pr_url, proof_scope_id=proof_scope_id)
+        _require_terminal_proof_metadata(event=event, description=description, proof_scope_id=proof_scope_id)
         lifecycle.complete_waiting_operation_attempt(
             operation_type=completed_operation_type,
             summary=f"Applied {event} for demo proof scope {proof_scope_id}.",
