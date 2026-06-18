@@ -551,6 +551,7 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
             }
             assert [work_unit.unit_key for work_unit in work_units] == [
                 "preview_lease.acquire",
+                "preview_lease.capacity_preflight",
                 "preview_lease.enforce_single_active",
             ]
             assert [
@@ -5904,7 +5905,11 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 attempt_statuses_by_operation.setdefault(operation.operation_type, []).append(work_unit_attempt.status)
 
             assert unit_keys_by_operation == {
-                "preview_lease": ["preview_lease.acquire", "preview_lease.enforce_single_active"],
+                "preview_lease": [
+                    "preview_lease.acquire",
+                    "preview_lease.capacity_preflight",
+                    "preview_lease.enforce_single_active",
+                ],
                 "release": ["release.create_or_reuse", "release.wait_for_live"],
                 "recording": ["recording.android", "recording.browser", "recording.ios"],
                 "evidence_upload": ["evidence_upload.persist"],

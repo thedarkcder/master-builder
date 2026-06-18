@@ -220,6 +220,15 @@ class PrRemediationWorkflow:
 
 class DemoProofWorkflowDefinition:
     @workflow_work_unit(
+        key="preview_lease.capacity_preflight",
+        step_key=DEMO_PROOF_STEP_PREVIEW_LEASE,
+        label="Verify proof capacity",
+        kind=WorkflowWorkUnitKind.PURE_COMPUTE,
+        description=(
+            "Verify disk, provider, storage, and recorder capacity before release creation can be requested."
+        ),
+    )
+    @workflow_work_unit(
         key="preview_lease.enforce_single_active",
         step_key=DEMO_PROOF_STEP_PREVIEW_LEASE,
         label="Enforce single active preview lease",
