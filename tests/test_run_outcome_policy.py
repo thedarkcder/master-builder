@@ -297,10 +297,8 @@ def test_complete_runs_qa_demo_stage_before_finalization() -> None:
         "run:run-1:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
     )
     assert deps.execution.start_demo_proof_workflow_fn.call_args.kwargs["commit_sha"] == "b" * 40
-    assert [
-        call.kwargs["event"]
-        for call in deps.execution.advance_demo_proof_workflow_event_fn.call_args_list
-    ] == [
+    event_calls = deps.execution.advance_demo_proof_workflow_event_fn.call_args_list
+    assert [call.kwargs["event"] for call in event_calls] == [
         "ProofLeaseAcquired",
         "ReleaseRequested",
         "ReleaseProvisioning",
@@ -316,6 +314,19 @@ def test_complete_runs_qa_demo_stage_before_finalization() -> None:
         "PreviewCleanupRequested",
         "PreviewCleanupCompleted",
     ]
+    metadata_by_event = {
+        call.kwargs["event"]: call.kwargs.get("event_metadata")
+        for call in event_calls
+    }
+    assert metadata_by_event["ReleaseLive"]["release_id"] == "release-preview-1"
+    assert metadata_by_event["RecordingCompleted"]["recording_count"] == 3
+    assert metadata_by_event["EvidenceUploaded"]["artifact_urls"] == [
+        "https://cdn.example/qa-demo-1.webm",
+        "https://cdn.example/qa-demo-2.webm",
+        "https://cdn.example/qa-demo-3.webm",
+    ]
+    assert metadata_by_event["PREvidenceAttached"]["pr_url"] == workflow_result.pr_url
+    assert metadata_by_event["PreviewCleanupCompleted"]["release_id"] == "release-preview-1"
     deps.execution.mark_pull_request_ready_after_demo_proof_fn.assert_called_once()
     ready_kwargs = deps.execution.mark_pull_request_ready_after_demo_proof_fn.call_args.kwargs
     assert ready_kwargs["session"] is session
