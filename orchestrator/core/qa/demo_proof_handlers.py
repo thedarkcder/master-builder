@@ -148,6 +148,8 @@ _DEMO_PROOF_FAILURE_EVENTS: dict[str, tuple[str, str, str]] = {
     ),
 }
 
+_DEMO_PROOF_BLOCKING_COMPLETION_EVENTS = frozenset({"FailurePreviewCleanupCompleted"})
+
 
 def _required_payload_string(payload: dict[str, object], field_name: str) -> str:
     value = str(payload.get(field_name) or "").strip()
@@ -528,11 +530,16 @@ class DemoProofWorkflowAdvanceHandler:
                 proof_scope_id=proof_scope_id,
                 summary=f"Waiting for {next_operation_type} event for demo proof scope {proof_scope_id}.",
             )
+        elif event in _DEMO_PROOF_BLOCKING_COMPLETION_EVENTS:
+            message = f"Demo proof recorded failure evidence for proof scope {proof_scope_id}."
+            mark_workflow_failed(workflow=lifecycle.workflow, message=message)
+            session.flush()
         else:
             lifecycle.mark_completed_if_ready()
         return WorkflowAdvanceOutcome(
             handled=True,
             reason=reason,
+            failed=event in _DEMO_PROOF_BLOCKING_COMPLETION_EVENTS,
             extra={
                 "workflow_id": lifecycle.workflow.workflow_id,
                 "execution_id": lifecycle.workflow.execution_id,

@@ -617,7 +617,7 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 "preview_cleanup": "completed",
             }
 
-    def test_demo_proof_failure_evidence_events_complete_operations_in_order(self) -> None:
+    def test_demo_proof_failure_evidence_events_complete_operations_then_block_workflow(self) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
             workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
@@ -655,7 +655,14 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 )
 
             workflow = session.execute(select(WorkflowExecution)).scalar_one()
-            assert workflow.status == "completed"
+            assert workflow.status == "failed"
+            assert (
+                workflow.last_error
+                == "Demo proof recorded failure evidence for proof scope run-1-main-abcdef1."
+            )
+            description = json.loads(workflow.source_description or "{}")
+            assert description["demo_proof_state"] == "blocked"
+            assert description["demo_proof_events"][-1] == "FailurePreviewCleanupCompleted"
             operations = session.execute(
                 select(WorkflowOperation).where(WorkflowOperation.workflow_id == workflow.workflow_id)
             ).scalars().all()
