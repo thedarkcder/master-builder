@@ -26,6 +26,7 @@ def _build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("worker-child-runs", help="Run one child issue-execution job")
     subparsers.add_parser("worker-child-webhooks", help="Run one child webhook job")
     subparsers.add_parser("deployment-host-agent", help="Run the managed deployment host agent")
+    subparsers.add_parser("deployment-reconciler", help="Run the deployment release reconciliation loop")
     subparsers.add_parser("temporal-orchestrator", help="Run Temporal workflow orchestrator loop")
     subparsers.add_parser("discord-gateway", help="Run Discord gateway leader loop")
     subparsers.add_parser("discord-live-voice", help="Run Discord live voice leader loop")
@@ -324,6 +325,12 @@ def main(argv: Sequence[str] | None = None) -> int:
         from orchestrator.core.deployment_host_agent_runtime import run_deployment_host_agent
 
         run_deployment_host_agent()
+        return 0
+
+    if args.command == "deployment-reconciler":
+        from orchestrator.core.deployment_runtime import run_deployment_reconciler
+
+        run_deployment_reconciler()
         return 0
 
     if args.command == "temporal-orchestrator":

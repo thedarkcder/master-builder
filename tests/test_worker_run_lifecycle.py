@@ -23,6 +23,8 @@ from orchestrator.core.worker.run_lifecycle import (
 )
 from orchestrator.core.worker.stage_event_types import WorkerStageEvent
 from orchestrator.core.worker.stage_events import WorkerStageUpdate
+from orchestrator.core.workflow.operation_service import start_workflow_operation_attempt
+from orchestrator.core.workflow.operation_service import upsert_workflow_operation
 from orchestrator.core.workflow.runner import (
     DevResult,
     PmPlan,
@@ -32,6 +34,7 @@ from orchestrator.core.workflow.runner import (
 )
 from orchestrator.storage.db import create_session_factory, reset_db_engine_cache
 from orchestrator.storage.models import Project, Run, Tenant, WorkflowCheckpoint, WorkflowExecution
+from orchestrator.storage.models import WorkflowOperationAttempt
 from tests.test_support.db_harness import SqliteTemplateDbTestCase
 from tests.workflow_test_support import add_workflow_attempt
 
@@ -983,3 +986,63 @@ class WorkerRunLifecycleTests(SqliteTemplateDbTestCase):
             workflow = self._get_workflow(session, issue_key="TA-203")
             assert workflow is not None
             self.assertEqual(workflow.status, "queued")
+
+    def test_requeue_workflow_result_closes_active_operation_attempt_before_retry(self) -> None:
+        now = datetime.now(timezone.utc)
+        with self.session_factory() as session:
+            _, run, _ = add_workflow_attempt(
+                session,
+                run_id="run-active-operation-requeue",
+                tenant_id="tenant-a",
+                project_id="tenant-a-default",
+                issue_key="TA-204",
+                issue_summary="active operation requeue",
+                issue_description="desc",
+                repo_url="https://github.com/example/a",
+                workflow_status="running",
+                run_status="running",
+                plan=self._canonical_plan(),
+                created_at=now,
+                started_at=now,
+                last_heartbeat_at=now,
+                worker_service_instance_id="node-a:1234",
+            )
+            session.commit()
+            session.refresh(run)
+            self._claim_running_run(run)
+            operation = upsert_workflow_operation(
+                session,
+                workflow_id=run.workflow_id,
+                operation_type="run_attempt_execution",
+                idempotency_key=f"run:{run.run_id}:runtime_invocation",
+                run_id=run.run_id,
+            )
+            active_attempt = start_workflow_operation_attempt(session, operation=operation)
+            session.commit()
+
+            requeue_workflow_result_for_stale_snapshot(
+                session,
+                run=run,
+                workflow_result=WorkflowResult(
+                    outcome="requeue",
+                    plan=None,
+                    pr_url=None,
+                    summary=["retry after preview wait"],
+                    test_guidance=[],
+                    attempts=1,
+                    requeue_reason="retry after preview wait",
+                ),
+                stage_updates=[],
+                error="retry after preview wait",
+                expected_worker_service_instance_id="node-a:1234",
+                expected_claim_id="claim-1",
+                mark_stale_snapshot=False,
+            )
+            session.refresh(operation)
+            closed_attempt = session.get(WorkflowOperationAttempt, active_attempt.attempt_id)
+
+            assert closed_attempt is not None
+            self.assertEqual(closed_attempt.status, "failed")
+            self.assertEqual(closed_attempt.error_category, "run_attempt_reset")
+            retry_attempt = start_workflow_operation_attempt(session, operation=operation)
+            self.assertEqual(retry_attempt.attempt_number, active_attempt.attempt_number + 1)

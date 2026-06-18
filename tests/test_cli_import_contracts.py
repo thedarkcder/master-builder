@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import ast
 from pathlib import Path
+from unittest.mock import patch
+
+from orchestrator.cli import _build_parser, main
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -12,6 +15,7 @@ def test_cli_keeps_command_specific_runtimes_out_of_top_level_imports() -> None:
     forbidden_modules = {
         "orchestrator.core.discord.gateway_runtime",
         "orchestrator.core.discord.live_voice_gateway_runtime",
+        "orchestrator.core.deployment_runtime",
         "orchestrator.core.jira_project_reconciliation.scheduler",
         "orchestrator.core.knowledge.jira_sync_runtime",
         "orchestrator.core.knowledge.prewarm",
@@ -30,3 +34,17 @@ def test_cli_keeps_command_specific_runtimes_out_of_top_level_imports() -> None:
     ]
 
     assert violations == []
+
+
+def test_cli_exposes_deployment_reconciler_command() -> None:
+    parser = _build_parser()
+    choices = parser._subparsers._group_actions[0].choices
+
+    assert "deployment-reconciler" in choices
+
+
+def test_cli_dispatches_deployment_reconciler_command() -> None:
+    with patch("orchestrator.core.deployment_runtime.run_deployment_reconciler") as run_reconciler:
+        assert main(["deployment-reconciler"]) == 0
+
+    run_reconciler.assert_called_once_with()

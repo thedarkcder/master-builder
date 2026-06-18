@@ -59,6 +59,8 @@ class RunHybridWorkersScriptTests(unittest.TestCase):
         self.assertIn("MUX_ENABLED=false", script)
         self.assertIn("docker network inspect coolify", script)
         self.assertIn("docker network create coolify", script)
+        self.assertIn('echo "Local Coolify already ready."', script)
+        self.assertIn("if local_coolify_health_ready; then", script)
         self.assertIn(
             'docker compose --project-name "$LOCAL_COOLIFY_COMPOSE_PROJECT_NAME" --env-file .env -f docker-compose.yml -f docker-compose.prod.yml up -d',
             script,
@@ -71,6 +73,10 @@ class RunHybridWorkersScriptTests(unittest.TestCase):
         self.assertLess(script.rindex("ensure_local_coolify_env"), script.rindex("docker compose --project-name"))
         self.assertIn('  start_local_coolify_proxy\n  wait_for_local_coolify_ready', script)
         self.assertLess(script.rindex("start_local_coolify_if_configured"), script.rindex("run_compose_up"))
+        self.assertLess(
+            script.rindex("start_local_coolify_if_configured"),
+            script.rindex("stop_existing_app_services_before_migration"),
+        )
         self.assertLess(
             script.rindex('wait_for_local_database_ready "$DOCKER_WAIT_TIMEOUT_SECONDS"'),
             script.rindex("bootstrap_local_coolify_if_configured"),
@@ -154,6 +160,40 @@ class RunHybridWorkersScriptTests(unittest.TestCase):
             script.index('"${VENV_DIR}/bin/python" -m orchestrator worker-runs'),
         )
 
+    def test_script_provisions_playwright_before_starting_local_qa_demo_worker(self) -> None:
+        script_path = Path("scripts/run_hybrid_workers.sh")
+        script = script_path.read_text(encoding="utf-8")
+
+        self.assertIn('HYBRID_NODE_TOOLS_DIR="${HYBRID_CACHE_DIR}/node-tools"', script)
+        self.assertIn('PLAYWRIGHT_NPM_VERSION="${PLAYWRIGHT_NPM_VERSION:-latest}"', script)
+        self.assertIn("node_can_require_playwright_from()", script)
+        self.assertIn("ensure_local_playwright_recorder_dependency()", script)
+        self.assertIn("npm --prefix \"$HYBRID_NODE_TOOLS_DIR\" install --no-audit --no-fund", script)
+        self.assertIn("playwright install chromium", script)
+        self.assertIn('export ORCHESTRATOR_QA_DEMO_PLAYWRIGHT_MODULE_DIR="$module_dir"', script)
+        self.assertIn('export PLAYWRIGHT_BROWSERS_PATH="${HYBRID_NODE_TOOLS_DIR}/ms-playwright"', script)
+        self.assertIn("node is required for QA demo browser recording.", script)
+        self.assertLess(
+            script.index("ensure_local_playwright_recorder_dependency"),
+            script.index('"${VENV_DIR}/bin/python" -m orchestrator worker-runs'),
+        )
+
+    def test_script_exports_android_aapt_for_local_android_qa_demo_worker(self) -> None:
+        script_path = Path("scripts/run_hybrid_workers.sh")
+        script = script_path.read_text(encoding="utf-8")
+
+        self.assertIn("configured_android_aapt()", script)
+        self.assertIn("configure_android_qa_demo_tools()", script)
+        self.assertIn('ANDROID_HOME or ANDROID_SDK_ROOT is required for Android QA demo recording.', script)
+        self.assertIn('find "${sdk_root}/build-tools" -mindepth 2 -maxdepth 2 -type f -name aapt', script)
+        self.assertIn('export QA_DEMO_ANDROID_AAPT', script)
+        self.assertIn("QA_DEMO_ANDROID_AAPT=\"$(configured_android_aapt)\"", script)
+        self.assertIn("configure_android_qa_demo_tools", script)
+        self.assertLess(
+            script.index("configure_android_qa_demo_tools"),
+            script.index('"${VENV_DIR}/bin/python" -m orchestrator worker-runs'),
+        )
+
     def test_script_forces_container_database_url_for_compose_services(self) -> None:
         script_path = Path("scripts/run_hybrid_workers.sh")
         script = script_path.read_text(encoding="utf-8")
@@ -167,15 +207,24 @@ class RunHybridWorkersScriptTests(unittest.TestCase):
             script,
         )
 
-    def test_script_includes_voice_workers_in_default_hybrid_startup(self) -> None:
+    def test_script_excludes_voice_workers_from_default_hybrid_startup(self) -> None:
         script_path = Path("scripts/run_hybrid_workers.sh")
         script = script_path.read_text(encoding="utf-8")
 
         self.assertIn("DOCKER_BASE_SERVICES=(", script)
         self.assertIn("DOCKER_VOICE_SERVICES=(", script)
-        self.assertIn('DOCKER_RUNTIME_SERVICES=("${DOCKER_BASE_RUNTIME_SERVICES[@]}" "${DOCKER_VOICE_SERVICES[@]}")', script)
-        self.assertIn('DOCKER_APP_SERVICES=("${DOCKER_BASE_APP_SERVICES[@]}" "${DOCKER_VOICE_SERVICES[@]}")', script)
-        self.assertNotIn("HYBRID_ENABLE_VOICE", script)
+        self.assertIn('HYBRID_ENABLE_VOICE="${HYBRID_ENABLE_VOICE:-false}"', script)
+        self.assertIn('HYBRID_ENABLE_VOICE must be one of: true, false.', script)
+        self.assertIn('DOCKER_RUNTIME_SERVICES=("${DOCKER_BASE_RUNTIME_SERVICES[@]}")', script)
+        self.assertIn('DOCKER_APP_SERVICES=("${DOCKER_BASE_APP_SERVICES[@]}")', script)
+        self.assertIn('if [[ "$HYBRID_ENABLE_VOICE" == "true" ]]; then', script)
+        self.assertIn('DOCKER_STOP_BEFORE_MIGRATION_SERVICES+=("${DOCKER_VOICE_SERVICES[@]}")', script)
+        self.assertIn('DOCKER_RUNTIME_SERVICES+=("${DOCKER_VOICE_SERVICES[@]}")', script)
+        self.assertIn('DOCKER_APP_SERVICES+=("${DOCKER_VOICE_SERVICES[@]}")', script)
+        self.assertLess(
+            script.index('DOCKER_RUNTIME_SERVICES=("${DOCKER_BASE_RUNTIME_SERVICES[@]}")'),
+            script.index('if [[ "$HYBRID_ENABLE_VOICE" == "true" ]]; then'),
+        )
 
     def test_script_skips_local_editable_install_when_dependency_inputs_are_unchanged(self) -> None:
         script_path = Path("scripts/run_hybrid_workers.sh")

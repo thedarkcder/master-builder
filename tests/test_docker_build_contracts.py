@@ -200,6 +200,28 @@ class DockerBuildContractTests(unittest.TestCase):
         self.assertIn("PLAYWRIGHT_DOWNLOAD_CONNECTION_TIMEOUT=120000", common_base)
         self.assertIn('"${VIRTUAL_ENV}/bin/pip" install --retries 10 --timeout 120', common_base)
 
+    def test_local_compose_api_does_not_repeat_migrations_after_migrate_service(self) -> None:
+        compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+        api_block = _compose_service_block(compose, "api")
+
+        self.assertIn("migrate:", api_block)
+        self.assertIn("condition: service_completed_successfully", api_block)
+        self.assertIn(
+            "ORCHESTRATOR_AUTO_MIGRATE_ON_STARTUP: ${ORCHESTRATOR_AUTO_MIGRATE_ON_STARTUP:-false}",
+            api_block,
+        )
+
+    def test_local_compose_api_defaults_to_single_worker_for_fast_dev_health(self) -> None:
+        compose = (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
+        prod_compose = (ROOT / "deploy" / "hetzner" / "docker-compose.prod.yml").read_text(encoding="utf-8")
+        api_block = _compose_service_block(compose, "api")
+        prod_api_block = _compose_service_block(prod_compose, "api")
+
+        self.assertIn("ORCHESTRATOR_API_WORKERS: ${ORCHESTRATOR_API_WORKERS:-1}", api_block)
+        self.assertIn('uvicorn orchestrator.api.main:app --host 0.0.0.0 --port 4000 --workers "${ORCHESTRATOR_API_WORKERS:-1}"', api_block)
+        self.assertIn("ORCHESTRATOR_API_WORKERS: ${ORCHESTRATOR_API_WORKERS:-4}", prod_api_block)
+        self.assertIn('uvicorn orchestrator.api.main:app --host 0.0.0.0 --port 4000 --workers "${ORCHESTRATOR_API_WORKERS:-4}"', prod_api_block)
+
     def test_dockerignore_excludes_local_workdirs_from_build_context(self) -> None:
         dockerignore = (ROOT / ".dockerignore").read_text(encoding="utf-8").splitlines()
         self.assertIn(

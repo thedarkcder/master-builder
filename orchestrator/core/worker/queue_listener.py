@@ -5,6 +5,12 @@ import contextlib
 import threading
 
 RECONNECT_DELAY_SECONDS = 2.0
+MAX_RECONNECT_DELAY_SECONDS = 8.0
+
+
+def _reconnect_delay_seconds(*, attempt: int) -> float:
+    bounded_attempt = max(1, int(attempt))
+    return min(MAX_RECONNECT_DELAY_SECONDS, RECONNECT_DELAY_SECONDS * (2 ** (bounded_attempt - 1)))
 
 
 class RunQueueNotificationBridge:
@@ -52,14 +58,16 @@ class RunQueueNotificationBridge:
             self._thread.join(timeout=2.0)
 
     def _run(self) -> None:
+        reconnect_attempts = 0
         while not self._stop_event.is_set():
-            self._run_once()
+            succeeded = self._run_once(reconnect_attempt=reconnect_attempts + 1)
+            reconnect_attempts = 0 if succeeded else reconnect_attempts + 1
 
-    def _run_once(self) -> None:
+    def _run_once(self, *, reconnect_attempt: int = 1) -> bool:
         if self._psycopg is None:
             self._logger.error("worker_queue_listener_unavailable reason=missing_psycopg")
             self._loop.call_soon_threadsafe(self._wake_event.set)
-            return
+            return True
         try:
             with self._psycopg.connect(self._postgres_dsn, autocommit=True) as conn:
                 with self._conn_lock:
@@ -71,12 +79,13 @@ class RunQueueNotificationBridge:
                     if self._stop_event.is_set():
                         break
                     self._loop.call_soon_threadsafe(self._wake_event.set)
+            return True
         except Exception as exc:
             if not self._stop_event.is_set():
                 self._logger.exception("worker_queue_listener_failed error=%s", exc)
-                self._loop.call_soon_threadsafe(self._wake_event.set)
                 # Dependency reconnect backoff, not workflow synchronization.
-                self._stop_event.wait(RECONNECT_DELAY_SECONDS)
+                self._stop_event.wait(_reconnect_delay_seconds(attempt=reconnect_attempt))
+            return False
         finally:
             with self._conn_lock:
                 self._conn = None

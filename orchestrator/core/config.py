@@ -113,6 +113,7 @@ class Settings(BaseSettings):
     deployment_reconcile_poll_seconds: int = 30
     deployment_reconcile_batch_size: int = 25
     deployment_release_stale_timeout_seconds: int = 900
+    run_preview_release_ttl_seconds: int = 86400
     deployment_host_stale_timeout_seconds: int = 180
     deployment_host_agent_api_base_url: str = ""
     deployment_host_agent_bootstrap_token: str = ""
