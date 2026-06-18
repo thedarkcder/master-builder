@@ -469,6 +469,11 @@ def _require_terminal_proof_metadata(
                 f"Demo proof scope {proof_scope_id} requires at least {len(required_targets)} playable artifact URL(s) "
                 f"for required capture target(s), got {len(artifact_urls)}."
             )
+        if len(set(artifact_urls)) < len(required_targets):
+            raise RuntimeError(
+                f"Demo proof scope {proof_scope_id} requires at least {len(required_targets)} "
+                "distinct playable artifact URL(s) for required capture target(s)."
+            )
 
 
 def _observe_waiting_operation_event(
