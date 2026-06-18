@@ -160,6 +160,7 @@ def create_run_preview_deployment(
         project_id=project.project_id,
         branch_run_ids=branch_run_ids,
         reason="preview_replaced",
+        proof_scope_id=normalized_proof_scope_id,
     )
 
     app = _project_level_deployment_app(session=session, tenant_id=tenant.tenant_id, project_id=project.project_id)
@@ -488,6 +489,23 @@ def _raise_if_preview_release_has_conflicting_demo_proof_lease(
     )
 
 
+def _raise_if_preview_release_is_owned_by_another_demo_proof_scope(
+    *,
+    release: ProjectDeploymentRelease,
+    proof_scope_id: str | None,
+) -> None:
+    metadata = _demo_proof_lease_metadata(release)
+    if metadata.get("state") != _DEMO_PROOF_LEASE_ACTIVE_STATE:
+        return
+    existing_scope = metadata.get("proof_scope_id")
+    if proof_scope_id is not None and existing_scope == proof_scope_id:
+        return
+    raise RuntimeError(
+        "Run preview release is leased to another active demo proof scope and cannot be replaced: "
+        f"{release.release_id}: existing={existing_scope or '<missing>'}: requested={proof_scope_id or '<unscoped>'}"
+    )
+
+
 def _normalize_optional_string(value: object) -> str | None:
     normalized = str(value or "").strip()
     return normalized or None
@@ -546,6 +564,7 @@ def _destroy_active_preview_releases_for_branch(
     project_id: str,
     branch_run_ids: tuple[str, ...],
     reason: str,
+    proof_scope_id: str | None = None,
 ) -> PreviewCleanupResult:
     if not branch_run_ids:
         return PreviewCleanupResult(destroyed_release_ids=())
@@ -565,6 +584,10 @@ def _destroy_active_preview_releases_for_branch(
         status = str(release.status or "").strip()
         if status not in _REUSABLE_PREVIEW_RELEASE_STATUSES and not _preview_release_has_provider_resource(release):
             continue
+        _raise_if_preview_release_is_owned_by_another_demo_proof_scope(
+            release=release,
+            proof_scope_id=proof_scope_id,
+        )
         destroyed_release = destroy_project_deployment_preview_release(
             session=session,
             tenant_id=tenant_id,
