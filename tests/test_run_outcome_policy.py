@@ -327,6 +327,7 @@ def test_complete_runs_qa_demo_stage_before_finalization() -> None:
     ]
     assert metadata_by_event["PREvidenceAttached"]["pr_url"] == workflow_result.pr_url
     assert metadata_by_event["PreviewCleanupCompleted"]["release_id"] == "release-preview-1"
+    assert metadata_by_event["PreviewCleanupCompleted"]["cleanup_status"] == "completed"
     deps.execution.mark_pull_request_ready_after_demo_proof_fn.assert_called_once()
     ready_kwargs = deps.execution.mark_pull_request_ready_after_demo_proof_fn.call_args.kwargs
     assert ready_kwargs["session"] is session

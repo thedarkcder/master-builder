@@ -1334,6 +1334,9 @@ def _qa_demo_proof_event_metadata(*, proof_context, event: str) -> dict[str, obj
                 "release_commit_sha": str(getattr(preview_release, "commit_sha", "") or "").strip(),
             }
         )
+        if event in {"PreviewCleanupCompleted", "FailurePreviewCleanupCompleted"}:
+            metadata["cleanup_status"] = "completed"
+            metadata["cleanup_mode"] = "destroy_or_ttl"
     qa_result = getattr(proof_context, "qa_result", None)
     if event in {"RecordingCompleted", "EvidenceUploadStarted", "EvidenceUploaded"} and qa_result is not None:
         recordings = list(getattr(qa_result, "recordings", ()) or ())
