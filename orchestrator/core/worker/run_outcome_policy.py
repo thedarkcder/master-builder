@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import replace
 from types import SimpleNamespace
@@ -588,7 +589,7 @@ class RunOutcomePolicy:
                         proof_context=proof_context,
                         events=_QA_DEMO_FAILURE_PROOF_EVENTS_BEFORE_PR,
                     )
-                    update_pull_request_with_demo_failure_evidence(
+                    updated_pr_body = update_pull_request_with_demo_failure_evidence(
                         session=self._session,
                         settings=self._settings,
                         tenant=prepared.tenant,
@@ -597,6 +598,8 @@ class RunOutcomePolicy:
                         workflow_result=workflow_result,
                         qa_result=qa_result,
                     )
+                    proof_context.pr_failure_evidence_artifact_urls = _qa_failure_evidence_artifact_urls(qa_result)
+                    proof_context.pr_failure_evidence_body_sha256 = _sha256_text(updated_pr_body)
                     self._advance_qa_demo_proof_events(
                         proof_context=proof_context,
                         events=("PRFailureEvidenceAttachStarted", "PRFailureEvidenceAttached"),
@@ -725,7 +728,7 @@ class RunOutcomePolicy:
                 message=message,
             )
         try:
-            update_pull_request_with_demo_evidence(
+            updated_pr_body = update_pull_request_with_demo_evidence(
                 session=self._session,
                 settings=self._settings,
                 tenant=prepared.tenant,
@@ -736,6 +739,8 @@ class RunOutcomePolicy:
                 required_capture_targets=required_capture_targets(plan),
                 required_recording_counts=required_recording_counts_by_target(plan),
             )
+            proof_context.pr_evidence_artifact_urls = _qa_recording_artifact_urls(qa_result)
+            proof_context.pr_evidence_body_sha256 = _sha256_text(updated_pr_body)
         except Exception as exc:  # noqa: BLE001
             message = f"QA demo evidence PR update failed: {type(exc).__name__}: {exc}"
             try:
@@ -1245,6 +1250,26 @@ def _qa_failure_evidence_diagnostics(result: QaResult) -> str:
     return " | ".join(diagnostics)
 
 
+def _sha256_text(value: object) -> str:
+    return hashlib.sha256(str(value or "").encode("utf-8")).hexdigest()
+
+
+def _qa_recording_artifact_urls(result: QaResult) -> list[str]:
+    return [
+        str(getattr(recording, "artifact_url", "") or "").strip()
+        for recording in list(result.recordings or [])
+        if str(getattr(recording, "artifact_url", "") or "").strip()
+    ]
+
+
+def _qa_failure_evidence_artifact_urls(result: QaResult) -> list[str]:
+    return [
+        str(getattr(item, "artifact_url", "") or "").strip()
+        for item in list(result.failure_evidence or [])
+        if str(getattr(item, "artifact_url", "") or "").strip()
+    ]
+
+
 def _qa_demo_proof_context(*, prepared, qa_result: QaResult, preview_release, plan, workflow_result):  # noqa: ANN001
     commit_sha = _qa_demo_proof_commit_sha(qa_result)
     run_id = str(getattr(prepared.run, "run_id", "") or "").strip()
@@ -1440,6 +1465,14 @@ def _qa_demo_proof_event_metadata(*, proof_context, event: str) -> dict[str, obj
         "PRFailureEvidenceAttachFailed",
     }:
         metadata["pr_url"] = str(getattr(proof_context, "pr_url", "") or "").strip()
+        if event == "PREvidenceAttached":
+            metadata["artifact_urls"] = list(getattr(proof_context, "pr_evidence_artifact_urls", ()) or ())
+            metadata["pr_body_sha256"] = str(getattr(proof_context, "pr_evidence_body_sha256", "") or "").strip()
+        if event == "PRFailureEvidenceAttached":
+            metadata["artifact_urls"] = list(getattr(proof_context, "pr_failure_evidence_artifact_urls", ()) or ())
+            metadata["pr_body_sha256"] = str(
+                getattr(proof_context, "pr_failure_evidence_body_sha256", "") or ""
+            ).strip()
     compacted: dict[str, object] = {}
     for key, value in metadata.items():
         if value == "" or value == [] or value == {}:

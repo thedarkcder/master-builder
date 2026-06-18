@@ -164,13 +164,13 @@ _PR_EVIDENCE_REQUEST_EVENTS = frozenset({"EvidenceUploaded", "FailureEvidenceUpl
 _SUCCESS_TERMINAL_METADATA_REQUIREMENTS: dict[str, tuple[str, ...]] = {
     "ReleaseLive": ("release_id", "release_commit_sha", "demo_proof_lease"),
     "EvidenceUploaded": ("artifact_urls", "recordings"),
-    "PREvidenceAttached": ("pr_url",),
+    "PREvidenceAttached": ("pr_url", "pr_body_sha256"),
     "PreviewCleanupCompleted": ("release_id", "cleanup_status", "cleanup_mode", "cleanup_evidence"),
 }
 _FAILURE_TERMINAL_METADATA_REQUIREMENTS: dict[str, tuple[str, ...]] = {
     "ReleaseLive": ("release_id", "release_commit_sha", "demo_proof_lease"),
     "FailureEvidenceUploaded": ("artifact_urls", "capture_targets", "failure_evidence"),
-    "PRFailureEvidenceAttached": ("pr_url",),
+    "PRFailureEvidenceAttached": ("pr_url", "pr_body_sha256"),
     "FailurePreviewCleanupCompleted": ("release_id", "cleanup_status", "cleanup_mode", "cleanup_evidence"),
 }
 _RECORDING_EVENT_STATES = {
@@ -622,6 +622,29 @@ def _require_cleanup_release_identity(
     )
 
 
+def _require_pr_evidence_matches_uploaded_artifacts(
+    *,
+    uploaded_metadata: dict[str, object],
+    pr_metadata: dict[str, object],
+    pr_event: str,
+    proof_scope_id: str,
+) -> None:
+    uploaded_urls = set(_metadata_string_list(uploaded_metadata.get("artifact_urls")))
+    attached_urls = set(_metadata_string_list(pr_metadata.get("artifact_urls")))
+    missing_urls = sorted(uploaded_urls - attached_urls)
+    extra_urls = sorted(attached_urls - uploaded_urls)
+    if missing_urls:
+        raise RuntimeError(
+            f"Demo proof scope {proof_scope_id} PR evidence metadata is missing uploaded artifact URL(s): "
+            + ", ".join(missing_urls)
+        )
+    if extra_urls:
+        raise RuntimeError(
+            f"Demo proof scope {proof_scope_id} {pr_event}.artifact_urls contains URL(s) that were not uploaded: "
+            + ", ".join(extra_urls)
+        )
+
+
 def _require_terminal_proof_metadata(
     *,
     event: str,
@@ -706,6 +729,12 @@ def _require_terminal_proof_metadata(
                 f"Demo proof scope {proof_scope_id} requires distinct playable artifact URL mappings for "
                 "required capture target(s)."
             )
+        _require_pr_evidence_matches_uploaded_artifacts(
+            uploaded_metadata=evidence_metadata,
+            pr_metadata=metadata.get("PREvidenceAttached", {}),
+            pr_event="PREvidenceAttached",
+            proof_scope_id=proof_scope_id,
+        )
         release_commit_sha = _metadata_string(release_metadata.get("release_commit_sha"))
         mismatched_commit_targets = sorted(
             target
@@ -741,6 +770,12 @@ def _require_terminal_proof_metadata(
                 "ReleaseLive.release_commit_sha for capture target(s): "
                 + ", ".join(mismatched_commit_targets)
             )
+        _require_pr_evidence_matches_uploaded_artifacts(
+            uploaded_metadata=failure_metadata,
+            pr_metadata=metadata.get("PRFailureEvidenceAttached", {}),
+            pr_event="PRFailureEvidenceAttached",
+            proof_scope_id=proof_scope_id,
+        )
 
 
 def _observe_waiting_operation_event(
