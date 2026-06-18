@@ -285,6 +285,7 @@ def test_complete_runs_qa_demo_stage_before_finalization() -> None:
 
     assert result is prepared.run
     assert create_preview_mock.call_args.kwargs["demo_proof_lease_required"] is True
+    assert callable(create_preview_mock.call_args.kwargs["demo_proof_lease_acquired_fn"])
     deps.execution.start_demo_proof_workflow_fn.assert_called_once()
     assert deps.execution.start_demo_proof_workflow_fn.call_args.kwargs["proof_scope_id"] == (
         "run:run-1:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"

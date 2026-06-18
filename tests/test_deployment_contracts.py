@@ -924,6 +924,37 @@ class DeploymentContractTests(unittest.TestCase):
         self.assertEqual(payload.delivery_metadata["demo_proof_lease"]["commit_sha"], "b" * 40)
         self.assertEqual(payload.delivery_metadata["demo_proof_lease"]["state"], "active")
 
+    def test_run_preview_generation_signals_demo_proof_lease_before_release_create(self) -> None:
+        now = datetime.now(timezone.utc)
+        order: list[str] = []
+        with self.session_factory() as session:
+            tenant, project, run = self._seed_preview_run(session=session, now=now, commit_sha="b" * 40)
+            session.commit()
+
+            def fake_release_create(**_kwargs):  # noqa: ANN202
+                order.append("release_create")
+                return SimpleNamespace(release_id="release-proof-new")
+
+            def fake_lease_acquired(*, proof_scope_id: str, commit_sha: str) -> None:
+                order.append(f"lease:{proof_scope_id}:{commit_sha}")
+
+            with patch(
+                "orchestrator.core.deployment_previews.create_project_deployment_release",
+                side_effect=fake_release_create,
+            ):
+                create_run_preview_deployment(
+                    session=session,
+                    tenant=tenant,
+                    project=project,
+                    run=run,
+                    settings=SimpleNamespace(project_repo_checkout_base_dir="/tmp/unused", secrets_encryption_key="unused"),
+                    pr_url="https://github.com/example/repo/pull/12",
+                    demo_proof_lease_required=True,
+                    demo_proof_lease_acquired_fn=fake_lease_acquired,
+                )
+
+        self.assertEqual(order, ["lease:run:run-1:" + "b" * 40 + ":" + "b" * 40, "release_create"])
+
     def test_run_preview_generation_replaces_conflicting_demo_proof_lease_before_create(self) -> None:
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
