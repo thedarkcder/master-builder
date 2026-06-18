@@ -408,8 +408,8 @@ def _required_trigger_mode(payload: dict[str, object]) -> str:
 
 def _requested_release_id(payload: dict[str, object], *, trigger_mode: str) -> str | None:
     release_id = str(payload.get("release_id") or "").strip()
-    if trigger_mode == "from_release" and not release_id:
-        raise RuntimeError("Demo proof from_release requires release_id")
+    if trigger_mode in {"from_release", "cleanup_only"} and not release_id:
+        raise RuntimeError(f"Demo proof {trigger_mode} requires release_id")
     if release_id and not re.fullmatch(r"[A-Za-z0-9._:-]+", release_id):
         raise RuntimeError("Demo proof release_id contains unsupported characters")
     return release_id or None
@@ -1236,6 +1236,32 @@ def _require_cleanup_release_identity(
     )
 
 
+def _require_cleanup_only_requested_release_identity(
+    *,
+    description: dict[str, object],
+    cleanup_metadata: dict[str, object],
+    event: str,
+    proof_scope_id: str,
+) -> None:
+    requested_release_id = _metadata_string(description.get("requested_release_id"))
+    if not requested_release_id:
+        raise RuntimeError(f"Demo proof scope {proof_scope_id} cleanup_only requires release_id")
+    cleanup_release_id = _metadata_string(cleanup_metadata.get("release_id"))
+    cleanup_evidence = cleanup_metadata.get("cleanup_evidence")
+    cleanup_evidence_release_id = (
+        _metadata_string(cleanup_evidence.get("release_id"))
+        if isinstance(cleanup_evidence, dict)
+        else ""
+    )
+    if cleanup_release_id == requested_release_id and cleanup_evidence_release_id == requested_release_id:
+        return
+    raise RuntimeError(
+        f"Demo proof scope {proof_scope_id} cleanup_only requested release_id {requested_release_id}, "
+        f"but {event}.release_id={cleanup_release_id or '<missing>'} and "
+        f"{event}.cleanup_evidence.release_id={cleanup_evidence_release_id or '<missing>'}"
+    )
+
+
 def _require_pr_evidence_matches_uploaded_artifacts(
     *,
     uploaded_metadata: dict[str, object],
@@ -1769,6 +1795,12 @@ def _require_terminal_proof_metadata(
         )
         _require_cleanup_release_identity(
             release_metadata=cleanup_metadata,
+            cleanup_metadata=cleanup_metadata,
+            event=event,
+            proof_scope_id=proof_scope_id,
+        )
+        _require_cleanup_only_requested_release_identity(
+            description=description,
             cleanup_metadata=cleanup_metadata,
             event=event,
             proof_scope_id=proof_scope_id,
