@@ -210,6 +210,27 @@ def _empty_release_context_sha256() -> str:
     )
 
 
+def _qa_failure_evidence(*, capture_target: str = "browser", index: int = 1) -> QaFailureEvidence:
+    suffix = "webm" if capture_target == "browser" else "mp4"
+    object_key = f"tenant-1/project-1/run-1/{capture_target}-failure-{index}.{suffix}"
+    capture_reference = {
+        "browser": "https://preview.example",
+        "ios": "ios-simulator://configured",
+        "android": "android-emulator://configured",
+    }.get(capture_target, "desktop://configured")
+    return QaFailureEvidence(
+        name=f"{capture_target} app load failure",
+        artifact_url=f"https://cdn.example/qa-demos/{object_key}",
+        object_key=object_key,
+        capture_target=capture_target,  # type: ignore[arg-type]
+        capture_reference=capture_reference,
+        error_message=f"{capture_target} app did not load",
+        content_sha256=_sha256(60 + index),
+        release_commit_sha=_RELEASE_COMMIT_SHA,
+        release_context_sha256=_release_context_sha256(),
+    )
+
+
 def _preview_release(*, service_urls: list[object] | None = None, commit_sha: str = _RELEASE_COMMIT_SHA) -> SimpleNamespace:
     return SimpleNamespace(commit_sha=commit_sha, service_urls=list(service_urls or []))
 
@@ -5281,6 +5302,36 @@ def test_update_pull_request_with_demo_failure_evidence_reports_app_load_crash_w
     assert "QA Demo Ready was not visible" in updated_body
     assert "process is not defined" in updated_body
     assert github_client.ready_calls == []
+
+
+def test_update_pull_request_with_demo_failure_evidence_rejects_missing_required_capture_target_before_url_probe() -> None:
+    with (
+        patch("orchestrator.core.qa.demo_service.github_client_from_tenant_config") as github_client_mock,
+        patch("orchestrator.core.qa.demo_service._default_artifact_url_probe") as url_probe,
+    ):
+        try:
+            update_pull_request_with_demo_failure_evidence(
+                session=SimpleNamespace(),
+                settings=_qa_artifact_settings(),
+                tenant=SimpleNamespace(tenant_id="tenant-1", github_config={}),
+                project=SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo"),
+                run=SimpleNamespace(run_id="run-1"),
+                workflow_result=SimpleNamespace(pr_url="https://github.com/acme/repo/pull/8"),
+                qa_result=QaResult(
+                    summary=["QA demo recording failed"],
+                    scenarios=[],
+                    failure_evidence=[_qa_failure_evidence(capture_target="browser")],
+                    outcome="blocked",
+                ),
+                required_capture_targets=("browser", "ios", "android"),
+            )
+        except RuntimeError as exc:
+            assert "QA demo failure evidence is missing required capture target(s): ios, android" in str(exc)
+        else:  # pragma: no cover
+            raise AssertionError("expected missing required failure evidence target to block PR evidence update")
+
+    url_probe.assert_not_called()
+    github_client_mock.assert_not_called()
 
 
 def test_update_pull_request_with_demo_evidence_verifies_pr_readback_after_update() -> None:

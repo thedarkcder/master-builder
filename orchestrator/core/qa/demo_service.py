@@ -1664,6 +1664,26 @@ def _validate_recordings_cover_required_counts(
         )
 
 
+def _validate_failure_evidence_cover_required_targets(
+    *,
+    failure_evidence: list[QaFailureEvidence],
+    required_capture_targets: list[str] | tuple[str, ...] | None,
+) -> None:
+    required_targets = _normalize_required_capture_targets(required_capture_targets)
+    if not required_targets:
+        return
+    evidence_targets = {
+        str(item.capture_target or "").strip()
+        for item in failure_evidence
+        if str(item.capture_target or "").strip()
+    }
+    missing_targets = [target for target in required_targets if target not in evidence_targets]
+    if missing_targets:
+        raise RuntimeError(
+            "QA demo failure evidence is missing required capture target(s): " + ", ".join(missing_targets)
+        )
+
+
 def _upload_failure_evidence(
     *,
     storage: DemoArtifactStorageConfig,
@@ -2972,11 +2992,16 @@ def update_pull_request_with_demo_failure_evidence(
     run,
     workflow_result,
     qa_result: QaResult,
+    required_capture_targets: list[str] | tuple[str, ...] | None = None,
 ) -> str:
     if not qa_result.failure_evidence:
         raise RuntimeError("QA demo failure evidence PR update requires at least one failure artifact")
     _validate_demo_failure_evidence_metadata(qa_result.failure_evidence)
     _validate_distinct_demo_failure_evidence_artifacts(qa_result.failure_evidence)
+    _validate_failure_evidence_cover_required_targets(
+        failure_evidence=qa_result.failure_evidence,
+        required_capture_targets=required_capture_targets,
+    )
     storage = storage_config_from_settings(settings)
     _validate_failure_evidence_use_configured_storage(
         failure_evidence=qa_result.failure_evidence,
