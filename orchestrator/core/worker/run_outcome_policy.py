@@ -597,6 +597,7 @@ class RunOutcomePolicy:
                         run=prepared.run,
                         workflow_result=workflow_result,
                         qa_result=qa_result,
+                        required_capture_targets=required_capture_targets(plan),
                     )
                     proof_context.pr_failure_evidence_artifact_urls = _qa_failure_evidence_artifact_urls(qa_result)
                     proof_context.pr_failure_evidence_body_sha256 = _sha256_text(updated_pr_body)

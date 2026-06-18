@@ -1746,6 +1746,7 @@ def test_complete_records_qa_failure_evidence_pr_attach_failure_before_blocking_
         )
 
     update_failure_pr_mock.assert_called_once()
+    assert update_failure_pr_mock.call_args.kwargs["required_capture_targets"] == ("browser",)
     update_pr_mock.assert_not_called()
     destroy_mock.assert_called_once()
     assert destroy_mock.call_args.kwargs["reason"] == "qa_demo_failed"
@@ -1843,6 +1844,7 @@ def test_complete_attaches_qa_failure_evidence_to_pr_before_blocking_ready_revie
     assert checkpoint.qa_result.failure_evidence == qa_result.failure_evidence
     update_failure_pr_mock.assert_called_once()
     assert update_failure_pr_mock.call_args.kwargs["qa_result"] == qa_result
+    assert update_failure_pr_mock.call_args.kwargs["required_capture_targets"] == ("browser",)
     update_pr_mock.assert_not_called()
     destroy_mock.assert_called_once()
     assert destroy_mock.call_args.kwargs["reason"] == "qa_demo_failed"
