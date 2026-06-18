@@ -369,6 +369,16 @@ def _start_demo_proof_workflow(
     run_id = str(payload.input.get("run_id") or "").strip() or None
     release_id = str(payload.input.get("release_id") or "").strip() or None
     pr_url = str(payload.input.get("pr_url") or "").strip() or None
+    if trigger_mode == "from_pr" and run_id is not None:
+        raise HTTPException(
+            status_code=422,
+            detail="Demo proof from_pr must not include run_id",
+        )
+    if trigger_mode == "from_pr" and release_id is not None:
+        raise HTTPException(
+            status_code=422,
+            detail="Demo proof from_pr must not include release_id",
+        )
     required_capture_targets = payload.input.get("required_capture_targets")
     if required_capture_targets is not None and not isinstance(required_capture_targets, list):
         raise HTTPException(
