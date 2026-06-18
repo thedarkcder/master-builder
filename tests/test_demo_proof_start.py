@@ -39,10 +39,12 @@ def _now() -> datetime:
 def _recording_artifact_metadata(capture_target: str, artifact_url: str) -> dict[str, str]:
     object_name = artifact_url.rsplit("/", 1)[-1]
     return {
+        "recording_name": f"{capture_target} QA walkthrough",
         "capture_target": capture_target,
         "artifact_url": artifact_url,
         "object_key": f"tenant-1/project-1/run-1/{object_name}",
         "capture_reference": _capture_reference_for_target(capture_target),
+        "created_at": "2026-06-18T11:30:00+00:00",
         "content_sha256": "a" * 64,
         "release_commit_sha": "b" * 40,
         "release_context_sha256": _default_release_context_sha256(),
@@ -2313,6 +2315,67 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 ],
             }
             with pytest.raises(RuntimeError, match="requires at least 3 playable artifact URL"):
+                execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=replace(event_request, payload=payload),
+                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                )
+
+            workflow = session.execute(select(WorkflowExecution)).scalar_one()
+            pr_operation = session.execute(
+                select(WorkflowOperation).where(
+                    WorkflowOperation.workflow_id == workflow.workflow_id,
+                    WorkflowOperation.operation_type == "pr_evidence_update",
+                )
+            ).scalar_one()
+            assert pr_operation.status == "pending"
+
+    def test_demo_proof_rejects_evidence_upload_without_created_at_metadata(self) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-a")
+            workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
+            request = _demo_proof_request(tenant=tenant)
+            execute_workflow_advance(
+                session=session,
+                settings=SimpleNamespace(),
+                workflow_type=workflow_type,
+                request=request,
+                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+            )
+
+            for event in (
+                "ProofLeaseAcquired",
+                "ReleaseRequested",
+                "ReleaseProvisioning",
+                "ReleaseLive",
+                "RouteReady",
+                "ServiceVerificationPassed",
+                "RecordingStarted",
+                "RecordingCompleted",
+                "EvidenceUploadStarted",
+            ):
+                execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=_demo_proof_request_for_event(request, event),
+                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                )
+
+            event_request = _demo_proof_request_for_event(request, "EvidenceUploaded")
+            payload = dict(event_request.payload)
+            metadata = dict(payload["event_metadata"])
+            recordings = [dict(item) for item in metadata["recordings"]]
+            recordings[0].pop("created_at", None)
+            metadata["recordings"] = recordings
+            payload["event_metadata"] = metadata
+
+            with pytest.raises(
+                RuntimeError,
+                match="EvidenceUploaded.recordings.browser.created_at",
+            ):
                 execute_workflow_advance(
                     session=session,
                     settings=SimpleNamespace(),

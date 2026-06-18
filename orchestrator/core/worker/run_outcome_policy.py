@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from dataclasses import replace
+from datetime import datetime, timezone
 from types import SimpleNamespace
 
 from orchestrator.core.deployment_previews import create_run_preview_deployment, destroy_project_deployment_preview_release
@@ -1682,6 +1683,7 @@ def _qa_demo_proof_event_metadata(*, proof_context, event: str) -> dict[str, obj
     metadata: dict[str, object] = {}
     preview_release = getattr(proof_context, "preview_release", None)
     qa_result = getattr(proof_context, "qa_result", None)
+    created_at = datetime.now(timezone.utc).isoformat(timespec="seconds")
     if event in {
         "ProofLeaseAcquired",
         "ReleaseRequested",
@@ -1794,10 +1796,12 @@ def _qa_demo_proof_event_metadata(*, proof_context, event: str) -> dict[str, obj
                 ],
                 "recordings": [
                     {
+                        "recording_name": str(getattr(recording, "name", "") or "").strip(),
                         "capture_target": str(getattr(recording, "capture_target", "") or "").strip(),
                         "artifact_url": str(getattr(recording, "artifact_url", "") or "").strip(),
                         "object_key": str(getattr(recording, "object_key", "") or "").strip(),
                         "capture_reference": str(getattr(recording, "capture_reference", "") or "").strip(),
+                        "created_at": created_at,
                         "content_sha256": str(getattr(recording, "content_sha256", "") or "").strip(),
                         "release_commit_sha": str(getattr(recording, "release_commit_sha", "") or "").strip(),
                         "release_context_sha256": str(
@@ -1837,10 +1841,12 @@ def _qa_demo_proof_event_metadata(*, proof_context, event: str) -> dict[str, obj
                 ],
                 "failure_evidence": [
                     {
+                        "recording_name": str(getattr(item, "name", "") or "").strip(),
                         "capture_target": str(getattr(item, "capture_target", "") or "").strip(),
                         "artifact_url": str(getattr(item, "artifact_url", "") or "").strip(),
                         "object_key": str(getattr(item, "object_key", "") or "").strip(),
                         "capture_reference": str(getattr(item, "capture_reference", "") or "").strip(),
+                        "created_at": created_at,
                         "content_sha256": str(getattr(item, "content_sha256", "") or "").strip(),
                         "release_commit_sha": str(getattr(item, "release_commit_sha", "") or "").strip(),
                         "release_context_sha256": str(
