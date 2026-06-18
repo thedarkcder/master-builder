@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from dataclasses import replace
 from datetime import datetime, timezone
 from types import SimpleNamespace
@@ -363,10 +364,18 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
 
             for event in (
                 "ProofLeaseAcquired",
+                "ReleaseRequested",
+                "ReleaseProvisioning",
+                "ReleaseLive",
+                "RouteReady",
                 "ServiceVerificationPassed",
+                "RecordingStarted",
                 "RecordingCompleted",
+                "EvidenceUploadStarted",
                 "EvidenceUploaded",
+                "PREvidenceAttachStarted",
                 "PREvidenceAttached",
+                "PreviewCleanupRequested",
                 "PreviewCleanupCompleted",
             ):
                 execute_workflow_advance(
@@ -391,6 +400,46 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 "pr_evidence_update": "completed",
                 "preview_cleanup": "completed",
             }
+            description = json.loads(workflow.source_description or "{}")
+            assert description["demo_proof_state"] == "complete"
+
+    def test_demo_proof_handler_rejects_service_verified_before_release_route_is_ready(self) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-a")
+            workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
+            request = _demo_proof_request(tenant=tenant)
+            execute_workflow_advance(
+                session=session,
+                settings=SimpleNamespace(),
+                workflow_type=workflow_type,
+                request=request,
+                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+            )
+            execute_workflow_advance(
+                session=session,
+                settings=SimpleNamespace(),
+                workflow_type=workflow_type,
+                request=replace(request, trigger=WorkflowTrigger(event="ProofLeaseAcquired")),
+                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+            )
+
+            with self.assertRaisesRegex(RuntimeError, "Cannot apply ServiceVerificationPassed"):
+                execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=replace(request, trigger=WorkflowTrigger(event="ServiceVerificationPassed")),
+                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                )
+
+            workflow = session.execute(select(WorkflowExecution)).scalar_one()
+            release_operation = session.execute(
+                select(WorkflowOperation).where(
+                    WorkflowOperation.workflow_id == workflow.workflow_id,
+                    WorkflowOperation.operation_type == "release",
+                )
+            ).scalar_one()
+            assert release_operation.status == "waiting_for_input"
 
     def test_demo_proof_full_lifecycle_events_complete_operations_in_order(self) -> None:
         with self.session_factory() as session:
@@ -459,10 +508,18 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
 
             for event in (
                 "ProofLeaseAcquired",
+                "ReleaseRequested",
+                "ReleaseProvisioning",
+                "ReleaseLive",
+                "RouteReady",
                 "ServiceVerificationPassed",
+                "RecordingStarted",
                 "RecordingFailureEvidenceCaptured",
+                "FailureEvidenceUploadStarted",
                 "FailureEvidenceUploaded",
+                "PRFailureEvidenceAttachStarted",
                 "PRFailureEvidenceAttached",
+                "FailurePreviewCleanupRequested",
                 "FailurePreviewCleanupCompleted",
             ):
                 execute_workflow_advance(
