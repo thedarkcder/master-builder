@@ -272,7 +272,7 @@ class JiraProjectReconciliationTriggerTests(AdminApiTestHarness):
         self.assertIn("pr_url", response.json()["detail"])
         runtime_mock.assert_not_called()
 
-    def test_generic_workflow_start_route_starts_cleanup_only_demo_proof_without_pr_url(self) -> None:
+    def test_generic_workflow_start_route_starts_cleanup_only_demo_proof_with_release_id_without_pr_url(self) -> None:
         payload = self._tenant_payload()
         create_response = self.client.post(
             "/api/admin/tenants",
@@ -302,6 +302,7 @@ class JiraProjectReconciliationTriggerTests(AdminApiTestHarness):
                         "proof_scope_id": "run-1-main-abcdef1",
                         "commit_sha": "abcdef1",
                         "trigger_mode": "cleanup_only",
+                        "release_id": "release-preview-1",
                         "required_capture_targets": ["browser", "ios", "android"],
                         "required_recording_counts": {"browser": 3, "ios": 3, "android": 3},
                     },
@@ -315,9 +316,42 @@ class JiraProjectReconciliationTriggerTests(AdminApiTestHarness):
         start_mock.assert_called_once()
         start_kwargs = start_mock.call_args.kwargs
         self.assertEqual(start_kwargs["trigger_mode"], "cleanup_only")
+        self.assertEqual(start_kwargs["release_id"], "release-preview-1")
         self.assertIsNone(start_kwargs["pr_url"])
         self.assertEqual(start_kwargs["required_recording_counts"], {"browser": 3, "ios": 3, "android": 3})
         self.assertEqual(start_kwargs["trigger_event"], "admin_workflow_start")
+
+    def test_generic_workflow_start_route_rejects_cleanup_only_demo_proof_without_release_id(self) -> None:
+        payload = self._tenant_payload()
+        create_response = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_response.status_code, 201)
+        project_id = self._first_project_id()
+
+        with patch("orchestrator.core.qa.demo_proof_start.build_workflow_runtime") as runtime_mock:
+            response = self.client.post(
+                "/api/admin/workflows",
+                json={
+                    "workflow_type_key": "demo_proof",
+                    "tenant_id": "tenant-a",
+                    "project_id": project_id,
+                    "input": {
+                        "proof_scope_id": "run-1-main-abcdef1",
+                        "commit_sha": "abcdef1",
+                        "trigger_mode": "cleanup_only",
+                        "required_capture_targets": ["browser", "ios", "android"],
+                        "required_recording_counts": {"browser": 3, "ios": 3, "android": 3},
+                    },
+                },
+                auth=("admin", "secret"),
+            )
+
+        self.assertEqual(response.status_code, 422, response.text)
+        self.assertIn("cleanup_only requires release_id", response.json()["detail"])
+        runtime_mock.assert_not_called()
 
     def test_generic_workflow_start_route_rejects_demo_proof_without_required_recording_counts(self) -> None:
         payload = self._tenant_payload()

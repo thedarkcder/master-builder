@@ -696,6 +696,36 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
             runtime_mock.assert_not_called()
             assert session.execute(select(WorkflowExecution)).scalar_one_or_none() is None
 
+    def test_start_demo_proof_workflow_rejects_cleanup_only_without_release_id_before_creating_workflow(
+        self,
+    ) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-a")
+            project = session.get(Project, "project-a")
+
+            with patch("orchestrator.core.qa.demo_proof_start.build_workflow_runtime") as runtime_mock:
+                try:
+                    start_demo_proof_workflow(
+                        session=session,
+                        settings=SimpleNamespace(),
+                        tenant=tenant,
+                        project=project,
+                        proof_scope_id="run-1-main-abcdef1",
+                        commit_sha="abcdef1",
+                        trigger_mode="cleanup_only",
+                        trigger_event="admin_cleanup_recovery",
+                        pr_url=None,
+                        required_capture_targets=["browser", "ios", "android"],
+                        required_recording_counts={"browser": 3, "ios": 3, "android": 3},
+                    )
+                except ValueError as exc:
+                    assert "cleanup_only requires release_id" in str(exc)
+                else:  # pragma: no cover
+                    raise AssertionError("expected cleanup_only demo proof start to require release_id")
+
+            runtime_mock.assert_not_called()
+            assert session.execute(select(WorkflowExecution)).scalar_one_or_none() is None
+
     def test_start_demo_proof_workflow_rejects_retry_recording_without_existing_workflow(self) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
@@ -862,6 +892,7 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     trigger_mode="cleanup_only",
                     trigger_event="admin_cleanup_recovery",
                     run_id=None,
+                    release_id="release-preview-1",
                     pr_url=None,
                     required_capture_targets=["browser", "ios", "android"],
                     required_recording_counts={"browser": 3, "ios": 3, "android": 3},
@@ -876,6 +907,7 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     trigger_mode="cleanup_only",
                     event="CleanupOnlyCompleted",
                     run_id=None,
+                    release_id="release-preview-1",
                     pr_url=None,
                     required_capture_targets=["browser", "ios", "android"],
                     required_recording_counts={"browser": 3, "ios": 3, "android": 3},
@@ -904,6 +936,81 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
             ).scalar_one_or_none()
             assert preview_lease_attempt is None
 
+    def test_cleanup_only_completion_must_match_requested_release_id(self) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-a")
+            project = session.get(Project, "project-a")
+            workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
+
+            def _advance(request: WorkflowAdvanceRequest):  # noqa: ANN202
+                return execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=request,
+                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                )
+
+            wrong_release_metadata = _demo_proof_event_metadata("CleanupOnlyCompleted")
+            assert wrong_release_metadata is not None
+            wrong_release_metadata["release_id"] = "release-preview-other"
+            cleanup_evidence = dict(wrong_release_metadata["cleanup_evidence"])  # type: ignore[arg-type]
+            cleanup_evidence["release_id"] = "release-preview-other"
+            cleanup_evidence["resource_refs"] = [
+                {
+                    "resource_type": "release",
+                    "resource_id": "release-preview-other",
+                    "cleanup_action": "destroyed",
+                },
+                {
+                    "resource_type": "coolify_application",
+                    "resource_id": "app-preview-other",
+                    "cleanup_action": "destroyed",
+                },
+            ]
+            wrong_release_metadata["cleanup_evidence"] = cleanup_evidence
+
+            with patch(
+                "orchestrator.core.qa.demo_proof_start.build_workflow_runtime",
+                return_value=SimpleNamespace(advance=_advance),
+            ):
+                start_demo_proof_workflow(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    tenant=tenant,
+                    project=project,
+                    proof_scope_id="run-1-main-abcdef1",
+                    commit_sha="abcdef1",
+                    trigger_mode="cleanup_only",
+                    trigger_event="admin_cleanup_recovery",
+                    run_id=None,
+                    release_id="release-preview-1",
+                    pr_url=None,
+                    required_capture_targets=["browser", "ios", "android"],
+                    required_recording_counts={"browser": 3, "ios": 3, "android": 3},
+                )
+                try:
+                    advance_demo_proof_workflow_event(
+                        session=session,
+                        settings=SimpleNamespace(),
+                        tenant=tenant,
+                        project=project,
+                        proof_scope_id="run-1-main-abcdef1",
+                        commit_sha="abcdef1",
+                        trigger_mode="cleanup_only",
+                        event="CleanupOnlyCompleted",
+                        run_id=None,
+                        release_id="release-preview-1",
+                        pr_url=None,
+                        required_capture_targets=["browser", "ios", "android"],
+                        required_recording_counts={"browser": 3, "ios": 3, "android": 3},
+                        event_metadata=wrong_release_metadata,
+                    )
+                except RuntimeError as exc:
+                    assert "cleanup_only requested release_id release-preview-1" in str(exc)
+                else:  # pragma: no cover
+                    raise AssertionError("expected cleanup_only completion to match requested release")
+
     def test_demo_proof_handler_rejects_missing_trigger_mode_before_creating_workflow(self) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
@@ -924,6 +1031,34 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 assert "trigger_mode" in str(exc)
             else:  # pragma: no cover
                 raise AssertionError("expected demo proof to require trigger_mode")
+
+            assert session.execute(select(WorkflowExecution)).scalar_one_or_none() is None
+
+    def test_demo_proof_handler_rejects_cleanup_only_without_release_id_before_creating_workflow(self) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-a")
+            workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
+            request = _demo_proof_request(tenant=tenant)
+            cleanup_payload = {
+                **request.payload,
+                "trigger_mode": "cleanup_only",
+                "run_id": None,
+                "release_id": None,
+                "pr_url": None,
+            }
+
+            try:
+                execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=replace(request, payload=cleanup_payload),
+                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                )
+            except RuntimeError as exc:
+                assert "cleanup_only requires release_id" in str(exc)
+            else:  # pragma: no cover
+                raise AssertionError("expected cleanup_only demo proof handler to require release_id")
 
             assert session.execute(select(WorkflowExecution)).scalar_one_or_none() is None
 
