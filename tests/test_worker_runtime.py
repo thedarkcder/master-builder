@@ -166,6 +166,30 @@ class QueueListenerTests(unittest.TestCase):
         logger.exception.assert_called_once()
         loop.close()
 
+    def test_bridge_listener_failure_does_not_wake_run_claimer(self) -> None:
+        from orchestrator.core.worker import queue_listener as queue_listener_module
+
+        loop = asyncio.new_event_loop()
+        wake_event = asyncio.Event()
+        logger = MagicMock()
+        bridge = queue_listener_module.RunQueueNotificationBridge(
+            postgres_dsn="postgres://x",
+            wake_event=wake_event,
+            loop=loop,
+            logger=logger,
+            notify_channel="run_queue",
+            psycopg_module=_FlakyPsycopg(RuntimeError("database system is in recovery mode")),
+        )
+
+        with patch.object(queue_listener_module, "_reconnect_delay_seconds", return_value=0):
+            succeeded = bridge._run_once()
+
+        loop.run_until_complete(asyncio.sleep(0))
+        self.assertFalse(succeeded)
+        self.assertFalse(wake_event.is_set())
+        logger.exception.assert_called_once()
+        loop.close()
+
     def test_wait_for_wake_or_stop(self) -> None:
         from orchestrator.core.worker.queue_listener import wait_for_wake_or_stop
 
@@ -1052,6 +1076,239 @@ class WorkerTests(unittest.TestCase):
         self.assertEqual(retry_timeouts, [worker_module.WORKER_STARTUP_DB_RETRY_BASE_DELAY_SECONDS])
         self.assertEqual(spawned_run_ids, ["run-claimed"])
         self.assertEqual(claim_mock.call_count, 2)
+        probe_mock.assert_not_called()
+
+    def test_run_worker_retries_startup_runtime_dependency_sync_db_recovery_then_claims_run(self) -> None:
+        import orchestrator.worker as worker_module
+
+        fake_settings = SimpleNamespace(
+            database_url="postgresql://localhost/db",
+            log_level="INFO",
+            sentry_environment="test",
+            sentry_release=None,
+            agent_id="worker-test",
+            codex_cli_command="codex",
+            runtime_home="/tmp/master-builder-test-runtime-home",
+            worker_poll_interval_seconds=5,
+        )
+        listener = MagicMock()
+        retry_timeouts: list[float] = []
+        spawned_run_ids: list[str | None] = []
+
+        async def _wait_for_wake_or_stop(
+            *,
+            wake_event: asyncio.Event,
+            stop_event: asyncio.Event,
+            timeout_seconds: float | None = None,
+        ) -> bool:
+            _ = wake_event
+            if timeout_seconds == worker_module.WORKER_STARTUP_DB_RETRY_BASE_DELAY_SECONDS:
+                retry_timeouts.append(float(timeout_seconds))
+                return True
+            stop_event.set()
+            return False
+
+        async def _spawn_worker_child_process(
+            *,
+            mode: str,
+            wake_event: asyncio.Event,
+            child_timeout_seconds: int,
+            claimed_run_id: str | None = None,
+            claim_id: str | None = None,
+            worker_service_instance_id: str | None = None,
+        ):
+            _ = mode
+            _ = wake_event
+            _ = child_timeout_seconds
+            _ = claim_id
+            spawned_run_ids.append(claimed_run_id)
+            child_result = worker_module.WorkerChildProcessResult(
+                return_code=worker_module.WORKER_CHILD_EXIT_IDLE,
+                processed=False,
+                dependency_failure=False,
+            )
+            process = SimpleNamespace(pid=777, returncode=child_result.return_code, terminate=lambda: None)
+            return worker_module.WorkerChildProcessHandle(
+                process=process,
+                wait_task=asyncio.create_task(asyncio.sleep(0, result=child_result)),
+            )
+
+        async def _stale_recovery_loop(*, stop_event: asyncio.Event, **_kwargs: object) -> None:
+            await stop_event.wait()
+
+        async def _archived_tenant_purge_loop(*, stop_event: asyncio.Event, **_kwargs: object) -> None:
+            await stop_event.wait()
+
+        recovery_error = SQLAlchemyOperationalError(
+            "SELECT 1",
+            {},
+            RuntimeError("connection failed: the database system is in recovery mode"),
+        )
+        ready_snapshot = worker_module.WorkerRuntimeDependencySnapshot(
+            dependencies={"openai": SimpleNamespace(state="ready")}
+        )
+
+        with (
+            patch.object(worker_module, "get_settings", return_value=fake_settings),
+            patch.object(worker_module, "configure_logging"),
+            patch.object(worker_module, "create_session_factory", return_value=MagicMock()),
+            patch.object(worker_module, "prewarm_knowledge_dependencies"),
+            patch.object(worker_module, "is_postgres_database_url", return_value=True),
+            patch.object(worker_module, "postgres_dsn_from_database_url", return_value="postgres://dsn"),
+            patch.object(worker_module, "RunQueueNotificationBridge", return_value=listener),
+            patch.object(worker_module, "wait_for_wake_or_stop", new=_wait_for_wake_or_stop),
+            patch.object(worker_module, "_resolve_worker_child_capacity", return_value=1),
+            patch.object(worker_module, "_run_stale_recovery_loop", new=_stale_recovery_loop),
+            patch.object(worker_module, "_run_archived_tenant_purge_loop", new=_archived_tenant_purge_loop),
+            patch.object(worker_module, "_recover_worker_run_health_once"),
+            patch.object(worker_module, "_purge_archived_tenants_once"),
+            patch.object(worker_module, "_spawn_worker_child_process", new=_spawn_worker_child_process),
+            patch.object(
+                worker_module,
+                "_claim_next_run_once",
+                side_effect=[
+                    run_dispatch_module.ClaimedRunDispatch(
+                        run_id="run-claimed",
+                        claim_id="claim-claimed",
+                        worker_service_instance_id="node-a:1234",
+                        tenant_id="tenant-1",
+                        issue_key="GP-186",
+                    ),
+                    None,
+                ],
+            ) as claim_mock,
+            patch.object(
+                worker_module,
+                "_probe_claimable_run_once",
+                return_value=QueueClaimabilityProbe(
+                    claimable=False,
+                    reason=QueueClaimabilityReason.NO_QUEUED_RUNS,
+                ),
+            ) as probe_mock,
+            patch.object(worker_module, "worker_service_instance_id_for_mode", return_value="node-a:1234"),
+            patch.object(
+                worker_module,
+                "_sync_run_worker_runtime_dependencies_once",
+                side_effect=[recovery_error, ready_snapshot, ready_snapshot],
+            ) as sync_mock,
+        ):
+            asyncio.run(worker_module.run_worker(mode="runs"))
+
+        self.assertEqual(retry_timeouts, [worker_module.WORKER_STARTUP_DB_RETRY_BASE_DELAY_SECONDS])
+        self.assertEqual(spawned_run_ids, ["run-claimed"])
+        self.assertEqual(sync_mock.call_count, 3)
+        self.assertEqual(claim_mock.call_count, 1)
+        probe_mock.assert_not_called()
+
+    def test_run_worker_backs_off_after_started_database_recovery(self) -> None:
+        import orchestrator.worker as worker_module
+
+        fake_settings = SimpleNamespace(
+            database_url="postgresql://localhost/db",
+            log_level="INFO",
+            sentry_environment="test",
+            sentry_release=None,
+            agent_id="worker-test",
+            codex_cli_command="codex",
+            runtime_home="/tmp/master-builder-test-runtime-home",
+            worker_poll_interval_seconds=5,
+        )
+        listener = MagicMock()
+        retry_timeouts: list[float] = []
+        spawned_run_ids: list[str | None] = []
+
+        async def _wait_for_wake_or_stop(
+            *,
+            wake_event: asyncio.Event,
+            stop_event: asyncio.Event,
+            timeout_seconds: float | None = None,
+        ) -> bool:
+            _ = wake_event
+            retry_timeouts.append(float(timeout_seconds or 0))
+            return True
+
+        async def _spawn_worker_child_process(
+            *,
+            mode: str,
+            wake_event: asyncio.Event,
+            child_timeout_seconds: int,
+            claimed_run_id: str | None = None,
+            claim_id: str | None = None,
+            worker_service_instance_id: str | None = None,
+        ):
+            _ = mode
+            _ = wake_event
+            _ = child_timeout_seconds
+            _ = claim_id
+            _ = worker_service_instance_id
+            spawned_run_ids.append(claimed_run_id)
+            child_result = worker_module.WorkerChildProcessResult(
+                return_code=worker_module.WORKER_CHILD_EXIT_IDLE,
+                processed=False,
+                dependency_failure=False,
+            )
+            process = SimpleNamespace(pid=888, returncode=child_result.return_code, terminate=lambda: None)
+            return worker_module.WorkerChildProcessHandle(
+                process=process,
+                wait_task=asyncio.create_task(asyncio.sleep(0, result=child_result)),
+            )
+
+        async def _stale_recovery_loop(*, stop_event: asyncio.Event, **_kwargs: object) -> None:
+            await stop_event.wait()
+
+        async def _archived_tenant_purge_loop(*, stop_event: asyncio.Event, **_kwargs: object) -> None:
+            await stop_event.wait()
+
+        recovery_error = SQLAlchemyOperationalError(
+            "SELECT 1",
+            {},
+            RuntimeError("connection failed: the database system is in recovery mode"),
+        )
+        ready_snapshot = worker_module.WorkerRuntimeDependencySnapshot(
+            dependencies={"openai": SimpleNamespace(state="ready")}
+        )
+
+        def _claim_or_stop(*_args: object, **_kwargs: object):  # noqa: ANN202
+            if len(retry_timeouts) >= 2:
+                raise ValueError("stop after post-startup retry backoff is observed")
+            raise recovery_error
+
+        with (
+            patch.object(worker_module, "get_settings", return_value=fake_settings),
+            patch.object(worker_module, "configure_logging"),
+            patch.object(worker_module, "create_session_factory", return_value=MagicMock()),
+            patch.object(worker_module, "prewarm_knowledge_dependencies"),
+            patch.object(worker_module, "is_postgres_database_url", return_value=True),
+            patch.object(worker_module, "postgres_dsn_from_database_url", return_value="postgres://dsn"),
+            patch.object(worker_module, "RunQueueNotificationBridge", return_value=listener),
+            patch.object(worker_module, "wait_for_wake_or_stop", new=_wait_for_wake_or_stop),
+            patch.object(worker_module, "_resolve_worker_child_capacity", return_value=1),
+            patch.object(worker_module, "_run_stale_recovery_loop", new=_stale_recovery_loop),
+            patch.object(worker_module, "_run_archived_tenant_purge_loop", new=_archived_tenant_purge_loop),
+            patch.object(worker_module, "_recover_worker_run_health_once"),
+            patch.object(worker_module, "_purge_archived_tenants_once"),
+            patch.object(worker_module, "_spawn_worker_child_process", new=_spawn_worker_child_process),
+            patch.object(worker_module, "_claim_next_run_once", side_effect=_claim_or_stop) as claim_mock,
+            patch.object(worker_module, "_probe_claimable_run_once") as probe_mock,
+            patch.object(worker_module, "worker_service_instance_id_for_mode", return_value="node-a:1234"),
+            patch.object(
+                worker_module,
+                "_sync_run_worker_runtime_dependencies_once",
+                return_value=ready_snapshot,
+            ),
+        ):
+            with self.assertRaisesRegex(ValueError, "post-startup retry backoff"):
+                asyncio.run(worker_module.run_worker(mode="runs"))
+
+        self.assertEqual(
+            retry_timeouts,
+            [
+                worker_module.WORKER_STARTUP_DB_RETRY_BASE_DELAY_SECONDS,
+                worker_module.WORKER_STARTUP_DB_RETRY_BASE_DELAY_SECONDS * 2,
+            ],
+        )
+        self.assertEqual(spawned_run_ids, [])
+        self.assertEqual(claim_mock.call_count, 3)
         probe_mock.assert_not_called()
 
     def test_run_worker_raises_when_startup_db_retry_budget_is_exhausted(self) -> None:

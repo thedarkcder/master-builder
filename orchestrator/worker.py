@@ -4,12 +4,13 @@ import asyncio
 import logging
 import os
 import signal
+from collections.abc import Callable
 from contextlib import suppress
 from datetime import datetime, timedelta, timezone
+from typing import TypeVar
 from uuid import uuid4
 
 from sqlalchemy import func, select
-from sqlalchemy.exc import OperationalError as SQLAlchemyOperationalError
 from sqlalchemy.orm import Session, sessionmaker
 
 from orchestrator.api.admin.tenant_crud import purge_expired_archived_tenants
@@ -65,6 +66,10 @@ from orchestrator.core.worker.capabilities import resolve_worker_capability_cont
 from orchestrator.core.workflow.execution_snapshot_startup import ensure_execution_snapshot_startup_bootstrap
 from orchestrator.core.workflow.type_catalog import validate_persisted_workflow_definitions
 from orchestrator.storage.db import create_session_factory
+from orchestrator.storage.database_recovery import (
+    database_recovery_retry_delay_seconds,
+    retryable_database_recovery_error,
+)
 from orchestrator.storage.run_queue_events import (
     RUN_QUEUE_NOTIFY_CHANNEL,
     is_postgres_database_url,
@@ -84,6 +89,7 @@ WORKER_MODE_WEBHOOKS = "webhooks"
 WORKER_STARTUP_DB_RETRY_MAX_ATTEMPTS = 6
 WORKER_STARTUP_DB_RETRY_BASE_DELAY_SECONDS = 1.0
 WORKER_STARTUP_DB_RETRY_MAX_DELAY_SECONDS = 8.0
+_T = TypeVar("_T")
 _VALID_POST_CHILD_RUN_STATUSES = {
     "queued",
     "ownership_lost",
@@ -340,44 +346,76 @@ def _resolve_worker_child_timeout_seconds(*, settings: Settings) -> int:
 
 
 def _worker_startup_db_retry_delay_seconds(*, attempt: int) -> float:
-    bounded_attempt = max(1, int(attempt))
-    return min(
-        WORKER_STARTUP_DB_RETRY_MAX_DELAY_SECONDS,
-        WORKER_STARTUP_DB_RETRY_BASE_DELAY_SECONDS * (2 ** (bounded_attempt - 1)),
+    return database_recovery_retry_delay_seconds(
+        attempt=attempt,
+        base_delay_seconds=WORKER_STARTUP_DB_RETRY_BASE_DELAY_SECONDS,
+        max_delay_seconds=WORKER_STARTUP_DB_RETRY_MAX_DELAY_SECONDS,
     )
-
-
-def _is_retryable_worker_startup_db_error(exc: BaseException) -> bool:
-    return _is_retryable_worker_database_error(exc)
 
 
 def _is_retryable_worker_database_error(exc: BaseException) -> bool:
-    if not isinstance(exc, SQLAlchemyOperationalError):
-        return False
-    message = " ".join(
-        part
-        for part in (
-            str(getattr(exc, "orig", "") or "").strip(),
-            str(exc).strip(),
-        )
-        if part
-    ).lower()
-    if not message:
-        return False
-    return any(
-        needle in message
-        for needle in (
-            "database system is in recovery mode",
-            "connection failed",
-            "could not connect",
-            "connection refused",
-            "consuming input failed",
-            "database system is not yet accepting connections",
-            "server closed the connection unexpectedly",
-            "the database system is starting up",
-            "timeout expired",
-        )
-    )
+    return retryable_database_recovery_error(exc)
+
+
+async def _run_worker_database_operation(
+    operation: Callable[[], _T],
+    *,
+    mode: str,
+    operation_name: str,
+    wake_event: asyncio.Event,
+    stop_event: asyncio.Event,
+    startup_db_access_verified: bool,
+    startup_db_retry_attempts: int,
+    mark_startup_db_access_verified: bool = False,
+) -> tuple[_T, bool, int]:
+    while not stop_event.is_set():
+        try:
+            result = await asyncio.to_thread(operation)
+            return result, startup_db_access_verified or mark_startup_db_access_verified, 0
+        except Exception as exc:
+            if not _is_retryable_worker_database_error(exc):
+                raise
+            if not startup_db_access_verified:
+                startup_db_retry_attempts += 1
+                retry_delay_seconds = _worker_startup_db_retry_delay_seconds(
+                    attempt=startup_db_retry_attempts
+                )
+                logger.warning(
+                    "worker_startup_database_unavailable mode=%s operation=%s attempt=%s max_attempts=%s retry_in_seconds=%.1f error=%s",
+                    mode,
+                    operation_name,
+                    startup_db_retry_attempts,
+                    WORKER_STARTUP_DB_RETRY_MAX_ATTEMPTS,
+                    retry_delay_seconds,
+                    exc,
+                )
+                if startup_db_retry_attempts >= WORKER_STARTUP_DB_RETRY_MAX_ATTEMPTS:
+                    logger.exception(
+                        "worker_startup_database_retry_exhausted mode=%s operation=%s attempts=%s",
+                        mode,
+                        operation_name,
+                        startup_db_retry_attempts,
+                    )
+                    raise
+            else:
+                startup_db_retry_attempts += 1
+                retry_delay_seconds = _worker_startup_db_retry_delay_seconds(
+                    attempt=startup_db_retry_attempts
+                )
+                logger.warning(
+                    "worker_database_unavailable mode=%s operation=%s attempt=%s retry_in_seconds=%.1f error=%s",
+                    mode,
+                    operation_name,
+                    startup_db_retry_attempts,
+                    retry_delay_seconds,
+                    exc,
+                )
+            await wait_for_wake_or_stop(
+                wake_event=wake_event,
+                stop_event=stop_event,
+                timeout_seconds=retry_delay_seconds,
+            )
+    raise RuntimeError(f"Worker stopped before database operation completed: {operation_name}")
 
 
 def _recover_worker_run_health_once(
@@ -428,6 +466,7 @@ async def _run_stale_recovery_loop(
     active_run_ids_fn,
 ) -> None:
     interval_seconds = max(15, int(getattr(settings, "worker_stale_sweep_interval_seconds", 60)))
+    db_recovery_attempts = 0
     while not stop_event.is_set():
         try:
             excluded_run_ids = tuple(sorted(active_run_ids_fn()))
@@ -439,7 +478,22 @@ async def _run_stale_recovery_loop(
                 service_instance_id=service_instance_id,
                 excluded_run_ids=excluded_run_ids,
             )
-        except Exception:
+            db_recovery_attempts = 0
+        except Exception as exc:
+            if retryable_database_recovery_error(exc):
+                db_recovery_attempts += 1
+                retry_delay_seconds = database_recovery_retry_delay_seconds(attempt=db_recovery_attempts)
+                logger.warning(
+                    "worker_stale_recovery_database_unavailable attempt=%s retry_in_seconds=%.1f error=%s",
+                    db_recovery_attempts,
+                    retry_delay_seconds,
+                    exc,
+                )
+                try:
+                    await asyncio.wait_for(stop_event.wait(), timeout=retry_delay_seconds)
+                except asyncio.TimeoutError:
+                    continue
+                continue
             logger.exception("worker_stale_recovery_failed")
         try:
             await asyncio.wait_for(stop_event.wait(), timeout=interval_seconds)
@@ -565,14 +619,9 @@ async def run_worker(*, mode: str = WORKER_MODE_RUNS) -> None:
         service_name="run-worker" if str(mode or "").strip().lower() == WORKER_MODE_RUNS else "webhook-worker",
     )
     session_factory = create_session_factory()
-    await asyncio.to_thread(
-        ensure_execution_snapshot_startup_bootstrap,
-        session_factory=session_factory,
-        database_url=settings.database_url,
-        actor=f"worker:{mode}",
-    )
 
     stop_event = asyncio.Event()
+    wake_event = asyncio.Event()
     loop = asyncio.get_running_loop()
 
     for sig in (signal.SIGINT, signal.SIGTERM):
@@ -584,7 +633,22 @@ async def run_worker(*, mode: str = WORKER_MODE_RUNS) -> None:
             "set ORCHESTRATOR_DATABASE_URL to a postgresql URL."
         )
 
-    wake_event = asyncio.Event()
+    startup_db_access_verified = False
+    startup_db_retry_attempts = 0
+    _, startup_db_access_verified, startup_db_retry_attempts = await _run_worker_database_operation(
+        lambda: ensure_execution_snapshot_startup_bootstrap(
+            session_factory=session_factory,
+            database_url=settings.database_url,
+            actor=f"worker:{mode}",
+        ),
+        mode=mode,
+        operation_name="execution_snapshot_bootstrap",
+        wake_event=wake_event,
+        stop_event=stop_event,
+        startup_db_access_verified=startup_db_access_verified,
+        startup_db_retry_attempts=startup_db_retry_attempts,
+    )
+
     listener = RunQueueNotificationBridge(
         postgres_dsn=postgres_dsn_from_database_url(settings.database_url),
         wake_event=wake_event,
@@ -608,17 +672,22 @@ async def run_worker(*, mode: str = WORKER_MODE_RUNS) -> None:
     next_readiness_refresh_at: datetime | None = None
     next_auth_request_refresh_at: datetime | None = None
     runtime_block_logged_keys: tuple[str, ...] = ()
-    startup_db_access_verified = False
-    startup_db_retry_attempts = 0
     try:
         listener.start()
-        await asyncio.to_thread(
-            _register_worker_runtime_once,
-            session_factory=session_factory,
-            settings=settings,
-            agent_id=agent_id,
-            service_instance_id=service_instance_id,
-            worker_mode=mode,
+        _, startup_db_access_verified, startup_db_retry_attempts = await _run_worker_database_operation(
+            lambda: _register_worker_runtime_once(
+                session_factory=session_factory,
+                settings=settings,
+                agent_id=agent_id,
+                service_instance_id=service_instance_id,
+                worker_mode=mode,
+            ),
+            mode=mode,
+            operation_name="register_worker_runtime",
+            wake_event=wake_event,
+            stop_event=stop_event,
+            startup_db_access_verified=startup_db_access_verified,
+            startup_db_retry_attempts=startup_db_retry_attempts,
         )
         worker_runtime_heartbeat_task = asyncio.create_task(
             _run_worker_runtime_heartbeat_loop(
@@ -635,16 +704,28 @@ async def run_worker(*, mode: str = WORKER_MODE_RUNS) -> None:
                 prewarm_knowledge_dependencies,
                 settings=settings,
             )
-            await asyncio.to_thread(
-                _recover_worker_run_health_once,
-                session_factory=session_factory,
-                settings=settings,
-                agent_id=agent_id,
-                service_instance_id=service_instance_id,
+            _, startup_db_access_verified, startup_db_retry_attempts = await _run_worker_database_operation(
+                lambda: _recover_worker_run_health_once(
+                    session_factory=session_factory,
+                    settings=settings,
+                    agent_id=agent_id,
+                    service_instance_id=service_instance_id,
+                ),
+                mode=mode,
+                operation_name="recover_worker_run_health",
+                wake_event=wake_event,
+                stop_event=stop_event,
+                startup_db_access_verified=startup_db_access_verified,
+                startup_db_retry_attempts=startup_db_retry_attempts,
             )
-            await asyncio.to_thread(
-                _purge_archived_tenants_once,
-                session_factory=session_factory,
+            _, startup_db_access_verified, startup_db_retry_attempts = await _run_worker_database_operation(
+                lambda: _purge_archived_tenants_once(session_factory=session_factory),
+                mode=mode,
+                operation_name="purge_archived_tenants",
+                wake_event=wake_event,
+                stop_event=stop_event,
+                startup_db_access_verified=startup_db_access_verified,
+                startup_db_retry_attempts=startup_db_retry_attempts,
             )
             stale_recovery_task = asyncio.create_task(
                 _run_stale_recovery_loop(
@@ -663,12 +744,23 @@ async def run_worker(*, mode: str = WORKER_MODE_RUNS) -> None:
                     stop_event=stop_event,
                 )
             )
-            runtime_dependency_snapshot = await asyncio.to_thread(
-                _sync_run_worker_runtime_dependencies_once,
-                session_factory=session_factory,
-                settings=settings,
-                agent_id=agent_id,
-                service_instance_id=service_instance_id,
+            (
+                runtime_dependency_snapshot,
+                startup_db_access_verified,
+                startup_db_retry_attempts,
+            ) = await _run_worker_database_operation(
+                lambda: _sync_run_worker_runtime_dependencies_once(
+                    session_factory=session_factory,
+                    settings=settings,
+                    agent_id=agent_id,
+                    service_instance_id=service_instance_id,
+                ),
+                mode=mode,
+                operation_name="sync_worker_runtime_dependencies",
+                wake_event=wake_event,
+                stop_event=stop_event,
+                startup_db_access_verified=startup_db_access_verified,
+                startup_db_retry_attempts=startup_db_retry_attempts,
             )
             next_readiness_refresh_at = datetime.now(timezone.utc)
             next_auth_request_refresh_at = datetime.now(timezone.utc)
@@ -678,20 +770,38 @@ async def run_worker(*, mode: str = WORKER_MODE_RUNS) -> None:
             if mode == WORKER_MODE_RUNS:
                 now = datetime.now(timezone.utc)
                 if next_auth_request_refresh_at is None or now >= next_auth_request_refresh_at:
-                    await asyncio.to_thread(
-                        sync_worker_runtime_auth_requests,
-                        session_factory=session_factory,
-                        settings=settings,
-                        service_instance_id=service_instance_id,
+                    _, startup_db_access_verified, startup_db_retry_attempts = await _run_worker_database_operation(
+                        lambda: sync_worker_runtime_auth_requests(
+                            session_factory=session_factory,
+                            settings=settings,
+                            service_instance_id=service_instance_id,
+                        ),
+                        mode=mode,
+                        operation_name="sync_worker_runtime_auth_requests",
+                        wake_event=wake_event,
+                        stop_event=stop_event,
+                        startup_db_access_verified=startup_db_access_verified,
+                        startup_db_retry_attempts=startup_db_retry_attempts,
                     )
                     next_auth_request_refresh_at = now + timedelta(seconds=auth_request_refresh_seconds)
                 if next_readiness_refresh_at is None or now >= next_readiness_refresh_at:
-                    runtime_dependency_snapshot = await asyncio.to_thread(
-                        _sync_run_worker_runtime_dependencies_once,
-                        session_factory=session_factory,
-                        settings=settings,
-                        agent_id=agent_id,
-                        service_instance_id=service_instance_id,
+                    (
+                        runtime_dependency_snapshot,
+                        startup_db_access_verified,
+                        startup_db_retry_attempts,
+                    ) = await _run_worker_database_operation(
+                        lambda: _sync_run_worker_runtime_dependencies_once(
+                            session_factory=session_factory,
+                            settings=settings,
+                            agent_id=agent_id,
+                            service_instance_id=service_instance_id,
+                        ),
+                        mode=mode,
+                        operation_name="sync_worker_runtime_dependencies",
+                        wake_event=wake_event,
+                        stop_event=stop_event,
+                        startup_db_access_verified=startup_db_access_verified,
+                        startup_db_retry_attempts=startup_db_retry_attempts,
                     )
                     next_readiness_refresh_at = now + timedelta(seconds=readiness_refresh_seconds)
                 blocked_runtime_kinds = tuple(sorted(runtime_dependency_snapshot.blocked_runtime_kinds))
@@ -805,85 +915,80 @@ async def run_worker(*, mode: str = WORKER_MODE_RUNS) -> None:
                 session_factory=session_factory,
             )
             while drain_requested and len(active_children) < parallel_slots and not stop_event.is_set():
-                try:
-                    if mode == WORKER_MODE_RUNS:
-                        claimed_run = await asyncio.to_thread(
-                            _claim_next_run_once,
+                if mode == WORKER_MODE_RUNS:
+                    (
+                        claimed_run,
+                        startup_db_access_verified,
+                        startup_db_retry_attempts,
+                    ) = await _run_worker_database_operation(
+                        lambda: _claim_next_run_once(
                             session_factory=session_factory,
                             settings=settings,
                             service_instance_id=service_instance_id,
                             ready_runtime_kinds=runtime_dependency_snapshot.ready_runtime_kinds,
-                        )
-                        if claimed_run is None:
-                            run_probe = await asyncio.to_thread(
-                                _probe_claimable_run_once,
+                        ),
+                        mode=mode,
+                        operation_name="claim_next_run",
+                        wake_event=wake_event,
+                        stop_event=stop_event,
+                        startup_db_access_verified=startup_db_access_verified,
+                        startup_db_retry_attempts=startup_db_retry_attempts,
+                        mark_startup_db_access_verified=True,
+                    )
+                    if claimed_run is None:
+                        (
+                            run_probe,
+                            startup_db_access_verified,
+                            startup_db_retry_attempts,
+                        ) = await _run_worker_database_operation(
+                            lambda: _probe_claimable_run_once(
                                 session_factory=session_factory,
                                 settings=settings,
                                 ready_runtime_kinds=runtime_dependency_snapshot.ready_runtime_kinds,
-                            )
-                            startup_db_access_verified = True
-                            startup_db_retry_attempts = 0
-                            logger.info(
-                                "worker_no_claimable_run reason=%s run_id=%s tenant_id=%s issue_key=%s",
-                                run_probe.reason.value,
-                                run_probe.run_id,
-                                run_probe.tenant_id,
-                                run_probe.issue_key,
-                            )
-                            drain_requested = False
-                            break
-                        startup_db_access_verified = True
-                        startup_db_retry_attempts = 0
-                        logger.info(
-                            "worker_claimed_run_for_child run_id=%s tenant_id=%s issue_key=%s worker_service_instance_id=%s claim_id=%s",
-                            claimed_run.run_id,
-                            claimed_run.tenant_id,
-                            claimed_run.issue_key,
-                            service_instance_id,
-                            claimed_run.claim_id,
-                        )
-                    else:
-                        has_webhook_job = await asyncio.to_thread(
-                            _has_available_webhook_job_once,
-                            session_factory=session_factory,
-                        )
-                        startup_db_access_verified = True
-                        startup_db_retry_attempts = 0
-                        if not has_webhook_job:
-                            drain_requested = False
-                            break
-                except Exception as exc:
-                    if (
-                        not startup_db_access_verified
-                        and _is_retryable_worker_startup_db_error(exc)
-                    ):
-                        startup_db_retry_attempts += 1
-                        retry_delay_seconds = _worker_startup_db_retry_delay_seconds(
-                            attempt=startup_db_retry_attempts
-                        )
-                        logger.warning(
-                            "worker_startup_database_unavailable mode=%s attempt=%s max_attempts=%s retry_in_seconds=%.1f error=%s",
-                            mode,
-                            startup_db_retry_attempts,
-                            WORKER_STARTUP_DB_RETRY_MAX_ATTEMPTS,
-                            retry_delay_seconds,
-                            exc,
-                        )
-                        if startup_db_retry_attempts >= WORKER_STARTUP_DB_RETRY_MAX_ATTEMPTS:
-                            logger.exception(
-                                "worker_startup_database_retry_exhausted mode=%s attempts=%s",
-                                mode,
-                                startup_db_retry_attempts,
-                            )
-                            raise
-                        await wait_for_wake_or_stop(
+                            ),
+                            mode=mode,
+                            operation_name="probe_claimable_run",
                             wake_event=wake_event,
                             stop_event=stop_event,
-                            timeout_seconds=retry_delay_seconds,
+                            startup_db_access_verified=startup_db_access_verified,
+                            startup_db_retry_attempts=startup_db_retry_attempts,
+                            mark_startup_db_access_verified=True,
                         )
-                        drain_requested = True
-                        continue
-                    raise
+                        logger.info(
+                            "worker_no_claimable_run reason=%s run_id=%s tenant_id=%s issue_key=%s",
+                            run_probe.reason.value,
+                            run_probe.run_id,
+                            run_probe.tenant_id,
+                            run_probe.issue_key,
+                        )
+                        drain_requested = False
+                        break
+                    logger.info(
+                        "worker_claimed_run_for_child run_id=%s tenant_id=%s issue_key=%s worker_service_instance_id=%s claim_id=%s",
+                        claimed_run.run_id,
+                        claimed_run.tenant_id,
+                        claimed_run.issue_key,
+                        service_instance_id,
+                        claimed_run.claim_id,
+                    )
+                else:
+                    (
+                        has_webhook_job,
+                        startup_db_access_verified,
+                        startup_db_retry_attempts,
+                    ) = await _run_worker_database_operation(
+                        lambda: _has_available_webhook_job_once(session_factory=session_factory),
+                        mode=mode,
+                        operation_name="has_available_webhook_job",
+                        wake_event=wake_event,
+                        stop_event=stop_event,
+                        startup_db_access_verified=startup_db_access_verified,
+                        startup_db_retry_attempts=startup_db_retry_attempts,
+                        mark_startup_db_access_verified=True,
+                    )
+                    if not has_webhook_job:
+                        drain_requested = False
+                        break
                 child = await _spawn_worker_child_process(
                     mode=mode,
                     wake_event=wake_event,

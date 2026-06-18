@@ -6,6 +6,7 @@ from datetime import datetime
 from sqlalchemy.orm import Session
 
 from orchestrator.core.workflow.execution_lifecycle import apply_execution_for_new_attempt
+from orchestrator.core.workflow.operation_service import fail_active_workflow_operation_attempts_for_run
 from orchestrator.storage.models import Run, WorkflowExecution
 from orchestrator.storage.run_queue_events import notify_run_enqueued
 
@@ -77,6 +78,12 @@ class WorkerRunTransitionService:
         run.finished_at = None
         run.worker_service_instance_id = None
         run.claim_id = None
+        fail_active_workflow_operation_attempts_for_run(
+            self._session,
+            run_id=run.run_id,
+            error_message="Run was reset for a new worker attempt before the workflow operation completed.",
+            now=now,
+        )
         apply_execution_for_new_attempt(
             session=self._session,
             run=run,

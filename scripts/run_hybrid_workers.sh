@@ -7,6 +7,7 @@ WORKER_CHECKOUT_DIR="${ROOT_DIR}/.workdirs"
 mkdir -p "${WORKER_CHECKOUT_DIR}"
 HYBRID_CACHE_DIR="${WORKER_CHECKOUT_DIR}/.hybrid-worker"
 mkdir -p "${HYBRID_CACHE_DIR}"
+HYBRID_NODE_TOOLS_DIR="${HYBRID_CACHE_DIR}/node-tools"
 
 if [[ -f ".env" ]]; then
   while IFS= read -r line || [[ -n "$line" ]]; do
@@ -48,6 +49,8 @@ DOCKER_WAIT_TIMEOUT_SECONDS="${DOCKER_WAIT_TIMEOUT_SECONDS:-300}"
 DOCKER_WAIT_INTERVAL_SECONDS="${DOCKER_WAIT_INTERVAL_SECONDS:-3}"
 HYBRID_DOCKER_BUILD_MODE="${HYBRID_DOCKER_BUILD_MODE:-auto}"
 HYBRID_LOCAL_PYTHON_INSTALL_MODE="${HYBRID_LOCAL_PYTHON_INSTALL_MODE:-auto}"
+HYBRID_ENABLE_VOICE="${HYBRID_ENABLE_VOICE:-false}"
+PLAYWRIGHT_NPM_VERSION="${PLAYWRIGHT_NPM_VERSION:-latest}"
 DOCKER_BUILD_FINGERPRINT_FILE="${HYBRID_CACHE_DIR}/docker-build.sha256"
 LOCAL_PYTHON_INSTALL_FINGERPRINT_FILE="${HYBRID_CACHE_DIR}/local-python-install.sha256"
 DOCKER_DATABASE_URL="${MASTER_BUILDER_DOCKER_DATABASE_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}"
@@ -80,6 +83,84 @@ local_coolify_enabled() {
       return 2
       ;;
   esac
+}
+
+configured_android_aapt() {
+  local configured="${QA_DEMO_ANDROID_AAPT:-}"
+  if [[ -n "$configured" ]]; then
+    if [[ -x "$configured" ]]; then
+      printf '%s\n' "$configured"
+      return 0
+    fi
+    if command -v "$configured" >/dev/null 2>&1; then
+      command -v "$configured"
+      return 0
+    fi
+    echo "QA_DEMO_ANDROID_AAPT is configured but not executable or on PATH: ${configured}" >&2
+    return 1
+  fi
+
+  local sdk_root="${ANDROID_HOME:-${ANDROID_SDK_ROOT:-}}"
+  if [[ -z "$sdk_root" ]]; then
+    echo "ANDROID_HOME or ANDROID_SDK_ROOT is required for Android QA demo recording." >&2
+    return 1
+  fi
+  if [[ ! -d "${sdk_root}/build-tools" ]]; then
+    echo "Android SDK build-tools directory not found: ${sdk_root}/build-tools" >&2
+    return 1
+  fi
+
+  local candidate
+  candidate="$(find "${sdk_root}/build-tools" -mindepth 2 -maxdepth 2 -type f -name aapt | LC_ALL=C sort | tail -n 1)"
+  if [[ -z "$candidate" ]]; then
+    echo "No aapt binary found under Android SDK build-tools: ${sdk_root}/build-tools" >&2
+    return 1
+  fi
+  if [[ ! -x "$candidate" ]]; then
+    echo "Android aapt binary is not executable: ${candidate}" >&2
+    return 1
+  fi
+  printf '%s\n' "$candidate"
+}
+
+configure_android_qa_demo_tools() {
+  if [[ "${ORCHESTRATOR_QA_DEMO_ANDROID_WORKER_PLATFORM:-macos}" != "macos" ]]; then
+    return 0
+  fi
+  export QA_DEMO_ANDROID_AAPT
+  QA_DEMO_ANDROID_AAPT="$(configured_android_aapt)"
+}
+
+node_can_require_playwright_from() {
+  local module_dir="$1"
+  NODE_PATH="$module_dir" QA_DEMO_PLAYWRIGHT_MODULE_DIR="$module_dir" node -e 'require("playwright")' >/dev/null 2>&1
+}
+
+ensure_local_playwright_recorder_dependency() {
+  local configured_module_dir="${ORCHESTRATOR_QA_DEMO_PLAYWRIGHT_MODULE_DIR:-}"
+  if [[ -n "$configured_module_dir" ]]; then
+    if ! node_can_require_playwright_from "$configured_module_dir"; then
+      echo "ORCHESTRATOR_QA_DEMO_PLAYWRIGHT_MODULE_DIR does not provide require('playwright'): ${configured_module_dir}" >&2
+      return 1
+    fi
+    export QA_DEMO_PLAYWRIGHT_MODULE_DIR="$configured_module_dir"
+    return 0
+  fi
+
+  local module_dir="${HYBRID_NODE_TOOLS_DIR}/node_modules"
+  if ! node_can_require_playwright_from "$module_dir"; then
+    echo "Installing local Playwright dependency for QA demo browser recording..."
+    mkdir -p "$HYBRID_NODE_TOOLS_DIR"
+    npm --prefix "$HYBRID_NODE_TOOLS_DIR" install --no-audit --no-fund "playwright@${PLAYWRIGHT_NPM_VERSION}"
+    PLAYWRIGHT_BROWSERS_PATH="${HYBRID_NODE_TOOLS_DIR}/ms-playwright" npx --prefix "$HYBRID_NODE_TOOLS_DIR" playwright install chromium
+  fi
+  if ! node_can_require_playwright_from "$module_dir"; then
+    echo "Local Playwright dependency is not usable after install: ${module_dir}" >&2
+    return 1
+  fi
+  export ORCHESTRATOR_QA_DEMO_PLAYWRIGHT_MODULE_DIR="$module_dir"
+  export QA_DEMO_PLAYWRIGHT_MODULE_DIR="$module_dir"
+  export PLAYWRIGHT_BROWSERS_PATH="${HYBRID_NODE_TOOLS_DIR}/ms-playwright"
 }
 
 local_coolify_health_ready() {
@@ -133,6 +214,12 @@ start_local_coolify_if_configured() {
   if ! local_coolify_config_available; then
     echo "Local Coolify config not found at ${LOCAL_COOLIFY_DIR}."
     return 1
+  fi
+
+  if local_coolify_health_ready; then
+    echo "Local Coolify already ready."
+    start_local_coolify_proxy
+    return 0
   fi
 
   echo "Starting local Coolify..."
@@ -214,14 +301,32 @@ DOCKER_VOICE_SERVICES=(
   discord-live-voice
 )
 
+case "$HYBRID_ENABLE_VOICE" in
+  true)
+    echo "Hybrid voice services enabled."
+    ;;
+  false)
+    echo "Hybrid voice services disabled."
+    ;;
+  *)
+    echo "HYBRID_ENABLE_VOICE must be one of: true, false." >&2
+    exit 1
+    ;;
+esac
+
 DOCKER_STOP_BEFORE_MIGRATION_SERVICES=(
   "${DOCKER_BASE_APP_SERVICES[@]}"
-  "${DOCKER_VOICE_SERVICES[@]}"
   "${DOCKER_POST_API_SERVICES[@]}"
 )
 
-DOCKER_RUNTIME_SERVICES=("${DOCKER_BASE_RUNTIME_SERVICES[@]}" "${DOCKER_VOICE_SERVICES[@]}")
-DOCKER_APP_SERVICES=("${DOCKER_BASE_APP_SERVICES[@]}" "${DOCKER_VOICE_SERVICES[@]}")
+DOCKER_RUNTIME_SERVICES=("${DOCKER_BASE_RUNTIME_SERVICES[@]}")
+DOCKER_APP_SERVICES=("${DOCKER_BASE_APP_SERVICES[@]}")
+
+if [[ "$HYBRID_ENABLE_VOICE" == "true" ]]; then
+  DOCKER_STOP_BEFORE_MIGRATION_SERVICES+=("${DOCKER_VOICE_SERVICES[@]}")
+  DOCKER_RUNTIME_SERVICES+=("${DOCKER_VOICE_SERVICES[@]}")
+  DOCKER_APP_SERVICES+=("${DOCKER_VOICE_SERVICES[@]}")
+fi
 
 DOCKER_READY_SERVICES=(
   "${DOCKER_BASE_SERVICES[@]}"
@@ -721,9 +826,8 @@ trap cleanup EXIT INT TERM
 
 cleanup_dead_project_containers
 restart_existing_local_worker_if_owned
-stop_existing_app_services_before_migration
-
 start_local_coolify_if_configured
+stop_existing_app_services_before_migration
 run_compose_up
 
 echo "Waiting for Docker services to become healthy/ready..."
@@ -731,6 +835,10 @@ wait_for_docker_services_ready "$DOCKER_WAIT_TIMEOUT_SECONDS" "$DOCKER_WAIT_INTE
 
 if ! command -v npm >/dev/null 2>&1; then
   echo "npm is required to start admin-ui."
+  exit 1
+fi
+if ! command -v node >/dev/null 2>&1; then
+  echo "node is required for QA demo browser recording."
   exit 1
 fi
 
@@ -783,6 +891,8 @@ export ORCHESTRATOR_QA_DEMO_ARTIFACT_URL_TIMEOUT_SECONDS="${ORCHESTRATOR_QA_DEMO
 export ORCHESTRATOR_QA_DEMO_IOS_RECORDER_COMMAND="${ORCHESTRATOR_QA_DEMO_IOS_RECORDER_COMMAND:-}"
 export ORCHESTRATOR_QA_DEMO_IOS_CAPTURE_REFERENCE="${ORCHESTRATOR_QA_DEMO_IOS_CAPTURE_REFERENCE:-}"
 export ORCHESTRATOR_QA_DEMO_ANDROID_WORKER_PLATFORM="${ORCHESTRATOR_QA_DEMO_ANDROID_WORKER_PLATFORM:-macos}"
+configure_android_qa_demo_tools
+ensure_local_playwright_recorder_dependency
 export ORCHESTRATOR_WORKER_CAPABILITIES="${ORCHESTRATOR_WORKER_CAPABILITIES:-macos}"
 export ORCHESTRATOR_AGENT_ID="${ORCHESTRATOR_AGENT_ID:-worker-macos-local}"
 export ORCHESTRATOR_CODEX_SANDBOX_MODE="${ORCHESTRATOR_CODEX_SANDBOX_MODE:-danger-full-access}"

@@ -243,7 +243,8 @@ services:
       ORCHESTRATOR_SENTRY_TRACES_SAMPLE_RATE: ${ORCHESTRATOR_SENTRY_TRACES_SAMPLE_RATE:-0.0}
       ORCHESTRATOR_PROJECT_REPO_CHECKOUT_BASE_DIR: /tmp/master-builder-project-repos
       ORCHESTRATOR_WORKER_CAPABILITIES: ${ORCHESTRATOR_WORKER_CAPABILITIES:-linux}
-      ORCHESTRATOR_API_WORKERS: ${ORCHESTRATOR_API_WORKERS:-4}
+      ORCHESTRATOR_API_WORKERS: ${ORCHESTRATOR_API_WORKERS:-1}
+      ORCHESTRATOR_AUTO_MIGRATE_ON_STARTUP: ${ORCHESTRATOR_AUTO_MIGRATE_ON_STARTUP:-false}
       ORCHESTRATOR_UVICORN_WORKER_HEALTHCHECK_TIMEOUT_SECONDS: ${ORCHESTRATOR_UVICORN_WORKER_HEALTHCHECK_TIMEOUT_SECONDS:-180}
       ORCHESTRATOR_ORCHESTRATION_BACKEND: ${ORCHESTRATOR_ORCHESTRATION_BACKEND:-legacy}
       ORCHESTRATOR_TEMPORAL_TARGET_HOST: ${ORCHESTRATOR_TEMPORAL_TARGET_HOST:-temporal:7233}
@@ -279,7 +280,7 @@ services:
       - -ceu
       - |
         if [ -f /app/AGENTS.md ]; then cp /app/AGENTS.md /root/AGENTS.md; fi
-        uvicorn orchestrator.api.main:app --host 0.0.0.0 --port 4000 --workers "${ORCHESTRATOR_API_WORKERS:-4}" --timeout-worker-healthcheck "${ORCHESTRATOR_UVICORN_WORKER_HEALTHCHECK_TIMEOUT_SECONDS:-180}"
+        uvicorn orchestrator.api.main:app --host 0.0.0.0 --port 4000 --workers "${ORCHESTRATOR_API_WORKERS:-1}" --timeout-worker-healthcheck "${ORCHESTRATOR_UVICORN_WORKER_HEALTHCHECK_TIMEOUT_SECONDS:-180}"
     volumes:
       - codex-home:/root/.codex
       - ./.workdirs:/tmp/master-builder-project-repos
@@ -494,6 +495,42 @@ services:
       - deployment-host-state:/var/lib/master-builder/deployment-host
       - /var/run/docker.sock:/var/run/docker.sock
       - ${HOME}/.master-builder-coolify/proxy/dynamic:/var/lib/master-builder/coolify-proxy-dynamic
+
+  deployment-reconciler:
+    <<: *extra_hosts_host_gateway
+    build:
+      context: .
+      dockerfile: orchestrator/Dockerfile
+      target: app-runtime-base
+      args:
+        CODEX_NPM_VERSION: ${CODEX_NPM_VERSION:-latest}
+    container_name: master-builder-deployment-reconciler
+    restart: unless-stopped
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+      postgres:
+        condition: service_healthy
+      clickhouse:
+        condition: service_healthy
+      otel-collector:
+        condition: service_started
+    environment:
+      <<: *otel_env
+      ORCHESTRATOR_DATABASE_URL: ${ORCHESTRATOR_DATABASE_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
+      POSTGRES_URL: ${POSTGRES_URL:-postgresql+psycopg://orchestrator:orchestrator@postgres:5432/orchestrator}
+      ORCHESTRATOR_SECRETS_ENCRYPTION_KEY: ${ORCHESTRATOR_SECRETS_ENCRYPTION_KEY:?Set ORCHESTRATOR_SECRETS_ENCRYPTION_KEY}
+      ORCHESTRATOR_SENTRY_DSN: ${ORCHESTRATOR_SENTRY_DSN:-}
+      ORCHESTRATOR_SENTRY_ENVIRONMENT: ${ORCHESTRATOR_SENTRY_ENVIRONMENT:-dev}
+      ORCHESTRATOR_SENTRY_RELEASE: ${ORCHESTRATOR_SENTRY_RELEASE:-}
+      ORCHESTRATOR_SENTRY_TRACES_SAMPLE_RATE: ${ORCHESTRATOR_SENTRY_TRACES_SAMPLE_RATE:-0.0}
+      ORCHESTRATOR_DEPLOYMENT_RECONCILE_POLL_SECONDS: ${ORCHESTRATOR_DEPLOYMENT_RECONCILE_POLL_SECONDS:-30}
+      ORCHESTRATOR_DEPLOYMENT_RECONCILE_BATCH_SIZE: ${ORCHESTRATOR_DEPLOYMENT_RECONCILE_BATCH_SIZE:-25}
+    command:
+      - python
+      - -m
+      - orchestrator
+      - deployment-reconciler
 
 
   project-automation:

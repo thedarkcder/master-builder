@@ -172,6 +172,58 @@ def start_workflow_operation_attempt(
     return attempt
 
 
+def fail_active_workflow_operation_attempts_for_run(
+    session: Session,
+    *,
+    run_id: str,
+    error_message: str,
+    now: datetime | None = None,
+) -> int:
+    normalized_run_id = str(run_id or "").strip()
+    if not normalized_run_id:
+        return 0
+    timestamp = now or _now()
+    rows = session.execute(
+        select(WorkflowOperation, WorkflowOperationAttempt)
+        .join(WorkflowOperationAttempt, WorkflowOperationAttempt.operation_id == WorkflowOperation.operation_id)
+        .where(
+            WorkflowOperation.run_id == normalized_run_id,
+            WorkflowOperationAttempt.status.in_(ACTIVE_OPERATION_ATTEMPT_STATUSES),
+        )
+    ).all()
+    for operation, attempt in rows:
+        operation.status = OPERATION_STATUS_FAILED
+        operation.finished_at = timestamp
+        operation.updated_at = timestamp
+        attempt.status = OPERATION_STATUS_FAILED
+        attempt.error_category = "run_attempt_reset"
+        attempt.error_message = error_message
+        attempt.retryable = True
+        attempt.next_retry_at = None
+        attempt.last_heartbeat_at = timestamp
+        attempt.lease_expires_at = timestamp
+        attempt.finished_at = timestamp
+        record_workflow_operation_audit_event(
+            session,
+            operation=operation,
+            attempt_ref=_attempt_ref(operation=operation, attempt=attempt),
+            source_component="workflow_operation_service",
+            event_kind="attempt_failed",
+            level="warning",
+            message=error_message,
+            payload={"status": attempt.status, "error_category": attempt.error_category},
+        )
+        emit_workflow_operation_log(
+            session,
+            operation=operation,
+            attempt_ref=_attempt_ref(operation=operation, attempt=attempt),
+            event_type="workflow_operation_attempt_failed",
+            message=error_message,
+            metadata={"status": attempt.status, "error_category": attempt.error_category},
+        )
+    return len(rows)
+
+
 def touch_workflow_operation_attempt_heartbeat(
     session: Session,
     *,
