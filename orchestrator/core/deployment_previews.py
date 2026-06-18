@@ -125,6 +125,7 @@ def create_run_preview_deployment(
                     release=existing_release,
                     proof_scope_id=normalized_proof_scope_id,
                     commit_sha=artifact.commit_sha,
+                    settings=settings,
                 )
                 session.flush()
                 _signal_demo_proof_lease_acquired(
@@ -171,6 +172,7 @@ def create_run_preview_deployment(
             delivery_metadata=delivery_metadata,
             proof_scope_id=normalized_proof_scope_id,
             commit_sha=release_commit_sha,
+            settings=settings,
         )
     if str(deployment_config.get("source_strategy") or app.build_strategy or "").strip() == "docker_compose":
         generated_compose_raw = str(deployment_config.get("generated_compose_raw") or "").strip()
@@ -360,6 +362,8 @@ def _demo_proof_lease_metadata(release: ProjectDeploymentRelease) -> dict[str, s
         "proof_scope_id": str(raw_metadata.get("proof_scope_id") or "").strip(),
         "commit_sha": str(raw_metadata.get("commit_sha") or "").strip(),
         "state": str(raw_metadata.get("state") or "").strip(),
+        "acquired_at": str(raw_metadata.get("acquired_at") or "").strip(),
+        "expires_at": str(raw_metadata.get("expires_at") or "").strip(),
     }
 
 
@@ -368,14 +372,26 @@ def _delivery_metadata_with_demo_proof_lease(
     delivery_metadata: dict[str, object],
     proof_scope_id: str,
     commit_sha: str,
+    settings,  # noqa: ANN001
 ) -> dict[str, object]:
     updated = dict(delivery_metadata)
+    acquired_at = datetime.now(timezone.utc)
     updated[_DEMO_PROOF_LEASE_METADATA_KEY] = {
         "proof_scope_id": proof_scope_id,
         "commit_sha": commit_sha,
         "state": _DEMO_PROOF_LEASE_ACTIVE_STATE,
+        "acquired_at": acquired_at.isoformat(),
+        "expires_at": _demo_proof_lease_expires_at(settings=settings, acquired_at=acquired_at).isoformat(),
     }
     return updated
+
+
+def _demo_proof_lease_expires_at(*, settings, acquired_at: datetime) -> datetime:  # noqa: ANN001
+    try:
+        ttl_seconds = max(60, int(getattr(settings, "run_preview_release_ttl_seconds", 86400) or 86400))
+    except (TypeError, ValueError):
+        ttl_seconds = 86400
+    return _as_utc(acquired_at) + timedelta(seconds=ttl_seconds)
 
 
 def _attach_demo_proof_lease_metadata(
@@ -383,11 +399,13 @@ def _attach_demo_proof_lease_metadata(
     release: ProjectDeploymentRelease,
     proof_scope_id: str,
     commit_sha: str,
+    settings,  # noqa: ANN001
 ) -> None:
     release.delivery_metadata = _delivery_metadata_with_demo_proof_lease(
         delivery_metadata=release.delivery_metadata if isinstance(release.delivery_metadata, dict) else {},
         proof_scope_id=proof_scope_id,
         commit_sha=commit_sha,
+        settings=settings,
     )
     release.updated_at = datetime.now(timezone.utc)
 
@@ -573,7 +591,8 @@ def cleanup_stale_run_preview_deployments(
     now: datetime | None = None,
     exclude_release_ids: set[str] | None = None,
 ) -> PreviewCleanupResult:  # noqa: ANN001
-    cutoff = _run_preview_ttl_cutoff(settings=settings, now=now or datetime.now(timezone.utc))
+    cleanup_now = now or datetime.now(timezone.utc)
+    cutoff = _run_preview_ttl_cutoff(settings=settings, now=cleanup_now)
     excluded = set(exclude_release_ids or set())
     releases = session.execute(
         select(ProjectDeploymentRelease)
@@ -590,7 +609,8 @@ def cleanup_stale_run_preview_deployments(
     for release in releases:
         if release.release_id in excluded:
             continue
-        if not _run_preview_release_is_cleanup_due(release=release, ttl_cutoff=cutoff):
+        cleanup_reason = _run_preview_release_cleanup_reason(release=release, ttl_cutoff=cutoff, now=cleanup_now)
+        if cleanup_reason is None:
             continue
         try:
             destroyed_release = destroy_project_deployment_preview_release(
@@ -598,7 +618,7 @@ def cleanup_stale_run_preview_deployments(
                 tenant_id=release.tenant_id,
                 project_id=release.project_id,
                 release_id=release.release_id,
-                reason="preview_ttl_expired" if str(release.status or "").strip() == "live" else "preview_terminal_cleanup",
+                reason=cleanup_reason,
             )
         except HTTPException as exc:
             session.rollback()
@@ -621,16 +641,41 @@ def _run_preview_ttl_cutoff(*, settings, now: datetime) -> datetime:  # noqa: AN
     return _as_utc(now) - timedelta(seconds=ttl_seconds)
 
 
-def _run_preview_release_is_cleanup_due(*, release: ProjectDeploymentRelease, ttl_cutoff: datetime) -> bool:
+def _run_preview_release_cleanup_reason(
+    *,
+    release: ProjectDeploymentRelease,
+    ttl_cutoff: datetime,
+    now: datetime,
+) -> str | None:
     status = str(release.status or "").strip()
     if status in _FAILED_PREVIEW_RELEASE_STATUSES:
-        return True
+        return "preview_terminal_cleanup"
     if status != "live":
-        return False
+        return None
+    if _demo_proof_lease_expired(release=release, now=now):
+        return "demo_proof_lease_expired"
     anchor = release.completed_at or release.updated_at or release.created_at
     if anchor is None:
+        return None
+    if _as_utc(anchor) <= ttl_cutoff:
+        return "preview_ttl_expired"
+    return None
+
+
+def _demo_proof_lease_expired(*, release: ProjectDeploymentRelease, now: datetime) -> bool:
+    metadata = _demo_proof_lease_metadata(release)
+    if metadata.get("state") != _DEMO_PROOF_LEASE_ACTIVE_STATE:
         return False
-    return _as_utc(anchor) <= ttl_cutoff
+    expires_at = metadata.get("expires_at")
+    if not expires_at:
+        return False
+    try:
+        parsed_expires_at = datetime.fromisoformat(expires_at)
+    except ValueError as exc:
+        raise RuntimeError(
+            f"Demo proof preview lease expires_at is invalid for release {release.release_id}"
+        ) from exc
+    return _as_utc(parsed_expires_at) <= _as_utc(now)
 
 
 def _as_utc(value: datetime) -> datetime:

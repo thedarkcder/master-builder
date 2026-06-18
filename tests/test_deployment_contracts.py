@@ -923,6 +923,11 @@ class DeploymentContractTests(unittest.TestCase):
         self.assertEqual(payload.delivery_metadata["demo_proof_lease"]["proof_scope_id"], "run:run-1:" + "b" * 40)
         self.assertEqual(payload.delivery_metadata["demo_proof_lease"]["commit_sha"], "b" * 40)
         self.assertEqual(payload.delivery_metadata["demo_proof_lease"]["state"], "active")
+        self.assertIn("acquired_at", payload.delivery_metadata["demo_proof_lease"])
+        self.assertIn("expires_at", payload.delivery_metadata["demo_proof_lease"])
+        expires_at = datetime.fromisoformat(payload.delivery_metadata["demo_proof_lease"]["expires_at"])
+        self.assertGreater(expires_at, datetime.now(timezone.utc) + timedelta(hours=20))
+        self.assertLess(expires_at, datetime.now(timezone.utc) + timedelta(hours=25))
 
     def test_run_preview_generation_signals_demo_proof_lease_before_release_create(self) -> None:
         now = datetime.now(timezone.utc)
@@ -2207,6 +2212,67 @@ class DeploymentContractTests(unittest.TestCase):
             assert release is not None
             self.assertEqual(release.status, "destroyed")
             self.assertEqual(release.provider_context["destroy_reason"], "preview_ttl_expired")
+
+    def test_reconciler_cleans_live_demo_proof_preview_when_lease_expires(self) -> None:
+        self._seed_tenant_project_app()
+        now = datetime.now(timezone.utc)
+        with self.session_factory() as session:
+            session.add(
+                ProjectDeploymentRelease(
+                    release_id="expired-demo-proof-preview-cleanup",
+                    tenant_id="tenant-1",
+                    project_id="project-1",
+                    app_id="app-1",
+                    provider="internal_coolify",
+                    release_kind="run_preview",
+                    status="live",
+                    environment_name="production",
+                    source_strategy="dockerfile",
+                    git_ref="run/ap-123/run-1",
+                    commit_sha="a" * 40,
+                    source_run_id="run-1",
+                    pr_number=12,
+                    requested_by_user_id=None,
+                    deployment_snapshot={},
+                    provider_context={"application_uuid": "expired-demo-proof-app"},
+                    delivery_metadata={
+                        "demo_proof_lease": {
+                            "proof_scope_id": "run:run-1:" + "a" * 40,
+                            "commit_sha": "a" * 40,
+                            "state": "active",
+                            "expires_at": (now - timedelta(minutes=5)).isoformat(),
+                        }
+                    },
+                    last_error=None,
+                    requested_at=now,
+                    started_at=now,
+                    completed_at=now,
+                    destroyed_at=None,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            session.commit()
+
+        with (
+            patch("orchestrator.api.admin.deployment_release_service._resolve_secret_value", return_value="token"),
+            patch("orchestrator.api.admin.deployment_release_service.CoolifyApiClient") as coolify_client_cls,
+            patch("orchestrator.api.admin.deployment_release_service.ensure_local_preview_route_cleanup_command"),
+        ):
+            processed = reconcile_deployment_releases_once(
+                session_factory=self.session_factory,
+                settings=SimpleNamespace(deployment_reconcile_batch_size=25, run_preview_release_ttl_seconds=86400),
+            )
+
+        self.assertEqual(processed, 1)
+        coolify_client_cls.return_value.delete_application.assert_called_once_with(
+            application_uuid="expired-demo-proof-app"
+        )
+        with self.session_factory() as session:
+            release = session.get(ProjectDeploymentRelease, "expired-demo-proof-preview-cleanup")
+            assert release is not None
+            self.assertEqual(release.status, "destroyed")
+            self.assertEqual(release.provider_context["destroy_reason"], "demo_proof_lease_expired")
 
     def test_reconciler_keeps_unexpired_live_run_preview_provider_resource(self) -> None:
         self._seed_tenant_project_app()
