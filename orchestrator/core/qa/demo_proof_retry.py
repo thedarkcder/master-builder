@@ -20,6 +20,7 @@ from orchestrator.core.workflow.type_catalog import (
     DEMO_PROOF_STEP_RECORDING,
     DEMO_PROOF_STEP_RELEASE,
 )
+from orchestrator.core.workflow.work_units import seed_declared_work_units_for_operation_attempt
 from orchestrator.storage.models import Project, Tenant
 
 
@@ -138,6 +139,17 @@ class DemoProofWorkflowOperationRetryHandler:
             target_system=str(getattr(request.operation, "target_system", "") or "").strip() or "master_builder",
             target_ref=proof_scope_id,
             summary=f"Retry demo proof operation {operation_type} for proof scope {proof_scope_id}.",
+        )
+        seed_declared_work_units_for_operation_attempt(
+            request.session,
+            workflow_type=request.workflow_type,
+            operation=operation,
+            operation_attempt=attempt,
+            input_payload={
+                "proof_scope_id": proof_scope_id,
+                "run_id": _run_id(request=request),
+                "summary": f"Retry demo proof operation {operation_type} for proof scope {proof_scope_id}.",
+            },
         )
         lifecycle.wait_started_operation(
             operation=operation,

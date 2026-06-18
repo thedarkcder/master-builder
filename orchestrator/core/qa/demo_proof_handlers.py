@@ -25,6 +25,11 @@ from orchestrator.core.workflow.type_catalog import (
     DEMO_PROOF_STEP_RECORDING,
     DEMO_PROOF_STEP_RELEASE,
 )
+from orchestrator.core.workflow.work_units import (
+    complete_work_units_for_operation_attempt,
+    fail_work_units_for_operation_attempt,
+    seed_declared_work_units_for_operation_attempt,
+)
 from orchestrator.storage.models import Project, Tenant
 from orchestrator.storage.models import WorkflowExecution, WorkflowOperation, WorkflowOperationAttempt
 
@@ -723,6 +728,17 @@ def _wait_for_operation_once(
         target_system="master_builder",
         target_ref=proof_scope_id,
         summary=summary,
+    )
+    seed_declared_work_units_for_operation_attempt(
+        session,
+        workflow_type=lifecycle.workflow_type,
+        operation=operation,
+        operation_attempt=attempt,
+        input_payload={
+            "proof_scope_id": proof_scope_id,
+            "run_id": run_id,
+            "summary": summary,
+        },
     )
     lifecycle.wait_started_operation(
         operation=operation,
@@ -2067,6 +2083,13 @@ def _fail_waiting_operation_event(
         category=category,
         message=message,
     )
+    fail_work_units_for_operation_attempt(
+        session,
+        operation=operation,
+        operation_attempt=attempt,
+        category=category,
+        message=message,
+    )
     mark_workflow_failed(workflow=lifecycle.workflow, message=message)
     session.flush()
     return message
@@ -2337,9 +2360,14 @@ class DemoProofWorkflowAdvanceHandler:
                 proof_scope_id=proof_scope_id,
             )
         _require_terminal_proof_metadata(event=event, description=description, proof_scope_id=proof_scope_id)
-        lifecycle.complete_waiting_operation_attempt(
+        operation, attempt = lifecycle.complete_waiting_operation_attempt(
             operation_type=completed_operation_type,
             summary=f"Applied {event} for demo proof scope {proof_scope_id}.",
+        )
+        complete_work_units_for_operation_attempt(
+            session,
+            operation=operation,
+            operation_attempt=attempt,
         )
         if next_operation_type is not None:
             _wait_for_operation_once(
