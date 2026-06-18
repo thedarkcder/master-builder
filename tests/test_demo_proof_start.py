@@ -1912,6 +1912,62 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
             description = json.loads(workflow.source_description or "{}")
             assert description["demo_proof_state"] == "complete"
 
+    def test_demo_proof_happy_path_allows_lease_acquired_before_release_identity_exists(self) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-a")
+            workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
+            request = _demo_proof_request(tenant=tenant)
+            execute_workflow_advance(
+                session=session,
+                settings=SimpleNamespace(),
+                workflow_type=workflow_type,
+                request=request,
+                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+            )
+
+            for event in (
+                "ProofLeaseAcquired",
+                "ReleaseRequested",
+                "ReleaseProvisioning",
+                "ReleaseLive",
+                "RouteReady",
+                "ServiceVerificationPassed",
+                "RecordingStarted",
+                "RecordingCompleted",
+                "EvidenceUploadStarted",
+                "EvidenceUploaded",
+                "PREvidenceAttachStarted",
+                "PREvidenceAttached",
+                "PreviewCleanupRequested",
+                "PreviewCleanupCompleted",
+            ):
+                event_request = _demo_proof_request_for_event(request, event)
+                if event == "ProofLeaseAcquired":
+                    payload = dict(event_request.payload)
+                    metadata = dict(payload["event_metadata"])
+                    metadata.pop("release_id", None)
+                    metadata.pop("release_commit_sha", None)
+                    payload["event_metadata"] = metadata
+                    event_request = replace(event_request, payload=payload)
+                execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=event_request,
+                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                )
+
+            workflow = session.execute(select(WorkflowExecution)).scalar_one()
+            assert workflow.status == "completed"
+            description = json.loads(workflow.source_description or "{}")
+            metadata_by_event = {
+                item["event"]: item["metadata"]
+                for item in description["demo_proof_event_metadata"]
+                if isinstance(item, dict)
+            }
+            assert "release_id" not in metadata_by_event["ProofLeaseAcquired"]
+            assert metadata_by_event["ReleaseLive"]["release_id"] == "release-preview-1"
+
     def test_demo_proof_rejects_completion_without_auditable_lifecycle_metadata(self) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
