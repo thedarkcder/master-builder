@@ -17,6 +17,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 
+from orchestrator.api.admin.deployment_release_service import get_project_deployment_release_logs
 from orchestrator.core.runtime.agent_runtime_resolver import build_runtime_for_selector
 from orchestrator.core.runtime.agents import CodexWorkflowAgents
 from orchestrator.core.runtime.runtime import build_codex_runtime
@@ -233,6 +234,85 @@ def release_context_sha256_for_release(*, release, release_service_urls: list[di
     }
     serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def _release_readiness_failure_diagnostics(
+    *,
+    session,  # noqa: ANN001
+    tenant,  # noqa: ANN001
+    project,  # noqa: ANN001
+    preview_release,  # noqa: ANN001
+    release_service_urls: list[dict[str, str]],
+) -> str:
+    release_id = str(getattr(preview_release, "release_id", "") or "").strip()
+    app_id = str(getattr(preview_release, "app_id", "") or "").strip() or None
+    provider = str(getattr(preview_release, "provider", "") or "").strip()
+    release_status = str(getattr(preview_release, "status", "") or "").strip()
+    lines = [
+        f"release_id: {release_id or '<missing>'}",
+        f"release_status: {release_status or '<missing>'}",
+        f"release_provider: {provider or '<missing>'}",
+        "release_service_urls:",
+        json.dumps(release_service_urls, sort_keys=True),
+    ]
+    if not release_id:
+        lines.extend(
+            [
+                "provider_logs_status: unavailable",
+                "provider_logs_error: preview release id is missing",
+            ]
+        )
+        return "\n".join(lines).strip()
+    try:
+        logs = get_project_deployment_release_logs(
+            session=session,
+            tenant_id=str(getattr(tenant, "tenant_id", "") or "").strip(),
+            project_id=str(getattr(project, "project_id", "") or "").strip(),
+            release_id=release_id,
+            app_id=app_id,
+        )
+    except Exception as exc:  # noqa: BLE001
+        lines.extend(
+            [
+                "provider_logs_status: unavailable",
+                f"provider_logs_error: {type(exc).__name__}: {exc}",
+            ]
+        )
+        return "\n".join(lines).strip()
+    provider_logs = str(getattr(logs, "logs", "") or "").strip()
+    lines.extend(
+        [
+            "provider_logs_status: available",
+            f"provider_deployment_uuid: {str(getattr(logs, 'deployment_uuid', '') or '').strip() or '<missing>'}",
+            f"provider_application_uuid: {str(getattr(logs, 'application_uuid', '') or '').strip() or '<missing>'}",
+            f"provider_release_status: {str(getattr(logs, 'status', '') or '').strip() or '<missing>'}",
+            f"provider_logs_truncated: {str(bool(getattr(logs, 'truncated', False))).lower()}",
+            "provider_logs:",
+            provider_logs or "<empty>",
+        ]
+    )
+    return "\n".join(lines).strip()
+
+
+def _append_failure_diagnostics(*, failure_message: str, diagnostics: str) -> str:
+    normalized_diagnostics = str(diagnostics or "").strip()
+    if not normalized_diagnostics:
+        return failure_message
+    return f"{failure_message}\n\nRelease diagnostics:\n{normalized_diagnostics}"
+
+
+def _ensure_failure_evidence_has_diagnostics(
+    evidence: list[LocalQaFailureEvidence],
+    *,
+    failure_message: str,
+) -> list[LocalQaFailureEvidence]:
+    updated: list[LocalQaFailureEvidence] = []
+    for item in evidence:
+        if failure_message in item.error_message:
+            updated.append(item)
+        else:
+            updated.append(replace(item, error_message=f"{item.error_message}\n\n{failure_message}".strip()))
+    return updated
 
 
 def _service_kind_from_item(item: object) -> str | None:
@@ -2127,7 +2207,10 @@ def _capture_release_readiness_diagnostic_failure_evidence(
 
 def _capture_release_readiness_failure_evidence(
     *,
+    session,  # noqa: ANN001
     settings,  # noqa: ANN001
+    tenant,  # noqa: ANN001
+    project,  # noqa: ANN001
     request: WorkflowRequest,
     preview_release,  # noqa: ANN001
     release_service_urls: list[dict[str, str]],
@@ -2136,6 +2219,16 @@ def _capture_release_readiness_failure_evidence(
     failure_message: str,
 ) -> list[LocalQaFailureEvidence]:
     available_targets = resolve_available_capture_targets(settings=settings, preview_release=preview_release)
+    diagnostic_failure_message = _append_failure_diagnostics(
+        failure_message=failure_message,
+        diagnostics=_release_readiness_failure_diagnostics(
+            session=session,
+            tenant=tenant,
+            project=project,
+            preview_release=preview_release,
+            release_service_urls=release_service_urls,
+        ),
+    )
     browser_target = available_targets.get("browser")
     evidence: list[LocalQaFailureEvidence] = []
     if browser_target is not None and _capture_target_runs_on_worker(capture_target=browser_target, request=request):
@@ -2144,7 +2237,7 @@ def _capture_release_readiness_failure_evidence(
             objective="Record the preview release failing to load before QA demo execution.",
             capture_target="browser",
             start_path="/",
-            expected_outcomes=[failure_message],
+            expected_outcomes=[diagnostic_failure_message],
             steps=[
                 QaStep(
                     action="assert_visible",
@@ -2165,10 +2258,16 @@ def _capture_release_readiness_failure_evidence(
                 release_commit_sha=release_commit_sha,
             )
         except QaDemoRecordingFailure as exc:
-            evidence.extend(exc.failure_evidence)
+            evidence.extend(
+                _ensure_failure_evidence_has_diagnostics(
+                    exc.failure_evidence,
+                    failure_message=diagnostic_failure_message,
+                )
+            )
         except Exception as exc:  # noqa: BLE001
-            failure_message = (
-                f"{failure_message} Browser release-readiness failure recording did not produce video evidence: "
+            diagnostic_failure_message = (
+                f"{diagnostic_failure_message} Browser release-readiness failure recording did not produce video "
+                "evidence: "
                 f"{type(exc).__name__}: {exc}"
             )
     evidence.extend(
@@ -2177,7 +2276,7 @@ def _capture_release_readiness_failure_evidence(
             available_targets=available_targets,
             required_capture_targets=required_capture_targets,
             existing_evidence=evidence,
-            failure_message=failure_message,
+            failure_message=diagnostic_failure_message,
         )
     )
     return evidence
@@ -2640,7 +2739,10 @@ def execute_qa_demo_stage(
         message = f"QA demo recording cannot start because the release did not load: {exc}"
         release_commit_sha = str(getattr(preview_release, "commit_sha", "") or "").strip()
         local_failure_evidence = _capture_release_readiness_failure_evidence(
+            session=session,
             settings=settings,
+            tenant=tenant,
+            project=project,
             request=request,
             preview_release=preview_release,
             release_service_urls=recorder_release_service_urls,
