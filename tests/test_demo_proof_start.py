@@ -4846,6 +4846,92 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 "preview_cleanup": ["completed"],
             }
 
+    def test_demo_proof_recording_work_units_include_real_release_context(self) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-a")
+            workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
+            request = _demo_proof_request(tenant=tenant)
+            execute_workflow_advance(
+                session=session,
+                settings=SimpleNamespace(),
+                workflow_type=workflow_type,
+                request=request,
+                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+            )
+
+            for event in (
+                "ProofLeaseAcquired",
+                "ReleaseRequested",
+                "ReleaseProvisioning",
+                "ReleaseLive",
+                "RouteReady",
+                "ServiceVerificationPassed",
+            ):
+                execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=_demo_proof_request_for_event(request, event),
+                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                )
+
+            workflow = session.execute(select(WorkflowExecution)).scalar_one()
+            recording_operation = session.execute(
+                select(WorkflowOperation).where(
+                    WorkflowOperation.workflow_id == workflow.workflow_id,
+                    WorkflowOperation.operation_type == "recording",
+                )
+            ).scalar_one()
+            recording_attempt = session.execute(
+                select(WorkflowOperationAttempt).where(
+                    WorkflowOperationAttempt.operation_id == recording_operation.operation_id,
+                )
+            ).scalar_one()
+            recording_work_units = session.execute(
+                select(WorkflowOperationWorkUnit)
+                .where(WorkflowOperationWorkUnit.operation_id == recording_operation.operation_id)
+                .order_by(WorkflowOperationWorkUnit.unit_key)
+            ).scalars().all()
+            service_metadata = _service_verification_metadata()
+            expected_payload = {
+                "proof_scope_id": "run-1-main-abcdef1",
+                "commit_sha": "abcdef1",
+                "trigger_mode": "from_run",
+                "run_id": "run-1",
+                "release_id": "release-preview-1",
+                "release_commit_sha": "b" * 40,
+                "demo_proof_lease": _demo_proof_lease_metadata(),
+                "release_service_urls": service_metadata["service_urls"],
+                "pr_url": "https://github.com/acme/project-a/pull/8",
+                "required_capture_targets": ["browser", "ios", "android"],
+                "required_recording_counts": {"browser": 1, "ios": 1, "android": 1},
+                "summary": (
+                    "Waiting for recording event for demo proof scope run-1-main-abcdef1 "
+                    "across required capture target(s): browser, ios, android."
+                ),
+            }
+
+            assert [work_unit.unit_key for work_unit in recording_work_units] == [
+                "recording.android",
+                "recording.browser",
+                "recording.ios",
+            ]
+            assert [
+                work_unit.input_fingerprint for work_unit in recording_work_units
+            ] == [
+                workflow_work_unit_input_fingerprint(
+                    {
+                        "workflow_id": workflow.workflow_id,
+                        "operation_id": recording_operation.operation_id,
+                        "operation_type": recording_operation.operation_type,
+                        "operation_attempt_id": recording_attempt.attempt_id,
+                        "unit_key": work_unit.unit_key,
+                        "input": expected_payload,
+                    }
+                )
+                for work_unit in recording_work_units
+            ]
+
     def test_demo_proof_failure_evidence_events_complete_operations_then_block_workflow(self) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
@@ -5236,7 +5322,9 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 "commit_sha": "abcdef1",
                 "trigger_mode": "from_run",
                 "run_id": "run-1",
-                "release_id": None,
+                "release_id": "release-preview-1",
+                "release_commit_sha": "b" * 40,
+                "demo_proof_lease": _demo_proof_lease_metadata(),
                 "pr_url": "https://github.com/acme/project-a/pull/8",
                 "required_capture_targets": ["browser", "ios", "android"],
                 "required_recording_counts": {"browser": 1, "ios": 1, "android": 1},
