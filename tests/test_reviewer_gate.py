@@ -71,6 +71,8 @@ class ReviewerGateTests(unittest.TestCase):
         current_run_id: str = "run-1",
         expected_recordings: tuple[dict[str, str], ...] | None = None,
         use_recordings_resolver: bool = False,
+        demo_proof_status: dict[str, object] | None = None,
+        use_demo_proof_status_resolver: bool = False,
     ) -> ReviewAgentGate:
         return ReviewAgentGate(
             client,
@@ -82,6 +84,9 @@ class ReviewerGateTests(unittest.TestCase):
             demo_evidence_run_id_resolver=lambda _pr_url: current_run_id,
             demo_evidence_recordings_resolver=(lambda _run_id: expected_recordings)
             if expected_recordings is not None or use_recordings_resolver
+            else None,
+            demo_proof_status_resolver=(lambda _pr_url: demo_proof_status)
+            if demo_proof_status is not None or use_demo_proof_status_resolver
             else None,
         )
 
@@ -794,6 +799,117 @@ class ReviewerGateTests(unittest.TestCase):
                 ),
             ),
             expected_recordings=(expected_recording,),
+        )
+
+        signal = gate.evaluate_pr(
+            repo_full_name="example/repo",
+            pr_number=21,
+        )
+
+        self.assertTrue(signal.ready)
+        self.assertEqual(signal.state, "ready")
+
+    def test_reviewer_blocks_structured_demo_evidence_until_durable_demo_proof_completes(self) -> None:
+        expected_recording = {
+            "name": "Browser happy path",
+            "capture_target": "browser",
+            "capture_reference": "https://preview.example",
+            "object_key": "route25/route25-default/run-1/qa-demo-1.webm",
+            "content_sha256": "0" * 63 + "1",
+            "release_commit_sha": "b" * 40,
+            "release_context_sha256": "a" * 64,
+            "artifact_url": "https://cdn.example/qa-demos/route25/route25-default/run-1/qa-demo-1.webm",
+        }
+        gate = self._gate_with_demo_requirement(
+            _FakeGitHubClient(
+                checks=[
+                    WorkflowCheckSuite(name="CI", status="completed", conclusion="success"),
+                    WorkflowCheckSuite(name="Security", status="completed", conclusion="success"),
+                ],
+                files=[
+                    PullRequestFileChange(filename="orchestrator/core/reviewer.py", patch="+ change"),
+                    PullRequestFileChange(filename="tests/test_reviewer_gate.py", patch="+ test"),
+                ],
+                review_body=(
+                    "Good:\n- implemented\n\n"
+                    "Risks:\n- low\n\n"
+                    "Must-fix:\n- none\n\n"
+                    "Tests:\n- pytest -q\n\n"
+                    "Questions:\n- none\n\n"
+                    "Follow-ups:\n- none\n\n"
+                    "## Demo Evidence\n"
+                    "<!-- master-builder:qa-demo-evidence v1 -->\n"
+                    "<!-- master-builder:qa-demo-required-targets browser -->\n"
+                    "<!-- master-builder:qa-demo-required-counts browser=1 -->\n"
+                    "- Browser happy path [target=browser; reference=https://preview.example; "
+                    "object_key=route25/route25-default/run-1/qa-demo-1.webm; "
+                    "sha256=0000000000000000000000000000000000000000000000000000000000000001; "
+                    "release_commit_sha=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb; "
+                    "release_context_sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa]: "
+                    "https://cdn.example/qa-demos/route25/route25-default/run-1/qa-demo-1.webm\n"
+                ),
+            ),
+            expected_recordings=(expected_recording,),
+            demo_proof_status={"status": "waiting_for_input", "demo_proof_state": "recording"},
+        )
+
+        signal = gate.evaluate_pr(
+            repo_full_name="example/repo",
+            pr_number=21,
+        )
+
+        self.assertFalse(signal.ready)
+        self.assertEqual(signal.state, "missing_demo_evidence")
+
+    def test_reviewer_accepts_structured_demo_evidence_after_durable_demo_proof_completes(self) -> None:
+        artifact_url = "https://cdn.example/qa-demos/route25/route25-default/run-1/qa-demo-1.webm"
+        expected_recording = {
+            "name": "Browser happy path",
+            "capture_target": "browser",
+            "capture_reference": "https://preview.example",
+            "object_key": "route25/route25-default/run-1/qa-demo-1.webm",
+            "content_sha256": "0" * 63 + "1",
+            "release_commit_sha": "b" * 40,
+            "release_context_sha256": "a" * 64,
+            "artifact_url": artifact_url,
+        }
+        gate = self._gate_with_demo_requirement(
+            _FakeGitHubClient(
+                checks=[
+                    WorkflowCheckSuite(name="CI", status="completed", conclusion="success"),
+                    WorkflowCheckSuite(name="Security", status="completed", conclusion="success"),
+                ],
+                files=[
+                    PullRequestFileChange(filename="orchestrator/core/reviewer.py", patch="+ change"),
+                    PullRequestFileChange(filename="tests/test_reviewer_gate.py", patch="+ test"),
+                ],
+                review_body=(
+                    "Good:\n- implemented\n\n"
+                    "Risks:\n- low\n\n"
+                    "Must-fix:\n- none\n\n"
+                    "Tests:\n- pytest -q\n\n"
+                    "Questions:\n- none\n\n"
+                    "Follow-ups:\n- none\n\n"
+                    "## Demo Evidence\n"
+                    "<!-- master-builder:qa-demo-evidence v1 -->\n"
+                    "<!-- master-builder:qa-demo-required-targets browser -->\n"
+                    "<!-- master-builder:qa-demo-required-counts browser=1 -->\n"
+                    "- Browser happy path [target=browser; reference=https://preview.example; "
+                    "object_key=route25/route25-default/run-1/qa-demo-1.webm; "
+                    "sha256=0000000000000000000000000000000000000000000000000000000000000001; "
+                    "release_commit_sha=bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb; "
+                    "release_context_sha256=aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa]: "
+                    f"{artifact_url}\n"
+                ),
+            ),
+            expected_recordings=(expected_recording,),
+            demo_proof_status={
+                "status": "completed",
+                "demo_proof_state": "complete",
+                "terminal_event": "PreviewCleanupCompleted",
+                "artifact_url_check_status": "passed",
+                "checked_artifact_urls": (artifact_url,),
+            },
         )
 
         signal = gate.evaluate_pr(

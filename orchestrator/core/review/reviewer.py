@@ -58,6 +58,7 @@ class ReviewAgentGate:
         demo_artifact_public_base_url: str | None = None,
         demo_evidence_run_id_resolver: Callable[[str], str | None] | None = None,
         demo_evidence_recordings_resolver: Callable[[str], tuple[dict[str, str], ...] | None] | None = None,
+        demo_proof_status_resolver: Callable[[str], dict[str, object] | None] | None = None,
     ):
         self._github_client = github_client
         self._required_workflows = required_workflows
@@ -68,6 +69,7 @@ class ReviewAgentGate:
         self._demo_artifact_public_base_url = str(demo_artifact_public_base_url or "").strip().rstrip("/")
         self._demo_evidence_run_id_resolver = demo_evidence_run_id_resolver
         self._demo_evidence_recordings_resolver = demo_evidence_recordings_resolver
+        self._demo_proof_status_resolver = demo_proof_status_resolver
 
     def evaluate_pr(
         self,
@@ -148,8 +150,20 @@ class ReviewAgentGate:
             )
 
         if self._require_demo_evidence:
+            pr_url = str(pr.html_url or "").strip()
+            if self._demo_proof_status_resolver is not None:
+                demo_proof_status = self._demo_proof_status_resolver(pr_url)
+                if not _demo_proof_status_ready(demo_proof_status):
+                    return ReviewerSignal(
+                        ready=False,
+                        state="missing_demo_evidence",
+                        message="PR blocked: completed QA demo proof workflow is required before ready-for-review signaling",
+                        readiness=readiness,
+                        must_fix_findings=("Complete the QA demo proof workflow and attach checked evidence links.",),
+                        policy_pack=selected_policy_pack_key,
+                    )
             expected_run_id = (
-                self._demo_evidence_run_id_resolver(str(pr.html_url or "").strip())
+                self._demo_evidence_run_id_resolver(pr_url)
                 if self._demo_evidence_run_id_resolver is not None
                 else None
             )
@@ -479,6 +493,21 @@ def _demo_evidence_present(
         return False
     recorded_counts = Counter(structured_match.group("target") for structured_match in structured_matches)
     return all(recorded_counts.get(target, 0) >= count for target, count in embedded_required_counts.items())
+
+
+def _demo_proof_status_ready(status: dict[str, object] | None) -> bool:
+    if not isinstance(status, dict):
+        return False
+    if str(status.get("status") or "").strip() != "completed":
+        return False
+    if str(status.get("demo_proof_state") or "").strip() != "complete":
+        return False
+    if str(status.get("terminal_event") or "").strip() != "PreviewCleanupCompleted":
+        return False
+    if str(status.get("artifact_url_check_status") or "").strip() != "passed":
+        return False
+    checked_urls = status.get("checked_artifact_urls")
+    return isinstance(checked_urls, tuple | list) and bool(checked_urls)
 
 
 def _structured_demo_evidence_matches_expected_recordings(
