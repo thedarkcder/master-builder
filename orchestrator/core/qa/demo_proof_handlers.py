@@ -412,6 +412,13 @@ def _metadata_field_is_present(value: object) -> bool:
     return value is not None
 
 
+def _metadata_string_set(value: object) -> set[str]:
+    if isinstance(value, list):
+        return {str(item or "").strip() for item in value if str(item or "").strip()}
+    normalized = str(value or "").strip()
+    return {normalized} if normalized else set()
+
+
 def _require_terminal_proof_metadata(
     *,
     event: str,
@@ -439,6 +446,15 @@ def _require_terminal_proof_metadata(
             f"Demo proof scope {proof_scope_id} requires auditable metadata before terminal completion: "
             + ", ".join(missing)
         )
+    if event == "PreviewCleanupCompleted":
+        required_targets = set(_normalized_capture_targets(list(description.get("required_capture_targets") or [])))
+        evidence_targets = _metadata_string_set(metadata.get("EvidenceUploaded", {}).get("capture_targets"))
+        missing_targets = sorted(required_targets - evidence_targets)
+        if missing_targets:
+            raise RuntimeError(
+                f"Demo proof scope {proof_scope_id} evidence metadata is missing required capture target(s): "
+                + ", ".join(missing_targets)
+            )
 
 
 def _observe_waiting_operation_event(
