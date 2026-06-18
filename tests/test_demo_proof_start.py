@@ -121,14 +121,20 @@ def _demo_proof_event_metadata(event: str) -> dict[str, object] | None:
             ],
         }
     if event == "FailureEvidenceUploaded":
+        artifact_url = "https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-failure-1.webm"
         return {
-            "artifact_urls": ["https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-failure-1.webm"],
+            "artifact_urls": [artifact_url],
             "failure_evidence_count": 1,
             "capture_targets": ["browser"],
             "failure_evidence": [
                 {
                     "capture_target": "browser",
-                    "artifact_url": "https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-failure-1.webm",
+                    "artifact_url": artifact_url,
+                    "object_key": "tenant-1/project-1/run-1/qa-failure-1.webm",
+                    "capture_reference": "https://preview.example/browser",
+                    "content_sha256": "d" * 64,
+                    "release_commit_sha": "b" * 40,
+                    "release_context_sha256": "c" * 64,
                     "error_message": "QA Demo Ready was not visible; app did not load",
                 }
             ],
@@ -1336,10 +1342,143 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
                 )
             except RuntimeError as exc:
-                assert "failure evidence metadata is missing diagnostic evidence" in str(exc)
+                assert "failure evidence metadata is missing uploaded diagnostic artifact metadata" in str(exc)
                 assert "browser" in str(exc)
             else:  # pragma: no cover
                 raise AssertionError("expected demo proof failure completion to require diagnostic evidence metadata")
+
+    def test_demo_proof_rejects_failure_completion_without_uploaded_failure_artifact_metadata(self) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-a")
+            workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
+            request = _demo_proof_request(tenant=tenant)
+            execute_workflow_advance(
+                session=session,
+                settings=SimpleNamespace(),
+                workflow_type=workflow_type,
+                request=request,
+                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+            )
+
+            for event in (
+                "ProofLeaseAcquired",
+                "ReleaseRequested",
+                "ReleaseProvisioning",
+                "ReleaseLive",
+                "RouteReady",
+                "ServiceVerificationPassed",
+                "RecordingStarted",
+                "RecordingFailureEvidenceCaptured",
+                "FailureEvidenceUploadStarted",
+                "FailureEvidenceUploaded",
+                "PRFailureEvidenceAttachStarted",
+                "PRFailureEvidenceAttached",
+                "FailurePreviewCleanupRequested",
+            ):
+                event_request = _demo_proof_request_for_event(request, event)
+                if event == "FailureEvidenceUploaded":
+                    payload = dict(event_request.payload)
+                    payload["event_metadata"] = {
+                        "artifact_urls": [
+                            "https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-failure-1.webm"
+                        ],
+                        "failure_evidence_count": 1,
+                        "capture_targets": ["browser"],
+                        "failure_evidence": [
+                            {
+                                "capture_target": "browser",
+                                "artifact_url": (
+                                    "https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-failure-1.webm"
+                                ),
+                                "error_message": "QA Demo Ready was not visible; app did not load",
+                            }
+                        ],
+                    }
+                    event_request = replace(event_request, payload=payload)
+                execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=event_request,
+                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                )
+
+            try:
+                execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=_demo_proof_request_for_event(request, "FailurePreviewCleanupCompleted"),
+                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                )
+            except RuntimeError as exc:
+                assert "failure evidence metadata is missing uploaded diagnostic artifact metadata" in str(exc)
+                assert "browser" in str(exc)
+            else:  # pragma: no cover
+                raise AssertionError("expected demo proof failure completion to require failure artifact metadata")
+
+    def test_demo_proof_rejects_failure_completion_when_failure_evidence_release_commit_mismatches_release(
+        self,
+    ) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-a")
+            workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
+            request = _demo_proof_request(tenant=tenant)
+            execute_workflow_advance(
+                session=session,
+                settings=SimpleNamespace(),
+                workflow_type=workflow_type,
+                request=request,
+                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+            )
+
+            for event in (
+                "ProofLeaseAcquired",
+                "ReleaseRequested",
+                "ReleaseProvisioning",
+                "ReleaseLive",
+                "RouteReady",
+                "ServiceVerificationPassed",
+                "RecordingStarted",
+                "RecordingFailureEvidenceCaptured",
+                "FailureEvidenceUploadStarted",
+                "FailureEvidenceUploaded",
+                "PRFailureEvidenceAttachStarted",
+                "PRFailureEvidenceAttached",
+                "FailurePreviewCleanupRequested",
+            ):
+                event_request = _demo_proof_request_for_event(request, event)
+                if event == "FailureEvidenceUploaded":
+                    metadata = _demo_proof_event_metadata(event)
+                    assert metadata is not None
+                    failure_evidence = list(metadata["failure_evidence"])
+                    failure_evidence[0] = {**failure_evidence[0], "release_commit_sha": "e" * 40}
+                    payload = dict(event_request.payload)
+                    payload["event_metadata"] = {**metadata, "failure_evidence": failure_evidence}
+                    event_request = replace(event_request, payload=payload)
+                execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=event_request,
+                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                )
+
+            try:
+                execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=_demo_proof_request_for_event(request, "FailurePreviewCleanupCompleted"),
+                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                )
+            except RuntimeError as exc:
+                assert "failure evidence metadata release commit does not match ReleaseLive.release_commit_sha" in str(
+                    exc
+                )
+                assert "browser" in str(exc)
+            else:  # pragma: no cover
+                raise AssertionError("expected demo proof failure completion to reject mismatched release commit")
 
     def test_demo_proof_persists_lifecycle_event_metadata_for_auditable_chain(self) -> None:
         with self.session_factory() as session:

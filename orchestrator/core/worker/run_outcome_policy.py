@@ -1407,11 +1407,23 @@ def _qa_demo_proof_event_metadata(*, proof_context, event: str) -> dict[str, obj
                     {
                         "capture_target": str(getattr(item, "capture_target", "") or "").strip(),
                         "artifact_url": str(getattr(item, "artifact_url", "") or "").strip(),
+                        "object_key": str(getattr(item, "object_key", "") or "").strip(),
+                        "capture_reference": str(getattr(item, "capture_reference", "") or "").strip(),
+                        "content_sha256": str(getattr(item, "content_sha256", "") or "").strip(),
+                        "release_commit_sha": str(getattr(item, "release_commit_sha", "") or "").strip(),
+                        "release_context_sha256": str(
+                            getattr(item, "release_context_sha256", "") or ""
+                        ).strip(),
                         "error_message": str(getattr(item, "error_message", "") or "").strip(),
                     }
                     for item in failure_evidence
                     if str(getattr(item, "capture_target", "") or "").strip()
                     and str(getattr(item, "artifact_url", "") or "").strip()
+                    and str(getattr(item, "object_key", "") or "").strip()
+                    and str(getattr(item, "capture_reference", "") or "").strip()
+                    and str(getattr(item, "content_sha256", "") or "").strip()
+                    and str(getattr(item, "release_commit_sha", "") or "").strip()
+                    and str(getattr(item, "release_context_sha256", "") or "").strip()
                     and str(getattr(item, "error_message", "") or "").strip()
                 ],
             }

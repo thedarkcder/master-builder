@@ -1844,6 +1844,11 @@ def test_complete_attaches_qa_failure_evidence_to_pr_before_blocking_ready_revie
         {
             "capture_target": "browser",
             "artifact_url": "https://cdn.example/qa-failure-1.webm",
+            "object_key": "tenant-1/project-1/run-1/qa-failure-1.webm",
+            "capture_reference": "https://preview.example",
+            "content_sha256": f"{101:064x}",
+            "release_commit_sha": "b" * 40,
+            "release_context_sha256": f"{999:064x}",
             "error_message": "QA Demo Ready was not visible\nBrowser diagnostics:\npageerror: process is not defined",
         }
     ]
