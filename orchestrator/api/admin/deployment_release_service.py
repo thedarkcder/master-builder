@@ -65,6 +65,8 @@ _RELEASE_ALLOWED_TRANSITIONS = {
     "destroyed": set(),
 }
 _MAX_PROVIDER_LOG_CHARS = 60_000
+_DEMO_PROOF_LEASE_METADATA_KEY = "demo_proof_lease"
+_DEMO_PROOF_LEASE_DESTROYED_STATE = "destroyed"
 
 
 @dataclass(frozen=True)
@@ -91,6 +93,24 @@ def _coerce_dict(value: object) -> dict[str, object]:
 def _normalize_optional_string(value: object) -> str | None:
     normalized = str(value or "").strip()
     return normalized or None
+
+
+def _mark_demo_proof_lease_destroyed(
+    *,
+    release: ProjectDeploymentRelease,
+    reason: str,
+    destroyed_at: datetime,
+) -> None:
+    delivery_metadata = _coerce_dict(release.delivery_metadata)
+    lease_metadata = delivery_metadata.get(_DEMO_PROOF_LEASE_METADATA_KEY)
+    if not isinstance(lease_metadata, dict):
+        return
+    updated_lease = dict(lease_metadata)
+    updated_lease["state"] = _DEMO_PROOF_LEASE_DESTROYED_STATE
+    updated_lease["destroy_reason"] = _normalize_optional_string(reason) or "preview_cleanup"
+    updated_lease["destroyed_at"] = destroyed_at.isoformat()
+    delivery_metadata[_DEMO_PROOF_LEASE_METADATA_KEY] = updated_lease
+    release.delivery_metadata = delivery_metadata
 
 
 def _route_binding_external_url(value: dict[str, object]) -> str | None:
@@ -708,6 +728,13 @@ def destroy_project_deployment_preview_release(
     if str(release.release_kind or "").strip() != "run_preview":
         raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Only run preview releases can be destroyed here")
     if str(release.status or "").strip() == "destroyed":
+        _mark_demo_proof_lease_destroyed(
+            release=release,
+            reason=reason,
+            destroyed_at=release.destroyed_at or datetime.now(timezone.utc),
+        )
+        session.commit()
+        session.refresh(release)
         return _project_deployment_release_to_schema_with_source(session=session, tenant=tenant, release=release)
 
     provider_context = _coerce_dict(release.provider_context)
@@ -748,6 +775,11 @@ def destroy_project_deployment_preview_release(
     if not should_delete_application and application_uuid is not None:
         provider_context["application_retained_for_replacement"] = True
     release.provider_context = provider_context
+    _mark_demo_proof_lease_destroyed(
+        release=release,
+        reason=reason,
+        destroyed_at=datetime.now(timezone.utc),
+    )
     updated = update_project_deployment_release_status(
         session=session,
         tenant_id=tenant_id,

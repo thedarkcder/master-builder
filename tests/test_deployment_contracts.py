@@ -1982,6 +1982,70 @@ class DeploymentContractTests(unittest.TestCase):
         self.assertEqual(updated.provider_context["destroy_reason"], "preview_replaced")
         self.assertNotIn("application_retained_for_replacement", updated.provider_context)
 
+    def test_destroy_run_preview_release_marks_demo_proof_lease_destroyed(self) -> None:
+        self._seed_tenant_project_app()
+        now = datetime.now(timezone.utc)
+        with self.session_factory() as session:
+            session.add(
+                ProjectDeploymentRelease(
+                    release_id="release-proof-preview",
+                    tenant_id="tenant-1",
+                    project_id="project-1",
+                    app_id="app-1",
+                    provider="internal_coolify",
+                    release_kind="run_preview",
+                    status="live",
+                    environment_name="production",
+                    source_strategy="dockerfile",
+                    git_ref="run/ap-123/run-1",
+                    commit_sha="a" * 40,
+                    source_run_id="run-1",
+                    pr_number=12,
+                    requested_by_user_id=None,
+                    deployment_snapshot={},
+                    provider_context={
+                        "base_domain": "apps.example.com",
+                        "application_uuid": "proof-preview-app",
+                    },
+                    delivery_metadata={
+                        "demo_proof_lease": {
+                            "proof_scope_id": "run:run-1:" + "a" * 40,
+                            "commit_sha": "a" * 40,
+                            "state": "active",
+                            "acquired_at": now.isoformat(),
+                            "expires_at": (now + timedelta(hours=1)).isoformat(),
+                        }
+                    },
+                    last_error=None,
+                    requested_at=now,
+                    started_at=now,
+                    completed_at=now,
+                    destroyed_at=None,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            session.commit()
+
+            with (
+                patch("orchestrator.api.admin.deployment_release_service._resolve_secret_value", return_value="token"),
+                patch("orchestrator.api.admin.deployment_release_service.CoolifyApiClient") as coolify_client_cls,
+                patch("orchestrator.api.admin.deployment_release_service.ensure_local_preview_route_cleanup_command"),
+            ):
+                updated = destroy_project_deployment_preview_release(
+                    session=session,
+                    tenant_id="tenant-1",
+                    project_id="project-1",
+                    release_id="release-proof-preview",
+                    reason="qa_demo_complete",
+                )
+
+        coolify_client_cls.return_value.delete_application.assert_called_once_with(application_uuid="proof-preview-app")
+        self.assertEqual(updated.status, "destroyed")
+        self.assertEqual(updated.delivery_metadata["demo_proof_lease"]["state"], "destroyed")
+        self.assertEqual(updated.delivery_metadata["demo_proof_lease"]["destroy_reason"], "qa_demo_complete")
+        self.assertIn("destroyed_at", updated.delivery_metadata["demo_proof_lease"])
+
     def test_run_preview_generation_stops_after_destroyed_failed_preview_retry_limit(self) -> None:
         now = datetime.now(timezone.utc)
         with self.session_factory() as session:
@@ -2370,6 +2434,69 @@ class DeploymentContractTests(unittest.TestCase):
 
         coolify_client_cls.assert_not_called()
         self.assertEqual(updated.status, "destroyed")
+
+    def test_destroy_run_preview_release_repairs_stale_demo_proof_lease_on_idempotent_cleanup(self) -> None:
+        self._seed_tenant_project_app()
+        now = datetime.now(timezone.utc)
+        with self.session_factory() as session:
+            session.add(
+                ProjectDeploymentRelease(
+                    release_id="release-preview-destroyed-stale-lease",
+                    tenant_id="tenant-1",
+                    project_id="project-1",
+                    app_id="app-1",
+                    provider="internal_coolify",
+                    release_kind="run_preview",
+                    status="destroyed",
+                    environment_name="production",
+                    source_strategy="dockerfile",
+                    git_ref="run/ap-123/run-1",
+                    commit_sha="a" * 40,
+                    source_run_id="run-1",
+                    pr_number=12,
+                    requested_by_user_id=None,
+                    deployment_snapshot={},
+                    provider_context={
+                        "base_domain": "apps.example.com",
+                        "application_uuid": "old-app",
+                        "status_before_destroy": "live",
+                    },
+                    delivery_metadata={
+                        "demo_proof_lease": {
+                            "proof_scope_id": "run:run-1:" + "a" * 40,
+                            "commit_sha": "a" * 40,
+                            "state": "active",
+                            "acquired_at": now.isoformat(),
+                            "expires_at": (now - timedelta(minutes=1)).isoformat(),
+                        }
+                    },
+                    last_error=None,
+                    requested_at=now,
+                    started_at=now,
+                    completed_at=now,
+                    destroyed_at=now,
+                    created_at=now,
+                    updated_at=now,
+                )
+            )
+            session.commit()
+
+            with patch("orchestrator.api.admin.deployment_release_service.CoolifyApiClient") as coolify_client_cls:
+                updated = destroy_project_deployment_preview_release(
+                    session=session,
+                    tenant_id="tenant-1",
+                    project_id="project-1",
+                    release_id="release-preview-destroyed-stale-lease",
+                    reason="demo_proof_lease_expired",
+                )
+
+        coolify_client_cls.assert_not_called()
+        self.assertEqual(updated.status, "destroyed")
+        self.assertEqual(updated.delivery_metadata["demo_proof_lease"]["state"], "destroyed")
+        self.assertEqual(
+            updated.delivery_metadata["demo_proof_lease"]["destroy_reason"],
+            "demo_proof_lease_expired",
+        )
 
     def test_destroy_run_preview_release_for_replacement_no_longer_retains_existing_coolify_app(self) -> None:
         self._seed_tenant_project_app()
