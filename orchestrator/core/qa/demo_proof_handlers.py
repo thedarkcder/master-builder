@@ -76,6 +76,29 @@ _DEMO_PROOF_EVENTS: dict[str, tuple[str, str | None, str]] = {
     ),
 }
 
+_DEMO_PROOF_OBSERVATION_EVENTS: dict[str, tuple[str, str]] = {
+    "ReleaseRequested": (DEMO_PROOF_STEP_RELEASE, "release_requested_observed"),
+    "ReleaseProvisioning": (DEMO_PROOF_STEP_RELEASE, "release_provisioning_observed"),
+    "ReleaseLive": (DEMO_PROOF_STEP_RELEASE, "release_live_observed"),
+    "RouteReady": (DEMO_PROOF_STEP_RELEASE, "route_ready_observed"),
+    "RecordingStarted": (DEMO_PROOF_STEP_RECORDING, "recording_started_observed"),
+    "EvidenceUploadStarted": (DEMO_PROOF_STEP_EVIDENCE_UPLOAD, "evidence_upload_started_observed"),
+    "PREvidenceAttachStarted": (DEMO_PROOF_STEP_PR_EVIDENCE_UPDATE, "pr_evidence_attach_started_observed"),
+    "PreviewCleanupRequested": (DEMO_PROOF_STEP_PREVIEW_CLEANUP, "preview_cleanup_requested_observed"),
+    "FailureEvidenceUploadStarted": (
+        DEMO_PROOF_STEP_EVIDENCE_UPLOAD,
+        "failure_evidence_upload_started_observed",
+    ),
+    "PRFailureEvidenceAttachStarted": (
+        DEMO_PROOF_STEP_PR_EVIDENCE_UPDATE,
+        "pr_failure_evidence_attach_started_observed",
+    ),
+    "FailurePreviewCleanupRequested": (
+        DEMO_PROOF_STEP_PREVIEW_CLEANUP,
+        "failure_preview_cleanup_requested_observed",
+    ),
+}
+
 
 def _required_payload_string(payload: dict[str, object], field_name: str) -> str:
     value = str(payload.get(field_name) or "").strip()
@@ -129,6 +152,27 @@ def _wait_for_operation_once(
         operation=operation,
         attempt=attempt,
         summary=summary,
+    )
+
+
+def _observe_waiting_operation_event(
+    *,
+    session,  # noqa: ANN001
+    lifecycle,  # noqa: ANN001
+    operation_type: str,
+    event: str,
+    proof_scope_id: str,
+) -> None:
+    current_status = _workflow_operation_status(
+        session=session,
+        workflow_id=lifecycle.workflow.workflow_id,
+        operation_type=operation_type,
+    )
+    if current_status in {OPERATION_STATUS_RUNNING, OPERATION_STATUS_WAITING_FOR_INPUT}:
+        return
+    raise RuntimeError(
+        f"Cannot apply demo proof event {event} to operation {operation_type} from current status {current_status} "
+        f"for proof scope {proof_scope_id}."
     )
 
 
@@ -211,6 +255,25 @@ class DemoProofWorkflowAdvanceHandler:
         proof_scope_id: str,
         run_id: str | None,
     ) -> WorkflowAdvanceOutcome:
+        observation_spec = _DEMO_PROOF_OBSERVATION_EVENTS.get(event)
+        if observation_spec is not None:
+            operation_type, reason = observation_spec
+            _observe_waiting_operation_event(
+                session=session,
+                lifecycle=lifecycle,
+                operation_type=operation_type,
+                event=event,
+                proof_scope_id=proof_scope_id,
+            )
+            return WorkflowAdvanceOutcome(
+                handled=True,
+                reason=reason,
+                extra={
+                    "workflow_id": lifecycle.workflow.workflow_id,
+                    "execution_id": lifecycle.workflow.execution_id,
+                    "proof_scope_id": proof_scope_id,
+                },
+            )
         event_spec = _DEMO_PROOF_EVENTS.get(event)
         if event_spec is None:
             raise RuntimeError(f"Unsupported demo proof workflow event: {event}")

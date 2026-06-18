@@ -29,14 +29,26 @@ _QA_DEMO_PREVIEW_PENDING_STATUSES = frozenset({"queued", "provisioning", "deploy
 _QA_DEMO_PREVIEW_TERMINAL_FAILURE_STATUSES = frozenset({"failed", "rolled_back", "destroyed"})
 _QA_DEMO_SUCCESS_PROOF_EVENTS_BEFORE_PR = (
     "ProofLeaseAcquired",
+    "ReleaseRequested",
+    "ReleaseProvisioning",
+    "ReleaseLive",
+    "RouteReady",
     "ServiceVerificationPassed",
+    "RecordingStarted",
     "RecordingCompleted",
+    "EvidenceUploadStarted",
     "EvidenceUploaded",
 )
 _QA_DEMO_FAILURE_PROOF_EVENTS_BEFORE_PR = (
     "ProofLeaseAcquired",
+    "ReleaseRequested",
+    "ReleaseProvisioning",
+    "ReleaseLive",
+    "RouteReady",
     "ServiceVerificationPassed",
+    "RecordingStarted",
     "RecordingFailureEvidenceCaptured",
+    "FailureEvidenceUploadStarted",
     "FailureEvidenceUploaded",
 )
 
@@ -524,7 +536,7 @@ class RunOutcomePolicy:
                     )
                     self._advance_qa_demo_proof_events(
                         proof_context=proof_context,
-                        events=("PRFailureEvidenceAttached",),
+                        events=("PRFailureEvidenceAttachStarted", "PRFailureEvidenceAttached"),
                     )
                 except Exception as exc:  # noqa: BLE001
                     message = f"QA demo failure evidence PR update failed: {type(exc).__name__}: {exc}"
@@ -560,7 +572,7 @@ class RunOutcomePolicy:
                 try:
                     self._advance_qa_demo_proof_events(
                         proof_context=proof_context,
-                        events=("FailurePreviewCleanupCompleted",),
+                        events=("FailurePreviewCleanupRequested", "FailurePreviewCleanupCompleted"),
                     )
                 except Exception as exc:  # noqa: BLE001
                     message = f"QA demo failure proof cleanup event failed: {type(exc).__name__}: {exc}"
@@ -662,7 +674,7 @@ class RunOutcomePolicy:
         try:
             self._advance_qa_demo_proof_events(
                 proof_context=proof_context,
-                events=("PREvidenceAttached",),
+                events=("PREvidenceAttachStarted", "PREvidenceAttached"),
             )
         except Exception as exc:  # noqa: BLE001
             message = f"QA demo proof workflow PR evidence event failed: {type(exc).__name__}: {exc}"
@@ -716,7 +728,7 @@ class RunOutcomePolicy:
         try:
             self._advance_qa_demo_proof_events(
                 proof_context=proof_context,
-                events=("PreviewCleanupCompleted",),
+                events=("PreviewCleanupRequested", "PreviewCleanupCompleted"),
             )
             self._mark_pull_request_ready_after_demo_proof(
                 prepared=prepared,
