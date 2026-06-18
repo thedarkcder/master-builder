@@ -60,6 +60,7 @@ def _demo_proof_event_metadata(event: str) -> dict[str, object] | None:
             "release_id": "release-preview-1",
             "release_kind": "run_preview",
             "release_status": "live",
+            **({"cleanup_status": "completed"} if event.endswith("CleanupCompleted") else {}),
         }
     if event == "EvidenceUploaded":
         return {
@@ -575,6 +576,62 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 assert "missing required capture target(s): android, ios" in str(exc)
             else:  # pragma: no cover
                 raise AssertionError("expected demo proof completion to require all capture targets")
+
+    def test_demo_proof_rejects_success_completion_without_cleanup_status_metadata(self) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-a")
+            workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
+            request = _demo_proof_request(tenant=tenant)
+            execute_workflow_advance(
+                session=session,
+                settings=SimpleNamespace(),
+                workflow_type=workflow_type,
+                request=request,
+                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+            )
+
+            for event in (
+                "ProofLeaseAcquired",
+                "ReleaseRequested",
+                "ReleaseProvisioning",
+                "ReleaseLive",
+                "RouteReady",
+                "ServiceVerificationPassed",
+                "RecordingStarted",
+                "RecordingCompleted",
+                "EvidenceUploadStarted",
+                "EvidenceUploaded",
+                "PREvidenceAttachStarted",
+                "PREvidenceAttached",
+                "PreviewCleanupRequested",
+            ):
+                execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=_demo_proof_request_for_event(request, event),
+                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                )
+
+            terminal_request = _demo_proof_request_for_event(request, "PreviewCleanupCompleted")
+            payload = dict(terminal_request.payload)
+            payload["event_metadata"] = {
+                "release_id": "release-preview-1",
+                "release_kind": "run_preview",
+                "release_status": "live",
+            }
+            try:
+                execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=replace(terminal_request, payload=payload),
+                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                )
+            except RuntimeError as exc:
+                assert "PreviewCleanupCompleted.cleanup_status" in str(exc)
+            else:  # pragma: no cover
+                raise AssertionError("expected demo proof completion to require cleanup status metadata")
 
     def test_demo_proof_rejects_failure_completion_without_failure_capture_target_metadata(self) -> None:
         with self.session_factory() as session:

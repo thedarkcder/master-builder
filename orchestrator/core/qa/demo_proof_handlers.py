@@ -156,13 +156,13 @@ _SUCCESS_TERMINAL_METADATA_REQUIREMENTS: dict[str, tuple[str, ...]] = {
     "ReleaseLive": ("release_id",),
     "EvidenceUploaded": ("artifact_urls",),
     "PREvidenceAttached": ("pr_url",),
-    "PreviewCleanupCompleted": ("release_id",),
+    "PreviewCleanupCompleted": ("release_id", "cleanup_status"),
 }
 _FAILURE_TERMINAL_METADATA_REQUIREMENTS: dict[str, tuple[str, ...]] = {
     "ReleaseLive": ("release_id",),
     "FailureEvidenceUploaded": ("artifact_urls", "capture_targets"),
     "PRFailureEvidenceAttached": ("pr_url",),
-    "FailurePreviewCleanupCompleted": ("release_id",),
+    "FailurePreviewCleanupCompleted": ("release_id", "cleanup_status"),
 }
 _RECORDING_EVENT_STATES = {
     "ServiceVerificationPassed": "waiting_for_recording",
