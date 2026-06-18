@@ -406,6 +406,79 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
             description = json.loads(workflow.source_description or "{}")
             assert description["demo_proof_state"] == "complete"
 
+    def test_demo_proof_tracks_required_platform_recording_workflows(self) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-a")
+            workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
+            request = _demo_proof_request(tenant=tenant)
+            execute_workflow_advance(
+                session=session,
+                settings=SimpleNamespace(),
+                workflow_type=workflow_type,
+                request=request,
+                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+            )
+
+            for event in (
+                "ProofLeaseAcquired",
+                "ReleaseRequested",
+                "ReleaseProvisioning",
+                "ReleaseLive",
+                "RouteReady",
+                "ServiceVerificationPassed",
+            ):
+                execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=replace(request, trigger=WorkflowTrigger(event=event)),
+                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                )
+
+            workflow = session.execute(select(WorkflowExecution)).scalar_one()
+            recording_operation = session.execute(
+                select(WorkflowOperation).where(
+                    WorkflowOperation.workflow_id == workflow.workflow_id,
+                    WorkflowOperation.operation_type == "recording",
+                )
+            ).scalar_one()
+            assert recording_operation.status == "waiting_for_input"
+            assert "browser, ios, android" in str(recording_operation.summary)
+            description = json.loads(workflow.source_description or "{}")
+            assert description["recording_workflows"] == [
+                {"capture_target": "browser", "state": "waiting_for_recording"},
+                {"capture_target": "ios", "state": "waiting_for_recording"},
+                {"capture_target": "android", "state": "waiting_for_recording"},
+            ]
+
+            execute_workflow_advance(
+                session=session,
+                settings=SimpleNamespace(),
+                workflow_type=workflow_type,
+                request=replace(request, trigger=WorkflowTrigger(event="RecordingStarted")),
+                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+            )
+            description = json.loads(workflow.source_description or "{}")
+            assert description["recording_workflows"] == [
+                {"capture_target": "browser", "state": "recording"},
+                {"capture_target": "ios", "state": "recording"},
+                {"capture_target": "android", "state": "recording"},
+            ]
+
+            execute_workflow_advance(
+                session=session,
+                settings=SimpleNamespace(),
+                workflow_type=workflow_type,
+                request=replace(request, trigger=WorkflowTrigger(event="RecordingCompleted")),
+                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+            )
+            description = json.loads(workflow.source_description or "{}")
+            assert description["recording_workflows"] == [
+                {"capture_target": "browser", "state": "recorded"},
+                {"capture_target": "ios", "state": "recorded"},
+                {"capture_target": "android", "state": "recorded"},
+            ]
+
     def test_demo_proof_handler_rejects_service_verified_before_release_route_is_ready(self) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
