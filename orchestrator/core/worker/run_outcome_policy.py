@@ -1534,6 +1534,7 @@ def _qa_demo_lease_metadata(*, preview_release) -> dict[str, str]:  # noqa: ANN0
     return {
         key: value
         for key, value in {
+            "lease_id": str(lease_metadata.get("lease_id") or "").strip(),
             "proof_scope_id": str(lease_metadata.get("proof_scope_id") or "").strip(),
             "commit_sha": str(lease_metadata.get("commit_sha") or "").strip(),
             "state": str(lease_metadata.get("state") or "").strip(),
@@ -1559,6 +1560,7 @@ def _qa_demo_cleanup_evidence_metadata(*, preview_release) -> dict[str, object]:
         key: value
         for key, value in {
             "release_id": release_id,
+            "lease_id": str(lease_metadata.get("lease_id") or "").strip(),
             "proof_scope_id": str(lease_metadata.get("proof_scope_id") or "").strip(),
             "commit_sha": str(lease_metadata.get("commit_sha") or "").strip(),
             "cleanup_status": cleanup_status,

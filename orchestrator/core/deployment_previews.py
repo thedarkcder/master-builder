@@ -359,6 +359,7 @@ def _demo_proof_lease_metadata(release: ProjectDeploymentRelease) -> dict[str, s
     if not isinstance(raw_metadata, dict):
         return {}
     return {
+        "lease_id": str(raw_metadata.get("lease_id") or "").strip(),
         "proof_scope_id": str(raw_metadata.get("proof_scope_id") or "").strip(),
         "commit_sha": str(raw_metadata.get("commit_sha") or "").strip(),
         "state": str(raw_metadata.get("state") or "").strip(),
@@ -377,6 +378,7 @@ def _delivery_metadata_with_demo_proof_lease(
     updated = dict(delivery_metadata)
     acquired_at = datetime.now(timezone.utc)
     updated[_DEMO_PROOF_LEASE_METADATA_KEY] = {
+        "lease_id": _demo_proof_lease_id(proof_scope_id=proof_scope_id, commit_sha=commit_sha),
         "proof_scope_id": proof_scope_id,
         "commit_sha": commit_sha,
         "state": _DEMO_PROOF_LEASE_ACTIVE_STATE,
@@ -384,6 +386,10 @@ def _delivery_metadata_with_demo_proof_lease(
         "expires_at": _demo_proof_lease_expires_at(settings=settings, acquired_at=acquired_at).isoformat(),
     }
     return updated
+
+
+def _demo_proof_lease_id(*, proof_scope_id: str, commit_sha: str) -> str:
+    return f"demo-proof-lease:{proof_scope_id}:{commit_sha}"
 
 
 def _demo_proof_lease_expires_at(*, settings, acquired_at: datetime) -> datetime:  # noqa: ANN001

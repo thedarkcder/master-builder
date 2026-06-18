@@ -565,6 +565,7 @@ _FAILURE_EVIDENCE_REQUIRED_FIELDS = frozenset(
 )
 _DEMO_PROOF_LEASE_REQUIRED_FIELDS = frozenset(
     {
+        "lease_id",
         "proof_scope_id",
         "commit_sha",
         "state",
@@ -657,7 +658,15 @@ def _require_cleanup_evidence_metadata(*, value: object, event: str, proof_scope
         raise RuntimeError(
             f"Demo proof scope {proof_scope_id} requires {event}.cleanup_evidence to be a JSON object"
         )
-    required = ("release_id", "proof_scope_id", "commit_sha", "cleanup_status", "cleanup_mode", "lease_state")
+    required = (
+        "release_id",
+        "lease_id",
+        "proof_scope_id",
+        "commit_sha",
+        "cleanup_status",
+        "cleanup_mode",
+        "lease_state",
+    )
     missing = [field for field in required if not str(value.get(field) or "").strip()]
     if missing:
         raise RuntimeError(
@@ -746,7 +755,8 @@ def _require_lease_scope_identity(
     if not release_lease:
         raise RuntimeError(
             f"Demo proof scope {proof_scope_id} requires ReleaseLive.demo_proof_lease metadata before terminal "
-            "completion."
+            "completion: "
+            + ", ".join(f"ReleaseLive.demo_proof_lease.{field}" for field in sorted(_DEMO_PROOF_LEASE_REQUIRED_FIELDS))
         )
     release_proof_scope_id = _metadata_string(release_lease.get("proof_scope_id"))
     if release_proof_scope_id != proof_scope_id:
@@ -764,6 +774,17 @@ def _require_lease_scope_identity(
         raise RuntimeError(
             f"Demo proof scope {proof_scope_id} cleanup evidence must reference proof scope {proof_scope_id}: "
             f"{event}.cleanup_evidence.proof_scope_id={cleanup_proof_scope_id or '<missing>'}"
+        )
+    release_lease_id = _metadata_string(release_lease.get("lease_id"))
+    cleanup_lease_id = (
+        _metadata_string(cleanup_evidence.get("lease_id"))
+        if isinstance(cleanup_evidence, dict)
+        else ""
+    )
+    if cleanup_lease_id != release_lease_id:
+        raise RuntimeError(
+            f"Demo proof scope {proof_scope_id} cleanup evidence must reference ReleaseLive.demo_proof_lease.lease_id "
+            f"{release_lease_id}: {event}.cleanup_evidence.lease_id={cleanup_lease_id or '<missing>'}"
         )
     release_commit_sha = _metadata_string(release_metadata.get("release_commit_sha")).lower()
     lease_commit_sha = _metadata_string(release_lease.get("commit_sha")).lower()
