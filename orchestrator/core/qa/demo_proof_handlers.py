@@ -1108,6 +1108,22 @@ def _demo_proof_lease_metadata(value: object) -> dict[str, str]:
     return {}
 
 
+def _require_demo_proof_lease_state(
+    *,
+    lease_metadata: dict[str, str],
+    event: str,
+    expected_state: str,
+    proof_scope_id: str,
+) -> None:
+    lease_state = _metadata_string(lease_metadata.get("state"))
+    if lease_state == expected_state:
+        return
+    raise RuntimeError(
+        f"Demo proof scope {proof_scope_id} {event}.demo_proof_lease.state must be {expected_state}: "
+        f"{lease_state or '<missing>'}"
+    )
+
+
 def _require_cleanup_evidence_metadata(*, value: object, event: str, proof_scope_id: str) -> None:
     if not isinstance(value, dict):
         raise RuntimeError(
@@ -1542,6 +1558,12 @@ def _require_proof_lease_acquired_metadata(*, description: dict[str, object], pr
             f"Demo proof scope {proof_scope_id} requires scoped lease metadata before release request: "
             + ", ".join(missing)
         )
+    _require_demo_proof_lease_state(
+        lease_metadata=lease_metadata,
+        event="ProofLeaseAcquired",
+        expected_state="active",
+        proof_scope_id=proof_scope_id,
+    )
     lease_proof_scope_id = _metadata_string(lease_metadata.get("proof_scope_id"))
     lease_commit_sha = _metadata_string(lease_metadata.get("commit_sha")).lower()
     if lease_proof_scope_id != proof_scope_id:
