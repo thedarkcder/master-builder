@@ -367,6 +367,7 @@ def _start_demo_proof_workflow(
     commit_sha = str(payload.input.get("commit_sha") or "").strip()
     trigger_mode = str(payload.input.get("trigger_mode") or "").strip()
     run_id = str(payload.input.get("run_id") or "").strip() or None
+    release_id = str(payload.input.get("release_id") or "").strip() or None
     pr_url = str(payload.input.get("pr_url") or "").strip() or None
     required_capture_targets = payload.input.get("required_capture_targets")
     if required_capture_targets is not None and not isinstance(required_capture_targets, list):
@@ -384,6 +385,7 @@ def _start_demo_proof_workflow(
             commit_sha=commit_sha,
             trigger_mode=trigger_mode,
             run_id=run_id,
+            release_id=release_id,
             pr_url=pr_url,
             required_capture_targets=required_capture_targets,
             trigger_event="admin_workflow_start",

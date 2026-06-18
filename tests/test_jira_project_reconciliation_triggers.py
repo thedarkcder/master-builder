@@ -142,6 +142,52 @@ class JiraProjectReconciliationTriggerTests(AdminApiTestHarness):
         self.assertEqual(start_kwargs["required_capture_targets"], ["browser", "ios", "android"])
         self.assertEqual(start_kwargs["trigger_event"], "admin_workflow_start")
 
+    def test_generic_workflow_start_route_starts_from_release_demo_proof_with_release_id(self) -> None:
+        payload = self._tenant_payload()
+        create_response = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_response.status_code, 201)
+        project_id = self._first_project_id()
+
+        with patch(
+            "orchestrator.api.admin.workflows.use_cases.start_demo_proof_workflow",
+            return_value=SimpleNamespace(
+                execution_id="wfexec-demo-proof-release-1",
+                workflow_id="demo_proof:release-proof-1",
+                workflow_type_key="demo_proof",
+                status="waiting_for_input",
+                started_attempt_id="attempt-preview-lease-1",
+            ),
+        ) as start_mock:
+            response = self.client.post(
+                "/api/admin/workflows",
+                json={
+                    "workflow_type_key": "demo_proof",
+                    "tenant_id": "tenant-a",
+                    "project_id": project_id,
+                    "input": {
+                        "proof_scope_id": "release-proof-1",
+                        "commit_sha": "abcdef1",
+                        "trigger_mode": "from_release",
+                        "release_id": "release-preview-1",
+                        "pr_url": "https://github.com/acme/repo/pull/8",
+                        "required_capture_targets": ["browser", "ios", "android"],
+                    },
+                },
+                auth=("admin", "secret"),
+            )
+
+        self.assertEqual(response.status_code, 201, response.text)
+        self.assertEqual(response.json()["workflow_id"], "demo_proof:release-proof-1")
+        start_mock.assert_called_once()
+        start_kwargs = start_mock.call_args.kwargs
+        self.assertEqual(start_kwargs["trigger_mode"], "from_release")
+        self.assertEqual(start_kwargs["release_id"], "release-preview-1")
+        self.assertEqual(start_kwargs["trigger_event"], "admin_workflow_start")
+
     def test_generic_workflow_start_route_rejects_demo_proof_without_pr_url(self) -> None:
         payload = self._tenant_payload()
         create_response = self.client.post(
