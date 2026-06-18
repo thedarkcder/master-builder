@@ -17,6 +17,7 @@ from orchestrator.core.workflow.execution_projection import WorkflowExecutionRef
 from orchestrator.core.workflow.handler_composition import build_installed_workflow_handler_registry
 from orchestrator.core.workflow.operation_service import fail_workflow_operation
 from orchestrator.core.workflow.type_catalog import get_workflow_type
+from orchestrator.core.workflow.work_units import workflow_work_unit_input_fingerprint
 from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.models import (
     Project,
@@ -471,6 +472,41 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 )
             ).scalar_one()
             assert attempt.status == "waiting_for_input"
+            work_units = session.execute(
+                select(WorkflowOperationWorkUnit)
+                .where(WorkflowOperationWorkUnit.operation_id == operation.operation_id)
+                .order_by(WorkflowOperationWorkUnit.unit_key)
+            ).scalars().all()
+            expected_payload = {
+                "proof_scope_id": "run-1-main-abcdef1",
+                "commit_sha": "abcdef1",
+                "trigger_mode": "from_run",
+                "run_id": "run-1",
+                "release_id": None,
+                "pr_url": "https://github.com/acme/project-a/pull/8",
+                "required_capture_targets": ["browser", "ios", "android"],
+                "required_recording_counts": {"browser": 1, "ios": 1, "android": 1},
+                "summary": "Acquire preview lease for demo proof scope run-1-main-abcdef1.",
+            }
+            assert [work_unit.unit_key for work_unit in work_units] == [
+                "preview_lease.acquire",
+                "preview_lease.enforce_single_active",
+            ]
+            assert [
+                work_unit.input_fingerprint for work_unit in work_units
+            ] == [
+                workflow_work_unit_input_fingerprint(
+                    {
+                        "workflow_id": workflow.workflow_id,
+                        "operation_id": operation.operation_id,
+                        "operation_type": operation.operation_type,
+                        "operation_attempt_id": attempt.attempt_id,
+                        "unit_key": work_unit.unit_key,
+                        "input": expected_payload,
+                    }
+                )
+                for work_unit in work_units
+            ]
 
     def test_start_demo_proof_workflow_treats_trigger_event_as_start_metadata(self) -> None:
         with self.session_factory() as session:
@@ -5186,3 +5222,29 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
             ]
             assert {work_unit.status for work_unit, _attempt in retried_work_unit_rows} == {"running"}
             assert {attempt.status for _work_unit, attempt in retried_work_unit_rows} == {"running"}
+            expected_payload = {
+                "proof_scope_id": "run-1-main-abcdef1",
+                "commit_sha": "abcdef1",
+                "trigger_mode": "from_run",
+                "run_id": "run-1",
+                "release_id": None,
+                "pr_url": "https://github.com/acme/project-a/pull/8",
+                "required_capture_targets": ["browser", "ios", "android"],
+                "required_recording_counts": {"browser": 1, "ios": 1, "android": 1},
+                "summary": "Retry demo proof operation release for proof scope run-1-main-abcdef1.",
+            }
+            assert [
+                work_unit.input_fingerprint for work_unit, _attempt in retried_work_unit_rows
+            ] == [
+                workflow_work_unit_input_fingerprint(
+                    {
+                        "workflow_id": workflow.workflow_id,
+                        "operation_id": release_operation.operation_id,
+                        "operation_type": release_operation.operation_type,
+                        "operation_attempt_id": attempts[-1].attempt_id,
+                        "unit_key": work_unit.unit_key,
+                        "input": expected_payload,
+                    }
+                )
+                for work_unit, _attempt in retried_work_unit_rows
+            ]
