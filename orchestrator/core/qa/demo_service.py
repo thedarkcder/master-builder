@@ -2328,10 +2328,10 @@ def _recorder_env_with_release_context(
         env["MB_QA_DEMO_RELEASE_API_RECORDING_URL"] = api_recording_url
     if browser_recording_url:
         env["MB_QA_DEMO_RELEASE_BROWSER_RECORDING_URL"] = browser_recording_url
-    if api_base_url:
-        env["QA_DEMO_API_BASE_URL"] = api_base_url
-    if browser_url:
-        env["QA_DEMO_BROWSER_URL"] = browser_url
+    if api_recording_url or api_base_url:
+        env["QA_DEMO_API_BASE_URL"] = api_recording_url or api_base_url
+    if browser_recording_url or browser_url:
+        env["QA_DEMO_BROWSER_URL"] = browser_recording_url or browser_url
     return env
 
 

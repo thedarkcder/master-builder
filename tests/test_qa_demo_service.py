@@ -58,6 +58,7 @@ from orchestrator.core.workflow.runner import (
     TestResult,
     WorkflowRequest,
 )
+from scripts.qa_demo_release_context import qa_demo_launch_context
 
 _RELEASE_COMMIT_SHA = "b" * 40
 
@@ -82,6 +83,39 @@ def _request() -> WorkflowRequest:
         base_branch="main",
         pr_target_branch="main",
     )
+
+
+def test_native_launch_context_prefers_recording_urls_without_losing_public_release_identity() -> None:
+    context = qa_demo_launch_context(
+        {
+            "release_commit_sha": "b" * 40,
+            "release_service_urls": [
+                {
+                    "service_kind": "api",
+                    "url": "https://api.preview.example",
+                    "recording_url": "http://127.0.0.1:8089",
+                    "recording_host_header": "api.preview.example",
+                },
+                {
+                    "service_kind": "website",
+                    "url": "https://preview.example",
+                    "recording_url": "http://127.0.0.1:8088",
+                    "recording_host_header": "preview.example",
+                },
+            ],
+            "release_api_base_url": "https://api.preview.example",
+            "release_browser_url": "https://preview.example",
+            "release_api_recording_url": "http://127.0.0.1:8089",
+            "release_browser_recording_url": "http://127.0.0.1:8088",
+        }
+    )
+
+    assert context["MB_QA_DEMO_RELEASE_API_BASE_URL"] == "https://api.preview.example"
+    assert context["MB_QA_DEMO_RELEASE_BROWSER_URL"] == "https://preview.example"
+    assert context["MB_QA_DEMO_RELEASE_API_RECORDING_URL"] == "http://127.0.0.1:8089"
+    assert context["MB_QA_DEMO_RELEASE_BROWSER_RECORDING_URL"] == "http://127.0.0.1:8088"
+    assert context["QA_DEMO_API_BASE_URL"] == "http://127.0.0.1:8089"
+    assert context["QA_DEMO_BROWSER_URL"] == "http://127.0.0.1:8088"
 
 
 def _qa_artifact_settings(**overrides: object) -> SimpleNamespace:
@@ -1467,11 +1501,15 @@ def test_record_demo_scenarios_passes_project_source_paths_and_release_context_t
                     "service_kind": "api",
                     "service_name": "api",
                     "url": "https://api.preview.example",
+                    "recording_url": "http://127.0.0.1:8089",
+                    "recording_host_header": "api.preview.example",
                 },
                 {
                     "service_kind": "website",
                     "service_name": "web",
                     "url": "https://preview.example",
+                    "recording_url": "http://127.0.0.1:8088",
+                    "recording_host_header": "preview.example",
                 },
             ],
             release_commit_sha="b" * 40,
@@ -1494,21 +1532,30 @@ def test_record_demo_scenarios_passes_project_source_paths_and_release_context_t
     assert input_payload["release_commit_sha"] == "b" * 40
     assert input_payload["release_api_base_url"] == "https://api.preview.example"
     assert input_payload["release_browser_url"] == "https://preview.example"
+    assert input_payload["release_api_recording_url"] == "http://127.0.0.1:8089"
+    assert input_payload["release_browser_recording_url"] == "http://127.0.0.1:8088"
     assert input_payload["release_service_urls"] == [
         {
             "service_kind": "api",
             "service_name": "api",
             "url": "https://api.preview.example",
+            "recording_url": "http://127.0.0.1:8089",
+            "recording_host_header": "api.preview.example",
         },
         {
             "service_kind": "website",
             "service_name": "web",
             "url": "https://preview.example",
+            "recording_url": "http://127.0.0.1:8088",
+            "recording_host_header": "preview.example",
         },
     ]
     assert env["MB_QA_DEMO_RELEASE_COMMIT_SHA"] == "b" * 40
     assert env["MB_QA_DEMO_RELEASE_API_BASE_URL"] == "https://api.preview.example"
-    assert env["QA_DEMO_API_BASE_URL"] == "https://api.preview.example"
+    assert env["MB_QA_DEMO_RELEASE_API_RECORDING_URL"] == "http://127.0.0.1:8089"
+    assert env["MB_QA_DEMO_RELEASE_BROWSER_RECORDING_URL"] == "http://127.0.0.1:8088"
+    assert env["QA_DEMO_API_BASE_URL"] == "http://127.0.0.1:8089"
+    assert env["QA_DEMO_BROWSER_URL"] == "http://127.0.0.1:8088"
     assert json.loads(env["MB_QA_DEMO_RELEASE_SERVICE_URLS_JSON"])[0]["url"] == "https://api.preview.example"
 
 
