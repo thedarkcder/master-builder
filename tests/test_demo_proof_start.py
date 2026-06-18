@@ -64,8 +64,12 @@ def _demo_proof_event_metadata(event: str) -> dict[str, object] | None:
         }
     if event == "EvidenceUploaded":
         return {
-            "artifact_urls": ["https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-demo-1.webm"],
-            "recording_count": 1,
+            "artifact_urls": [
+                "https://cdn.example/qa-demos/tenant-1/project-1/run-1/browser.webm",
+                "https://cdn.example/qa-demos/tenant-1/project-1/run-1/ios.webm",
+                "https://cdn.example/qa-demos/tenant-1/project-1/run-1/android.webm",
+            ],
+            "recording_count": 3,
             "capture_targets": ["browser", "ios", "android"],
         }
     if event == "FailureEvidenceUploaded":
@@ -576,6 +580,64 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 assert "missing required capture target(s): android, ios" in str(exc)
             else:  # pragma: no cover
                 raise AssertionError("expected demo proof completion to require all capture targets")
+
+    def test_demo_proof_rejects_success_completion_when_artifact_urls_do_not_cover_required_targets(self) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-a")
+            workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
+            request = _demo_proof_request(tenant=tenant)
+            execute_workflow_advance(
+                session=session,
+                settings=SimpleNamespace(),
+                workflow_type=workflow_type,
+                request=request,
+                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+            )
+
+            for event in (
+                "ProofLeaseAcquired",
+                "ReleaseRequested",
+                "ReleaseProvisioning",
+                "ReleaseLive",
+                "RouteReady",
+                "ServiceVerificationPassed",
+                "RecordingStarted",
+                "RecordingCompleted",
+                "EvidenceUploadStarted",
+                "EvidenceUploaded",
+                "PREvidenceAttachStarted",
+                "PREvidenceAttached",
+                "PreviewCleanupRequested",
+            ):
+                event_request = _demo_proof_request_for_event(request, event)
+                if event == "EvidenceUploaded":
+                    payload = dict(event_request.payload)
+                    payload["event_metadata"] = {
+                        "artifact_urls": ["https://cdn.example/qa-demos/tenant-1/project-1/run-1/shared.webm"],
+                        "recording_count": 1,
+                        "capture_targets": ["browser", "ios", "android"],
+                    }
+                    event_request = replace(event_request, payload=payload)
+                execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=event_request,
+                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                )
+
+            try:
+                execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=_demo_proof_request_for_event(request, "PreviewCleanupCompleted"),
+                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                )
+            except RuntimeError as exc:
+                assert "requires at least 3 playable artifact URL(s)" in str(exc)
+            else:  # pragma: no cover
+                raise AssertionError("expected demo proof completion to require one artifact URL per target")
 
     def test_demo_proof_rejects_success_completion_without_cleanup_status_metadata(self) -> None:
         with self.session_factory() as session:
