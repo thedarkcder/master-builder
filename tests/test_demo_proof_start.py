@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 from dataclasses import replace
 from datetime import datetime, timezone
@@ -41,10 +42,10 @@ def _recording_artifact_metadata(capture_target: str, artifact_url: str) -> dict
         "capture_target": capture_target,
         "artifact_url": artifact_url,
         "object_key": f"tenant-1/project-1/run-1/{object_name}",
-        "capture_reference": f"https://preview.example/{capture_target}",
+        "capture_reference": _capture_reference_for_target(capture_target),
         "content_sha256": "a" * 64,
         "release_commit_sha": "b" * 40,
-        "release_context_sha256": "c" * 64,
+        "release_context_sha256": _default_release_context_sha256(),
     }
 
 
@@ -138,6 +139,27 @@ def _service_verification_metadata() -> dict[str, object]:
             }
         ],
     }
+
+
+def _default_release_service_urls() -> list[dict[str, str]]:
+    service_urls = _service_verification_metadata()["service_urls"]
+    assert isinstance(service_urls, list)
+    return [dict(item) for item in service_urls if isinstance(item, dict)]
+
+
+def _default_release_context_sha256() -> str:
+    payload = {
+        "commit_sha": "b" * 40,
+        "service_urls": _default_release_service_urls(),
+    }
+    serialized = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
+def _capture_reference_for_target(capture_target: str) -> str:
+    if capture_target == "browser":
+        return "https://preview.example"
+    return f"{capture_target}://configured"
 
 
 def _demo_proof_request(*, tenant) -> WorkflowAdvanceRequest:  # noqa: ANN001
@@ -2094,6 +2116,100 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 )
             else:  # pragma: no cover
                 raise AssertionError("expected recording completion to reject unplanned capture target evidence")
+
+    def test_demo_proof_rejects_recording_completion_with_mismatched_release_context(self) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-a")
+            workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
+            request = _demo_proof_request(tenant=tenant)
+            execute_workflow_advance(
+                session=session,
+                settings=SimpleNamespace(),
+                workflow_type=workflow_type,
+                request=request,
+                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+            )
+
+            for event in (
+                "ProofLeaseAcquired",
+                "ReleaseRequested",
+                "ReleaseProvisioning",
+                "ReleaseLive",
+                "RouteReady",
+                "ServiceVerificationPassed",
+                "RecordingStarted",
+            ):
+                execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=_demo_proof_request_for_event(request, event),
+                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                )
+
+            event_request = _demo_proof_request_for_event(request, "RecordingCompleted")
+            payload = dict(event_request.payload)
+            metadata = dict(payload["event_metadata"])
+            recordings = [dict(item) for item in metadata["recordings"]]
+            recordings[0]["release_context_sha256"] = "d" * 64
+            metadata["recordings"] = recordings
+            payload["event_metadata"] = metadata
+
+            with pytest.raises(RuntimeError, match="RecordingCompleted.recordings release context does not match"):
+                execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=replace(event_request, payload=payload),
+                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                )
+
+    def test_demo_proof_rejects_browser_recording_completion_for_non_verified_release_url(self) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-a")
+            workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
+            request = _demo_proof_request(tenant=tenant)
+            execute_workflow_advance(
+                session=session,
+                settings=SimpleNamespace(),
+                workflow_type=workflow_type,
+                request=request,
+                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+            )
+
+            for event in (
+                "ProofLeaseAcquired",
+                "ReleaseRequested",
+                "ReleaseProvisioning",
+                "ReleaseLive",
+                "RouteReady",
+                "ServiceVerificationPassed",
+                "RecordingStarted",
+            ):
+                execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=_demo_proof_request_for_event(request, event),
+                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                )
+
+            event_request = _demo_proof_request_for_event(request, "RecordingCompleted")
+            payload = dict(event_request.payload)
+            metadata = dict(payload["event_metadata"])
+            recordings = [dict(item) for item in metadata["recordings"]]
+            recordings[0]["capture_reference"] = "https://fake-proof.example/browser"
+            metadata["recordings"] = recordings
+            payload["event_metadata"] = metadata
+
+            with pytest.raises(RuntimeError, match="browser recording capture_reference must match verified release URL"):
+                execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=replace(event_request, payload=payload),
+                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                )
 
     def test_demo_proof_rejects_success_completion_when_artifact_urls_do_not_cover_required_targets(self) -> None:
         with self.session_factory() as session:
