@@ -1635,6 +1635,46 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
             if release_operation is not None:
                 assert release_operation.status != "waiting_for_input"
 
+    def test_demo_proof_rejects_lease_acquired_when_lease_is_not_active(self) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-a")
+            workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
+            request = _demo_proof_request(tenant=tenant)
+            execute_workflow_advance(
+                session=session,
+                settings=SimpleNamespace(),
+                workflow_type=workflow_type,
+                request=request,
+                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+            )
+
+            metadata = dict(_demo_proof_event_metadata("ProofLeaseAcquired") or {})
+            demo_proof_lease = dict(metadata["demo_proof_lease"])
+            demo_proof_lease["state"] = "destroyed"
+            metadata["demo_proof_lease"] = demo_proof_lease
+
+            with pytest.raises(RuntimeError, match="ProofLeaseAcquired.demo_proof_lease.state must be active"):
+                execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=replace(
+                        _demo_proof_request_for_event(request, "ProofLeaseAcquired"),
+                        payload={**request.payload, "event_metadata": metadata},
+                    ),
+                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                )
+
+            workflow = session.execute(select(WorkflowExecution)).scalar_one()
+            release_operation = session.execute(
+                select(WorkflowOperation).where(
+                    WorkflowOperation.workflow_id == workflow.workflow_id,
+                    WorkflowOperation.operation_type == "release",
+                )
+            ).scalar_one_or_none()
+            if release_operation is not None:
+                assert release_operation.status != "waiting_for_input"
+
     def test_demo_proof_from_release_rejects_lease_for_different_release(self) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
