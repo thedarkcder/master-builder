@@ -467,6 +467,12 @@ _RECORDING_ARTIFACT_REQUIRED_FIELDS = frozenset(
         "release_context_sha256",
     }
 )
+_FAILURE_EVIDENCE_REQUIRED_FIELDS = frozenset(
+    {
+        *_RECORDING_ARTIFACT_REQUIRED_FIELDS,
+        "error_message",
+    }
+)
 
 
 def _recording_artifacts_by_target(value: object) -> dict[str, dict[str, str]]:
@@ -494,13 +500,12 @@ def _failure_evidence_by_target(value: object) -> dict[str, dict[str, str]]:
         if not isinstance(item, dict):
             continue
         capture_target = str(item.get("capture_target") or "").strip()
-        artifact_url = str(item.get("artifact_url") or "").strip()
-        error_message = str(item.get("error_message") or "").strip()
-        if capture_target and artifact_url and error_message:
-            evidence_by_target[capture_target] = {
-                "artifact_url": artifact_url,
-                "error_message": error_message,
-            }
+        evidence_metadata = {
+            field: str(item.get(field) or "").strip()
+            for field in _FAILURE_EVIDENCE_REQUIRED_FIELDS
+        }
+        if capture_target and all(evidence_metadata.values()):
+            evidence_by_target[capture_target] = evidence_metadata
     return evidence_by_target
 
 
@@ -647,8 +652,21 @@ def _require_terminal_proof_metadata(
         missing_diagnostic_targets = sorted(target for target in failure_targets if target not in evidence_by_target)
         if missing_diagnostic_targets:
             raise RuntimeError(
-                f"Demo proof scope {proof_scope_id} failure evidence metadata is missing diagnostic evidence "
+                f"Demo proof scope {proof_scope_id} failure evidence metadata is missing uploaded diagnostic "
+                "artifact metadata "
                 "for capture target(s): " + ", ".join(missing_diagnostic_targets)
+            )
+        release_commit_sha = _metadata_string(release_metadata.get("release_commit_sha"))
+        mismatched_commit_targets = sorted(
+            target
+            for target in failure_targets
+            if evidence_by_target[target]["release_commit_sha"].lower() != release_commit_sha.lower()
+        )
+        if mismatched_commit_targets:
+            raise RuntimeError(
+                f"Demo proof scope {proof_scope_id} failure evidence metadata release commit does not match "
+                "ReleaseLive.release_commit_sha for capture target(s): "
+                + ", ".join(mismatched_commit_targets)
             )
 
 
