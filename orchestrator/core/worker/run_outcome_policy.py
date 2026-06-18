@@ -74,6 +74,16 @@ _QA_DEMO_DEFERRED_PROOF_EVENTS_BEFORE_RECORDING = (
     "RouteReady",
     "ServiceVerificationPassed",
 )
+_QA_DEMO_CLEANUP_FAILURE_EVENTS = frozenset(
+    {
+        "ReleaseFailedPreviewCleanupFailed",
+        "RecordingFailedPreviewCleanupFailed",
+        "PREvidenceAttachFailedPreviewCleanupFailed",
+        "PRFailureEvidenceAttachFailedPreviewCleanupFailed",
+        "PreviewCleanupFailed",
+        "FailurePreviewCleanupFailed",
+    }
+)
 
 
 class RunOutcomePolicy:
@@ -526,6 +536,7 @@ class RunOutcomePolicy:
             if cleanup_error:
                 if proof_context is not None and not proof_terminal_failure_emitted:
                     try:
+                        proof_context.cleanup_failure_message = cleanup_error
                         self._advance_qa_demo_proof_events(
                             proof_context=proof_context,
                             events=("ReleaseFailedPreviewCleanupFailed",),
@@ -846,6 +857,7 @@ class RunOutcomePolicy:
             if cleanup_error:
                 if proof_context is not None and not proof_terminal_failure_emitted:
                     try:
+                        proof_context.cleanup_failure_message = cleanup_error
                         cleanup_failure_events = (
                             ("RecordingFailedPreviewCleanupFailed",)
                             if proof_context is recording_failure_cleanup_proof_context
@@ -997,6 +1009,7 @@ class RunOutcomePolicy:
             proof_context.preview_release = cleanup_release
             if cleanup_error:
                 try:
+                    proof_context.cleanup_failure_message = cleanup_error
                     self._advance_qa_demo_proof_events(
                         proof_context=proof_context,
                         events=("PREvidenceAttachFailedPreviewCleanupFailed",),
@@ -1063,6 +1076,7 @@ class RunOutcomePolicy:
         proof_context.preview_release = cleanup_release
         if cleanup_error:
             try:
+                proof_context.cleanup_failure_message = cleanup_error
                 self._advance_qa_demo_proof_events(
                     proof_context=proof_context,
                     events=("PreviewCleanupRequested", "PreviewCleanupFailed"),
@@ -1751,6 +1765,18 @@ def _qa_demo_proof_event_metadata(*, proof_context, event: str) -> dict[str, obj
             cleanup_evidence = _qa_demo_cleanup_evidence_metadata(preview_release=preview_release)
             if cleanup_evidence:
                 metadata["cleanup_evidence"] = cleanup_evidence
+        if event in _QA_DEMO_CLEANUP_FAILURE_EVENTS:
+            error_message = str(getattr(proof_context, "cleanup_failure_message", "") or "").strip()
+            metadata["cleanup_status"] = "failed"
+            metadata["cleanup_mode"] = "destroy_or_ttl"
+            if error_message:
+                metadata["error_message"] = error_message
+            cleanup_evidence = _qa_demo_cleanup_failure_evidence_metadata(
+                preview_release=preview_release,
+                error_message=error_message,
+            )
+            if cleanup_evidence:
+                metadata["cleanup_evidence"] = cleanup_evidence
     if event in {"RecordingCompleted", "EvidenceUploadStarted", "EvidenceUploaded"} and qa_result is not None:
         recordings = list(getattr(qa_result, "recordings", ()) or ())
         metadata.update(
@@ -1972,6 +1998,44 @@ def _qa_demo_cleanup_evidence_metadata(*, preview_release) -> dict[str, object]:
             "expires_at": str(lease_metadata.get("expires_at") or "").strip(),
             "destroy_reason": str(lease_metadata.get("destroy_reason") or "").strip(),
             "destroyed_at": str(lease_metadata.get("destroyed_at") or "").strip(),
+        }.items()
+        if value
+    }
+    resource_refs = _qa_demo_cleanup_resource_refs(preview_release=preview_release, cleanup_action=lease_state)
+    if resource_refs:
+        metadata["resource_refs"] = resource_refs
+    return metadata
+
+
+def _qa_demo_cleanup_failure_evidence_metadata(
+    *,
+    preview_release,
+    error_message: str,
+) -> dict[str, object]:  # noqa: ANN001
+    delivery_metadata = getattr(preview_release, "delivery_metadata", None)
+    lease_metadata = delivery_metadata.get("demo_proof_lease") if isinstance(delivery_metadata, dict) else None
+    if not isinstance(lease_metadata, dict):
+        return {}
+    release_id = str(getattr(preview_release, "release_id", "") or "").strip()
+    cleanup_mode = str(
+        lease_metadata.get("destroy_reason")
+        or lease_metadata.get("cleanup_mode")
+        or "destroy_or_ttl"
+    ).strip()
+    lease_state = "cleanup_failed"
+    metadata: dict[str, object] = {
+        key: value
+        for key, value in {
+            "release_id": release_id,
+            "lease_id": str(lease_metadata.get("lease_id") or "").strip(),
+            "proof_scope_id": str(lease_metadata.get("proof_scope_id") or "").strip(),
+            "commit_sha": str(lease_metadata.get("commit_sha") or "").strip(),
+            "cleanup_status": "failed",
+            "cleanup_mode": cleanup_mode,
+            "lease_state": lease_state,
+            "error_message": str(error_message or "").strip(),
+            "acquired_at": str(lease_metadata.get("acquired_at") or "").strip(),
+            "expires_at": str(lease_metadata.get("expires_at") or "").strip(),
         }.items()
         if value
     }

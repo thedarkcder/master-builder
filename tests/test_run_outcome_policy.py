@@ -912,6 +912,46 @@ def test_complete_blocks_success_when_qa_demo_preview_cleanup_fails() -> None:
     assert [
         call.kwargs["event"] for call in deps.execution.advance_demo_proof_workflow_event_fn.call_args_list
     ][-2:] == ["PreviewCleanupRequested", "PreviewCleanupFailed"]
+    metadata_by_event = {
+        call.kwargs["event"]: call.kwargs.get("event_metadata")
+        for call in deps.execution.advance_demo_proof_workflow_event_fn.call_args_list
+    }
+    cleanup_failed_metadata = metadata_by_event["PreviewCleanupFailed"]
+    assert cleanup_failed_metadata["cleanup_status"] == "failed"
+    assert cleanup_failed_metadata["cleanup_mode"] == "destroy_or_ttl"
+    assert "provider deletion failed" in cleanup_failed_metadata["error_message"]
+    assert cleanup_failed_metadata["cleanup_evidence"] == {
+        "release_id": "release-preview-1",
+        "lease_id": "lease-1",
+        "proof_scope_id": "run:run-1:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        "commit_sha": "b" * 40,
+        "cleanup_status": "failed",
+        "cleanup_mode": "destroy_or_ttl",
+        "lease_state": "cleanup_failed",
+        "error_message": (
+            "QA demo preview cleanup failed; run preview release was not proven destroyed: "
+            "release-preview-1: RuntimeError: provider deletion failed"
+        ),
+        "acquired_at": "2026-06-18T10:00:00+00:00",
+        "expires_at": "2026-06-18T11:00:00+00:00",
+        "resource_refs": [
+            {
+                "resource_type": "release",
+                "resource_id": "release-preview-1",
+                "cleanup_action": "cleanup_failed",
+            },
+            {
+                "resource_type": "coolify_application",
+                "resource_id": "app-1",
+                "cleanup_action": "cleanup_failed",
+            },
+            {
+                "resource_type": "coolify_deployment",
+                "resource_id": "deployment-1",
+                "cleanup_action": "cleanup_failed",
+            },
+        ],
+    }
     final_checkpoint = deps.execution.persist_stage_checkpoint_fn.call_args.kwargs["checkpoint"]
     assert final_checkpoint.stage == "qa"
     assert final_checkpoint.status == "blocked"
@@ -2626,6 +2666,20 @@ def test_complete_blocks_incomplete_qa_failure_evidence_before_pr_update() -> No
         status="live",
         commit_sha="b" * 40,
         service_urls=[],
+        delivery_metadata={
+            "demo_proof_lease": {
+                "lease_id": "lease-1",
+                "proof_scope_id": "run:run-1:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                "commit_sha": "b" * 40,
+                "state": "live",
+                "acquired_at": "2026-06-18T10:00:00+00:00",
+                "expires_at": "2026-06-18T11:00:00+00:00",
+            }
+        },
+        provider_context={
+            "application_uuid": "app-1",
+            "deployment_uuid": "deployment-1",
+        },
     )
     finalizer_calls: dict[str, object] = {}
 
@@ -2694,6 +2748,31 @@ def test_complete_blocks_incomplete_qa_failure_evidence_before_pr_update() -> No
         "RecordingStarted",
         "RecordingFailed",
         "RecordingFailedPreviewCleanupFailed",
+    ]
+    metadata_by_event = {
+        call.kwargs["event"]: call.kwargs.get("event_metadata")
+        for call in deps.execution.advance_demo_proof_workflow_event_fn.call_args_list
+    }
+    cleanup_failed_metadata = metadata_by_event["RecordingFailedPreviewCleanupFailed"]
+    assert cleanup_failed_metadata["cleanup_status"] == "failed"
+    assert "provider deletion failed" in cleanup_failed_metadata["error_message"]
+    assert cleanup_failed_metadata["cleanup_evidence"]["lease_state"] == "cleanup_failed"
+    assert cleanup_failed_metadata["cleanup_evidence"]["resource_refs"] == [
+        {
+            "resource_type": "release",
+            "resource_id": "release-1",
+            "cleanup_action": "cleanup_failed",
+        },
+        {
+            "resource_type": "coolify_application",
+            "resource_id": "app-1",
+            "cleanup_action": "cleanup_failed",
+        },
+        {
+            "resource_type": "coolify_deployment",
+            "resource_id": "deployment-1",
+            "cleanup_action": "cleanup_failed",
+        },
     ]
     assert finalizer_calls["workflow_result"].outcome == "blocked"
     assert "missing proof for required capture target(s): ios" in str(
