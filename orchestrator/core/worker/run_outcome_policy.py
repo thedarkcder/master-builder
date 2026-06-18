@@ -229,6 +229,7 @@ class RunOutcomePolicy:
                         run=run,
                         settings=self._settings,
                         pr_url=workflow_result.pr_url,
+                        demo_proof_lease_required=demo_recording_required,
                         force=_qa_demo_preview_force_requested(
                             workflow_request=getattr(prepared, "workflow_request", None),
                             demo_recording_required=demo_recording_required,

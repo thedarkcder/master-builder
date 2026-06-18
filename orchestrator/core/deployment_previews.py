@@ -49,6 +49,8 @@ _RECONCILE_BEFORE_REUSE_STATUSES = {"provisioning", "deploying", "route_activati
 _FAILED_PREVIEW_RELEASE_STATUSES = {"failed", "rolled_back"}
 _DESTROYED_PREVIEW_STATUS_CONTEXT_KEY = "status_before_destroy"
 _TERMINAL_PREVIEW_RELEASE_STATUSES = {"failed", "rolled_back", "live"}
+_DEMO_PROOF_LEASE_METADATA_KEY = "demo_proof_lease"
+_DEMO_PROOF_LEASE_ACTIVE_STATE = "active"
 
 
 def create_run_preview_deployment(
@@ -60,6 +62,8 @@ def create_run_preview_deployment(
     settings,
     pr_url: str | None = None,
     force: bool = False,
+    proof_scope_id: str | None = None,
+    demo_proof_lease_required: bool = False,
 ) -> RunPreviewDeploymentResult:  # noqa: ANN001
     policy = ProjectDeploymentPolicyRead.model_validate(dict(getattr(project, "deployment_config", None) or {}))
     if not policy.enabled:
@@ -78,7 +82,28 @@ def create_run_preview_deployment(
         branch=getattr(run, "branch", None),
         current_run_id=run.run_id,
     )
+    normalized_proof_scope_id = _normalize_optional_string(proof_scope_id)
+    if demo_proof_lease_required and normalized_proof_scope_id is None:
+        normalized_run_id = _normalize_optional_string(run.run_id)
+        if normalized_run_id is None:
+            raise RuntimeError("Demo proof preview lease requires run_id")
+        normalized_proof_scope_id = f"run:{normalized_run_id}:{artifact.commit_sha}"
     if not force:
+        if normalized_proof_scope_id is not None:
+            scoped_release = _resolve_active_demo_proof_preview_release(
+                session=session,
+                tenant_id=tenant.tenant_id,
+                project_id=project.project_id,
+                proof_scope_id=normalized_proof_scope_id,
+                expected_commit_sha=artifact.commit_sha,
+                current_base_domain=_normalize_optional_string((tenant.deployment_plane_config or {}).get("base_domain")),
+            )
+            if scoped_release is not None:
+                return RunPreviewDeploymentResult(
+                    created=False,
+                    reason="existing",
+                    release=project_deployment_release_to_schema(scoped_release),
+                )
         existing_release = _reusable_existing_preview_release(
             session=session,
             tenant_id=tenant.tenant_id,
@@ -88,6 +113,13 @@ def create_run_preview_deployment(
             current_base_domain=_normalize_optional_string((tenant.deployment_plane_config or {}).get("base_domain")),
         )
         if existing_release is not None:
+            if normalized_proof_scope_id is not None:
+                _attach_demo_proof_lease_metadata(
+                    release=existing_release,
+                    proof_scope_id=normalized_proof_scope_id,
+                    commit_sha=artifact.commit_sha,
+                )
+                session.flush()
             return RunPreviewDeploymentResult(
                 created=False,
                 reason="existing",
@@ -121,6 +153,13 @@ def create_run_preview_deployment(
     deployment_config_override: dict[str, object] | None = None
     release_branch = artifact.branch
     release_commit_sha = artifact.commit_sha
+    delivery_metadata = _mobile_delivery_metadata(session=session, tenant_id=tenant.tenant_id, project_id=project.project_id)
+    if normalized_proof_scope_id is not None:
+        delivery_metadata = _delivery_metadata_with_demo_proof_lease(
+            delivery_metadata=delivery_metadata,
+            proof_scope_id=normalized_proof_scope_id,
+            commit_sha=release_commit_sha,
+        )
     if str(deployment_config.get("source_strategy") or app.build_strategy or "").strip() == "docker_compose":
         generated_compose_raw = str(deployment_config.get("generated_compose_raw") or "").strip()
         if not generated_compose_raw:
@@ -174,12 +213,152 @@ def create_run_preview_deployment(
             reason=f"Preview for run {run.run_id}",
             source_run_id=run.run_id,
             pr_number=_pr_number_from_run(run, pr_url=pr_url),
-            delivery_metadata=_mobile_delivery_metadata(session=session, tenant_id=tenant.tenant_id, project_id=project.project_id),
+            delivery_metadata=delivery_metadata,
         ),
         requested_by_user_id=None,
         deployment_config_override=deployment_config_override,
     )
     return RunPreviewDeploymentResult(created=True, reason="created", release=release)
+
+
+def _resolve_active_demo_proof_preview_release(
+    *,
+    session: Session,
+    tenant_id: str,
+    project_id: str,
+    proof_scope_id: str,
+    expected_commit_sha: str,
+    current_base_domain: str | None,
+) -> ProjectDeploymentRelease | None:
+    scoped_releases = _active_demo_proof_preview_releases_for_scope(
+        session=session,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        proof_scope_id=proof_scope_id,
+    )
+    if not scoped_releases:
+        return None
+    if len(scoped_releases) > 1:
+        release_ids = ", ".join(release.release_id for release in scoped_releases)
+        raise RuntimeError(
+            "Demo proof preview lease scope has multiple active releases and must be reconciled before creating "
+            f"another: {proof_scope_id}: {release_ids}"
+        )
+    scoped_release = scoped_releases[0]
+    if (
+        str(scoped_release.commit_sha or "").strip() == expected_commit_sha
+        and _preview_release_is_reusable_for_current_context(
+            session=session,
+            release=scoped_release,
+            current_base_domain=current_base_domain,
+        )
+    ):
+        return scoped_release
+    destroy_project_deployment_preview_release(
+        session=session,
+        tenant_id=tenant_id,
+        project_id=project_id,
+        release_id=scoped_release.release_id,
+        reason="demo_proof_lease_superseded",
+    )
+    scoped_release.status = "destroyed"
+    scoped_release.destroyed_at = datetime.now(timezone.utc)
+    scoped_release.updated_at = scoped_release.destroyed_at
+    session.flush()
+    return None
+
+
+def _active_demo_proof_preview_releases_for_scope(
+    *,
+    session: Session,
+    tenant_id: str,
+    project_id: str,
+    proof_scope_id: str,
+) -> list[ProjectDeploymentRelease]:
+    releases = session.execute(
+        select(ProjectDeploymentRelease)
+        .where(
+            ProjectDeploymentRelease.tenant_id == tenant_id,
+            ProjectDeploymentRelease.project_id == project_id,
+            ProjectDeploymentRelease.release_kind == "run_preview",
+            ProjectDeploymentRelease.status != "destroyed",
+            ProjectDeploymentRelease.destroyed_at.is_(None),
+        )
+        .order_by(ProjectDeploymentRelease.created_at.asc(), ProjectDeploymentRelease.release_id.asc())
+    ).scalars().all()
+    return [
+        release
+        for release in releases
+        if _demo_proof_lease_metadata(release).get("proof_scope_id") == proof_scope_id
+        and _demo_proof_lease_metadata(release).get("state") == _DEMO_PROOF_LEASE_ACTIVE_STATE
+    ]
+
+
+def _preview_release_is_reusable_for_current_context(
+    *,
+    session: Session,
+    release: ProjectDeploymentRelease,
+    current_base_domain: str | None,
+) -> bool:
+    if str(release.status or "").strip() in _RECONCILE_BEFORE_REUSE_STATUSES:
+        reconcile_deployment_release(session=session, release=release)
+        session.flush()
+        session.refresh(release)
+    existing_status = str(release.status or "").strip()
+    if existing_status not in _REUSABLE_PREVIEW_RELEASE_STATUSES:
+        return False
+    if current_base_domain is None:
+        return True
+    provider_context = release.provider_context if isinstance(release.provider_context, dict) else {}
+    provider_base_domain = _normalize_optional_string(provider_context.get("base_domain"))
+    if provider_base_domain is not None and provider_base_domain != current_base_domain:
+        return False
+    return existing_status != "live" or deployment_release_routes_match_base_domain(
+        provider_context=provider_context,
+        base_domain=current_base_domain,
+        require_preview_wildcard_shape=True,
+    )
+
+
+def _demo_proof_lease_metadata(release: ProjectDeploymentRelease) -> dict[str, str]:
+    delivery_metadata = release.delivery_metadata if isinstance(release.delivery_metadata, dict) else {}
+    raw_metadata = delivery_metadata.get(_DEMO_PROOF_LEASE_METADATA_KEY)
+    if not isinstance(raw_metadata, dict):
+        return {}
+    return {
+        "proof_scope_id": str(raw_metadata.get("proof_scope_id") or "").strip(),
+        "commit_sha": str(raw_metadata.get("commit_sha") or "").strip(),
+        "state": str(raw_metadata.get("state") or "").strip(),
+    }
+
+
+def _delivery_metadata_with_demo_proof_lease(
+    *,
+    delivery_metadata: dict[str, object],
+    proof_scope_id: str,
+    commit_sha: str,
+) -> dict[str, object]:
+    updated = dict(delivery_metadata)
+    updated[_DEMO_PROOF_LEASE_METADATA_KEY] = {
+        "proof_scope_id": proof_scope_id,
+        "commit_sha": commit_sha,
+        "state": _DEMO_PROOF_LEASE_ACTIVE_STATE,
+    }
+    return updated
+
+
+def _attach_demo_proof_lease_metadata(
+    *,
+    release: ProjectDeploymentRelease,
+    proof_scope_id: str,
+    commit_sha: str,
+) -> None:
+    release.delivery_metadata = _delivery_metadata_with_demo_proof_lease(
+        delivery_metadata=release.delivery_metadata if isinstance(release.delivery_metadata, dict) else {},
+        proof_scope_id=proof_scope_id,
+        commit_sha=commit_sha,
+    )
+    release.updated_at = datetime.now(timezone.utc)
 
 
 def _reusable_existing_preview_release(

@@ -258,7 +258,7 @@ def test_complete_runs_qa_demo_stage_before_finalization() -> None:
         patch(
             "orchestrator.core.worker.run_outcome_policy.create_run_preview_deployment",
             return_value=SimpleNamespace(created=False, reason="existing", release=preview_release),
-        ),
+        ) as create_preview_mock,
         patch(
             "orchestrator.core.worker.run_outcome_policy.execute_qa_demo_stage",
             return_value=qa_result,
@@ -284,6 +284,7 @@ def test_complete_runs_qa_demo_stage_before_finalization() -> None:
         )
 
     assert result is prepared.run
+    assert create_preview_mock.call_args.kwargs["demo_proof_lease_required"] is True
     deps.execution.start_demo_proof_workflow_fn.assert_called_once()
     assert deps.execution.start_demo_proof_workflow_fn.call_args.kwargs["proof_scope_id"] == (
         "run:run-1:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
