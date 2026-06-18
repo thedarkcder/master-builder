@@ -10,6 +10,7 @@ from orchestrator.core.qa.demo_proof_workflow import (
     DEMO_PROOF_STATE_LEASE_ACQUIRING,
     DEMO_PROOF_STATE_REQUESTED,
     DEMO_PROOF_STATE_RECORDING,
+    DEMO_PROOF_STATE_RECORDING_DEFERRED,
     PREVIEW_LEASE_STATE_DESTROYED,
     PREVIEW_LEASE_STATE_LIVE,
     PREVIEW_LEASE_STATE_RECORDING,
@@ -117,6 +118,29 @@ def test_demo_proof_recording_failure_without_evidence_blocks_immediately() -> N
     )
 
     assert state == DEMO_PROOF_STATE_BLOCKED
+
+
+def test_demo_proof_recording_deferred_can_resume_on_next_worker() -> None:
+    state = transition_demo_proof_state(
+        current_state=DEMO_PROOF_STATE_REQUESTED,
+        event="DemoProofRequested",
+    )
+    for event in (
+        "ProofLeaseAcquired",
+        "ReleaseRequested",
+        "ReleaseProvisioning",
+        "ReleaseLive",
+        "RouteReady",
+        "ServiceVerificationPassed",
+    ):
+        state = transition_demo_proof_state(current_state=state, event=event)
+
+    state = transition_demo_proof_state(current_state=state, event="RecordingDeferred")
+    assert state == DEMO_PROOF_STATE_RECORDING_DEFERRED
+    assert not is_demo_proof_terminal(state)
+
+    state = transition_demo_proof_state(current_state=state, event="RecordingStarted")
+    assert state == DEMO_PROOF_STATE_RECORDING
 
 
 def test_demo_proof_terminal_state_rejects_late_non_duplicate_event() -> None:

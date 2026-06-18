@@ -103,6 +103,7 @@ _DEMO_PROOF_OBSERVATION_EVENTS: dict[str, tuple[str, str]] = {
     "ReleaseLive": (DEMO_PROOF_STEP_RELEASE, "release_live_observed"),
     "RouteReady": (DEMO_PROOF_STEP_RELEASE, "route_ready_observed"),
     "RecordingStarted": (DEMO_PROOF_STEP_RECORDING, "recording_started_observed"),
+    "RecordingDeferred": (DEMO_PROOF_STEP_RECORDING, "recording_deferred_observed"),
     "EvidenceUploadStarted": (DEMO_PROOF_STEP_EVIDENCE_UPLOAD, "evidence_upload_started_observed"),
     "PREvidenceAttachStarted": (DEMO_PROOF_STEP_PR_EVIDENCE_UPDATE, "pr_evidence_attach_started_observed"),
     "PreviewCleanupRequested": (DEMO_PROOF_STEP_PREVIEW_CLEANUP, "preview_cleanup_requested_observed"),
@@ -193,6 +194,7 @@ _FAILURE_TERMINAL_METADATA_REQUIREMENTS: dict[str, tuple[str, ...]] = {
 _RECORDING_EVENT_STATES = {
     "ServiceVerificationPassed": "waiting_for_recording",
     "RecordingStarted": "recording",
+    "RecordingDeferred": "deferred",
     "RecordingCompleted": "recorded",
     "RecordingFailed": "failed",
     "RecordingFailureEvidenceCaptured": "failed",
@@ -298,6 +300,7 @@ def _recording_workflow_descriptions(
     previous_description: dict[str, object],
     required_capture_targets: list[object],
     event: str | None,
+    event_metadata: dict[str, object] | None,
 ) -> list[dict[str, str]]:
     existing_state_by_target: dict[str, str] = {}
     for item in list(previous_description.get(_RECORDING_WORKFLOW_DESCRIPTION_KEY) or []):
@@ -307,9 +310,21 @@ def _recording_workflow_descriptions(
         state = str(item.get("state") or "").strip()
         if capture_target and state:
             existing_state_by_target[capture_target] = state
-    next_state = _RECORDING_EVENT_STATES.get(str(event or "").strip())
+    normalized_event = str(event or "").strip()
+    next_state = _RECORDING_EVENT_STATES.get(normalized_event)
+    recorded_targets = set(_metadata_string_list((event_metadata or {}).get("recorded_capture_targets")))
+    remaining_targets = set(_metadata_string_list((event_metadata or {}).get("remaining_capture_targets")))
     workflows: list[dict[str, str]] = []
     for capture_target in _normalized_capture_targets(required_capture_targets):
+        if normalized_event == "RecordingDeferred":
+            if capture_target in recorded_targets:
+                state = "recorded"
+            elif capture_target in remaining_targets:
+                state = "deferred"
+            else:
+                state = existing_state_by_target.get(capture_target, next_state or "planned")
+            workflows.append({"capture_target": capture_target, "state": state})
+            continue
         workflows.append(
             {
                 "capture_target": capture_target,
@@ -420,6 +435,7 @@ def _demo_proof_description(
                 previous_description=previous_description,
                 required_capture_targets=required_capture_targets,
                 event=event,
+                event_metadata=event_metadata,
             ),
             "request_id": request_id,
             _DEMO_PROOF_STATE_DESCRIPTION_KEY: state,

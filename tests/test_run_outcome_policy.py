@@ -1462,6 +1462,13 @@ def test_complete_requeues_when_qa_demo_stage_needs_remaining_worker_platform() 
     update_pr_mock.assert_not_called()
     deps.execution.requeue_workflow_result_for_capability_fn.assert_called_once()
     assert deps.execution.requeue_workflow_result_for_capability_fn.call_args.kwargs["required_worker_capability"] == "macos"
+    deps.execution.start_demo_proof_workflow_fn.assert_not_called()
+    deps.execution.advance_demo_proof_workflow_event_fn.assert_called_once()
+    assert deps.execution.advance_demo_proof_workflow_event_fn.call_args.kwargs["event"] == "RecordingDeferred"
+    assert deps.execution.advance_demo_proof_workflow_event_fn.call_args.kwargs["event_metadata"] == {
+        "recorded_capture_targets": ["browser"],
+        "remaining_capture_targets": ["browser", "ios"],
+    }
 
 
 def test_complete_attaches_pr_evidence_after_accumulated_qa_demo_recordings_finish() -> None:
