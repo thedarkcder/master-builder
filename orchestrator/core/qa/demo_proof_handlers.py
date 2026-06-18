@@ -726,17 +726,46 @@ def demo_proof_operation_input_payload(
         raise RuntimeError(
             f"Demo proof operation input requires required_recording_counts for proof scope {proof_scope_id}"
         )
-    return {
+    metadata = _metadata_by_event(description)
+    release_identity_metadata = (
+        metadata.get("ReleaseLive")
+        or metadata.get("ServiceVerificationPassed")
+        or metadata.get("ServiceVerificationFailed")
+        or metadata.get("ProofLeaseAcquired")
+        or metadata.get("ReleaseFailed")
+        or {}
+    )
+    release_id = (
+        _metadata_string(release_identity_metadata.get("release_id"))
+        or _metadata_string(description.get("requested_release_id"))
+        or None
+    )
+    payload = {
         "proof_scope_id": proof_scope_id,
         "commit_sha": commit_sha,
         "trigger_mode": trigger_mode,
         "run_id": _metadata_string(description.get("run_id")) or None,
-        "release_id": _metadata_string(description.get("requested_release_id")) or None,
+        "release_id": release_id,
         "pr_url": _metadata_string(description.get("pr_url")) or None,
         "required_capture_targets": [str(target) for target in required_capture_targets],
         "required_recording_counts": dict(required_recording_counts),
         "summary": summary,
     }
+    release_commit_sha = _metadata_string(release_identity_metadata.get("release_commit_sha"))
+    if release_commit_sha:
+        payload["release_commit_sha"] = release_commit_sha
+    demo_proof_lease = release_identity_metadata.get("demo_proof_lease")
+    if isinstance(demo_proof_lease, dict):
+        payload["demo_proof_lease"] = dict(demo_proof_lease)
+    service_metadata = metadata.get("ServiceVerificationPassed") or metadata.get("ServiceVerificationFailed") or {}
+    service_urls = service_metadata.get("service_urls")
+    if isinstance(service_urls, list):
+        payload["release_service_urls"] = [
+            dict(service_url)
+            for service_url in service_urls
+            if isinstance(service_url, dict)
+        ]
+    return payload
 
 
 def _wait_summary(
