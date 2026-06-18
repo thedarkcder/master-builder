@@ -161,6 +161,26 @@ def test_registered_demo_proof_side_effect_units_require_idempotency() -> None:
     assert side_effect_unit_keys <= idempotent_unit_keys
 
 
+def test_registered_demo_proof_retryable_steps_have_executable_capabilities() -> None:
+    workflow_type = get_workflow_type(workflow_type_key="demo_proof")
+
+    executable_retry_types = {
+        capability.operation_type
+        for capability in installed_operation_retry_capabilities(workflow_type=workflow_type)
+    }
+    retryable_steps = {step.key for step in workflow_type.steps if step.retryable}
+
+    assert retryable_steps == {
+        "preview_lease",
+        "release",
+        "recording",
+        "evidence_upload",
+        "pr_evidence_update",
+        "preview_cleanup",
+    }
+    assert retryable_steps == executable_retry_types
+
+
 def test_installed_workflow_handler_registry_resolves_demo_proof_handler() -> None:
     registry = build_installed_workflow_handler_registry(
         integration_router=object(),

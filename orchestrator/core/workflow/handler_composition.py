@@ -8,12 +8,14 @@ from orchestrator.core.jira_project_reconciliation.handlers import JiraProjectRe
 from orchestrator.core.jira_project_reconciliation.retry import JiraProjectReconciliationOperationRetryHandler
 from orchestrator.core.jira_project_reconciliation.service import build_default_jira_project_reconciliation_gateway
 from orchestrator.core.qa.demo_proof_handlers import DEMO_PROOF_HANDLER_KEY, DemoProofWorkflowAdvanceHandler
+from orchestrator.core.qa.demo_proof_retry import DemoProofWorkflowOperationRetryHandler
 from orchestrator.core.workflow.definition import WorkflowDefinition
 from orchestrator.core.workflow.advance import WorkflowOperationRetryCapability
 from orchestrator.core.workflow.handler_registry import WorkflowHandlerRegistry, build_workflow_handler_registry
 
 
 _INSTALLED_OPERATION_RETRY_CAPABILITY_PROVIDERS = {
+    DEMO_PROOF_HANDLER_KEY: DemoProofWorkflowOperationRetryHandler.declared_operation_retry_capabilities,
     "jira_project_reconciliation": JiraProjectReconciliationOperationRetryHandler.declared_operation_retry_capabilities,
     "jira_parent_feature": ParentFeatureWorkflowOperationRetryHandler.declared_operation_retry_capabilities,
 }
@@ -51,6 +53,7 @@ def build_installed_workflow_handler_registry(
             "jira_parent_feature": ParentFeatureWorkflowAdvanceHandler(deps=parent_feature_deps),
         },
         operation_retry_handlers={
+            DEMO_PROOF_HANDLER_KEY: DemoProofWorkflowOperationRetryHandler(),
             "jira_project_reconciliation": JiraProjectReconciliationOperationRetryHandler(
                 deps=jira_project_reconciliation_deps,
             ),

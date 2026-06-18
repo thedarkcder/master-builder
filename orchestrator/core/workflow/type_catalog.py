@@ -238,6 +238,7 @@ class DemoProofWorkflowDefinition:
         key=DEMO_PROOF_STEP_PREVIEW_LEASE,
         label="Preview lease",
         kind=WorkflowStepKind.BUSINESS,
+        retryable=True,
         description="Own the one-active-preview-lease invariant for the proof scope.",
     )
     def preview_lease(self) -> None:
@@ -264,6 +265,7 @@ class DemoProofWorkflowDefinition:
         label="Release workflow",
         kind=WorkflowStepKind.INTEGRATION,
         after=DEMO_PROOF_STEP_PREVIEW_LEASE,
+        retryable=True,
         description="Satisfy the preview lease with a real release and service readiness evidence.",
     )
     def release(self) -> None:
@@ -298,6 +300,7 @@ class DemoProofWorkflowDefinition:
         label="Recording workflow",
         kind=WorkflowStepKind.INTEGRATION,
         after=DEMO_PROOF_STEP_RELEASE,
+        retryable=True,
         description="Record required walkthrough variants for browser, iOS, and Android targets.",
     )
     def recording(self) -> None:
@@ -316,6 +319,7 @@ class DemoProofWorkflowDefinition:
         label="Evidence upload",
         kind=WorkflowStepKind.INTEGRATION,
         after=DEMO_PROOF_STEP_RECORDING,
+        retryable=True,
         description="Persist proof artifacts and verify their storage metadata.",
     )
     def evidence_upload(self) -> None:
@@ -334,6 +338,7 @@ class DemoProofWorkflowDefinition:
         label="PR evidence update",
         kind=WorkflowStepKind.SIDE_EFFECT,
         after=DEMO_PROOF_STEP_EVIDENCE_UPLOAD,
+        retryable=True,
         description="Publish verified evidence links to the pull request.",
     )
     def pr_evidence_update(self) -> None:
@@ -352,6 +357,7 @@ class DemoProofWorkflowDefinition:
         label="Preview cleanup workflow",
         kind=WorkflowStepKind.SIDE_EFFECT,
         after=DEMO_PROOF_STEP_PR_EVIDENCE_UPDATE,
+        retryable=True,
         description="Clean up or TTL every preview resource owned by the proof lease.",
     )
     def preview_cleanup(self) -> None:
