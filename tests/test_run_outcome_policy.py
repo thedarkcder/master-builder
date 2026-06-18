@@ -240,7 +240,15 @@ def test_complete_runs_qa_demo_stage_before_finalization() -> None:
         release_id="release-preview-1",
         release_kind="run_preview",
         status="live",
-        service_urls=[],
+        service_urls=[
+            SimpleNamespace(
+                service_kind="website",
+                service_name="web",
+                service_key="web",
+                status="active",
+                url="https://preview.example",
+            )
+        ],
         commit_sha="b" * 40,
         provider_context={
             "application_uuid": "app-preview-1",
@@ -347,6 +355,16 @@ def test_complete_runs_qa_demo_stage_before_finalization() -> None:
         "destroyed_at": "2026-06-18T12:00:00+00:00",
     }
     assert metadata_by_event["RecordingCompleted"]["recording_count"] == 3
+    assert metadata_by_event["ServiceVerificationPassed"]["required_service_kinds"] == ["website"]
+    assert metadata_by_event["ServiceVerificationPassed"]["service_urls"] == [
+        {
+            "service_kind": "website",
+            "url": "https://preview.example",
+            "status": "active",
+            "service_name": "web",
+            "service_key": "web",
+        }
+    ]
     assert metadata_by_event["EvidenceUploaded"]["artifact_urls"] == [
         "https://cdn.example/qa-demo-1.webm",
         "https://cdn.example/qa-demo-2.webm",
@@ -419,6 +437,13 @@ def test_complete_runs_qa_demo_stage_before_finalization() -> None:
                 "resource_type": "coolify_deployment",
                 "resource_id": "deployment-preview-1",
                 "cleanup_action": "destroyed",
+            },
+            {
+                "resource_type": "service_url",
+                "resource_id": "https://preview.example",
+                "cleanup_action": "destroyed",
+                "service_kind": "website",
+                "service_key": "web",
             },
         ],
     }

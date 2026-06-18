@@ -163,12 +163,24 @@ _DEMO_PROOF_BLOCKING_COMPLETION_EVENTS = frozenset({"FailurePreviewCleanupComple
 _PR_EVIDENCE_REQUEST_EVENTS = frozenset({"EvidenceUploaded", "FailureEvidenceUploaded"})
 _SUCCESS_TERMINAL_METADATA_REQUIREMENTS: dict[str, tuple[str, ...]] = {
     "ReleaseLive": ("release_id", "release_commit_sha", "demo_proof_lease"),
+    "ServiceVerificationPassed": (
+        "release_id",
+        "release_commit_sha",
+        "required_service_kinds",
+        "service_urls",
+    ),
     "EvidenceUploaded": ("artifact_urls", "recordings"),
     "PREvidenceAttached": ("pr_url", "pr_body_sha256"),
     "PreviewCleanupCompleted": ("release_id", "cleanup_status", "cleanup_mode", "cleanup_evidence"),
 }
 _FAILURE_TERMINAL_METADATA_REQUIREMENTS: dict[str, tuple[str, ...]] = {
     "ReleaseLive": ("release_id", "release_commit_sha", "demo_proof_lease"),
+    "ServiceVerificationPassed": (
+        "release_id",
+        "release_commit_sha",
+        "required_service_kinds",
+        "service_urls",
+    ),
     "FailureEvidenceUploaded": ("artifact_urls", "capture_targets", "failure_evidence"),
     "PRFailureEvidenceAttached": ("pr_url", "pr_body_sha256"),
     "FailurePreviewCleanupCompleted": ("release_id", "cleanup_status", "cleanup_mode", "cleanup_evidence"),
@@ -613,6 +625,21 @@ def _failure_evidence_by_target(value: object) -> dict[str, dict[str, str]]:
     return evidence_by_target
 
 
+def _verified_service_kinds(value: object) -> set[str]:
+    if not isinstance(value, list):
+        return set()
+    service_kinds: set[str] = set()
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        service_kind = str(item.get("service_kind") or "").strip()
+        url = str(item.get("url") or "").strip()
+        status = str(item.get("status") or "").strip()
+        if service_kind and url and status == "active":
+            service_kinds.add(service_kind)
+    return service_kinds
+
+
 def _demo_proof_lease_metadata(value: object) -> dict[str, str]:
     if not isinstance(value, dict):
         return {}
@@ -891,6 +918,41 @@ def _require_failure_evidence_target_metadata(
     return evidence_by_target
 
 
+def _require_service_verification_metadata(
+    *,
+    release_metadata: dict[str, object],
+    service_metadata: dict[str, object],
+    proof_scope_id: str,
+) -> None:
+    release_id = _metadata_string(release_metadata.get("release_id"))
+    service_release_id = _metadata_string(service_metadata.get("release_id"))
+    if service_release_id != release_id:
+        raise RuntimeError(
+            f"Demo proof scope {proof_scope_id} service verification must reference ReleaseLive.release_id "
+            f"{release_id}: ServiceVerificationPassed.release_id={service_release_id or '<missing>'}"
+        )
+    release_commit_sha = _metadata_string(release_metadata.get("release_commit_sha")).lower()
+    service_commit_sha = _metadata_string(service_metadata.get("release_commit_sha")).lower()
+    if service_commit_sha != release_commit_sha:
+        raise RuntimeError(
+            f"Demo proof scope {proof_scope_id} service verification must reference ReleaseLive.release_commit_sha "
+            f"{release_commit_sha}: ServiceVerificationPassed.release_commit_sha={service_commit_sha or '<missing>'}"
+        )
+    required_kinds = set(_metadata_string_list(service_metadata.get("required_service_kinds")))
+    if not required_kinds:
+        raise RuntimeError(
+            f"Demo proof scope {proof_scope_id} requires ServiceVerificationPassed.required_service_kinds "
+            "before terminal completion"
+        )
+    verified_kinds = _verified_service_kinds(service_metadata.get("service_urls"))
+    missing_kinds = sorted(required_kinds - verified_kinds)
+    if missing_kinds:
+        raise RuntimeError(
+            f"Demo proof scope {proof_scope_id} ServiceVerificationPassed.service_urls is missing active "
+            "verified service kind(s): " + ", ".join(missing_kinds)
+        )
+
+
 def _require_terminal_proof_metadata(
     *,
     event: str,
@@ -919,6 +981,11 @@ def _require_terminal_proof_metadata(
             + ", ".join(missing)
         )
     release_metadata = metadata.get("ReleaseLive", {})
+    _require_service_verification_metadata(
+        release_metadata=release_metadata,
+        service_metadata=metadata.get("ServiceVerificationPassed", {}),
+        proof_scope_id=proof_scope_id,
+    )
     if event in {"PreviewCleanupCompleted", "FailurePreviewCleanupCompleted"}:
         cleanup_metadata = metadata.get(event, {})
         _require_cleanup_evidence_metadata(
