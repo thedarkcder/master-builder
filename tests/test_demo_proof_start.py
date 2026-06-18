@@ -428,6 +428,141 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
             else:  # pragma: no cover
                 raise AssertionError("expected demo proof to reject trigger_mode mutation")
 
+    def test_demo_proof_handler_rejects_commit_changes_for_existing_scope(self) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-a")
+            workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
+            request = _demo_proof_request(tenant=tenant)
+            execute_workflow_advance(
+                session=session,
+                settings=SimpleNamespace(),
+                workflow_type=workflow_type,
+                request=request,
+                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+            )
+            changed_payload = {**request.payload, "commit_sha": "fedcba9"}
+
+            try:
+                execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=replace(
+                        request,
+                        payload=changed_payload,
+                        trigger=WorkflowTrigger(event="ProofLeaseAcquired"),
+                    ),
+                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                )
+            except RuntimeError as exc:
+                assert "commit_sha cannot change" in str(exc)
+            else:  # pragma: no cover
+                raise AssertionError("expected demo proof to reject commit mutation")
+
+    def test_demo_proof_handler_rejects_required_capture_target_changes_for_existing_scope(self) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-a")
+            workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
+            request = _demo_proof_request(tenant=tenant)
+            execute_workflow_advance(
+                session=session,
+                settings=SimpleNamespace(),
+                workflow_type=workflow_type,
+                request=request,
+                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+            )
+            changed_payload = {
+                **request.payload,
+                "required_capture_targets": ["browser"],
+                "required_recording_counts": {"browser": 1},
+            }
+
+            try:
+                execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=replace(
+                        request,
+                        payload=changed_payload,
+                        trigger=WorkflowTrigger(event="ProofLeaseAcquired"),
+                    ),
+                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                )
+            except RuntimeError as exc:
+                assert "required_capture_targets cannot change" in str(exc)
+            else:  # pragma: no cover
+                raise AssertionError("expected demo proof to reject required capture target mutation")
+
+    def test_demo_proof_handler_rejects_required_recording_count_changes_for_existing_scope(self) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-a")
+            workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
+            request = _demo_proof_request(tenant=tenant)
+            execute_workflow_advance(
+                session=session,
+                settings=SimpleNamespace(),
+                workflow_type=workflow_type,
+                request=request,
+                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+            )
+            changed_payload = {
+                **request.payload,
+                "required_recording_counts": {"browser": 2, "ios": 1, "android": 1},
+            }
+
+            try:
+                execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=replace(
+                        request,
+                        payload=changed_payload,
+                        trigger=WorkflowTrigger(event="ProofLeaseAcquired"),
+                    ),
+                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                )
+            except RuntimeError as exc:
+                assert "required_recording_counts cannot change" in str(exc)
+            else:  # pragma: no cover
+                raise AssertionError("expected demo proof to reject required recording count mutation")
+
+    def test_demo_proof_handler_rejects_run_identity_changes_for_existing_scope(self) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-a")
+            workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
+            request = _demo_proof_request(tenant=tenant)
+            execute_workflow_advance(
+                session=session,
+                settings=SimpleNamespace(),
+                workflow_type=workflow_type,
+                request=request,
+                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+            )
+            changed_payload = {
+                **request.payload,
+                "run_id": "run-2",
+                "pr_url": "https://github.com/acme/project-a/pull/9",
+            }
+
+            try:
+                execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=replace(
+                        request,
+                        payload=changed_payload,
+                        trigger=WorkflowTrigger(event="ProofLeaseAcquired"),
+                    ),
+                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                )
+            except RuntimeError as exc:
+                assert "run_id cannot change" in str(exc)
+            else:  # pragma: no cover
+                raise AssertionError("expected demo proof to reject run identity mutation")
+
     def test_advance_demo_proof_workflow_event_uses_explicit_lifecycle_event(self) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")

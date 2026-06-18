@@ -302,6 +302,24 @@ def _recording_workflow_descriptions(
     return workflows
 
 
+def _require_immutable_description_value(
+    *,
+    previous_description: dict[str, object],
+    field: str,
+    next_value: object,
+    proof_scope_id: str,
+) -> None:
+    if field not in previous_description:
+        return
+    previous_value = previous_description.get(field)
+    if previous_value == next_value:
+        return
+    raise RuntimeError(
+        f"Demo proof workflow {field} cannot change for proof scope {proof_scope_id}: "
+        f"{previous_value!r} != {next_value!r}"
+    )
+
+
 def _current_demo_proof_state(*, session, workflow_id: str) -> str:  # noqa: ANN001
     workflow = session.get(WorkflowExecution, workflow_id)
     if workflow is None:
@@ -338,6 +356,36 @@ def _demo_proof_description(
             f"Demo proof workflow trigger_mode cannot change for proof scope {proof_scope_id}: "
             f"{previous_trigger_mode} != {trigger_mode}"
         )
+    _require_immutable_description_value(
+        previous_description=previous_description,
+        field="commit_sha",
+        next_value=commit_sha,
+        proof_scope_id=proof_scope_id,
+    )
+    _require_immutable_description_value(
+        previous_description=previous_description,
+        field="run_id",
+        next_value=run_id,
+        proof_scope_id=proof_scope_id,
+    )
+    _require_immutable_description_value(
+        previous_description=previous_description,
+        field="pr_url",
+        next_value=pr_url,
+        proof_scope_id=proof_scope_id,
+    )
+    _require_immutable_description_value(
+        previous_description=previous_description,
+        field="required_capture_targets",
+        next_value=[str(target) for target in required_capture_targets],
+        proof_scope_id=proof_scope_id,
+    )
+    _require_immutable_description_value(
+        previous_description=previous_description,
+        field="required_recording_counts",
+        next_value=dict(required_recording_counts),
+        proof_scope_id=proof_scope_id,
+    )
     if event and (not events or str(events[-1]) != event):
         events.append(event)
     if event and event_metadata and previous_last_event != event:
