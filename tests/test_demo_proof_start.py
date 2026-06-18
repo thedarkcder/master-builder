@@ -547,6 +547,35 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
             runtime_mock.assert_not_called()
             assert session.execute(select(WorkflowExecution)).scalar_one_or_none() is None
 
+    def test_start_demo_proof_workflow_rejects_from_run_without_run_id_before_creating_workflow(self) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-a")
+            project = session.get(Project, "project-a")
+
+            with patch("orchestrator.core.qa.demo_proof_start.build_workflow_runtime") as runtime_mock:
+                try:
+                    start_demo_proof_workflow(
+                        session=session,
+                        settings=SimpleNamespace(),
+                        tenant=tenant,
+                        project=project,
+                        proof_scope_id="run-1-main-abcdef1",
+                        commit_sha="abcdef1",
+                        trigger_mode="from_run",
+                        trigger_event="admin_workflow_start",
+                        run_id=None,
+                        pr_url="https://github.com/acme/project-a/pull/8",
+                        required_capture_targets=["browser", "ios", "android"],
+                        required_recording_counts={"browser": 3, "ios": 3, "android": 3},
+                    )
+                except ValueError as exc:
+                    assert "from_run requires run_id" in str(exc)
+                else:  # pragma: no cover
+                    raise AssertionError("expected from_run demo proof start to require run_id")
+
+            runtime_mock.assert_not_called()
+            assert session.execute(select(WorkflowExecution)).scalar_one_or_none() is None
+
     def test_start_demo_proof_workflow_rejects_missing_required_capture_targets_before_creating_workflow(
         self,
     ) -> None:
