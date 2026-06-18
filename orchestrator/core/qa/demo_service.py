@@ -1977,6 +1977,62 @@ def _copy_failure_evidence(
     return copied
 
 
+def _capture_recording_terminal_failure_evidence(
+    *,
+    request: WorkflowRequest,
+    capture_targets: dict[str, DemoCaptureTarget],
+    error_message: str,
+) -> list[LocalQaFailureEvidence]:
+    tenant_id = _require_safe_recording_scope_segment(
+        request.tenant_id,
+        field_name="tenant_id",
+        scope_name="failure evidence diagnostic scope",
+    )
+    project_id = _require_safe_recording_scope_segment(
+        request.project_id,
+        field_name="project_id",
+        scope_name="failure evidence diagnostic scope",
+    )
+    run_id = _require_safe_recording_scope_segment(
+        request.run_id,
+        field_name="run_id",
+        scope_name="failure evidence diagnostic scope",
+    )
+    persisted_dir = Path.cwd() / "tmp" / "qa-demos" / tenant_id / project_id / run_id / "failures"
+    persisted_dir.mkdir(parents=True, exist_ok=True)
+
+    evidence: list[LocalQaFailureEvidence] = []
+    for capture_target_name in sorted(capture_targets):
+        capture_target = capture_targets[capture_target_name]
+        content = "\n".join(
+            [
+                "QA demo recording failed before video evidence was produced.",
+                f"tenant_id: {tenant_id}",
+                f"project_id: {project_id}",
+                f"run_id: {run_id}",
+                f"capture_target: {capture_target.capture_target}",
+                f"capture_reference: {capture_target.capture_reference}",
+                "error:",
+                error_message,
+            ]
+        ).strip() + "\n"
+        target = persisted_dir / f"{capture_target.capture_target}-terminal-failure.txt"
+        payload = content.encode("utf-8")
+        target.write_bytes(payload)
+        evidence.append(
+            LocalQaFailureEvidence(
+                name=f"{capture_target.capture_target} recorder failure",
+                path=str(target),
+                capture_target=capture_target.capture_target,
+                capture_reference=capture_target.capture_reference,
+                content_type="text/plain",
+                content_sha256=hashlib.sha256(payload).hexdigest(),
+                error_message=error_message,
+            )
+        )
+    return evidence
+
+
 def _capture_release_readiness_failure_evidence(
     *,
     settings,  # noqa: ANN001
@@ -2729,6 +2785,12 @@ def execute_qa_demo_stage(
     if last_error is None:  # pragma: no cover
         raise RuntimeError("QA demo recording failed without an exception")
     message = f"QA demo recording failed after {max_attempts} attempts: {type(last_error).__name__}: {last_error}"
+    if not last_failure_evidence:
+        last_failure_evidence = _capture_recording_terminal_failure_evidence(
+            request=request,
+            capture_targets=current_worker_capture_targets,
+            error_message=message,
+        )
     uploaded_failure_evidence = _upload_failure_evidence(
         storage=storage,
         tenant=tenant,

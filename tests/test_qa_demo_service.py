@@ -4997,6 +4997,78 @@ def test_execute_qa_demo_stage_uploads_failure_evidence_when_app_does_not_load()
     assert upload_mock.call_args.kwargs["object_key"] == "tenant-1/project-1/run-1/qa-failure-1.webm"
 
 
+def test_execute_qa_demo_stage_uploads_diagnostic_failure_evidence_when_recorder_crashes_without_video() -> None:
+    tenant = SimpleNamespace(tenant_id="tenant-1", github_config={})
+    project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo")
+    run = SimpleNamespace(run_id="run-1")
+    release = SimpleNamespace(
+        commit_sha="b" * 40,
+        service_urls=[SimpleNamespace(service_kind="website", status="active", url="https://preview.example")],
+    )
+    plan = PmPlan(
+        plan_steps=["Implement"],
+        acceptance_criteria=["Feature works"],
+        risks=[],
+        demo_requirements=[_demo_requirement()],
+    )
+    dev_result = DevResult(change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8")
+    test_result = TestResult(guidance=["pytest -q"])
+    review_result = ReviewResult(summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8")
+    fake_agents = SimpleNamespace(qa=lambda **_: _qa_result())
+
+    with (
+        patch("orchestrator.core.qa.demo_service.build_codex_runtime"),
+        patch("orchestrator.core.qa.demo_service.CodexWorkflowAgents", return_value=fake_agents),
+        patch(
+            "orchestrator.core.qa.demo_service.record_demo_scenarios",
+            side_effect=RuntimeError("Chromium exited before recording could start"),
+        ),
+        patch(
+            "orchestrator.core.qa.demo_service.storage_config_from_settings",
+            return_value=SimpleNamespace(
+                endpoint="minio:9000",
+                access_key="key",
+                secret_key="secret",
+                bucket="qa-demos",
+                public_base_url="https://cdn.example/qa-demos",
+                secure=False,
+            ),
+        ),
+        patch(
+            "orchestrator.core.qa.demo_service.upload_recording",
+            return_value="https://cdn.example/qa-demos/tenant-1/project-1/run-1/qa-failure-1.txt",
+        ) as upload_mock,
+        patch("orchestrator.core.qa.demo_service._default_service_url_probe", return_value=200),
+        patch("orchestrator.core.qa.demo_service._default_artifact_url_probe", return_value=200),
+    ):
+        result = execute_qa_demo_stage(
+            session=SimpleNamespace(),
+            settings=SimpleNamespace(qa_demo_playwright_module_dir="", qa_demo_max_attempts=1),
+            tenant=tenant,
+            project=project,
+            run=run,
+            request=_request(),
+            plan=plan,
+            dev_result=dev_result,
+            test_result=test_result,
+            review_result=review_result,
+            preview_release=release,
+        )
+
+    assert result.outcome == "blocked"
+    assert result.recordings == []
+    assert result.failure_evidence[0].artifact_url.endswith("qa-failure-1.txt")
+    assert result.failure_evidence[0].object_key == "tenant-1/project-1/run-1/qa-failure-1.txt"
+    assert result.failure_evidence[0].capture_target == "browser"
+    assert "Chromium exited before recording could start" in result.failure_evidence[0].error_message
+    upload_mock.assert_called_once()
+    uploaded_path = Path(upload_mock.call_args.kwargs["local_path"])
+    assert upload_mock.call_args.kwargs["content_type"] == "text/plain"
+    assert upload_mock.call_args.kwargs["object_key"] == "tenant-1/project-1/run-1/qa-failure-1.txt"
+    assert uploaded_path.suffix == ".txt"
+    assert "Chromium exited before recording could start" in uploaded_path.read_text(encoding="utf-8")
+
+
 def test_execute_qa_demo_stage_uploads_failure_evidence_when_release_readiness_fails() -> None:
     tenant = SimpleNamespace(tenant_id="tenant-1", github_config={})
     project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo")
