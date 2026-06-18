@@ -241,6 +241,13 @@ def test_complete_runs_qa_demo_stage_before_finalization() -> None:
         status="live",
         service_urls=[],
         commit_sha="b" * 40,
+        delivery_metadata={
+            "demo_proof_lease": {
+                "state": "destroyed",
+                "destroy_reason": "qa_demo_complete",
+                "destroyed_at": "2026-06-18T12:00:00+00:00",
+            }
+        },
     )
     finalizer_calls: dict[str, object] = {}
 
@@ -357,6 +364,15 @@ def test_complete_runs_qa_demo_stage_before_finalization() -> None:
     assert metadata_by_event["PREvidenceAttached"]["pr_url"] == workflow_result.pr_url
     assert metadata_by_event["PreviewCleanupCompleted"]["release_id"] == "release-preview-1"
     assert metadata_by_event["PreviewCleanupCompleted"]["cleanup_status"] == "completed"
+    assert metadata_by_event["PreviewCleanupCompleted"]["cleanup_mode"] == "destroy_or_ttl"
+    assert metadata_by_event["PreviewCleanupCompleted"]["cleanup_evidence"] == {
+        "release_id": "release-preview-1",
+        "cleanup_status": "completed",
+        "cleanup_mode": "qa_demo_complete",
+        "lease_state": "destroyed",
+        "destroy_reason": "qa_demo_complete",
+        "destroyed_at": "2026-06-18T12:00:00+00:00",
+    }
     deps.execution.mark_pull_request_ready_after_demo_proof_fn.assert_called_once()
     ready_kwargs = deps.execution.mark_pull_request_ready_after_demo_proof_fn.call_args.kwargs
     assert ready_kwargs["session"] is session

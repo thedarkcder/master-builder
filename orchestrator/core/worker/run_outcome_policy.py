@@ -1342,6 +1342,9 @@ def _qa_demo_proof_event_metadata(*, proof_context, event: str) -> dict[str, obj
         if event in {"PreviewCleanupCompleted", "FailurePreviewCleanupCompleted"}:
             metadata["cleanup_status"] = "completed"
             metadata["cleanup_mode"] = "destroy_or_ttl"
+            cleanup_evidence = _qa_demo_cleanup_evidence_metadata(preview_release=preview_release)
+            if cleanup_evidence:
+                metadata["cleanup_evidence"] = cleanup_evidence
     qa_result = getattr(proof_context, "qa_result", None)
     if event in {"RecordingCompleted", "EvidenceUploadStarted", "EvidenceUploaded"} and qa_result is not None:
         recordings = list(getattr(qa_result, "recordings", ()) or ())
@@ -1428,6 +1431,30 @@ def _qa_demo_proof_event_metadata(*, proof_context, event: str) -> dict[str, obj
             continue
         compacted[key] = value
     return compacted or None
+
+
+def _qa_demo_cleanup_evidence_metadata(*, preview_release) -> dict[str, str]:  # noqa: ANN001
+    delivery_metadata = getattr(preview_release, "delivery_metadata", None)
+    lease_metadata = delivery_metadata.get("demo_proof_lease") if isinstance(delivery_metadata, dict) else None
+    if not isinstance(lease_metadata, dict):
+        return {}
+    release_id = str(getattr(preview_release, "release_id", "") or "").strip()
+    lease_state = str(lease_metadata.get("state") or "").strip()
+    cleanup_status = "completed" if lease_state in {"destroyed", "expired", "ttl_scheduled"} else ""
+    cleanup_mode = str(lease_metadata.get("destroy_reason") or lease_metadata.get("cleanup_mode") or "").strip()
+    return {
+        key: value
+        for key, value in {
+            "release_id": release_id,
+            "cleanup_status": cleanup_status,
+            "cleanup_mode": cleanup_mode,
+            "lease_state": lease_state,
+            "destroy_reason": str(lease_metadata.get("destroy_reason") or "").strip(),
+            "destroyed_at": str(lease_metadata.get("destroyed_at") or "").strip(),
+            "expires_at": str(lease_metadata.get("expires_at") or "").strip(),
+        }.items()
+        if value
+    }
 
 
 def _qa_demo_proof_commit_sha(qa_result: QaResult) -> str:

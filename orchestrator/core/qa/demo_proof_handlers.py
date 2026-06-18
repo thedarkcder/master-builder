@@ -165,13 +165,13 @@ _SUCCESS_TERMINAL_METADATA_REQUIREMENTS: dict[str, tuple[str, ...]] = {
     "ReleaseLive": ("release_id",),
     "EvidenceUploaded": ("artifact_urls", "recordings"),
     "PREvidenceAttached": ("pr_url",),
-    "PreviewCleanupCompleted": ("release_id", "cleanup_status"),
+    "PreviewCleanupCompleted": ("release_id", "cleanup_status", "cleanup_mode", "cleanup_evidence"),
 }
 _FAILURE_TERMINAL_METADATA_REQUIREMENTS: dict[str, tuple[str, ...]] = {
     "ReleaseLive": ("release_id",),
     "FailureEvidenceUploaded": ("artifact_urls", "capture_targets", "failure_evidence"),
     "PRFailureEvidenceAttached": ("pr_url",),
-    "FailurePreviewCleanupCompleted": ("release_id", "cleanup_status"),
+    "FailurePreviewCleanupCompleted": ("release_id", "cleanup_status", "cleanup_mode", "cleanup_evidence"),
 }
 _RECORDING_EVENT_STATES = {
     "ServiceVerificationPassed": "waiting_for_recording",
@@ -500,6 +500,25 @@ def _failure_evidence_by_target(value: object) -> dict[str, dict[str, str]]:
     return evidence_by_target
 
 
+def _require_cleanup_evidence_metadata(*, value: object, event: str, proof_scope_id: str) -> None:
+    if not isinstance(value, dict):
+        raise RuntimeError(
+            f"Demo proof scope {proof_scope_id} requires {event}.cleanup_evidence to be a JSON object"
+        )
+    required = ("release_id", "cleanup_status", "cleanup_mode", "lease_state")
+    missing = [field for field in required if not str(value.get(field) or "").strip()]
+    if missing:
+        raise RuntimeError(
+            f"Demo proof scope {proof_scope_id} requires cleanup evidence metadata before terminal completion: "
+            + ", ".join(f"{event}.cleanup_evidence.{field}" for field in missing)
+        )
+    lease_state = str(value.get("lease_state") or "").strip()
+    if lease_state not in {"destroyed", "expired", "ttl_scheduled"}:
+        raise RuntimeError(
+            f"Demo proof scope {proof_scope_id} cleanup evidence has unsupported lease_state: {lease_state}"
+        )
+
+
 def _require_terminal_proof_metadata(
     *,
     event: str,
@@ -526,6 +545,12 @@ def _require_terminal_proof_metadata(
         raise RuntimeError(
             f"Demo proof scope {proof_scope_id} requires auditable metadata before terminal completion: "
             + ", ".join(missing)
+        )
+    if event in {"PreviewCleanupCompleted", "FailurePreviewCleanupCompleted"}:
+        _require_cleanup_evidence_metadata(
+            value=metadata.get(event, {}).get("cleanup_evidence"),
+            event=event,
+            proof_scope_id=proof_scope_id,
         )
     if event == "PreviewCleanupCompleted":
         required_targets = set(_normalized_capture_targets(list(description.get("required_capture_targets") or [])))
