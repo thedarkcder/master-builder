@@ -2815,6 +2815,17 @@ class DemoProofWorkflowAdvanceHandler:
                 pr_event="PREvidenceAttached",
                 proof_scope_id=proof_scope_id,
             )
+            _require_pr_evidence_targets_workflow_pr(
+                description=description,
+                pr_metadata=pr_metadata,
+                pr_event="PREvidenceAttached",
+                proof_scope_id=proof_scope_id,
+            )
+            _require_pr_body_sha256_metadata(
+                pr_metadata=pr_metadata,
+                pr_event="PREvidenceAttached",
+                proof_scope_id=proof_scope_id,
+            )
         if event == "PRFailureEvidenceAttached":
             metadata = _metadata_by_event(description)
             failure_metadata = metadata.get("FailureEvidenceUploaded", {})
@@ -2827,6 +2838,17 @@ class DemoProofWorkflowAdvanceHandler:
             )
             _require_pr_artifact_url_checks(
                 uploaded_metadata=failure_metadata,
+                pr_metadata=pr_metadata,
+                pr_event="PRFailureEvidenceAttached",
+                proof_scope_id=proof_scope_id,
+            )
+            _require_pr_evidence_targets_workflow_pr(
+                description=description,
+                pr_metadata=pr_metadata,
+                pr_event="PRFailureEvidenceAttached",
+                proof_scope_id=proof_scope_id,
+            )
+            _require_pr_body_sha256_metadata(
                 pr_metadata=pr_metadata,
                 pr_event="PRFailureEvidenceAttached",
                 proof_scope_id=proof_scope_id,
