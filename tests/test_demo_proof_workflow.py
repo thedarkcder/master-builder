@@ -7,9 +7,11 @@ from orchestrator.core.qa.demo_proof_workflow import (
     DEMO_PROOF_STATE_COMPLETE,
     DEMO_PROOF_STATE_EVIDENCE_UPLOADING,
     DEMO_PROOF_STATE_FAILURE_EVIDENCE_UPLOADING,
+    DEMO_PROOF_STATE_FAILURE_PR_ATTACHING,
     DEMO_PROOF_STATE_LEASE_ACQUIRING,
     DEMO_PROOF_STATE_RELEASE_PROVISIONING,
     DEMO_PROOF_STATE_REQUESTED,
+    DEMO_PROOF_STATE_PR_ATTACHING,
     DEMO_PROOF_STATE_RECORDING,
     DEMO_PROOF_STATE_RECORDING_DEFERRED,
     DEMO_PROOF_STATE_SERVICES_VERIFYING,
@@ -108,6 +110,42 @@ def test_demo_proof_service_verification_failure_waits_for_cleanup_before_blocki
     state = transition_demo_proof_state(
         current_state=state,
         event="ServiceVerificationFailedPreviewCleanupCompleted",
+    )
+
+    assert state == DEMO_PROOF_STATE_BLOCKED
+    assert is_demo_proof_terminal(state)
+
+
+def test_demo_proof_pr_evidence_attach_failure_waits_for_cleanup_before_blocking() -> None:
+    state = transition_demo_proof_state(
+        current_state=DEMO_PROOF_STATE_PR_ATTACHING,
+        event="PREvidenceAttachFailed",
+    )
+
+    assert state != DEMO_PROOF_STATE_BLOCKED
+    assert not is_demo_proof_terminal(state)
+
+    state = transition_demo_proof_state(
+        current_state=state,
+        event="PREvidenceAttachFailedPreviewCleanupCompleted",
+    )
+
+    assert state == DEMO_PROOF_STATE_BLOCKED
+    assert is_demo_proof_terminal(state)
+
+
+def test_demo_proof_failure_pr_evidence_attach_failure_waits_for_cleanup_before_blocking() -> None:
+    state = transition_demo_proof_state(
+        current_state=DEMO_PROOF_STATE_FAILURE_PR_ATTACHING,
+        event="PRFailureEvidenceAttachFailed",
+    )
+
+    assert state != DEMO_PROOF_STATE_BLOCKED
+    assert not is_demo_proof_terminal(state)
+
+    state = transition_demo_proof_state(
+        current_state=state,
+        event="PRFailureEvidenceAttachFailedPreviewCleanupCompleted",
     )
 
     assert state == DEMO_PROOF_STATE_BLOCKED

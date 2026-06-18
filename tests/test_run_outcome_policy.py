@@ -1738,7 +1738,35 @@ def test_complete_persists_blocked_qa_checkpoint_when_pr_evidence_update_fails()
             _qa_recording(name="Repeat action remains safe", index=3),
         ],
     )
+    preview_release = SimpleNamespace(
+        release_id="release-preview-1",
+        release_kind="run_preview",
+        status="live",
+        commit_sha="b" * 40,
+        service_urls=[],
+        delivery_metadata={
+            "demo_proof_lease": {
+                "lease_id": "lease-1",
+                "proof_scope_id": "run:run-1:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                "commit_sha": "b" * 40,
+                "state": "live",
+                "acquired_at": "2026-06-18T10:00:00+00:00",
+                "expires_at": "2026-06-18T11:00:00+00:00",
+            }
+        },
+        provider_context={
+            "application_uuid": "app-1",
+            "deployment_uuid": "deployment-1",
+        },
+    )
     finalizer_calls: dict[str, object] = {}
+
+    def _destroy_preview(**_kwargs):  # noqa: ANN001
+        preview_release.status = "destroyed"
+        lease = preview_release.delivery_metadata["demo_proof_lease"]
+        lease["state"] = "destroyed"
+        lease["destroy_reason"] = "qa_demo_failed"
+        lease["destroyed_at"] = "2026-06-18T10:30:00+00:00"
 
     class _Finalizer:
         def __init__(self, **_kwargs):
@@ -1759,13 +1787,17 @@ def test_complete_persists_blocked_qa_checkpoint_when_pr_evidence_update_fails()
     with (
         patch(
             "orchestrator.core.worker.run_outcome_policy.create_run_preview_deployment",
-            return_value=SimpleNamespace(created=False, reason="existing", release=SimpleNamespace(service_urls=[])),
+            return_value=SimpleNamespace(created=False, reason="existing", release=preview_release),
         ),
         patch("orchestrator.core.worker.run_outcome_policy.execute_qa_demo_stage", return_value=qa_result),
         patch(
             "orchestrator.core.worker.run_outcome_policy.update_pull_request_with_demo_evidence",
             side_effect=RuntimeError("GitHub rejected PR update"),
         ),
+        patch(
+            "orchestrator.core.worker.run_outcome_policy.destroy_project_deployment_preview_release",
+            side_effect=_destroy_preview,
+        ) as destroy_preview_mock,
         patch("orchestrator.core.worker.run_outcome_policy.WorkflowFinalizer", _Finalizer),
         patch("orchestrator.core.worker.run_outcome_policy.CompletionTailExecutor") as tail_executor_cls,
     ):
@@ -1805,7 +1837,24 @@ def test_complete_persists_blocked_qa_checkpoint_when_pr_evidence_update_fails()
         "EvidenceUploaded",
         "PREvidenceAttachStarted",
         "PREvidenceAttachFailed",
+        "PREvidenceAttachFailedPreviewCleanupCompleted",
     ]
+    destroy_preview_mock.assert_called_once_with(
+        session=session,
+        tenant_id="tenant-1",
+        project_id="project-1",
+        release_id="release-preview-1",
+        reason="qa_demo_failed",
+    )
+    metadata_by_event = {
+        call.kwargs["event"]: call.kwargs.get("event_metadata")
+        for call in deps.execution.advance_demo_proof_workflow_event_fn.call_args_list
+    }
+    assert metadata_by_event["PREvidenceAttachFailed"]["error_message"] == (
+        "QA demo evidence PR update failed: RuntimeError: GitHub rejected PR update"
+    )
+    assert metadata_by_event["PREvidenceAttachFailedPreviewCleanupCompleted"]["cleanup_status"] == "completed"
+    assert metadata_by_event["PREvidenceAttachFailedPreviewCleanupCompleted"]["cleanup_mode"] == "destroy_or_ttl"
     assert finalizer_calls["workflow_result"].outcome == "blocked"
     assert "GitHub rejected PR update" in str(finalizer_calls["workflow_result"].blocker_message)
 
@@ -1830,8 +1879,29 @@ def test_complete_records_qa_failure_evidence_pr_attach_failure_before_blocking_
         status="live",
         service_urls=[],
         commit_sha="b" * 40,
+        delivery_metadata={
+            "demo_proof_lease": {
+                "lease_id": "lease-1",
+                "proof_scope_id": "run:run-1:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+                "commit_sha": "b" * 40,
+                "state": "live",
+                "acquired_at": "2026-06-18T10:00:00+00:00",
+                "expires_at": "2026-06-18T11:00:00+00:00",
+            }
+        },
+        provider_context={
+            "application_uuid": "app-1",
+            "deployment_uuid": "deployment-1",
+        },
     )
     finalizer_calls: dict[str, object] = {}
+
+    def _destroy_preview(**_kwargs):  # noqa: ANN001
+        preview_release.status = "destroyed"
+        lease = preview_release.delivery_metadata["demo_proof_lease"]
+        lease["state"] = "destroyed"
+        lease["destroy_reason"] = "qa_demo_failed"
+        lease["destroyed_at"] = "2026-06-18T10:30:00+00:00"
 
     class _Finalizer:
         def __init__(self, **_kwargs):
@@ -1860,7 +1930,10 @@ def test_complete_records_qa_failure_evidence_pr_attach_failure_before_blocking_
             side_effect=RuntimeError("GitHub rejected failure evidence update"),
         ) as update_failure_pr_mock,
         patch("orchestrator.core.worker.run_outcome_policy.update_pull_request_with_demo_evidence") as update_pr_mock,
-        patch("orchestrator.core.worker.run_outcome_policy.destroy_project_deployment_preview_release") as destroy_mock,
+        patch(
+            "orchestrator.core.worker.run_outcome_policy.destroy_project_deployment_preview_release",
+            side_effect=_destroy_preview,
+        ) as destroy_mock,
         patch("orchestrator.core.worker.run_outcome_policy.WorkflowFinalizer", _Finalizer),
         patch("orchestrator.core.worker.run_outcome_policy.CompletionTailExecutor") as tail_executor_cls,
     ):
@@ -1896,7 +1969,27 @@ def test_complete_records_qa_failure_evidence_pr_attach_failure_before_blocking_
         "FailureEvidenceUploaded",
         "PRFailureEvidenceAttachStarted",
         "PRFailureEvidenceAttachFailed",
+        "PRFailureEvidenceAttachFailedPreviewCleanupCompleted",
     ]
+    metadata_by_event = {
+        call.kwargs["event"]: call.kwargs.get("event_metadata")
+        for call in deps.execution.advance_demo_proof_workflow_event_fn.call_args_list
+    }
+    assert metadata_by_event["PRFailureEvidenceAttachFailed"]["error_message"].startswith(
+        "QA demo failure evidence PR update failed: RuntimeError: GitHub rejected failure evidence update"
+    )
+    assert "pageerror: process is not defined" in metadata_by_event["PRFailureEvidenceAttachFailed"]["error_message"]
+    assert metadata_by_event["PRFailureEvidenceAttachFailed"]["artifact_urls"] == [
+        "https://cdn.example/qa-failure-1.webm"
+    ]
+    assert (
+        metadata_by_event["PRFailureEvidenceAttachFailedPreviewCleanupCompleted"]["cleanup_status"]
+        == "completed"
+    )
+    assert (
+        metadata_by_event["PRFailureEvidenceAttachFailedPreviewCleanupCompleted"]["cleanup_mode"]
+        == "destroy_or_ttl"
+    )
     assert finalizer_calls["workflow_result"].outcome == "blocked"
     assert "app did not load" in str(finalizer_calls["workflow_result"].blocker_message)
     assert "GitHub rejected failure evidence update" in str(finalizer_calls["workflow_result"].blocker_message)

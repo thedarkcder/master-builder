@@ -20,11 +20,13 @@ DEMO_PROOF_STATE_RECORDING_DEFERRED = "recording_deferred"
 DEMO_PROOF_STATE_EVIDENCE_UPLOADING = "evidence_uploading"
 DEMO_PROOF_STATE_EVIDENCE_UPLOADED = "evidence_uploaded"
 DEMO_PROOF_STATE_PR_ATTACHING = "pr_attaching"
+DEMO_PROOF_STATE_PR_ATTACH_FAILED_CLEANUP_SCHEDULED = "pr_attach_failed_cleanup_scheduled"
 DEMO_PROOF_STATE_PR_ATTACHED = "pr_attached"
 DEMO_PROOF_STATE_CLEANUP_SCHEDULED = "cleanup_scheduled"
 DEMO_PROOF_STATE_FAILURE_EVIDENCE_UPLOADING = "failure_evidence_uploading"
 DEMO_PROOF_STATE_FAILURE_EVIDENCE_UPLOADED = "failure_evidence_uploaded"
 DEMO_PROOF_STATE_FAILURE_PR_ATTACHING = "failure_pr_attaching"
+DEMO_PROOF_STATE_FAILURE_PR_ATTACH_FAILED_CLEANUP_SCHEDULED = "failure_pr_attach_failed_cleanup_scheduled"
 DEMO_PROOF_STATE_FAILURE_PR_ATTACHED = "failure_pr_attached"
 DEMO_PROOF_STATE_FAILURE_CLEANUP_SCHEDULED = "failure_cleanup_scheduled"
 DEMO_PROOF_STATE_COMPLETE = "complete"
@@ -83,11 +85,13 @@ _ALL_DEMO_PROOF_NON_TERMINAL_STATES = frozenset(
         DEMO_PROOF_STATE_EVIDENCE_UPLOADING,
         DEMO_PROOF_STATE_EVIDENCE_UPLOADED,
         DEMO_PROOF_STATE_PR_ATTACHING,
+        DEMO_PROOF_STATE_PR_ATTACH_FAILED_CLEANUP_SCHEDULED,
         DEMO_PROOF_STATE_PR_ATTACHED,
         DEMO_PROOF_STATE_CLEANUP_SCHEDULED,
         DEMO_PROOF_STATE_FAILURE_EVIDENCE_UPLOADING,
         DEMO_PROOF_STATE_FAILURE_EVIDENCE_UPLOADED,
         DEMO_PROOF_STATE_FAILURE_PR_ATTACHING,
+        DEMO_PROOF_STATE_FAILURE_PR_ATTACH_FAILED_CLEANUP_SCHEDULED,
         DEMO_PROOF_STATE_FAILURE_PR_ATTACHED,
         DEMO_PROOF_STATE_FAILURE_CLEANUP_SCHEDULED,
     }
@@ -217,6 +221,14 @@ _DEMO_PROOF_TRANSITIONS: dict[str, _EventTransition] = {
     ),
     "PREvidenceAttachFailed": _EventTransition(
         frozenset({DEMO_PROOF_STATE_PR_ATTACHING}),
+        DEMO_PROOF_STATE_PR_ATTACH_FAILED_CLEANUP_SCHEDULED,
+    ),
+    "PREvidenceAttachFailedPreviewCleanupCompleted": _EventTransition(
+        frozenset({DEMO_PROOF_STATE_PR_ATTACH_FAILED_CLEANUP_SCHEDULED}),
+        DEMO_PROOF_STATE_BLOCKED,
+    ),
+    "PREvidenceAttachFailedPreviewCleanupFailed": _EventTransition(
+        frozenset({DEMO_PROOF_STATE_PR_ATTACH_FAILED_CLEANUP_SCHEDULED}),
         DEMO_PROOF_STATE_BLOCKED,
     ),
     "PreviewCleanupRequested": _EventTransition(
@@ -253,6 +265,14 @@ _DEMO_PROOF_TRANSITIONS: dict[str, _EventTransition] = {
     ),
     "PRFailureEvidenceAttachFailed": _EventTransition(
         frozenset({DEMO_PROOF_STATE_FAILURE_PR_ATTACHING}),
+        DEMO_PROOF_STATE_FAILURE_PR_ATTACH_FAILED_CLEANUP_SCHEDULED,
+    ),
+    "PRFailureEvidenceAttachFailedPreviewCleanupCompleted": _EventTransition(
+        frozenset({DEMO_PROOF_STATE_FAILURE_PR_ATTACH_FAILED_CLEANUP_SCHEDULED}),
+        DEMO_PROOF_STATE_BLOCKED,
+    ),
+    "PRFailureEvidenceAttachFailedPreviewCleanupFailed": _EventTransition(
+        frozenset({DEMO_PROOF_STATE_FAILURE_PR_ATTACH_FAILED_CLEANUP_SCHEDULED}),
         DEMO_PROOF_STATE_BLOCKED,
     ),
     "FailurePreviewCleanupRequested": _EventTransition(

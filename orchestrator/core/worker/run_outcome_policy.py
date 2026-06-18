@@ -684,6 +684,7 @@ class RunOutcomePolicy:
         if qa_result.outcome != "continue":
             proof_context = recording_failure_cleanup_proof_context
             proof_terminal_failure_emitted = False
+            pr_failure_evidence_attach_failed = False
             if qa_result.failure_evidence:
                 try:
                     proof_context = _qa_demo_proof_context(
@@ -719,16 +720,20 @@ class RunOutcomePolicy:
                     )
                 except Exception as exc:  # noqa: BLE001
                     message = f"QA demo failure evidence PR update failed: {type(exc).__name__}: {exc}"
+                    pr_failure_evidence_attach_failed = True
                     diagnostics = _qa_failure_evidence_diagnostics(qa_result)
                     if diagnostics:
                         message = f"{message} QA failure evidence diagnostics: {diagnostics}"
                     if proof_context is not None:
+                        proof_context.pr_failure_evidence_failure_message = message
+                        proof_context.pr_failure_evidence_artifact_urls = _qa_failure_evidence_artifact_urls(
+                            qa_result
+                        )
                         try:
                             self._advance_qa_demo_proof_events(
                                 proof_context=proof_context,
                                 events=("PRFailureEvidenceAttachStarted", "PRFailureEvidenceAttachFailed"),
                             )
-                            proof_terminal_failure_emitted = True
                         except Exception as proof_exc:  # noqa: BLE001
                             message = (
                                 f"{message} QA demo failure proof PR evidence failure event failed: "
@@ -759,6 +764,8 @@ class RunOutcomePolicy:
                         cleanup_failure_events = (
                             ("RecordingFailedPreviewCleanupFailed",)
                             if proof_context is recording_failure_cleanup_proof_context
+                            else ("PRFailureEvidenceAttachFailedPreviewCleanupFailed",)
+                            if pr_failure_evidence_attach_failed
                             else ("FailurePreviewCleanupRequested", "FailurePreviewCleanupFailed")
                         )
                         self._advance_qa_demo_proof_events(
@@ -783,6 +790,8 @@ class RunOutcomePolicy:
                     cleanup_events = (
                         ("RecordingFailedPreviewCleanupCompleted",)
                         if proof_context is recording_failure_cleanup_proof_context
+                        else ("PRFailureEvidenceAttachFailedPreviewCleanupCompleted",)
+                        if pr_failure_evidence_attach_failed
                         else ("FailurePreviewCleanupRequested", "FailurePreviewCleanupCompleted")
                     )
                     self._advance_qa_demo_proof_events(
@@ -866,6 +875,7 @@ class RunOutcomePolicy:
             proof_context.pr_evidence_body_sha256 = _sha256_text(updated_pr_body)
         except Exception as exc:  # noqa: BLE001
             message = f"QA demo evidence PR update failed: {type(exc).__name__}: {exc}"
+            proof_context.pr_evidence_failure_message = message
             try:
                 self._advance_qa_demo_proof_events(
                     proof_context=proof_context,
@@ -894,7 +904,28 @@ class RunOutcomePolicy:
                 reason="qa_demo_failed",
             )
             if cleanup_error:
+                try:
+                    self._advance_qa_demo_proof_events(
+                        proof_context=proof_context,
+                        events=("PREvidenceAttachFailedPreviewCleanupFailed",),
+                    )
+                except Exception as proof_exc:  # noqa: BLE001
+                    cleanup_error = (
+                        f"{cleanup_error} QA demo PR evidence proof cleanup failure event failed: "
+                        f"{type(proof_exc).__name__}: {proof_exc}"
+                    )
                 message = f"{message} {cleanup_error}"
+            else:
+                try:
+                    self._advance_qa_demo_proof_events(
+                        proof_context=proof_context,
+                        events=("PREvidenceAttachFailedPreviewCleanupCompleted",),
+                    )
+                except Exception as proof_exc:  # noqa: BLE001
+                    message = (
+                        f"{message} QA demo PR evidence proof cleanup event failed: "
+                        f"{type(proof_exc).__name__}: {proof_exc}"
+                    )
             return _workflow_result_with_qa_blocker(
                 workflow_result=workflow_result,
                 attempt=attempt,
@@ -1486,6 +1517,10 @@ def _qa_demo_proof_event_metadata(*, proof_context, event: str) -> dict[str, obj
         "PreviewCleanupRequested",
         "PreviewCleanupCompleted",
         "PreviewCleanupFailed",
+        "PREvidenceAttachFailedPreviewCleanupCompleted",
+        "PREvidenceAttachFailedPreviewCleanupFailed",
+        "PRFailureEvidenceAttachFailedPreviewCleanupCompleted",
+        "PRFailureEvidenceAttachFailedPreviewCleanupFailed",
         "FailurePreviewCleanupRequested",
         "FailurePreviewCleanupCompleted",
         "FailurePreviewCleanupFailed",
@@ -1528,6 +1563,8 @@ def _qa_demo_proof_event_metadata(*, proof_context, event: str) -> dict[str, obj
             "FailurePreviewCleanupCompleted",
             "ReleaseFailedPreviewCleanupCompleted",
             "RecordingFailedPreviewCleanupCompleted",
+            "PREvidenceAttachFailedPreviewCleanupCompleted",
+            "PRFailureEvidenceAttachFailedPreviewCleanupCompleted",
         }:
             metadata["cleanup_status"] = "completed"
             metadata["cleanup_mode"] = "destroy_or_ttl"
@@ -1632,6 +1669,12 @@ def _qa_demo_proof_event_metadata(*, proof_context, event: str) -> dict[str, obj
             metadata["artifact_url_check_status"] = "passed"
             metadata["checked_artifact_urls"] = artifact_urls
             metadata["pr_body_sha256"] = str(getattr(proof_context, "pr_evidence_body_sha256", "") or "").strip()
+        if event == "PREvidenceAttachFailed":
+            artifact_urls = _qa_recording_artifact_urls(getattr(proof_context, "qa_result", None))
+            metadata["artifact_urls"] = artifact_urls
+            metadata["artifact_url_check_status"] = "passed"
+            metadata["checked_artifact_urls"] = artifact_urls
+            metadata["error_message"] = str(getattr(proof_context, "pr_evidence_failure_message", "") or "").strip()
         if event == "PRFailureEvidenceAttached":
             artifact_urls = list(getattr(proof_context, "pr_failure_evidence_artifact_urls", ()) or ())
             metadata["artifact_urls"] = artifact_urls
@@ -1639,6 +1682,14 @@ def _qa_demo_proof_event_metadata(*, proof_context, event: str) -> dict[str, obj
             metadata["checked_artifact_urls"] = artifact_urls
             metadata["pr_body_sha256"] = str(
                 getattr(proof_context, "pr_failure_evidence_body_sha256", "") or ""
+            ).strip()
+        if event == "PRFailureEvidenceAttachFailed":
+            artifact_urls = list(getattr(proof_context, "pr_failure_evidence_artifact_urls", ()) or ())
+            metadata["artifact_urls"] = artifact_urls
+            metadata["artifact_url_check_status"] = "passed"
+            metadata["checked_artifact_urls"] = artifact_urls
+            metadata["error_message"] = str(
+                getattr(proof_context, "pr_failure_evidence_failure_message", "") or ""
             ).strip()
     compacted: dict[str, object] = {}
     for key, value in metadata.items():
