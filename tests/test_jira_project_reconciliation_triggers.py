@@ -174,6 +174,51 @@ class JiraProjectReconciliationTriggerTests(AdminApiTestHarness):
         self.assertIn("pr_url", response.json()["detail"])
         runtime_mock.assert_not_called()
 
+    def test_generic_workflow_start_route_starts_cleanup_only_demo_proof_without_pr_url(self) -> None:
+        payload = self._tenant_payload()
+        create_response = self.client.post(
+            "/api/admin/tenants",
+            json=payload,
+            auth=("admin", "secret"),
+        )
+        self.assertEqual(create_response.status_code, 201)
+        project_id = self._first_project_id()
+
+        with patch(
+            "orchestrator.api.admin.workflows.use_cases.start_demo_proof_workflow",
+            return_value=SimpleNamespace(
+                execution_id="wfexec-demo-proof-cleanup-1",
+                workflow_id="demo_proof:run-1-main-abcdef1",
+                workflow_type_key="demo_proof",
+                status="waiting_for_input",
+                started_attempt_id="attempt-cleanup-1",
+            ),
+        ) as start_mock:
+            response = self.client.post(
+                "/api/admin/workflows",
+                json={
+                    "workflow_type_key": "demo_proof",
+                    "tenant_id": "tenant-a",
+                    "project_id": project_id,
+                    "input": {
+                        "proof_scope_id": "run-1-main-abcdef1",
+                        "commit_sha": "abcdef1",
+                        "trigger_mode": "cleanup_only",
+                        "required_capture_targets": ["browser", "ios", "android"],
+                    },
+                },
+                auth=("admin", "secret"),
+            )
+
+        self.assertEqual(response.status_code, 201, response.text)
+        self.assertEqual(response.json()["workflow_id"], "demo_proof:run-1-main-abcdef1")
+        self.assertEqual(response.json()["status"], "waiting_for_input")
+        start_mock.assert_called_once()
+        start_kwargs = start_mock.call_args.kwargs
+        self.assertEqual(start_kwargs["trigger_mode"], "cleanup_only")
+        self.assertIsNone(start_kwargs["pr_url"])
+        self.assertEqual(start_kwargs["trigger_event"], "admin_workflow_start")
+
     def test_generic_workflow_start_route_rejects_demo_proof_without_trigger_mode(self) -> None:
         payload = self._tenant_payload()
         create_response = self.client.post(

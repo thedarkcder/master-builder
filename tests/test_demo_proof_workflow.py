@@ -5,6 +5,7 @@ import pytest
 from orchestrator.core.qa.demo_proof_workflow import (
     DEMO_PROOF_STATE_BLOCKED,
     DEMO_PROOF_STATE_COMPLETE,
+    DEMO_PROOF_STATE_CLEANUP_SCHEDULED,
     DEMO_PROOF_STATE_EVIDENCE_UPLOADING,
     DEMO_PROOF_STATE_FAILURE_EVIDENCE_UPLOADING,
     DEMO_PROOF_STATE_FAILURE_PR_ATTACHING,
@@ -113,6 +114,24 @@ def test_demo_proof_service_verification_failure_waits_for_cleanup_before_blocki
     )
 
     assert state == DEMO_PROOF_STATE_BLOCKED
+    assert is_demo_proof_terminal(state)
+
+
+def test_demo_proof_cleanup_only_request_waits_for_cleanup_before_completing() -> None:
+    state = transition_demo_proof_state(
+        current_state=DEMO_PROOF_STATE_REQUESTED,
+        event="DemoProofCleanupRequested",
+    )
+
+    assert state == DEMO_PROOF_STATE_CLEANUP_SCHEDULED
+    assert not is_demo_proof_terminal(state)
+
+    state = transition_demo_proof_state(
+        current_state=state,
+        event="CleanupOnlyCompleted",
+    )
+
+    assert state == DEMO_PROOF_STATE_COMPLETE
     assert is_demo_proof_terminal(state)
 
 

@@ -334,6 +334,16 @@ def _demo_proof_event_metadata(event: str) -> dict[str, object] | None:
             "cleanup_mode": "destroy_or_ttl",
             "cleanup_evidence": _cleanup_evidence_metadata(),
         }
+    if event == "CleanupOnlyCompleted":
+        return {
+            "release_id": "release-preview-1",
+            "release_kind": "run_preview",
+            "release_status": "destroyed",
+            "release_commit_sha": "b" * 40,
+            "cleanup_status": "completed",
+            "cleanup_mode": "destroy_or_ttl",
+            "cleanup_evidence": _cleanup_evidence_metadata(),
+        }
     return None
 
 
@@ -533,6 +543,75 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
 
             runtime_mock.assert_not_called()
             assert session.execute(select(WorkflowExecution)).scalar_one_or_none() is None
+
+    def test_start_demo_proof_cleanup_only_starts_cleanup_without_pr_or_preview_lease(self) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-a")
+            project = session.get(Project, "project-a")
+            workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
+
+            def _advance(request: WorkflowAdvanceRequest):  # noqa: ANN202
+                return execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=request,
+                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                )
+
+            with patch(
+                "orchestrator.core.qa.demo_proof_start.build_workflow_runtime",
+                return_value=SimpleNamespace(advance=_advance),
+            ):
+                result = start_demo_proof_workflow(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    tenant=tenant,
+                    project=project,
+                    proof_scope_id="run-1-main-abcdef1",
+                    commit_sha="abcdef1",
+                    trigger_mode="cleanup_only",
+                    trigger_event="admin_cleanup_recovery",
+                    run_id=None,
+                    pr_url=None,
+                    required_capture_targets=["browser", "ios", "android"],
+                )
+                cleanup_result = advance_demo_proof_workflow_event(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    tenant=tenant,
+                    project=project,
+                    proof_scope_id="run-1-main-abcdef1",
+                    commit_sha="abcdef1",
+                    trigger_mode="cleanup_only",
+                    event="CleanupOnlyCompleted",
+                    run_id=None,
+                    pr_url=None,
+                    required_capture_targets=["browser", "ios", "android"],
+                    event_metadata=_demo_proof_event_metadata("CleanupOnlyCompleted"),
+                )
+
+            assert result.status == "waiting_for_input"
+            assert cleanup_result.status == "completed"
+            workflow = session.execute(select(WorkflowExecution)).scalar_one()
+            description = json.loads(workflow.source_description or "{}")
+            assert description["trigger_mode"] == "cleanup_only"
+            assert description["demo_proof_state"] == "complete"
+            operations = session.execute(
+                select(WorkflowOperation).where(WorkflowOperation.workflow_id == workflow.workflow_id)
+            ).scalars().all()
+            status_by_type = {operation.operation_type: operation.status for operation in operations}
+            assert status_by_type["preview_cleanup"] == "completed"
+            assert status_by_type["preview_lease"] == "pending"
+            preview_lease_operation = next(
+                operation for operation in operations if operation.operation_type == "preview_lease"
+            )
+            preview_lease_attempt = session.execute(
+                select(WorkflowOperationAttempt).where(
+                    WorkflowOperationAttempt.operation_id == preview_lease_operation.operation_id
+                )
+            ).scalar_one_or_none()
+            assert preview_lease_attempt is None
 
     def test_demo_proof_handler_rejects_missing_trigger_mode_before_creating_workflow(self) -> None:
         with self.session_factory() as session:

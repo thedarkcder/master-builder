@@ -15,7 +15,7 @@ from orchestrator.core.workflow.operation_service import (
     OPERATION_STATUS_WAITING_FOR_INPUT,
     fail_workflow_operation,
 )
-from orchestrator.core.workflow.execution_status import mark_workflow_failed
+from orchestrator.core.workflow.execution_status import mark_workflow_completed, mark_workflow_failed
 from orchestrator.core.workflow.runtime import WorkflowAdvanceOutcome
 from orchestrator.core.workflow.type_catalog import (
     DEMO_PROOF_STEP_EVIDENCE_UPLOAD,
@@ -105,6 +105,11 @@ _DEMO_PROOF_EVENTS: dict[str, tuple[str, str | None, str]] = {
         None,
         "demo_proof_completed",
     ),
+    "CleanupOnlyCompleted": (
+        DEMO_PROOF_STEP_PREVIEW_CLEANUP,
+        None,
+        "demo_proof_cleanup_only_completed",
+    ),
     "RecordingFailureEvidenceCaptured": (
         DEMO_PROOF_STEP_RECORDING,
         DEMO_PROOF_STEP_EVIDENCE_UPLOAD,
@@ -181,6 +186,11 @@ _DEMO_PROOF_FAILURE_EVENTS: dict[str, tuple[str, str, str]] = {
         DEMO_PROOF_STEP_PREVIEW_CLEANUP,
         "preview_cleanup_failed",
         "preview_cleanup_failed",
+    ),
+    "CleanupOnlyFailed": (
+        DEMO_PROOF_STEP_PREVIEW_CLEANUP,
+        "cleanup_only_failed",
+        "cleanup_only_failed",
     ),
     "PREvidenceAttachFailedPreviewCleanupFailed": (
         DEMO_PROOF_STEP_PREVIEW_CLEANUP,
@@ -334,6 +344,14 @@ _PR_FAILURE_EVIDENCE_ATTACH_FAILED_TERMINAL_METADATA_REQUIREMENTS: dict[str, tup
     "FailureEvidenceUploaded": ("artifact_urls", "failure_evidence"),
     "PRFailureEvidenceAttachFailed": ("pr_url", "artifact_urls", "error_message"),
     "PRFailureEvidenceAttachFailedPreviewCleanupCompleted": (
+        "release_id",
+        "cleanup_status",
+        "cleanup_mode",
+        "cleanup_evidence",
+    ),
+}
+_CLEANUP_ONLY_TERMINAL_METADATA_REQUIREMENTS: dict[str, tuple[str, ...]] = {
+    "CleanupOnlyCompleted": (
         "release_id",
         "cleanup_status",
         "cleanup_mode",
@@ -1637,6 +1655,8 @@ def _require_terminal_proof_metadata(
         if event == "PREvidenceAttachFailedPreviewCleanupCompleted"
         else _PR_FAILURE_EVIDENCE_ATTACH_FAILED_TERMINAL_METADATA_REQUIREMENTS
         if event == "PRFailureEvidenceAttachFailedPreviewCleanupCompleted"
+        else _CLEANUP_ONLY_TERMINAL_METADATA_REQUIREMENTS
+        if event == "CleanupOnlyCompleted"
         else None
     )
     if requirements is None:
@@ -1658,6 +1678,39 @@ def _require_terminal_proof_metadata(
         if event == "ReleaseFailedPreviewCleanupCompleted"
         else metadata.get("ReleaseLive", {})
     )
+    if event == "CleanupOnlyCompleted":
+        cleanup_metadata = metadata.get(event, {})
+        cleanup_evidence = cleanup_metadata.get("cleanup_evidence")
+        _require_cleanup_evidence_metadata(
+            value=cleanup_evidence,
+            event=event,
+            proof_scope_id=proof_scope_id,
+        )
+        _require_cleanup_release_identity(
+            release_metadata=cleanup_metadata,
+            cleanup_metadata=cleanup_metadata,
+            event=event,
+            proof_scope_id=proof_scope_id,
+        )
+        cleanup_proof_scope_id = (
+            _metadata_string(cleanup_evidence.get("proof_scope_id"))
+            if isinstance(cleanup_evidence, dict)
+            else ""
+        )
+        if cleanup_proof_scope_id != proof_scope_id:
+            raise RuntimeError(
+                f"Demo proof scope {proof_scope_id} cleanup evidence must reference proof scope "
+                f"{proof_scope_id}: {event}.cleanup_evidence.proof_scope_id="
+                f"{cleanup_proof_scope_id or '<missing>'}"
+            )
+        _require_cleanup_resource_refs(
+            value=cleanup_evidence.get("resource_refs") if isinstance(cleanup_evidence, dict) else None,
+            release_id=_metadata_string(cleanup_metadata.get("release_id")),
+            lease_state=_metadata_string(cleanup_evidence.get("lease_state")) if isinstance(cleanup_evidence, dict) else "",
+            event=event,
+            proof_scope_id=proof_scope_id,
+        )
+        return
     if event not in {
         "ReleaseFailedPreviewCleanupCompleted",
         "ServiceVerificationFailedPreviewCleanupCompleted",
@@ -1922,7 +1975,12 @@ class DemoProofWorkflowAdvanceHandler:
             else {}
         )
         trigger_event = str(getattr(request.trigger, "event", "") or "").strip()
-        state_event = trigger_event or "DemoProofRequested"
+        if trigger_event:
+            state_event = trigger_event
+        elif trigger_mode == "cleanup_only":
+            state_event = "DemoProofCleanupRequested"
+        else:
+            state_event = "DemoProofRequested"
         event_metadata = _event_metadata(request.payload)
         try:
             next_state = transition_demo_proof_state(current_state=current_state, event=state_event)
@@ -1964,6 +2022,30 @@ class DemoProofWorkflowAdvanceHandler:
             )
             session.commit()
             return result
+        if trigger_mode == "cleanup_only":
+            _wait_for_operation_once(
+                session=session,
+                lifecycle=lifecycle,
+                operation_type=DEMO_PROOF_STEP_PREVIEW_CLEANUP,
+                run_id=run_id,
+                proof_scope_id=proof_scope_id,
+                summary=f"Cleanup preview resources for demo proof scope {proof_scope_id}.",
+            )
+            _persist_demo_proof_state(
+                session=session,
+                workflow_id=workflow_id,
+                description=next_description,
+            )
+            session.commit()
+            return WorkflowAdvanceOutcome(
+                handled=True,
+                reason="cleanup_only_requested",
+                extra={
+                    "workflow_id": lifecycle.workflow.workflow_id,
+                    "execution_id": lifecycle.workflow.execution_id,
+                    "proof_scope_id": proof_scope_id,
+                },
+            )
         _wait_for_operation_once(
             session=session,
             lifecycle=lifecycle,
@@ -2097,6 +2179,9 @@ class DemoProofWorkflowAdvanceHandler:
             else:
                 message = f"Demo proof recorded failure evidence for proof scope {proof_scope_id}."
             mark_workflow_failed(workflow=lifecycle.workflow, message=message)
+            session.flush()
+        elif event == "CleanupOnlyCompleted":
+            mark_workflow_completed(workflow=lifecycle.workflow)
             session.flush()
         else:
             lifecycle.mark_completed_if_ready()
