@@ -323,7 +323,13 @@ _PR_EVIDENCE_ATTACH_FAILED_TERMINAL_METADATA_REQUIREMENTS: dict[str, tuple[str, 
     ),
     "RecordingCompleted": ("artifact_urls", "recordings"),
     "EvidenceUploaded": ("artifact_urls", "recordings"),
-    "PREvidenceAttachFailed": ("pr_url", "artifact_urls", "error_message"),
+    "PREvidenceAttachFailed": (
+        "pr_url",
+        "artifact_urls",
+        "artifact_url_check_status",
+        "checked_artifact_urls",
+        "error_message",
+    ),
     "PREvidenceAttachFailedPreviewCleanupCompleted": (
         "release_id",
         "cleanup_status",
@@ -342,7 +348,13 @@ _PR_FAILURE_EVIDENCE_ATTACH_FAILED_TERMINAL_METADATA_REQUIREMENTS: dict[str, tup
     ),
     "RecordingFailureEvidenceCaptured": ("artifact_urls", "failure_evidence"),
     "FailureEvidenceUploaded": ("artifact_urls", "failure_evidence"),
-    "PRFailureEvidenceAttachFailed": ("pr_url", "artifact_urls", "error_message"),
+    "PRFailureEvidenceAttachFailed": (
+        "pr_url",
+        "artifact_urls",
+        "artifact_url_check_status",
+        "checked_artifact_urls",
+        "error_message",
+    ),
     "PRFailureEvidenceAttachFailedPreviewCleanupCompleted": (
         "release_id",
         "cleanup_status",
@@ -1785,12 +1797,24 @@ def _require_terminal_proof_metadata(
             pr_event="PREvidenceAttachFailed",
             proof_scope_id=proof_scope_id,
         )
+        _require_pr_artifact_url_checks(
+            uploaded_metadata=evidence_metadata,
+            pr_metadata=failed_pr_metadata,
+            pr_event="PREvidenceAttachFailed",
+            proof_scope_id=proof_scope_id,
+        )
         return
     if event == "PRFailureEvidenceAttachFailedPreviewCleanupCompleted":
         _require_failure_evidence_uploaded_metadata(description=description, proof_scope_id=proof_scope_id)
         failure_metadata = metadata.get("FailureEvidenceUploaded", {})
         failed_pr_metadata = metadata.get("PRFailureEvidenceAttachFailed", {})
         _require_pr_evidence_matches_uploaded_artifacts(
+            uploaded_metadata=failure_metadata,
+            pr_metadata=failed_pr_metadata,
+            pr_event="PRFailureEvidenceAttachFailed",
+            proof_scope_id=proof_scope_id,
+        )
+        _require_pr_artifact_url_checks(
             uploaded_metadata=failure_metadata,
             pr_metadata=failed_pr_metadata,
             pr_event="PRFailureEvidenceAttachFailed",
