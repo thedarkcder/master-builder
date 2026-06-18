@@ -11,6 +11,7 @@ from unittest.mock import patch
 import pytest
 import yaml
 
+from orchestrator.core.node_release_contracts import LEGACY_EXPO_CLI_INSTALL_COMMAND
 from orchestrator.core.project_app_analysis_runtime import run_project_app_analysis
 from orchestrator.core.deployment_setup.planner import DeploymentPlannerResponse, run_project_deployment_planning
 from orchestrator.core.project_app_planner import (
@@ -159,7 +160,8 @@ def test_scan_repo_for_project_apps_detects_react_native_web_browser_target() ->
   "dependencies": {
     "expo": "^37.0.0",
     "react-native": "~0.61.5",
-    "react-native-web": "~0.11.7"
+    "react-native-web": "~0.11.7",
+    "stompjs": "^2.3.3"
   }
 }
 """,
@@ -180,13 +182,15 @@ plugins {
     root_candidate = next(candidate for candidate in candidates if candidate.source_path == ".")
     assert root_candidate.detected_runtime == "react_native_web"
     assert root_candidate.exposed_port == 19006
-    assert root_candidate.start_command == "npx expo-cli start --web --non-interactive --host lan"
+    assert root_candidate.start_command == (
+        "NODE_OPTIONS=--openssl-legacy-provider npx expo-cli start --web --non-interactive --host lan"
+    )
     assert root_candidate.deployment_config["source_strategy"] == "nixpacks"
     assert "capture_target" not in root_candidate.deployment_config
-    assert root_candidate.deployment_config["install_command"] == (
-        "npm install --package-lock=false --legacy-peer-deps --production=false && "
-        "npm install --no-save --legacy-peer-deps expo-cli@3.28.6"
-    )
+    assert root_candidate.deployment_config["install_command"] == LEGACY_EXPO_CLI_INSTALL_COMMAND
+    assert root_candidate.deployment_config["environment"]["NODE_OPTIONS"] == "--openssl-legacy-provider"
+    assert root_candidate.deployment_config["environment"]["NPM_CONFIG_FETCH_RETRIES"] == "5"
+    assert root_candidate.deployment_config["environment"]["NPM_CONFIG_NETWORK_TIMEOUT"] == "120000"
     assert {"android/app", "ios"}.issubset({candidate.source_path for candidate in candidates})
 
 
@@ -223,12 +227,14 @@ def test_scan_repo_for_project_apps_sets_npm_install_for_react_native_web_with_s
 
     root_candidate = next(candidate for candidate in candidates if candidate.source_path == ".")
     assert root_candidate.detected_runtime == "react_native_web"
-    assert root_candidate.start_command == "npx expo-cli start --web --non-interactive --host lan"
-    assert root_candidate.deployment_config["source_strategy"] == "nixpacks"
-    assert root_candidate.deployment_config["install_command"] == (
-        "npm install --package-lock=false --legacy-peer-deps --production=false && "
-        "npm install --no-save --legacy-peer-deps expo-cli@3.28.6"
+    assert root_candidate.start_command == (
+        "NODE_OPTIONS=--openssl-legacy-provider npx expo-cli start --web --non-interactive --host lan"
     )
+    assert root_candidate.deployment_config["source_strategy"] == "nixpacks"
+    assert root_candidate.deployment_config["install_command"] == LEGACY_EXPO_CLI_INSTALL_COMMAND
+    assert root_candidate.deployment_config["environment"]["NODE_OPTIONS"] == "--openssl-legacy-provider"
+    assert root_candidate.deployment_config["environment"]["NPM_CONFIG_FETCH_RETRIES"] == "5"
+    assert root_candidate.deployment_config["environment"]["NPM_CONFIG_NETWORK_TIMEOUT"] == "120000"
 
 
 def test_scan_repo_for_project_apps_keeps_modern_expo_web_script_without_legacy_cli() -> None:

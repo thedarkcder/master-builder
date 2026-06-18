@@ -779,8 +779,13 @@ def _build_candidate_from_directory(*, repo_root: Path, directory: Path, evidenc
         if runtime == "react_native_web":
             legacy_expo_contract = legacy_expo_web_release_contract(package_json_text)
             if legacy_expo_contract:
-                start_command = legacy_expo_contract["start_command"]
+                start_command = str(legacy_expo_contract["start_command"])
                 deployment_config["install_command"] = legacy_expo_contract["install_command"]
+                if isinstance(legacy_expo_contract.get("environment"), dict):
+                    deployment_config["environment"] = {
+                        **dict(deployment_config.get("environment") or {}),
+                        **dict(legacy_expo_contract["environment"]),
+                    }
         if runtime == "react_native_web" and _has_stale_taobao_yarn_lock(evidence.get("yarn_lock_text")):
             deployment_config.setdefault("install_command", NODE_INSTALL_WITH_LEGACY_PEERS_COMMAND)
         detection_confidence = max(detection_confidence, confidence)

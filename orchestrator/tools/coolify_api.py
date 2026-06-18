@@ -71,6 +71,8 @@ class CoolifyApiClient:
                 path=path,
                 body=error_body,
             ) from exc
+        except TimeoutError as exc:
+            raise CoolifyApiError(f"Coolify API request timed out for {method} {path}") from exc
         except URLError as exc:
             raise CoolifyApiError(f"Coolify API request failed for {method} {path}: {exc.reason}") from exc
 
@@ -292,4 +294,8 @@ class CoolifyApiClient:
         )
         if isinstance(response, list):
             return [item for item in response if isinstance(item, dict)]
+        for key in ("deployments", "data"):
+            deployments = response.get(key)
+            if isinstance(deployments, list):
+                return [item for item in deployments if isinstance(item, dict)]
         raise CoolifyApiError("Coolify list application deployments response was not a list")

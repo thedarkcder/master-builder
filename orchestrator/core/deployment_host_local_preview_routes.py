@@ -159,6 +159,39 @@ def _build_proxy_payload(*, release_id: str, targets: list[RouteTarget]) -> dict
     return {"http": {"routers": routers, "services": services}}
 
 
+def _route_file_hosts(route_file: Path) -> set[str]:
+    try:
+        payload = yaml.safe_load(route_file.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError):
+        return set()
+    routers = _coerce_dict(_coerce_dict(_coerce_dict(payload).get("http")).get("routers"))
+    hosts: set[str] = set()
+    for router in routers.values():
+        rule = _normalize_optional_string(_coerce_dict(router).get("rule"))
+        if rule is None:
+            continue
+        marker = "Host(`"
+        start = rule.find(marker)
+        if start < 0:
+            continue
+        start += len(marker)
+        end = rule.find("`)", start)
+        if end > start:
+            hosts.add(rule[start:end])
+    return hosts
+
+
+def _remove_conflicting_preview_route_files(*, dynamic_dir: Path, current_file: Path, hosts: set[str]) -> None:
+    if not hosts:
+        return
+    for route_file in dynamic_dir.glob("mb-preview-*.yaml"):
+        if route_file == current_file:
+            continue
+        if _route_file_hosts(route_file).isdisjoint(hosts):
+            continue
+        route_file.unlink(missing_ok=True)
+
+
 def sync_local_preview_routes(
     *,
     config: LocalPreviewRouteSyncConfig,
@@ -193,6 +226,11 @@ def sync_local_preview_routes(
         )
         for route_binding in route_bindings
     ]
+    _remove_conflicting_preview_route_files(
+        dynamic_dir=config.dynamic_dir,
+        current_file=route_file,
+        hosts={target.host for target in targets},
+    )
     route_file.write_text(
         yaml.safe_dump(_build_proxy_payload(release_id=release_id, targets=targets), sort_keys=False),
         encoding="utf-8",
