@@ -224,6 +224,11 @@ _DEMO_PROOF_FAILURE_EVENTS: dict[str, tuple[str, str, str]] = {
         "failure_preview_cleanup_failed",
     ),
 }
+_DEMO_PROOF_CLEANUP_FAILURE_EVENTS = frozenset(
+    event
+    for event, (operation_type, _category, _reason) in _DEMO_PROOF_FAILURE_EVENTS.items()
+    if operation_type == DEMO_PROOF_STEP_PREVIEW_CLEANUP
+)
 
 _DEMO_PROOF_BLOCKING_COMPLETION_EVENTS = frozenset(
     {
@@ -1163,6 +1168,94 @@ def _require_cleanup_resource_refs(
             "at least one managed preview resource, not only diagnostic refs: "
             + ", ".join(provided_types)
         )
+
+
+def _require_cleanup_failure_metadata(
+    *,
+    description: dict[str, object],
+    event: str,
+    proof_scope_id: str,
+) -> None:
+    metadata = _metadata_by_event(description)
+    failure_metadata = metadata.get(event) or {}
+    missing = [
+        field
+        for field in (
+            "release_id",
+            "release_commit_sha",
+            "cleanup_status",
+            "cleanup_mode",
+            "cleanup_evidence",
+            "error_message",
+        )
+        if not _metadata_field_is_present(failure_metadata.get(field))
+    ]
+    if missing:
+        raise RuntimeError(
+            f"Demo proof scope {proof_scope_id} requires auditable cleanup failure metadata before blocking: "
+            + ", ".join(f"{event}.{field}" for field in missing)
+        )
+    if _metadata_string(failure_metadata.get("cleanup_status")) != "failed":
+        raise RuntimeError(
+            f"Demo proof scope {proof_scope_id} {event}.cleanup_status must be failed before blocking"
+        )
+    cleanup_evidence = failure_metadata.get("cleanup_evidence")
+    if not isinstance(cleanup_evidence, dict):
+        raise RuntimeError(
+            f"Demo proof scope {proof_scope_id} requires {event}.cleanup_evidence to be a JSON object"
+        )
+    nested_missing = [
+        field
+        for field in (
+            "release_id",
+            "lease_id",
+            "proof_scope_id",
+            "commit_sha",
+            "cleanup_status",
+            "cleanup_mode",
+            "lease_state",
+            "resource_refs",
+            "error_message",
+        )
+        if not _metadata_field_is_present(cleanup_evidence.get(field))
+    ]
+    if nested_missing:
+        raise RuntimeError(
+            f"Demo proof scope {proof_scope_id} requires cleanup failure evidence before blocking: "
+            + ", ".join(f"{event}.cleanup_evidence.{field}" for field in nested_missing)
+        )
+    if _metadata_string(cleanup_evidence.get("cleanup_status")) != "failed":
+        raise RuntimeError(
+            f"Demo proof scope {proof_scope_id} {event}.cleanup_evidence.cleanup_status must be failed"
+        )
+    cleanup_proof_scope_id = _metadata_string(cleanup_evidence.get("proof_scope_id"))
+    if cleanup_proof_scope_id != proof_scope_id:
+        raise RuntimeError(
+            f"Demo proof scope {proof_scope_id} cleanup failure evidence must reference proof scope "
+            f"{proof_scope_id}: {event}.cleanup_evidence.proof_scope_id="
+            f"{cleanup_proof_scope_id or '<missing>'}"
+        )
+    cleanup_release_id = _metadata_string(cleanup_evidence.get("release_id"))
+    if cleanup_release_id != _metadata_string(failure_metadata.get("release_id")):
+        raise RuntimeError(
+            f"Demo proof scope {proof_scope_id} cleanup failure evidence must reference {event}.release_id "
+            f"{_metadata_string(failure_metadata.get('release_id'))}: "
+            f"{event}.cleanup_evidence.release_id={cleanup_release_id or '<missing>'}"
+        )
+    cleanup_commit_sha = _metadata_string(cleanup_evidence.get("commit_sha")).lower()
+    if cleanup_commit_sha != _metadata_string(failure_metadata.get("release_commit_sha")).lower():
+        raise RuntimeError(
+            f"Demo proof scope {proof_scope_id} cleanup failure evidence must reference "
+            f"{event}.release_commit_sha {_metadata_string(failure_metadata.get('release_commit_sha')).lower()}: "
+            f"{event}.cleanup_evidence.commit_sha={cleanup_commit_sha or '<missing>'}"
+        )
+    _require_cleanup_resource_refs(
+        value=cleanup_evidence.get("resource_refs"),
+        release_id=_metadata_string(failure_metadata.get("release_id")),
+        lease_state=_metadata_string(cleanup_evidence.get("lease_state")),
+        event=event,
+        proof_scope_id=proof_scope_id,
+    )
 
 
 def _require_lease_scope_identity(
@@ -2360,6 +2453,12 @@ class DemoProofWorkflowAdvanceHandler:
         failure_spec = _DEMO_PROOF_FAILURE_EVENTS.get(event)
         if failure_spec is not None:
             operation_type, category, reason = failure_spec
+            if event in _DEMO_PROOF_CLEANUP_FAILURE_EVENTS:
+                _require_cleanup_failure_metadata(
+                    description=description,
+                    event=event,
+                    proof_scope_id=proof_scope_id,
+                )
             message = _fail_waiting_operation_event(
                 session=session,
                 lifecycle=lifecycle,

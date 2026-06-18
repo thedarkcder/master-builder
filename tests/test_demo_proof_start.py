@@ -86,6 +86,28 @@ def _cleanup_evidence_metadata() -> dict[str, object]:
     }
 
 
+def _cleanup_failure_evidence_metadata() -> dict[str, object]:
+    metadata = dict(_cleanup_evidence_metadata())
+    metadata.update(
+        {
+            "cleanup_status": "failed",
+            "cleanup_mode": "destroy_or_ttl",
+            "lease_state": "cleanup_failed",
+            "error_message": "Coolify deletion returned HTTP 500",
+            "resource_refs": [
+                {
+                    **ref,
+                    "cleanup_action": "cleanup_failed",
+                }
+                for ref in _cleanup_resource_refs()
+            ],
+        }
+    )
+    metadata.pop("destroy_reason", None)
+    metadata.pop("destroyed_at", None)
+    return metadata
+
+
 def _demo_proof_lease_metadata() -> dict[str, str]:
     return {
         "lease_id": "demo-proof-lease:run-1-main-abcdef1:" + "b" * 40,
@@ -206,6 +228,18 @@ def _demo_proof_event_metadata(event: str) -> dict[str, object] | None:
             "cleanup_status": "completed",
             "cleanup_mode": "destroy_or_ttl",
             "cleanup_evidence": _cleanup_evidence_metadata(),
+        }
+    if event == "PreviewCleanupFailed":
+        return {
+            "release_id": "release-preview-1",
+            "release_kind": "run_preview",
+            "release_status": "live",
+            "release_commit_sha": "b" * 40,
+            "demo_proof_lease": _demo_proof_lease_metadata(),
+            "cleanup_status": "failed",
+            "cleanup_mode": "destroy_or_ttl",
+            "cleanup_evidence": _cleanup_failure_evidence_metadata(),
+            "error_message": "Coolify deletion returned HTTP 500",
         }
     if event == "ServiceVerificationPassed":
         return _service_verification_metadata()
@@ -2492,6 +2526,128 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 assert "PreviewCleanupCompleted.cleanup_evidence" in str(exc)
             else:  # pragma: no cover
                 raise AssertionError("expected demo proof completion to require cleanup evidence metadata")
+
+    def test_demo_proof_rejects_cleanup_failure_without_cleanup_failure_evidence_metadata(self) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-a")
+            workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
+            request = _demo_proof_request(tenant=tenant)
+            execute_workflow_advance(
+                session=session,
+                settings=SimpleNamespace(),
+                workflow_type=workflow_type,
+                request=request,
+                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+            )
+
+            for event in (
+                "ProofLeaseAcquired",
+                "ReleaseRequested",
+                "ReleaseProvisioning",
+                "ReleaseLive",
+                "RouteReady",
+                "ServiceVerificationPassed",
+                "RecordingStarted",
+                "RecordingCompleted",
+                "EvidenceUploadStarted",
+                "EvidenceUploaded",
+                "PREvidenceAttachStarted",
+                "PREvidenceAttached",
+                "PreviewCleanupRequested",
+            ):
+                execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=_demo_proof_request_for_event(request, event),
+                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                )
+
+            terminal_request = _demo_proof_request_for_event(request, "PreviewCleanupFailed")
+            payload = dict(terminal_request.payload)
+            payload.pop("event_metadata", None)
+            try:
+                execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=replace(terminal_request, payload=payload),
+                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                )
+            except RuntimeError as exc:
+                assert "PreviewCleanupFailed.error_message" in str(exc)
+                assert "PreviewCleanupFailed.cleanup_evidence" in str(exc)
+            else:  # pragma: no cover
+                raise AssertionError("expected demo proof cleanup failure to require cleanup failure evidence")
+
+    def test_demo_proof_records_cleanup_failure_with_cleanup_failure_evidence_metadata(self) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-a")
+            workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
+            request = _demo_proof_request(tenant=tenant)
+            execute_workflow_advance(
+                session=session,
+                settings=SimpleNamespace(),
+                workflow_type=workflow_type,
+                request=request,
+                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+            )
+
+            for event in (
+                "ProofLeaseAcquired",
+                "ReleaseRequested",
+                "ReleaseProvisioning",
+                "ReleaseLive",
+                "RouteReady",
+                "ServiceVerificationPassed",
+                "RecordingStarted",
+                "RecordingCompleted",
+                "EvidenceUploadStarted",
+                "EvidenceUploaded",
+                "PREvidenceAttachStarted",
+                "PREvidenceAttached",
+                "PreviewCleanupRequested",
+            ):
+                execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=_demo_proof_request_for_event(request, event),
+                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                )
+
+            result = execute_workflow_advance(
+                session=session,
+                settings=SimpleNamespace(),
+                workflow_type=workflow_type,
+                request=_demo_proof_request_for_event(request, "PreviewCleanupFailed"),
+                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+            )
+
+            assert result.failed is True
+            assert result.reason == "preview_cleanup_failed"
+            workflow = session.execute(select(WorkflowExecution)).scalar_one()
+            assert workflow.status == "failed"
+            description = json.loads(workflow.source_description)
+            metadata_by_event = {
+                item["event"]: item["metadata"]
+                for item in description["demo_proof_event_metadata"]
+            }
+            cleanup_metadata = metadata_by_event["PreviewCleanupFailed"]
+            assert cleanup_metadata["cleanup_status"] == "failed"
+            assert cleanup_metadata["cleanup_evidence"]["lease_state"] == "cleanup_failed"
+            assert cleanup_metadata["cleanup_evidence"]["resource_refs"] == [
+                {
+                    "resource_type": "release",
+                    "resource_id": "release-preview-1",
+                    "cleanup_action": "cleanup_failed",
+                },
+                {
+                    "resource_type": "coolify_application",
+                    "resource_id": "app-preview-1",
+                    "cleanup_action": "cleanup_failed",
+                },
+            ]
 
     def test_demo_proof_rejects_success_completion_without_service_verification_metadata(self) -> None:
         with self.session_factory() as session:
