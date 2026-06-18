@@ -89,7 +89,7 @@ def _normalize_trigger_mode(value: object) -> str:
 
 def _normalize_required_capture_targets(value: object) -> tuple[str, ...]:
     if value is None:
-        return ("browser", "ios", "android")
+        raise ValueError("Demo proof required_capture_targets must be provided by PM demo requirements")
     if not isinstance(value, list):
         raise ValueError("Demo proof required_capture_targets must be a list")
     targets = tuple(str(item or "").strip() for item in value if str(item or "").strip())
