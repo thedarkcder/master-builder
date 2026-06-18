@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import defaultdict
 import json
 
 from sqlalchemy import select
@@ -169,6 +170,7 @@ _SUCCESS_TERMINAL_METADATA_REQUIREMENTS: dict[str, tuple[str, ...]] = {
         "required_service_kinds",
         "service_urls",
     ),
+    "RecordingCompleted": ("artifact_urls", "recordings"),
     "EvidenceUploaded": ("artifact_urls", "recordings"),
     "PREvidenceAttached": ("pr_url", "pr_body_sha256"),
     "PreviewCleanupCompleted": ("release_id", "cleanup_status", "cleanup_mode", "cleanup_evidence"),
@@ -181,6 +183,7 @@ _FAILURE_TERMINAL_METADATA_REQUIREMENTS: dict[str, tuple[str, ...]] = {
         "required_service_kinds",
         "service_urls",
     ),
+    "RecordingFailureEvidenceCaptured": ("artifact_urls", "capture_targets", "failure_evidence"),
     "FailureEvidenceUploaded": ("artifact_urls", "capture_targets", "failure_evidence"),
     "PRFailureEvidenceAttached": ("pr_url", "pr_body_sha256"),
     "FailurePreviewCleanupCompleted": ("release_id", "cleanup_status", "cleanup_mode", "cleanup_evidence"),
@@ -626,6 +629,51 @@ def _failure_evidence_by_target(value: object) -> dict[str, dict[str, str]]:
     return evidence_by_target
 
 
+def _artifact_lineage_by_target(*, value: object, required_fields: frozenset[str]) -> dict[str, list[tuple[str, ...]]]:
+    if not isinstance(value, list):
+        return {}
+    fields = tuple(sorted(required_fields))
+    lineage_by_target: dict[str, list[tuple[str, ...]]] = defaultdict(list)
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        capture_target = _metadata_string(item.get("capture_target"))
+        field_values = tuple(_metadata_string(item.get(field)) for field in fields)
+        if capture_target and all(field_values):
+            lineage_by_target[capture_target].append(field_values)
+    return {target: sorted(lineage) for target, lineage in lineage_by_target.items()}
+
+
+def _require_matching_artifact_lineage(
+    *,
+    source_metadata: dict[str, object],
+    downstream_metadata: dict[str, object],
+    source_event: str,
+    downstream_event: str,
+    evidence_field: str,
+    required_fields: frozenset[str],
+    proof_scope_id: str,
+) -> None:
+    source_lineage = _artifact_lineage_by_target(
+        value=source_metadata.get(evidence_field),
+        required_fields=required_fields,
+    )
+    downstream_lineage = _artifact_lineage_by_target(
+        value=downstream_metadata.get(evidence_field),
+        required_fields=required_fields,
+    )
+    mismatched_targets = sorted(
+        target
+        for target in set(source_lineage) | set(downstream_lineage)
+        if source_lineage.get(target) != downstream_lineage.get(target)
+    )
+    if mismatched_targets:
+        raise RuntimeError(
+            f"Demo proof scope {proof_scope_id} {downstream_event}.{evidence_field} must match "
+            f"{source_event}.{evidence_field} for capture target(s): " + ", ".join(mismatched_targets)
+        )
+
+
 def _verified_service_kinds(value: object) -> set[str]:
     if not isinstance(value, list):
         return set()
@@ -1036,6 +1084,7 @@ def _require_terminal_proof_metadata(
         )
     if event == "PreviewCleanupCompleted":
         required_targets = set(_normalized_capture_targets(list(description.get("required_capture_targets") or [])))
+        recording_metadata = metadata.get("RecordingCompleted", {})
         evidence_metadata = metadata.get("EvidenceUploaded", {})
         evidence_targets = _metadata_string_set(evidence_metadata.get("capture_targets"))
         missing_targets = sorted(required_targets - evidence_targets)
@@ -1071,6 +1120,15 @@ def _require_terminal_proof_metadata(
                 f"Demo proof scope {proof_scope_id} requires distinct playable artifact URL mappings for "
                 "required capture target(s)."
             )
+        _require_matching_artifact_lineage(
+            source_metadata=recording_metadata,
+            downstream_metadata=evidence_metadata,
+            source_event="RecordingCompleted",
+            downstream_event="EvidenceUploaded",
+            evidence_field="recordings",
+            required_fields=_RECORDING_ARTIFACT_REQUIRED_FIELDS,
+            proof_scope_id=proof_scope_id,
+        )
         _require_pr_evidence_matches_uploaded_artifacts(
             uploaded_metadata=evidence_metadata,
             pr_metadata=metadata.get("PREvidenceAttached", {}),
@@ -1106,10 +1164,20 @@ def _require_terminal_proof_metadata(
                 + ", ".join(mismatched_commit_targets)
             )
     if event == "FailurePreviewCleanupCompleted":
+        captured_failure_metadata = metadata.get("RecordingFailureEvidenceCaptured", {})
         failure_metadata = metadata.get("FailureEvidenceUploaded", {})
         evidence_by_target = _require_failure_evidence_target_metadata(
             description=description,
             failure_metadata=failure_metadata,
+            proof_scope_id=proof_scope_id,
+        )
+        _require_matching_artifact_lineage(
+            source_metadata=captured_failure_metadata,
+            downstream_metadata=failure_metadata,
+            source_event="RecordingFailureEvidenceCaptured",
+            downstream_event="FailureEvidenceUploaded",
+            evidence_field="failure_evidence",
+            required_fields=_FAILURE_EVIDENCE_REQUIRED_FIELDS,
             proof_scope_id=proof_scope_id,
         )
         release_commit_sha = _metadata_string(release_metadata.get("release_commit_sha"))
