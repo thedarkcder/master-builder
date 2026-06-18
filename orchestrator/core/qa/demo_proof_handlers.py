@@ -734,6 +734,51 @@ def _require_recording_completion_metadata(*, description: dict[str, object], pr
         )
 
 
+def _require_failure_evidence_target_metadata(
+    *,
+    description: dict[str, object],
+    failure_metadata: dict[str, object],
+    proof_scope_id: str,
+) -> dict[str, dict[str, str]]:
+    required_targets = set(_normalized_capture_targets(list(description.get("required_capture_targets") or [])))
+    failure_targets = _metadata_string_set(failure_metadata.get("capture_targets"))
+    missing_targets = sorted(required_targets - failure_targets)
+    if missing_targets:
+        raise RuntimeError(
+            f"Demo proof scope {proof_scope_id} failure evidence metadata is missing required capture target(s): "
+            + ", ".join(missing_targets)
+        )
+    artifact_urls = _metadata_string_list(failure_metadata.get("artifact_urls"))
+    if len(artifact_urls) < len(required_targets):
+        raise RuntimeError(
+            f"Demo proof scope {proof_scope_id} requires at least {len(required_targets)} failure artifact URL(s) "
+            f"for required capture target(s), got {len(artifact_urls)}."
+        )
+    if len(set(artifact_urls)) < len(required_targets):
+        raise RuntimeError(
+            f"Demo proof scope {proof_scope_id} requires at least {len(required_targets)} distinct failure "
+            "artifact URL(s) for required capture target(s)."
+        )
+    evidence_by_target = _failure_evidence_by_target(failure_metadata.get("failure_evidence"))
+    missing_diagnostic_targets = sorted(target for target in required_targets if target not in evidence_by_target)
+    if missing_diagnostic_targets:
+        raise RuntimeError(
+            f"Demo proof scope {proof_scope_id} failure evidence metadata is missing uploaded diagnostic "
+            "artifact metadata "
+            "for required capture target(s): " + ", ".join(missing_diagnostic_targets)
+        )
+    artifact_urls_by_target = {
+        target: evidence_by_target[target]["artifact_url"]
+        for target in required_targets
+    }
+    if len(set(artifact_urls_by_target.values())) < len(required_targets):
+        raise RuntimeError(
+            f"Demo proof scope {proof_scope_id} requires distinct failure artifact URL mappings for "
+            "required capture target(s)."
+        )
+    return evidence_by_target
+
+
 def _require_terminal_proof_metadata(
     *,
     event: str,
@@ -854,19 +899,15 @@ def _require_terminal_proof_metadata(
             )
     if event == "FailurePreviewCleanupCompleted":
         failure_metadata = metadata.get("FailureEvidenceUploaded", {})
-        failure_targets = _metadata_string_set(failure_metadata.get("capture_targets"))
-        evidence_by_target = _failure_evidence_by_target(failure_metadata.get("failure_evidence"))
-        missing_diagnostic_targets = sorted(target for target in failure_targets if target not in evidence_by_target)
-        if missing_diagnostic_targets:
-            raise RuntimeError(
-                f"Demo proof scope {proof_scope_id} failure evidence metadata is missing uploaded diagnostic "
-                "artifact metadata "
-                "for capture target(s): " + ", ".join(missing_diagnostic_targets)
-            )
+        evidence_by_target = _require_failure_evidence_target_metadata(
+            description=description,
+            failure_metadata=failure_metadata,
+            proof_scope_id=proof_scope_id,
+        )
         release_commit_sha = _metadata_string(release_metadata.get("release_commit_sha"))
         mismatched_commit_targets = sorted(
             target
-            for target in failure_targets
+            for target in evidence_by_target
             if evidence_by_target[target]["release_commit_sha"].lower() != release_commit_sha.lower()
         )
         if mismatched_commit_targets:
