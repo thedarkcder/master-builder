@@ -1574,11 +1574,17 @@ def _qa_demo_release_service_urls(*, preview_release) -> list[dict[str, str]]:  
         status = str(getattr(service_url, "status", "") or "").strip()
         if not service_kind or not url:
             continue
+        internal_url = str(getattr(service_url, "internal_url", "") or "").strip()
+        host = str(getattr(service_url, "host", "") or "").strip()
         item = {
             "service_kind": service_kind,
             "url": url,
             "status": status,
         }
+        if internal_url:
+            item["recording_url"] = internal_url
+        if internal_url and host:
+            item["recording_host_header"] = host
         service_name = str(getattr(service_url, "service_name", "") or "").strip()
         if service_name:
             item["service_name"] = service_name

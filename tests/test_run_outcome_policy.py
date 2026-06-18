@@ -247,6 +247,8 @@ def test_complete_runs_qa_demo_stage_before_finalization() -> None:
                 service_key="web",
                 status="active",
                 url="https://preview.example",
+                internal_url="http://127.0.0.1:8088",
+                host="preview.example",
             )
         ],
         commit_sha="b" * 40,
@@ -362,6 +364,8 @@ def test_complete_runs_qa_demo_stage_before_finalization() -> None:
         {
             "service_kind": "website",
             "url": "https://preview.example",
+            "recording_url": "http://127.0.0.1:8088",
+            "recording_host_header": "preview.example",
             "status": "active",
             "service_name": "web",
             "service_key": "web",
