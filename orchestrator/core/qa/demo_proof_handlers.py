@@ -235,6 +235,34 @@ def _normalized_capture_targets(required_capture_targets: list[object]) -> list[
     return targets or ["browser", "ios", "android"]
 
 
+def _normalized_required_recording_counts(
+    *,
+    required_capture_targets: list[object],
+    value: object,
+) -> dict[str, int]:
+    targets = _normalized_capture_targets(required_capture_targets)
+    counts: dict[str, int] = {target: 1 for target in targets}
+    if value is None:
+        return counts
+    if not isinstance(value, dict):
+        raise RuntimeError("Demo proof required_recording_counts must be a JSON object")
+    target_set = set(targets)
+    for raw_target, raw_count in value.items():
+        target = str(raw_target or "").strip()
+        if target not in target_set:
+            raise RuntimeError(f"Demo proof required_recording_counts contains unsupported target: {target}")
+        if isinstance(raw_count, bool):
+            raise RuntimeError(f"Demo proof required_recording_counts.{target} must be a positive integer")
+        try:
+            count = int(raw_count)
+        except (TypeError, ValueError) as exc:
+            raise RuntimeError(f"Demo proof required_recording_counts.{target} must be a positive integer") from exc
+        if count < 1:
+            raise RuntimeError(f"Demo proof required_recording_counts.{target} must be a positive integer")
+        counts[target] = count
+    return counts
+
+
 def _event_metadata(payload: dict[str, object]) -> dict[str, object] | None:
     raw_metadata = payload.get("event_metadata")
     if raw_metadata is None:
@@ -294,6 +322,7 @@ def _demo_proof_description(
     run_id: str | None,
     pr_url: str | None,
     required_capture_targets: list[object],
+    required_recording_counts: dict[str, int],
     request_id: str,
     state: str,
     event: str | None,
@@ -321,6 +350,7 @@ def _demo_proof_description(
             "run_id": run_id,
             "pr_url": pr_url,
             "required_capture_targets": [str(target) for target in required_capture_targets],
+            "required_recording_counts": dict(required_recording_counts),
             _RECORDING_WORKFLOW_DESCRIPTION_KEY: _recording_workflow_descriptions(
                 previous_description=previous_description,
                 required_capture_targets=required_capture_targets,
@@ -499,6 +529,23 @@ def _recording_artifacts_by_target(value: object) -> dict[str, dict[str, str]]:
         if capture_target and all(artifact_metadata.values()):
             artifacts_by_target[capture_target] = artifact_metadata
     return artifacts_by_target
+
+
+def _recording_artifact_counts_by_target(value: object) -> dict[str, int]:
+    if not isinstance(value, list):
+        return {}
+    counts_by_target: dict[str, int] = {}
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        capture_target = str(item.get("capture_target") or "").strip()
+        artifact_metadata = {
+            field: str(item.get(field) or "").strip()
+            for field in _RECORDING_ARTIFACT_REQUIRED_FIELDS
+        }
+        if capture_target and all(artifact_metadata.values()):
+            counts_by_target[capture_target] = counts_by_target.get(capture_target, 0) + 1
+    return counts_by_target
 
 
 def _failure_evidence_by_target(value: object) -> dict[str, dict[str, str]]:
@@ -735,6 +782,22 @@ def _require_terminal_proof_metadata(
             pr_event="PREvidenceAttached",
             proof_scope_id=proof_scope_id,
         )
+        recording_counts_by_target = _recording_artifact_counts_by_target(evidence_metadata.get("recordings"))
+        required_counts = _normalized_required_recording_counts(
+            required_capture_targets=list(required_targets),
+            value=description.get("required_recording_counts"),
+        )
+        missing_count_targets = sorted(
+            (target, required_count, recording_counts_by_target.get(target, 0))
+            for target, required_count in required_counts.items()
+            if recording_counts_by_target.get(target, 0) < required_count
+        )
+        if missing_count_targets:
+            target, required_count, actual_count = missing_count_targets[0]
+            raise RuntimeError(
+                f"Demo proof scope {proof_scope_id} requires {required_count} recording artifact(s) "
+                f"for capture target {target}, got {actual_count}."
+            )
         release_commit_sha = _metadata_string(release_metadata.get("release_commit_sha"))
         mismatched_commit_targets = sorted(
             target
@@ -889,6 +952,10 @@ class DemoProofWorkflowAdvanceHandler:
         required_capture_targets = request.payload.get("required_capture_targets")
         if not isinstance(required_capture_targets, list) or not required_capture_targets:
             required_capture_targets = ["browser", "ios", "android"]
+        required_recording_counts = _normalized_required_recording_counts(
+            required_capture_targets=required_capture_targets,
+            value=request.payload.get("required_recording_counts"),
+        )
         workflow_id = _workflow_id(workflow_type=workflow_type, request=request)
         current_state = _current_demo_proof_state(session=session, workflow_id=workflow_id)
         existing_workflow = session.get(WorkflowExecution, workflow_id)
@@ -912,6 +979,7 @@ class DemoProofWorkflowAdvanceHandler:
             run_id=run_id,
             pr_url=pr_url,
             required_capture_targets=required_capture_targets,
+            required_recording_counts=required_recording_counts,
             request_id=request_id,
             state=next_state,
             event=state_event,
