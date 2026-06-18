@@ -8,6 +8,7 @@ from unittest.mock import patch
 import pytest
 
 from scripts.qa_demo_mobile_recorder import _ios_command_timeout_seconds
+from scripts.qa_demo_mobile_recorder import _ios_failure_diagnostics
 from scripts.qa_demo_mobile_recorder import _combined_recording_failure
 from scripts.qa_demo_mobile_recorder import _build_for_testing
 from scripts.qa_demo_mobile_recorder import _reboot_simulator
@@ -103,6 +104,70 @@ def test_run_surfaces_timeout_as_runtime_error(monkeypatch: pytest.MonkeyPatch) 
 
     with pytest.raises(RuntimeError, match="timed out after 123 seconds"):
         _run(["xcodebuild", "-version"], capture_output=True)
+
+
+def test_ios_failure_diagnostics_include_simulator_crash_logs(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    result_bundle_path = tmp_path / "AppLoad.xcresult"
+    calls: list[list[str]] = []
+
+    def _fake_run(args, **_kwargs):  # noqa: ANN001
+        calls.append(list(args))
+        if "xcresulttool" in args:
+            return type(
+                "Result",
+                (),
+                {
+                    "stdout": json.dumps(
+                        {
+                            "issues": {
+                                "testFailureSummaries": [
+                                    {
+                                        "testCaseName": "App load",
+                                        "message": "Ready was not visible",
+                                    }
+                                ]
+                            }
+                        }
+                    ),
+                    "stderr": "",
+                    "returncode": 0,
+                },
+            )()
+        if "spawn" in args and "log" in args:
+            return type(
+                "Result",
+                (),
+                {
+                    "stdout": "\n".join(
+                        [
+                            "unrelated simulator noise",
+                            "com.example.app Fatal error: unexpectedly found nil",
+                            "EXC_CRASH SIGABRT com.example.app",
+                        ]
+                    ),
+                    "stderr": "",
+                    "returncode": 0,
+                },
+            )()
+        return type("Result", (), {"stdout": "", "stderr": "", "returncode": 0})()
+
+    monkeypatch.setattr("scripts.qa_demo_mobile_recorder._run", _fake_run)
+
+    diagnostics = _ios_failure_diagnostics(
+        result_bundle_path=result_bundle_path,
+        simulator_udid="SIM-123",
+        bundle_id="com.example.app",
+    )
+
+    assert "iOS diagnostics:" in diagnostics
+    assert "Ready was not visible" in diagnostics
+    assert "iOS simulator logs:" in diagnostics
+    assert "Fatal error: unexpectedly found nil" in diagnostics
+    assert "EXC_CRASH SIGABRT com.example.app" in diagnostics
+    assert any(call[:4] == ["xcrun", "simctl", "spawn", "SIM-123"] for call in calls)
 
 
 def test_qa_demo_launch_environment_maps_release_context() -> None:

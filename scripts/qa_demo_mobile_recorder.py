@@ -132,7 +132,11 @@ def main(argv: list[str]) -> int:
                     stop_error = exc
             combined_error = _combined_recording_failure(primary_error=primary_error, stop_error=stop_error)
             if combined_error is not None:
-                diagnostics = _ios_failure_diagnostics(result_bundle_path=result_bundle_path)
+                diagnostics = _ios_failure_diagnostics(
+                    result_bundle_path=result_bundle_path,
+                    simulator_udid=simulator_udid,
+                    bundle_id=bundle_id,
+                )
                 failure_path = video_path
                 try:
                     _validate_mp4_recording(video_path)
@@ -199,7 +203,13 @@ def _ios_failure_message(*, scenario_name: str, error: Exception, diagnostics: s
     return "\n".join(parts)
 
 
-def _ios_failure_diagnostics(*, result_bundle_path: Path) -> str:
+def _ios_failure_diagnostics(
+    *,
+    result_bundle_path: Path,
+    simulator_udid: str | None = None,
+    bundle_id: str | None = None,
+) -> str:
+    diagnostics: list[str] = []
     try:
         result = _run(
             [
@@ -215,15 +225,91 @@ def _ios_failure_diagnostics(*, result_bundle_path: Path) -> str:
             capture_output=True,
         )
     except Exception as exc:  # noqa: BLE001
-        return f"iOS diagnostics unavailable: {exc}"
-    try:
-        payload = json.loads(result.stdout or "{}")
-    except json.JSONDecodeError as exc:
-        return f"iOS diagnostics unavailable: xcresult payload was not valid JSON: {exc}"
-    messages = _xcresult_failure_messages(payload)
-    if not messages:
+        diagnostics.append(f"iOS diagnostics unavailable: {exc}")
+    else:
+        try:
+            payload = json.loads(result.stdout or "{}")
+        except json.JSONDecodeError as exc:
+            diagnostics.append(f"iOS diagnostics unavailable: xcresult payload was not valid JSON: {exc}")
+        else:
+            messages = _xcresult_failure_messages(payload)
+            if messages:
+                diagnostics.append("iOS diagnostics:\n" + _bounded_diagnostic_text(messages))
+
+    simulator_logs = _ios_simulator_failure_logs(
+        simulator_udid=simulator_udid,
+        bundle_id=bundle_id,
+    )
+    if simulator_logs:
+        diagnostics.append(simulator_logs)
+    return "\n".join(diagnostics).strip()
+
+
+def _ios_simulator_failure_logs(*, simulator_udid: str | None, bundle_id: str | None) -> str:
+    normalized_udid = str(simulator_udid or "").strip()
+    normalized_bundle_id = str(bundle_id or "").strip()
+    if not normalized_udid or not normalized_bundle_id:
         return ""
-    return "iOS diagnostics:\n" + _bounded_diagnostic_text(messages)
+    predicate = (
+        f'process == "{normalized_bundle_id}" OR '
+        f'eventMessage CONTAINS[c] "{normalized_bundle_id}" OR '
+        'eventMessage CONTAINS[c] "crash" OR '
+        'eventMessage CONTAINS[c] "fatal" OR '
+        'eventMessage CONTAINS[c] "exception"'
+    )
+    try:
+        result = _run(
+            [
+                "xcrun",
+                "simctl",
+                "spawn",
+                normalized_udid,
+                "log",
+                "show",
+                "--style",
+                "compact",
+                "--predicate",
+                predicate,
+                "--last",
+                "10m",
+            ],
+            capture_output=True,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return f"iOS simulator logs unavailable: {exc}"
+    lines = _select_ios_failure_log_lines(
+        log_output=str(result.stdout or ""),
+        bundle_id=normalized_bundle_id,
+    )
+    if not lines:
+        return ""
+    return "iOS simulator logs:\n" + _bounded_diagnostic_text(lines)
+
+
+def _select_ios_failure_log_lines(*, log_output: str, bundle_id: str) -> list[str]:
+    normalized_bundle_id = str(bundle_id or "").strip()
+    crash_markers = (
+        "Fatal error",
+        "fatal",
+        "EXC_CRASH",
+        "SIGABRT",
+        "crash",
+        "CRASH",
+        "Exception",
+        "exception",
+        "Terminating app",
+    )
+    selected: list[str] = []
+    for raw_line in log_output.splitlines():
+        line = raw_line.strip()
+        if not line:
+            continue
+        if normalized_bundle_id and normalized_bundle_id in line:
+            selected.append(line)
+            continue
+        if any(marker in line for marker in crash_markers):
+            selected.append(line)
+    return selected[-40:]
 
 
 def _xcresult_failure_messages(value: object) -> list[str]:
