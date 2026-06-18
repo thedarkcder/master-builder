@@ -65,7 +65,7 @@ class MigrationTests(unittest.TestCase):
 
         duplicates = {revision_id: count for revision_id, count in Counter(revision_ids).items() if count > 1}
         self.assertEqual(duplicates, {})
-        self.assertEqual(script.get_heads(), ["20260615_0122"])
+        self.assertEqual(script.get_heads(), ["20260616_0133"])
 
     def test_project_app_deployment_config_migration_removes_qa_capture_metadata(self) -> None:
         migration = self._load_migration_module(
@@ -133,6 +133,253 @@ class MigrationTests(unittest.TestCase):
         self.assertTrue(changed)
         self.assertEqual(updated_start_command, "npx expo-cli start --web --non-interactive --host lan")
 
+    def test_legacy_expo_web_openssl_repair_adds_legacy_provider_option(self) -> None:
+        migration = self._load_migration_module(
+            "20260615_0123_repair_legacy_expo_openssl_start_command.py",
+            "migration_20260615_0123",
+        )
+
+        updated_start_command, changed = migration.canonical_legacy_expo_openssl_start_command(
+            detected_runtime="react_native_web",
+            start_command="npx expo-cli start --web --non-interactive --host lan",
+        )
+
+        self.assertTrue(changed)
+        self.assertEqual(
+            updated_start_command,
+            "NODE_OPTIONS=--openssl-legacy-provider npx expo-cli start --web --non-interactive --host lan",
+        )
+
+    def test_legacy_expo_install_command_repair_uses_single_npm_install(self) -> None:
+        migration = self._load_migration_module(
+            "20260615_0124_repair_legacy_expo_install_command.py",
+            "migration_20260615_0124",
+        )
+
+        updated_config, changed = migration.canonical_legacy_expo_install_command(
+            {
+                "source_strategy": "nixpacks",
+                "install_command": (
+                    "npm install --package-lock=false --legacy-peer-deps --production=false && "
+                    "npm install --no-save --legacy-peer-deps expo-cli@3.28.6 websocket@1.0.35"
+                ),
+            }
+        )
+
+        self.assertTrue(changed)
+        self.assertEqual(
+            updated_config["install_command"],
+            "npm install --package-lock=false --legacy-peer-deps --production=false --no-save "
+            "expo-cli@3.28.6 websocket@1.0.35",
+        )
+
+    def test_legacy_expo_native_build_tools_repair_installs_python_for_node_gyp(self) -> None:
+        migration = self._load_migration_module(
+            "20260615_0125_repair_legacy_expo_native_build_tools.py",
+            "migration_20260615_0125",
+        )
+
+        updated_config, changed = migration.canonical_legacy_expo_native_build_tools(
+            {
+                "source_strategy": "nixpacks",
+                "install_command": (
+                    "npm install --package-lock=false --legacy-peer-deps --production=false --no-save "
+                    "expo-cli@3.28.6 websocket@1.0.35"
+                ),
+            }
+        )
+
+        self.assertTrue(changed)
+        self.assertEqual(
+            updated_config["install_command"],
+            "sudo apt-get update && sudo apt-get install -y --no-install-recommends python3 make g++ && "
+            "npm install --package-lock=false --legacy-peer-deps --production=false --no-save "
+            "expo-cli@3.28.6 websocket@1.0.35",
+        )
+
+    def test_legacy_expo_project_dependency_install_repair_installs_app_dependencies(self) -> None:
+        migration = self._load_migration_module(
+            "20260616_0126_repair_legacy_expo_project_dependency_install.py",
+            "migration_20260616_0126",
+        )
+
+        updated_config, changed = migration.canonical_legacy_expo_project_dependency_install(
+            {
+                "source_strategy": "nixpacks",
+                "install_command": (
+                    "sudo apt-get update && sudo apt-get install -y --no-install-recommends python3 make g++ && "
+                    "npm install --package-lock=false --legacy-peer-deps --production=false --no-save "
+                    "expo-cli@3.28.6 websocket@1.0.35"
+                ),
+            }
+        )
+
+        self.assertTrue(changed)
+        self.assertEqual(
+            updated_config["install_command"],
+            "sudo apt-get update && sudo apt-get install -y --no-install-recommends python3 make g++ && "
+            "npm install --package-lock=false --legacy-peer-deps --production=false && "
+            "npm install --package-lock=false --legacy-peer-deps --production=false --no-save "
+            "expo-cli@3.28.6 websocket@1.0.35",
+        )
+
+    def test_legacy_expo_install_command_repair_fits_coolify_command_limit(self) -> None:
+        migration = self._load_migration_module(
+            "20260616_0127_shorten_legacy_expo_install_command_for_coolify.py",
+            "migration_20260616_0127",
+        )
+
+        updated_config, changed = migration.canonical_legacy_expo_install_command(
+            {
+                "source_strategy": "nixpacks",
+                "install_command": (
+                    "sudo apt-get update && sudo apt-get install -y --no-install-recommends python3 make g++ && "
+                    "npm install --package-lock=false --legacy-peer-deps --production=false && "
+                    "npm install --package-lock=false --legacy-peer-deps --production=false --no-save "
+                    "expo-cli@3.28.6 websocket@1.0.35"
+                ),
+            }
+        )
+
+        self.assertTrue(changed)
+        self.assertEqual(
+            updated_config["install_command"],
+            "sudo apt-get update && sudo apt-get install -y python3 make g++ && "
+            "npm install --legacy-peer-deps && "
+            "npm install --legacy-peer-deps --no-save expo-cli@3.28.6 websocket@1.0.35",
+        )
+        self.assertLessEqual(len(updated_config["install_command"]), 255)
+
+    def test_legacy_expo_install_command_repair_adds_npm_progress_logging(self) -> None:
+        migration = self._load_migration_module(
+            "20260616_0129_add_legacy_expo_install_progress_logging.py",
+            "migration_20260616_0129",
+        )
+
+        updated_config, changed = migration.canonical_legacy_expo_install_command(
+            {
+                "source_strategy": "nixpacks",
+                "install_command": (
+                    "sudo apt-get update && sudo apt-get install -y python3 make g++ && "
+                    "npm install --legacy-peer-deps && "
+                    "npm install --legacy-peer-deps --no-save expo-cli@3.28.6 websocket@1.0.35"
+                ),
+            }
+        )
+
+        self.assertTrue(changed)
+        self.assertEqual(
+            updated_config["install_command"],
+            "sudo apt-get update && sudo apt-get install -y python3 make g++ && "
+            "npm install --legacy-peer-deps --loglevel=info && "
+            "npm install --legacy-peer-deps --loglevel=info --no-save expo-cli@3.28.6 websocket@1.0.35",
+        )
+        self.assertLessEqual(len(updated_config["install_command"]), 255)
+
+    def test_legacy_expo_install_command_repair_removes_yarn_lock_before_npm_install(self) -> None:
+        migration = self._load_migration_module(
+            "20260616_0130_remove_stale_yarn_lock_before_legacy_expo_npm_install.py",
+            "migration_20260616_0130",
+        )
+
+        updated_config, changed = migration.canonical_legacy_expo_install_command(
+            {
+                "source_strategy": "nixpacks",
+                "install_command": (
+                    "sudo apt-get update && sudo apt-get install -y python3 make g++ && "
+                    "npm install --legacy-peer-deps --loglevel=info && "
+                    "npm install --legacy-peer-deps --loglevel=info --no-save expo-cli@3.28.6 websocket@1.0.35"
+                ),
+            }
+        )
+
+        self.assertTrue(changed)
+        self.assertEqual(
+            updated_config["install_command"],
+            "rm -f yarn.lock && "
+            "sudo apt-get update && sudo apt-get install -y python3 make g++ && "
+            "npm install --legacy-peer-deps --loglevel=info && "
+            "npm install --legacy-peer-deps --loglevel=info --no-save expo-cli@3.28.6 websocket@1.0.35",
+        )
+        self.assertLessEqual(len(updated_config["install_command"]), 255)
+
+    def test_legacy_expo_native_build_environment_repair_points_node_gyp_to_python(self) -> None:
+        migration = self._load_migration_module(
+            "20260616_0128_repair_legacy_expo_native_build_environment.py",
+            "migration_20260616_0128",
+        )
+
+        updated_config, changed = migration.canonical_legacy_expo_environment(
+            {
+                "source_strategy": "nixpacks",
+                "install_command": (
+                    "sudo apt-get update && sudo apt-get install -y python3 make g++ && "
+                    "npm install --legacy-peer-deps && "
+                    "npm install --legacy-peer-deps --no-save expo-cli@3.28.6 websocket@1.0.35"
+                ),
+                "environment": {"NODE_OPTIONS": "--openssl-legacy-provider"},
+            }
+        )
+
+        self.assertTrue(changed)
+        self.assertEqual(updated_config["environment"]["PYTHON"], "/usr/bin/python3")
+        self.assertEqual(updated_config["environment"]["NPM_CONFIG_PYTHON"], "/usr/bin/python3")
+        self.assertEqual(updated_config["environment"]["NPM_CONFIG_PRODUCTION"], "false")
+
+    def test_legacy_expo_nixpacks_node_version_repair_removes_invalid_node_14_pin(self) -> None:
+        migration = self._load_migration_module(
+            "20260616_0132_remove_invalid_legacy_expo_nixpacks_node_version.py",
+            "migration_20260616_0132",
+        )
+
+        updated_config, changed = migration.remove_invalid_legacy_expo_node_version(
+            {
+                "source_strategy": "nixpacks",
+                "install_command": (
+                    "rm -f yarn.lock && "
+                    "sudo apt-get update && sudo apt-get install -y python3 make g++ && "
+                    "npm install --legacy-peer-deps --loglevel=info && "
+                    "npm install --legacy-peer-deps --loglevel=info --no-save expo-cli@3.28.6 websocket@1.0.35"
+                ),
+                "environment": {
+                    "NODE_OPTIONS": "--openssl-legacy-provider",
+                    "NIXPACKS_NODE_VERSION": "14.21.3",
+                },
+            }
+        )
+
+        self.assertTrue(changed)
+        self.assertNotIn("NIXPACKS_NODE_VERSION", updated_config["environment"])
+
+    def test_legacy_expo_npm_retry_environment_repair_adds_retry_settings(self) -> None:
+        migration = self._load_migration_module(
+            "20260616_0133_add_legacy_expo_npm_retry_environment.py",
+            "migration_20260616_0133",
+        )
+
+        updated_config, changed = migration.add_legacy_expo_npm_retry_environment(
+            {
+                "source_strategy": "nixpacks",
+                "install_command": (
+                    "rm -f yarn.lock && "
+                    "sudo apt-get update && sudo apt-get install -y python3 make g++ && "
+                    "npm install --legacy-peer-deps --loglevel=info && "
+                    "npm install --legacy-peer-deps --loglevel=info --no-save expo-cli@3.28.6 websocket@1.0.35"
+                ),
+                "environment": {
+                    "NODE_OPTIONS": "--openssl-legacy-provider",
+                    "NPM_CONFIG_PRODUCTION": "false",
+                },
+            }
+        )
+
+        self.assertTrue(changed)
+        self.assertEqual(updated_config["environment"]["NPM_CONFIG_FETCH_RETRIES"], "5")
+        self.assertEqual(updated_config["environment"]["NPM_CONFIG_FETCH_RETRY_FACTOR"], "2")
+        self.assertEqual(updated_config["environment"]["NPM_CONFIG_FETCH_RETRY_MAXTIMEOUT"], "120000")
+        self.assertEqual(updated_config["environment"]["NPM_CONFIG_FETCH_RETRY_MINTIMEOUT"], "10000")
+        self.assertEqual(updated_config["environment"]["NPM_CONFIG_NETWORK_TIMEOUT"], "120000")
+
     def test_project_install_request_label_normalization_migration_canonicalizes_provider_labels(self) -> None:
         module = self._load_migration_module(
             "20260526_0111_normalize_project_install_request_labels.py",
@@ -176,7 +423,7 @@ class MigrationTests(unittest.TestCase):
             with engine.connect() as connection:
                 versions = connection.execute(text("SELECT version_num FROM alembic_version")).scalars().all()
 
-            self.assertEqual(versions, ["20260615_0122"])
+            self.assertEqual(versions, ["20260616_0133"])
 
     def test_requeue_snapshot_reason_repair_migration_backfills_missing_reason(self) -> None:
         migration = self._load_migration_module(
@@ -2071,7 +2318,7 @@ class MigrationTests(unittest.TestCase):
 
             with engine.begin() as connection:
                 versions = connection.execute(text("SELECT version_num FROM alembic_version")).scalars().all()
-            self.assertEqual(versions, ["20260615_0122"])
+        self.assertEqual(versions, ["20260616_0133"])
 
     def test_run_migrations_disables_alembic_logger_reconfiguration(self) -> None:
         fake_config = MagicMock()

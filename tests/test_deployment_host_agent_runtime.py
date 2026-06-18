@@ -415,6 +415,106 @@ def test_agent_process_once_syncs_local_preview_routes() -> None:
         assert "http://172.20.0.7:8080" in route_yaml
 
 
+def test_agent_process_once_removes_stale_local_preview_routes_for_same_host() -> None:
+    with TemporaryDirectory() as tmp_dir:
+        token_path = Path(tmp_dir) / "agent-token"
+        token_path.write_text("access-token-1", encoding="utf-8")
+        proxy_dir = Path(tmp_dir) / "proxy"
+        proxy_dir.mkdir()
+        stale_file = proxy_dir / "mb-preview-stale123.yaml"
+        stale_file.write_text(
+            "http:\n"
+            "  routers:\n"
+            "    stale:\n"
+            "      entryPoints: [http]\n"
+            "      rule: Host(`app.preview.example.test`) && PathPrefix(`/`)\n"
+            "      service: stale\n"
+            "  services:\n"
+            "    stale:\n"
+            "      loadBalancer:\n"
+            "        servers:\n"
+            "        - url: http://172.20.0.2:19006\n",
+            encoding="utf-8",
+        )
+        unrelated_file = proxy_dir / "mb-preview-keep123.yaml"
+        unrelated_file.write_text(
+            "http:\n"
+            "  routers:\n"
+            "    keep:\n"
+            "      entryPoints: [http]\n"
+            "      rule: Host(`other.preview.example.test`) && PathPrefix(`/`)\n"
+            "      service: keep\n",
+            encoding="utf-8",
+        )
+        completions: list[tuple[str, dict[str, object], str | None]] = []
+
+        class _FakeClient:
+            def __init__(self, *, api_base_url: str, access_token: str | None = None) -> None:
+                self.access_token = access_token
+
+            def heartbeat(self, *, agent_version: str, advertised_capabilities: tuple[str, ...], state: str) -> dict[str, object]:
+                return {"host_id": "host-1"}
+
+            def claim_command(self) -> dict[str, object] | None:
+                command = _local_preview_route_command()
+                command["payload"]["release_id"] = "release-current"
+                command["payload"]["application_uuid"] = "app-uuid-current"
+                command["payload"]["route_bindings"] = [
+                    {
+                        "service_key": "repo",
+                        "host": "app.preview.example.test",
+                        "port": "19006",
+                    }
+                ]
+                return command
+
+            def start_command(self, *, command_id: str, claim_id: str) -> dict[str, object]:
+                return {"command_id": command_id}
+
+            def complete_command(
+                self,
+                *,
+                command_id: str,
+                claim_id: str,
+                status: str,
+                result: dict[str, object],
+                last_error: str | None,
+            ) -> dict[str, object]:
+                completions.append((status, result, last_error))
+                return {"command_id": command_id, "status": status}
+
+        def _fake_run(command: list[str], **_: object) -> SimpleNamespace:
+            if command[:4] == ["docker", "ps", "-q", "--filter"]:
+                return SimpleNamespace(returncode=0, stdout="container-1\n", stderr="")
+            if command[:2] == ["docker", "inspect"]:
+                payload = [
+                    {
+                        "Config": {"Labels": {"com.docker.compose.service": "repo"}},
+                        "NetworkSettings": {"Networks": {"coolify": {"IPAddress": "172.20.0.21"}}},
+                    }
+                ]
+                return SimpleNamespace(returncode=0, stdout=__import__("json").dumps(payload), stderr="")
+            raise AssertionError(f"Unexpected docker command: {command}")
+
+        agent = DeploymentHostAgent(
+            config=replace(_agent_config(access_token_path=token_path), local_preview_proxy_dynamic_dir=proxy_dir),
+            client_factory=_FakeClient,
+            subprocess_run_fn=_fake_run,
+        )
+
+        result = agent.process_once()
+
+        assert result.processed is True
+        assert completions[0][0] == "succeeded"
+        assert not stale_file.exists()
+        assert unrelated_file.exists()
+        route_file = proxy_dir / "mb-preview-release-.yaml"
+        assert route_file.exists()
+        route_yaml = route_file.read_text(encoding="utf-8")
+        assert "app.preview.example.test" in route_yaml
+        assert "http://172.20.0.21:19006" in route_yaml
+
+
 def test_agent_process_once_syncs_single_app_local_preview_route_when_coolify_service_label_is_generated() -> None:
     with TemporaryDirectory() as tmp_dir:
         token_path = Path(tmp_dir) / "agent-token"

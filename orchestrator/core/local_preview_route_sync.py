@@ -116,13 +116,15 @@ def ensure_local_preview_route_sync_command(
     project: Project,
     release: ProjectDeploymentRelease,
     deployment_uuid: str | None,
+    force: bool = False,
 ) -> DeploymentHostCommand | None:
     tenant_plane = tenant_deployment_plane_to_schema(tenant)
     if release.release_kind != "run_preview" or not is_local_preview_proxy_base_domain(tenant_plane.base_domain):
         return None
     latest = latest_local_preview_route_command(session=session, release_id=release.release_id)
     if latest.command is not None and latest.deployment_uuid == deployment_uuid:
-        return latest.command
+        if not force or latest.command.status in _ACTIVE_COMMAND_STATUSES:
+            return latest.command
     host = _resolve_managed_host(session=session, tenant=tenant)
     return enqueue_deployment_host_command(
         session,

@@ -23,7 +23,17 @@ from orchestrator.core.local_preview_route_sync import ensure_local_preview_rout
 from orchestrator.core.node_release_contracts import (
     INVALID_LEGACY_EXPO_WEB_START_COMMAND,
     LEGACY_EXPO_CLI_INSTALL_COMMAND,
+    LEGACY_EXPO_CLI_INSTALL_COMMAND_OVERSIZED_WITH_PROJECT_DEPS,
+    LEGACY_EXPO_CLI_INSTALL_COMMAND_WITH_NATIVE_BUILD_TOOLS_WITHOUT_PROJECT_DEPS,
+    LEGACY_EXPO_CLI_INSTALL_COMMAND_WITH_SEPARATE_EXPO_INSTALL,
+    LEGACY_EXPO_CLI_INSTALL_COMMAND_WITHOUT_NPM_LOG_PROGRESS,
+    LEGACY_EXPO_CLI_INSTALL_COMMAND_WITHOUT_YARN_LOCK_CLEANUP,
+    LEGACY_EXPO_CLI_INSTALL_COMMAND_WITHOUT_NATIVE_BUILD_TOOLS,
+    LEGACY_EXPO_CLI_INSTALL_COMMAND_WITHOUT_WEBSOCKET,
+    LEGACY_EXPO_RELEASE_ENVIRONMENT,
     LEGACY_EXPO_WEB_START_COMMAND,
+    LEGACY_EXPO_WEB_START_COMMAND_WITHOUT_OPENSSL,
+    LEGACY_NODE_INSTALL_WITH_PACKAGE_LOCK_FLAGS_COMMAND,
     NODE_INSTALL_WITH_LEGACY_PEERS_COMMAND,
     STALE_LEGACY_EXPO_WEB_START_COMMAND,
 )
@@ -200,7 +210,7 @@ def verify_release_route_bindings(
 
 
 def _fetch_route_activation(service_url: ProjectDeploymentServiceUrlRead) -> str | None:
-    probe_url = service_url.internal_url or service_url.url
+    probe_url = _normalize_probe_url_for_current_runtime(service_url.internal_url or service_url.url)
     headers = {"User-Agent": "master-builder-route-verifier/1.0"}
     if service_url.internal_url and service_url.host:
         headers["Host"] = service_url.host
@@ -222,6 +232,16 @@ def _fetch_route_activation(service_url: ProjectDeploymentServiceUrlRead) -> str
         return str(exc.reason)
     except TimeoutError:
         return "route verification timed out"
+
+
+def _normalize_probe_url_for_current_runtime(url: str) -> str:
+    parsed = urlsplit(url)
+    if parsed.hostname != "host.docker.internal" or Path("/.dockerenv").exists():
+        return url
+    netloc = "localhost"
+    if parsed.port is not None:
+        netloc = f"{netloc}:{parsed.port}"
+    return urlunsplit((parsed.scheme, netloc, parsed.path, parsed.query, parsed.fragment))
 
 
 def _resolve_project_app_scope(
@@ -548,6 +568,7 @@ def create_project_deployment_release(
         latest_provider_context = _coerce_dict(latest_release.provider_context)
         if payload.release_kind == "run_preview" and not _run_preview_release_can_reuse_existing_application(
             provider_context=latest_provider_context,
+            release_status=latest_release.status,
             tenant_plane=tenant_plane,
         ):
             continue
@@ -557,8 +578,9 @@ def create_project_deployment_release(
             break
 
     now = datetime.now(timezone.utc)
+    release_id = str(uuid4())
     release = ProjectDeploymentRelease(
-        release_id=str(uuid4()),
+        release_id=release_id,
         tenant_id=tenant_id,
         project_id=project_id,
         app_id=project_app.app_id,
@@ -597,6 +619,7 @@ def create_project_deployment_release(
             payload=payload,
             existing_application_uuid=existing_application_uuid,
             existing_service_uuid=existing_service_uuid,
+            release_id=release_id,
         )
     except HTTPException as exc:
         failure_time = datetime.now(timezone.utc)
@@ -739,7 +762,22 @@ def destroy_project_deployment_preview_release(
 
     provider_context = _coerce_dict(release.provider_context)
     application_uuid = _normalize_optional_string(provider_context.get("application_uuid"))
+    provider_context["status_before_destroy"] = _normalize_optional_string(release.status) or "unknown"
     should_delete_application = _should_delete_preview_application_on_destroy(reason=reason)
+    provider_context["destroy_reason"] = _normalize_optional_string(reason) or "preview_cleanup"
+    release.provider_context = provider_context
+    _mark_demo_proof_lease_destroyed(
+        release=release,
+        reason=reason,
+        destroyed_at=datetime.now(timezone.utc),
+    )
+    if should_delete_application:
+        ensure_local_preview_route_cleanup_command(
+            session=session,
+            tenant=tenant,
+            project=project,
+            release=release,
+        )
     if application_uuid is not None and should_delete_application:
         tenant_plane = tenant_deployment_plane_to_schema(tenant)
         settings = get_settings()
@@ -771,15 +809,6 @@ def destroy_project_deployment_preview_release(
                     detail=f"Coolify preview deletion failed: {exc}",
                 ) from exc
 
-    provider_context["destroy_reason"] = _normalize_optional_string(reason) or "preview_cleanup"
-    if not should_delete_application and application_uuid is not None:
-        provider_context["application_retained_for_replacement"] = True
-    release.provider_context = provider_context
-    _mark_demo_proof_lease_destroyed(
-        release=release,
-        reason=reason,
-        destroyed_at=datetime.now(timezone.utc),
-    )
     updated = update_project_deployment_release_status(
         session=session,
         tenant_id=tenant_id,
@@ -788,13 +817,6 @@ def destroy_project_deployment_preview_release(
         app_id=release.app_id,
         payload=ProjectDeploymentReleaseStatusUpdate(status="destroyed", last_error=None),
     )
-    if should_delete_application:
-        ensure_local_preview_route_cleanup_command(
-            session=session,
-            tenant=tenant,
-            project=project,
-            release=release,
-        )
     return updated
 
 
@@ -936,6 +958,7 @@ def submit_internal_coolify_release(
     payload: ProjectDeploymentReleaseCreate,
     existing_application_uuid: str | None,
     existing_service_uuid: str | None,
+    release_id: str | None = None,
 ) -> dict[str, object]:  # noqa: ANN001
     settings = get_settings()
     encryption_key = str(getattr(settings, "secrets_encryption_key", "") or "").strip()
@@ -974,11 +997,12 @@ def submit_internal_coolify_release(
     env_payload = _build_coolify_environment_payload(
         session=session,
         project=project,
+        project_app=project_app,
         project_deployment=project_deployment,
         git_ref=git_branch,
         encryption_key=encryption_key,
     )
-    name = _coolify_application_name(project_app=project_app, payload=payload)
+    name = _coolify_application_name(project_app=project_app, payload=payload, release_id=release_id)
     source_path = _normalize_source_path(project_app.source_path)
     compose_location = _compose_location_for_source(source_path)
     base_directory = _coolify_base_directory(source_path)
@@ -1005,6 +1029,7 @@ def submit_internal_coolify_release(
             tenant_plane=tenant_plane,
             project_deployment=project_deployment,
             git_ref=git_branch,
+            release_id=release_id,
             release_kind=payload.release_kind,
             exposed_ports_by_service=compose_result.exposed_ports_by_service,
         )
@@ -1131,8 +1156,37 @@ def submit_internal_coolify_release(
             detail=f"Coolify deployment submission failed: {exc}",
         ) from exc
 
+    if payload.release_kind == "run_preview" and project_deployment.source_strategy != "docker_compose":
+        base_domain = _required_plane_value(tenant_plane.base_domain, "base_domain")
+        scheme = _generated_route_scheme(base_domain=base_domain)
+        host = _generated_service_host(
+            project=project,
+            project_app=project_app,
+            service_key=project_app.slug,
+            base_domain=base_domain,
+            git_ref=git_branch,
+            release_id=release_id,
+            release_kind=payload.release_kind,
+        )
+        port = _coolify_ports_exposes(project_app=project_app)
+        route_bindings.append(
+            {
+                "service_key": project_app.slug,
+                "service_name": project_app.name,
+                "service_kind": "website",
+                "scheme": scheme,
+                "host": host,
+                "path": "",
+                "url_kind": "generated",
+                "status": "pending",
+                "port": port,
+                "proxy_port": _base_domain_port(base_domain),
+                "domain_key": None,
+                "internal_url": _local_base_domain_probe_url(base_domain),
+            }
+        )
     fqdn = _normalize_optional_string(application.get("fqdn"))
-    if fqdn is not None and project_deployment.source_strategy != "docker_compose":
+    if fqdn is not None and project_deployment.source_strategy != "docker_compose" and payload.release_kind != "run_preview":
         route_binding = _route_binding_from_url(
             service_key=project_app.slug,
             service_name=project_app.name,
@@ -1167,6 +1221,7 @@ def _coolify_application_update_payload(payload: dict[str, object]) -> dict[str,
         "destination_uuid",
         "github_app_uuid",
         "docker_compose_domains",
+        "autogenerate_domain",
     }
     return {key: value for key, value in payload.items() if key not in create_only_fields}
 
@@ -1270,6 +1325,7 @@ def _coolify_docker_compose_routes(
     project_deployment: ProjectDeploymentConfigRead,
     git_ref: str,
     exposed_ports_by_service: dict[str, list[str]],
+    release_id: str | None = None,
     release_kind: str = "production",
 ) -> tuple[dict[str, str], dict[str, str], list[dict[str, object]]]:
     routes: dict[str, str] = {}
@@ -1310,6 +1366,7 @@ def _coolify_docker_compose_routes(
             service_key=service_key,
             base_domain=base_domain,
             git_ref=git_ref,
+            release_id=release_id,
             release_kind=release_kind,
         )
         path = ""
@@ -1418,13 +1475,20 @@ def _generated_service_host(
     service_key: str,
     base_domain: str,
     git_ref: str,
+    release_id: str | None = None,
     release_kind: str = "production",
 ) -> str:
     normalized_base_domain = _base_domain_hostname(base_domain)
     if release_kind == "run_preview":
+        normalized_release_id = _normalize_optional_string(release_id)
+        if normalized_release_id is None:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Run preview generated routes require a release_id to avoid hostname collisions",
+            )
         return ".".join(
             [
-                _preview_dns_label(service_key, project_app.slug or project_app.name, git_ref),
+                _preview_dns_label(service_key, project_app.slug or project_app.name, git_ref, normalized_release_id),
                 _dns_label(project.name or project.project_id),
                 normalized_base_domain,
             ]
@@ -1501,8 +1565,11 @@ def deployment_release_routes_match_base_domain(
 def _run_preview_release_can_reuse_existing_application(
     *,
     provider_context: dict[str, object],
+    release_status: object,
     tenant_plane: TenantDeploymentPlaneRead,
 ) -> bool:
+    if _normalize_optional_string(release_status) != "live":
+        return False
     existing_base_domain = _normalize_optional_string(provider_context.get("base_domain"))
     current_base_domain = _normalize_optional_string(tenant_plane.base_domain)
     if existing_base_domain is None or current_base_domain is None:
@@ -1517,7 +1584,8 @@ def _run_preview_release_can_reuse_existing_application(
 
 
 def _should_delete_preview_application_on_destroy(*, reason: str) -> bool:
-    return _normalize_optional_string(reason) != "preview_replaced"
+    _ = reason
+    return True
 
 
 def _local_base_domain_probe_url(value: str) -> str | None:
@@ -1618,10 +1686,20 @@ def _uses_stale_legacy_expo_contract(*, project_app: ProjectApp, project_deploym
     return _normalize_optional_string(project_app.start_command) in {
         "npm run web",
         INVALID_LEGACY_EXPO_WEB_START_COMMAND,
+        LEGACY_EXPO_WEB_START_COMMAND,
+        LEGACY_EXPO_WEB_START_COMMAND_WITHOUT_OPENSSL,
         STALE_LEGACY_EXPO_WEB_START_COMMAND,
     } and _normalize_optional_string(project_deployment.install_command) in {
         NODE_INSTALL_WITH_LEGACY_PEERS_COMMAND,
+        LEGACY_NODE_INSTALL_WITH_PACKAGE_LOCK_FLAGS_COMMAND,
         LEGACY_EXPO_CLI_INSTALL_COMMAND,
+        LEGACY_EXPO_CLI_INSTALL_COMMAND_WITHOUT_NPM_LOG_PROGRESS,
+        LEGACY_EXPO_CLI_INSTALL_COMMAND_WITHOUT_YARN_LOCK_CLEANUP,
+        LEGACY_EXPO_CLI_INSTALL_COMMAND_OVERSIZED_WITH_PROJECT_DEPS,
+        LEGACY_EXPO_CLI_INSTALL_COMMAND_WITH_NATIVE_BUILD_TOOLS_WITHOUT_PROJECT_DEPS,
+        LEGACY_EXPO_CLI_INSTALL_COMMAND_WITH_SEPARATE_EXPO_INSTALL,
+        LEGACY_EXPO_CLI_INSTALL_COMMAND_WITHOUT_NATIVE_BUILD_TOOLS,
+        LEGACY_EXPO_CLI_INSTALL_COMMAND_WITHOUT_WEBSOCKET,
     }
 
 
@@ -1637,12 +1715,52 @@ def _coolify_install_command(*, project_app: ProjectApp, project_deployment: Pro
     return _normalize_optional_string(project_deployment.install_command)
 
 
-def _coolify_application_name(*, project_app: ProjectApp, payload: ProjectDeploymentReleaseCreate) -> str:
+def _release_environment_overrides(
+    *,
+    project_app: ProjectApp,
+    project_deployment: ProjectDeploymentConfigRead,
+) -> dict[str, str]:
+    normalized_runtime = _normalize_optional_string(project_app.detected_runtime)
+    normalized_start_command = _normalize_optional_string(project_app.start_command)
+    normalized_install_command = _normalize_optional_string(project_deployment.install_command)
+    if normalized_runtime != "react_native_web":
+        return {}
+    if normalized_start_command not in {
+        "npm run web",
+        INVALID_LEGACY_EXPO_WEB_START_COMMAND,
+        LEGACY_EXPO_WEB_START_COMMAND,
+        LEGACY_EXPO_WEB_START_COMMAND_WITHOUT_OPENSSL,
+        STALE_LEGACY_EXPO_WEB_START_COMMAND,
+    }:
+        return {}
+    if normalized_install_command not in {
+        NODE_INSTALL_WITH_LEGACY_PEERS_COMMAND,
+        LEGACY_NODE_INSTALL_WITH_PACKAGE_LOCK_FLAGS_COMMAND,
+        LEGACY_EXPO_CLI_INSTALL_COMMAND,
+        LEGACY_EXPO_CLI_INSTALL_COMMAND_WITHOUT_NPM_LOG_PROGRESS,
+        LEGACY_EXPO_CLI_INSTALL_COMMAND_WITHOUT_YARN_LOCK_CLEANUP,
+        LEGACY_EXPO_CLI_INSTALL_COMMAND_OVERSIZED_WITH_PROJECT_DEPS,
+        LEGACY_EXPO_CLI_INSTALL_COMMAND_WITH_NATIVE_BUILD_TOOLS_WITHOUT_PROJECT_DEPS,
+        LEGACY_EXPO_CLI_INSTALL_COMMAND_WITH_SEPARATE_EXPO_INSTALL,
+        LEGACY_EXPO_CLI_INSTALL_COMMAND_WITHOUT_NATIVE_BUILD_TOOLS,
+        LEGACY_EXPO_CLI_INSTALL_COMMAND_WITHOUT_WEBSOCKET,
+    }:
+        return {}
+    return dict(LEGACY_EXPO_RELEASE_ENVIRONMENT)
+
+
+def _coolify_application_name(
+    *,
+    project_app: ProjectApp,
+    payload: ProjectDeploymentReleaseCreate,
+    release_id: str | None = None,
+) -> str:
     base_name = _normalize_coolify_name(project_app.name, fallback=project_app.app_id)
     if payload.release_kind != "run_preview":
         return base_name
     source = payload.source_run_id or payload.pr_number or payload.commit_sha
-    suffix = _normalize_coolify_name(str(source), fallback=payload.commit_sha[:12])
+    suffix_source = f"{source}-{release_id[:8]}" if release_id else str(source)
+    suffix = _normalize_coolify_name(suffix_source, fallback=payload.commit_sha[:12])
     return f"{base_name}-preview-{suffix}"[:63].strip("-")
 
 
@@ -1918,6 +2036,7 @@ def _build_coolify_environment_payload(
     *,
     session,
     project: Project,
+    project_app: ProjectApp,
     project_deployment: ProjectDeploymentConfigRead,
     git_ref: str,
     encryption_key: str,
@@ -1931,6 +2050,13 @@ def _build_coolify_environment_payload(
         git_ref=git_ref,
         encryption_key=encryption_key,
     )
+    runtime_environment = _release_environment_overrides(
+        project_app=project_app,
+        project_deployment=project_deployment,
+    )
+    if runtime_environment:
+        resolved_environment.update(runtime_environment)
+        literal_keys.update(runtime_environment)
     for key, value in sorted(resolved_environment.items()):
         payload.append(
             {
