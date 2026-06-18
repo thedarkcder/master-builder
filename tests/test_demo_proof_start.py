@@ -18,7 +18,15 @@ from orchestrator.core.workflow.handler_composition import build_installed_workf
 from orchestrator.core.workflow.operation_service import fail_workflow_operation
 from orchestrator.core.workflow.type_catalog import get_workflow_type
 from orchestrator.storage.db import create_session_factory
-from orchestrator.storage.models import Project, Tenant, WorkflowExecution, WorkflowOperation, WorkflowOperationAttempt
+from orchestrator.storage.models import (
+    Project,
+    Tenant,
+    WorkflowExecution,
+    WorkflowOperation,
+    WorkflowOperationAttempt,
+    WorkflowOperationWorkUnit,
+    WorkflowOperationWorkUnitAttempt,
+)
 from tests.test_support.db_harness import SqliteTemplateDbTestCase
 
 
@@ -4703,6 +4711,96 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 "preview_cleanup": "completed",
             }
 
+    def test_demo_proof_full_lifecycle_completes_declared_work_units(self) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-a")
+            workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
+            request = _demo_proof_request(tenant=tenant)
+            execute_workflow_advance(
+                session=session,
+                settings=SimpleNamespace(),
+                workflow_type=workflow_type,
+                request=request,
+                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+            )
+
+            for event in (
+                "ProofLeaseAcquired",
+                "ReleaseRequested",
+                "ReleaseProvisioning",
+                "ReleaseLive",
+                "RouteReady",
+                "ServiceVerificationPassed",
+                "RecordingStarted",
+                "RecordingCompleted",
+                "EvidenceUploadStarted",
+                "EvidenceUploaded",
+                "PREvidenceAttachStarted",
+                "PREvidenceAttached",
+                "PreviewCleanupRequested",
+                "PreviewCleanupCompleted",
+            ):
+                execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=_demo_proof_request_for_event(request, event),
+                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                )
+
+            workflow = session.execute(select(WorkflowExecution)).scalar_one()
+            rows = session.execute(
+                select(WorkflowOperation, WorkflowOperationWorkUnit, WorkflowOperationWorkUnitAttempt)
+                .join(
+                    WorkflowOperationWorkUnit,
+                    WorkflowOperationWorkUnit.operation_id == WorkflowOperation.operation_id,
+                )
+                .join(
+                    WorkflowOperationWorkUnitAttempt,
+                    WorkflowOperationWorkUnitAttempt.work_unit_id == WorkflowOperationWorkUnit.work_unit_id,
+                )
+                .where(WorkflowOperation.workflow_id == workflow.workflow_id)
+                .order_by(WorkflowOperation.operation_type, WorkflowOperationWorkUnit.unit_key)
+            ).all()
+            unit_keys_by_operation: dict[str, list[str]] = {}
+            unit_statuses_by_operation: dict[str, list[str]] = {}
+            attempt_statuses_by_operation: dict[str, list[str]] = {}
+            for operation, work_unit, work_unit_attempt in rows:
+                unit_keys_by_operation.setdefault(operation.operation_type, []).append(work_unit.unit_key)
+                unit_statuses_by_operation.setdefault(operation.operation_type, []).append(work_unit.status)
+                attempt_statuses_by_operation.setdefault(operation.operation_type, []).append(work_unit_attempt.status)
+
+            assert unit_keys_by_operation == {
+                "preview_lease": ["preview_lease.acquire", "preview_lease.enforce_single_active"],
+                "release": ["release.create_or_reuse", "release.wait_for_live"],
+                "recording": ["recording.android", "recording.browser", "recording.ios"],
+                "evidence_upload": ["evidence_upload.persist"],
+                "pr_evidence_update": ["pr_evidence_update.attach_links"],
+                "preview_cleanup": ["preview_cleanup.destroy_or_ttl"],
+            }
+            assert {
+                operation_type: sorted(set(statuses))
+                for operation_type, statuses in unit_statuses_by_operation.items()
+            } == {
+                "preview_lease": ["completed"],
+                "release": ["completed"],
+                "recording": ["completed"],
+                "evidence_upload": ["completed"],
+                "pr_evidence_update": ["completed"],
+                "preview_cleanup": ["completed"],
+            }
+            assert {
+                operation_type: sorted(set(statuses))
+                for operation_type, statuses in attempt_statuses_by_operation.items()
+            } == {
+                "preview_lease": ["completed"],
+                "release": ["completed"],
+                "recording": ["completed"],
+                "evidence_upload": ["completed"],
+                "pr_evidence_update": ["completed"],
+                "preview_cleanup": ["completed"],
+            }
+
     def test_demo_proof_failure_evidence_events_complete_operations_then_block_workflow(self) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
@@ -5064,8 +5162,27 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 .where(WorkflowOperationAttempt.operation_id == release_operation.operation_id)
                 .order_by(WorkflowOperationAttempt.attempt_number)
             ).scalars().all()
+            retried_work_unit_rows = session.execute(
+                select(WorkflowOperationWorkUnit, WorkflowOperationWorkUnitAttempt)
+                .join(
+                    WorkflowOperationWorkUnitAttempt,
+                    WorkflowOperationWorkUnitAttempt.work_unit_id == WorkflowOperationWorkUnit.work_unit_id,
+                )
+                .where(
+                    WorkflowOperationWorkUnit.operation_id == release_operation.operation_id,
+                    WorkflowOperationWorkUnit.parent_attempt_id == attempts[-1].attempt_id,
+                    WorkflowOperationWorkUnitAttempt.operation_attempt_id == attempts[-1].attempt_id,
+                )
+                .order_by(WorkflowOperationWorkUnit.unit_key)
+            ).all()
             assert handle.operation_type == "release"
             assert handle.status == "waiting_for_input"
             assert workflow.status == "waiting_for_input"
             assert release_operation.status == "waiting_for_input"
             assert [attempt.status for attempt in attempts] == ["failed", "waiting_for_input"]
+            assert [work_unit.unit_key for work_unit, _attempt in retried_work_unit_rows] == [
+                "release.create_or_reuse",
+                "release.wait_for_live",
+            ]
+            assert {work_unit.status for work_unit, _attempt in retried_work_unit_rows} == {"running"}
+            assert {attempt.status for _work_unit, attempt in retried_work_unit_rows} == {"running"}

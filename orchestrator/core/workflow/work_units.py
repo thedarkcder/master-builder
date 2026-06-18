@@ -444,3 +444,132 @@ def run_work_unit(
     )
     session.flush()
     return result
+
+
+def seed_declared_work_units_for_operation_attempt(
+    session: Session,
+    *,
+    workflow_type: WorkflowDefinition,
+    operation: WorkflowOperation,
+    operation_attempt: WorkflowOperationAttempt,
+    input_payload: object,
+) -> list[WorkflowOperationWorkUnit]:
+    if operation_attempt.operation_id != operation.operation_id:
+        raise WorkflowWorkUnitContractError("Workflow work unit attempt does not belong to the supplied operation.")
+    seeded: list[WorkflowOperationWorkUnit] = []
+    for definition in workflow_type.work_units:
+        if definition.step_key != operation.operation_type:
+            continue
+        idempotency_key = _validate_idempotency(
+            definition=definition,
+            idempotency_key=f"{operation.idempotency_key}:{operation_attempt.attempt_id}:{definition.key}",
+        )
+        unit_input = {
+            "workflow_id": operation.workflow_id,
+            "operation_id": operation.operation_id,
+            "operation_type": operation.operation_type,
+            "operation_attempt_id": operation_attempt.attempt_id,
+            "unit_key": definition.key,
+            "input": input_payload,
+        }
+        work_unit = _get_or_create_work_unit(
+            session=session,
+            operation=operation,
+            parent_attempt=operation_attempt,
+            definition=definition,
+            idempotency_key=idempotency_key,
+            input_fingerprint=_input_fingerprint(unit_input),
+        )
+        existing_attempt = session.execute(
+            select(WorkflowOperationWorkUnitAttempt)
+            .where(
+                WorkflowOperationWorkUnitAttempt.work_unit_id == work_unit.work_unit_id,
+                WorkflowOperationWorkUnitAttempt.operation_attempt_id == operation_attempt.attempt_id,
+            )
+            .limit(1)
+        ).scalar_one_or_none()
+        if existing_attempt is None:
+            _start_unit_attempt(
+                session=session,
+                work_unit=work_unit,
+                operation_attempt=operation_attempt,
+            )
+        seeded.append(work_unit)
+    session.flush()
+    return seeded
+
+
+def complete_work_units_for_operation_attempt(
+    session: Session,
+    *,
+    operation: WorkflowOperation,
+    operation_attempt: WorkflowOperationAttempt,
+) -> None:
+    _finish_work_units_for_operation_attempt(
+        session,
+        operation=operation,
+        operation_attempt=operation_attempt,
+        status=WORK_UNIT_STATUS_COMPLETED,
+        error_category=None,
+        error_message=None,
+    )
+
+
+def fail_work_units_for_operation_attempt(
+    session: Session,
+    *,
+    operation: WorkflowOperation,
+    operation_attempt: WorkflowOperationAttempt,
+    category: str,
+    message: str,
+) -> None:
+    _finish_work_units_for_operation_attempt(
+        session,
+        operation=operation,
+        operation_attempt=operation_attempt,
+        status=WORK_UNIT_STATUS_FAILED,
+        error_category=category,
+        error_message=message,
+    )
+
+
+def _finish_work_units_for_operation_attempt(
+    session: Session,
+    *,
+    operation: WorkflowOperation,
+    operation_attempt: WorkflowOperationAttempt,
+    status: str,
+    error_category: str | None,
+    error_message: str | None,
+) -> None:
+    if operation_attempt.operation_id != operation.operation_id:
+        raise WorkflowWorkUnitContractError("Workflow work unit attempt does not belong to the supplied operation.")
+    timestamp = _now()
+    work_units = session.execute(
+        select(WorkflowOperationWorkUnit).where(
+            WorkflowOperationWorkUnit.operation_id == operation.operation_id,
+            WorkflowOperationWorkUnit.parent_attempt_id == operation_attempt.attempt_id,
+        )
+    ).scalars().all()
+    for work_unit in work_units:
+        if work_unit.status != WORK_UNIT_STATUS_COMPLETED:
+            work_unit.status = status
+            work_unit.error_category = error_category
+            work_unit.error_message = error_message
+            work_unit.updated_at = timestamp
+            work_unit.completed_at = timestamp if status == WORK_UNIT_STATUS_COMPLETED else None
+        attempts = session.execute(
+            select(WorkflowOperationWorkUnitAttempt).where(
+                WorkflowOperationWorkUnitAttempt.work_unit_id == work_unit.work_unit_id,
+                WorkflowOperationWorkUnitAttempt.operation_attempt_id == operation_attempt.attempt_id,
+            )
+        ).scalars()
+        for attempt in attempts:
+            if attempt.status == WORK_UNIT_STATUS_COMPLETED:
+                continue
+            attempt.status = status
+            attempt.error_category = error_category
+            attempt.error_message = error_message
+            attempt.next_retry_at = None
+            attempt.finished_at = timestamp
+    session.flush()
