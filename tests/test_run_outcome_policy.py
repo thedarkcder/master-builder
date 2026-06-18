@@ -242,6 +242,10 @@ def test_complete_runs_qa_demo_stage_before_finalization() -> None:
         status="live",
         service_urls=[],
         commit_sha="b" * 40,
+        provider_context={
+            "application_uuid": "app-preview-1",
+            "deployment_uuid": "deployment-preview-1",
+        },
         delivery_metadata={
             "demo_proof_lease": {
                 "proof_scope_id": "run:run-1:" + "b" * 40,
@@ -400,6 +404,23 @@ def test_complete_runs_qa_demo_stage_before_finalization() -> None:
         "expires_at": "2026-06-19T11:00:00+00:00",
         "destroy_reason": "qa_demo_complete",
         "destroyed_at": "2026-06-18T12:00:00+00:00",
+        "resource_refs": [
+            {
+                "resource_type": "release",
+                "resource_id": "release-preview-1",
+                "cleanup_action": "destroyed",
+            },
+            {
+                "resource_type": "coolify_application",
+                "resource_id": "app-preview-1",
+                "cleanup_action": "destroyed",
+            },
+            {
+                "resource_type": "coolify_deployment",
+                "resource_id": "deployment-preview-1",
+                "cleanup_action": "destroyed",
+            },
+        ],
     }
     deps.execution.mark_pull_request_ready_after_demo_proof_fn.assert_called_once()
     ready_kwargs = deps.execution.mark_pull_request_ready_after_demo_proof_fn.call_args.kwargs

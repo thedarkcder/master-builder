@@ -1507,7 +1507,7 @@ def _qa_demo_lease_metadata(*, preview_release) -> dict[str, str]:  # noqa: ANN0
     }
 
 
-def _qa_demo_cleanup_evidence_metadata(*, preview_release) -> dict[str, str]:  # noqa: ANN001
+def _qa_demo_cleanup_evidence_metadata(*, preview_release) -> dict[str, object]:  # noqa: ANN001
     delivery_metadata = getattr(preview_release, "delivery_metadata", None)
     lease_metadata = delivery_metadata.get("demo_proof_lease") if isinstance(delivery_metadata, dict) else None
     if not isinstance(lease_metadata, dict):
@@ -1516,7 +1516,7 @@ def _qa_demo_cleanup_evidence_metadata(*, preview_release) -> dict[str, str]:  #
     lease_state = str(lease_metadata.get("state") or "").strip()
     cleanup_status = "completed" if lease_state in {"destroyed", "expired", "ttl_scheduled"} else ""
     cleanup_mode = str(lease_metadata.get("destroy_reason") or lease_metadata.get("cleanup_mode") or "").strip()
-    return {
+    metadata: dict[str, object] = {
         key: value
         for key, value in {
             "release_id": release_id,
@@ -1532,6 +1532,68 @@ def _qa_demo_cleanup_evidence_metadata(*, preview_release) -> dict[str, str]:  #
         }.items()
         if value
     }
+    resource_refs = _qa_demo_cleanup_resource_refs(preview_release=preview_release, cleanup_action=lease_state)
+    if resource_refs:
+        metadata["resource_refs"] = resource_refs
+    return metadata
+
+
+def _qa_demo_cleanup_resource_refs(*, preview_release, cleanup_action: str) -> list[dict[str, str]]:  # noqa: ANN001
+    action = str(cleanup_action or "").strip()
+    if not action:
+        return []
+    refs: list[dict[str, str]] = []
+
+    def add_ref(resource_type: str, resource_id: object, **metadata: object) -> None:
+        normalized_type = str(resource_type or "").strip()
+        normalized_id = str(resource_id or "").strip()
+        if not normalized_type or not normalized_id:
+            return
+        item = {
+            "resource_type": normalized_type,
+            "resource_id": normalized_id,
+            "cleanup_action": action,
+        }
+        for key, value in metadata.items():
+            normalized_value = str(value or "").strip()
+            if normalized_value:
+                item[key] = normalized_value
+        identity = (item["resource_type"], item["resource_id"], item["cleanup_action"])
+        if any((ref["resource_type"], ref["resource_id"], ref["cleanup_action"]) == identity for ref in refs):
+            return
+        refs.append(item)
+
+    add_ref("release", getattr(preview_release, "release_id", ""))
+    provider_context = getattr(preview_release, "provider_context", None)
+    if isinstance(provider_context, dict):
+        add_ref("coolify_application", provider_context.get("application_uuid"))
+        add_ref("coolify_deployment", provider_context.get("deployment_uuid"))
+        add_ref("coolify_service", provider_context.get("service_uuid"))
+        add_ref("preview_base_domain", provider_context.get("base_domain"))
+        route_bindings = provider_context.get("route_bindings")
+        if isinstance(route_bindings, list):
+            for route_binding in route_bindings:
+                if not isinstance(route_binding, dict):
+                    continue
+                host = str(route_binding.get("host") or route_binding.get("domain") or "").strip()
+                service_key = str(route_binding.get("service_key") or "").strip()
+                add_ref(
+                    "preview_route_binding",
+                    host or service_key,
+                    service_key=service_key,
+                )
+    for service_url in list(getattr(preview_release, "service_urls", []) or []):
+        status = str(getattr(service_url, "status", "") or "").strip()
+        url = str(getattr(service_url, "url", "") or "").strip()
+        if status != "active" or not url:
+            continue
+        add_ref(
+            "service_url",
+            url,
+            service_kind=getattr(service_url, "service_kind", ""),
+            service_key=getattr(service_url, "service_key", ""),
+        )
+    return refs
 
 
 def _qa_demo_proof_commit_sha(qa_result: QaResult) -> str:
