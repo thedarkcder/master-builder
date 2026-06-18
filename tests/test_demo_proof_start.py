@@ -156,6 +156,26 @@ def _demo_proof_event_metadata(event: str) -> dict[str, object] | None:
                 else {}
             ),
         }
+    if event == "RecordingFailed":
+        return {
+            "release_id": "release-preview-1",
+            "release_kind": "run_preview",
+            "release_status": "live",
+            "release_commit_sha": "b" * 40,
+            "demo_proof_lease": _demo_proof_lease_metadata(),
+            "error_message": "QA demo recording failed before artifact evidence could be uploaded",
+        }
+    if event == "RecordingFailedPreviewCleanupCompleted":
+        return {
+            "release_id": "release-preview-1",
+            "release_kind": "run_preview",
+            "release_status": "live",
+            "release_commit_sha": "b" * 40,
+            "demo_proof_lease": _demo_proof_lease_metadata(),
+            "cleanup_status": "completed",
+            "cleanup_mode": "destroy_or_ttl",
+            "cleanup_evidence": _cleanup_evidence_metadata(),
+        }
     if event == "ServiceVerificationPassed":
         return _service_verification_metadata()
     if event in {"RecordingCompleted", "EvidenceUploaded"}:
@@ -3638,6 +3658,60 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 "recording": "completed",
                 "evidence_upload": "completed",
                 "pr_evidence_update": "completed",
+                "preview_cleanup": "completed",
+            }
+
+    def test_demo_proof_recording_failure_without_evidence_waits_for_cleanup_before_blocking(self) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-a")
+            workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
+            request = _demo_proof_request(tenant=tenant)
+            execute_workflow_advance(
+                session=session,
+                settings=SimpleNamespace(),
+                workflow_type=workflow_type,
+                request=request,
+                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+            )
+
+            for event in (
+                "ProofLeaseAcquired",
+                "ReleaseRequested",
+                "ReleaseProvisioning",
+                "ReleaseLive",
+                "RouteReady",
+                "ServiceVerificationPassed",
+                "RecordingStarted",
+                "RecordingFailed",
+                "RecordingFailedPreviewCleanupCompleted",
+            ):
+                execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=_demo_proof_request_for_event(request, event),
+                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                )
+
+            workflow = session.execute(select(WorkflowExecution)).scalar_one()
+            assert workflow.status == "failed"
+            assert (
+                workflow.last_error
+                == "Demo proof recorded recording failure cleanup for proof scope run-1-main-abcdef1."
+            )
+            description = json.loads(workflow.source_description or "{}")
+            assert description["demo_proof_state"] == "blocked"
+            assert description["demo_proof_events"][-1] == "RecordingFailedPreviewCleanupCompleted"
+            operations = session.execute(
+                select(WorkflowOperation).where(WorkflowOperation.workflow_id == workflow.workflow_id)
+            ).scalars().all()
+            status_by_type = {operation.operation_type: operation.status for operation in operations}
+            assert status_by_type == {
+                "preview_lease": "completed",
+                "release": "completed",
+                "recording": "completed",
+                "evidence_upload": "pending",
+                "pr_evidence_update": "pending",
                 "preview_cleanup": "completed",
             }
 

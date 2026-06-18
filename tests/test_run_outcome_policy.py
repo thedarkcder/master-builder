@@ -986,7 +986,17 @@ def test_complete_blocks_success_when_qa_demo_stage_cannot_finish() -> None:
         "ServiceVerificationPassed",
         "RecordingStarted",
         "RecordingFailed",
+        "RecordingFailedPreviewCleanupCompleted",
     ]
+    metadata_by_event = {
+        call.kwargs["event"]: call.kwargs.get("event_metadata")
+        for call in deps.execution.advance_demo_proof_workflow_event_fn.call_args_list
+    }
+    assert metadata_by_event["RecordingFailed"]["error_message"] == (
+        "QA demo recording failed: RuntimeError: upload failed after retries"
+    )
+    assert metadata_by_event["RecordingFailedPreviewCleanupCompleted"]["cleanup_status"] == "completed"
+    assert metadata_by_event["RecordingFailedPreviewCleanupCompleted"]["cleanup_mode"] == "destroy_or_ttl"
     destroy_preview_mock.assert_called_once_with(
         session=session,
         tenant_id="tenant-1",
