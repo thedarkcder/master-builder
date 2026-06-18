@@ -2197,6 +2197,82 @@ def test_execute_qa_demo_stage_records_and_uploads() -> None:
     assert upload_mock.call_args.kwargs["release_context_sha256"] == _release_context_sha256_with_commit(include_api=True)
 
 
+def test_execute_qa_demo_stage_uploads_independent_pr_proof_under_proof_scope() -> None:
+    tenant = SimpleNamespace(tenant_id="tenant-1", github_config={})
+    project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo")
+    run = SimpleNamespace(run_id="")
+    release = SimpleNamespace(
+        commit_sha="b" * 40,
+        service_urls=[
+            SimpleNamespace(service_kind="website", service_name="web", status="active", url="https://preview.example")
+        ],
+    )
+    plan = PmPlan(
+        plan_steps=["Implement"],
+        acceptance_criteria=["Feature works"],
+        risks=[],
+        demo_requirements=[_demo_requirement()],
+    )
+    dev_result = DevResult(change_summary=["implemented"], pr_url="https://github.com/acme/repo/pull/8")
+    test_result = TestResult(guidance=["pytest -q"])
+    review_result = ReviewResult(summary=["Looks good"], pr_url="https://github.com/acme/repo/pull/8")
+    request = replace(
+        _request(),
+        run_id="",
+        trigger_context={"demo_proof": {"proof_scope_id": "pr-8-abcdef1"}},
+    )
+    fake_agents = SimpleNamespace(qa=MagicMock(return_value=_qa_result()))
+
+    def _upload(**kwargs):  # noqa: ANN001
+        return f"https://cdn.example/qa-demos/{kwargs['object_key']}"
+
+    with (
+        patch("orchestrator.core.qa.demo_service.build_codex_runtime"),
+        patch("orchestrator.core.qa.demo_service.CodexWorkflowAgents", return_value=fake_agents),
+        patch(
+            "orchestrator.core.qa.demo_service.record_demo_scenarios",
+            return_value=[
+                _local_recording(name="Happy path"),
+                _local_recording(name="Invalid input is rejected", path="/tmp/invalid.webm"),
+                _local_recording(name="Repeat action remains safe", path="/tmp/repeat.webm"),
+            ],
+        ),
+        patch(
+            "orchestrator.core.qa.demo_service.storage_config_from_settings",
+            return_value=SimpleNamespace(
+                endpoint="minio:9000",
+                access_key="key",
+                secret_key="secret",
+                bucket="qa-demos",
+                public_base_url="https://cdn.example/qa-demos",
+                secure=False,
+            ),
+        ),
+        patch("orchestrator.core.qa.demo_service.upload_recording", side_effect=_upload) as upload_mock,
+        patch("orchestrator.core.qa.demo_service._default_service_url_probe", return_value=200),
+        patch("orchestrator.core.qa.demo_service._default_artifact_url_probe", return_value=200),
+    ):
+        result = execute_qa_demo_stage(
+            session=SimpleNamespace(),
+            settings=SimpleNamespace(qa_demo_playwright_module_dir=""),
+            tenant=tenant,
+            project=project,
+            run=run,
+            request=request,
+            plan=plan,
+            dev_result=dev_result,
+            test_result=test_result,
+            review_result=review_result,
+            preview_release=release,
+        )
+
+    assert result.outcome == "continue"
+    assert result.recordings[0].object_key == "tenant-1/project-1/proofs/pr-8-abcdef1/qa-demo-1.webm"
+    assert upload_mock.call_args_list[0].kwargs["object_key"] == (
+        "tenant-1/project-1/proofs/pr-8-abcdef1/qa-demo-1.webm"
+    )
+
+
 def test_execute_qa_demo_stage_rejects_unsafe_artifact_scope_before_upload() -> None:
     tenant = SimpleNamespace(tenant_id="tenant-1", github_config={})
     project = SimpleNamespace(project_id="project-1", github_repository="https://github.com/acme/repo")
