@@ -376,6 +376,127 @@ module.exports = {{
     assert "http 500 GET https://preview.example/" in output["failure_evidence"][0]["error_message"]
 
 
+def test_browser_recorder_writes_text_diagnostics_when_failure_video_cannot_be_copied(tmp_path: Path) -> None:
+    module_root = tmp_path / "modules"
+    playwright_dir = module_root / "playwright"
+    playwright_dir.mkdir(parents=True)
+    missing_video_path = tmp_path / "missing-video.webm"
+    (playwright_dir / "index.js").write_text(
+        f"""
+let currentUrl = "";
+const handlers = {{}};
+const missingVideoPath = {json.dumps(str(missing_video_path))};
+
+function locator() {{
+  return {{
+    async click() {{}},
+    async fill() {{}},
+    async press() {{}},
+    async selectOption() {{}},
+    async waitFor() {{
+      throw new Error("QA Demo Ready was not visible");
+    }},
+    async textContent() {{
+      return "";
+    }},
+  }};
+}}
+
+const page = {{
+  on(event, handler) {{
+    handlers[event] = handler;
+  }},
+  async goto(url) {{
+    currentUrl = url;
+    if (handlers.crash) {{
+      handlers.crash();
+    }}
+  }},
+  url() {{
+    return currentUrl;
+  }},
+  video() {{
+    return {{
+      async path() {{
+        return missingVideoPath;
+      }},
+    }};
+  }},
+  getByText() {{
+    return {{
+      async count() {{
+        return 0;
+      }},
+    }};
+  }},
+  locator,
+  async waitForURL(url) {{
+    currentUrl = url;
+  }},
+}};
+
+module.exports = {{
+  chromium: {{
+    async launch() {{
+      return {{
+        async newContext() {{
+          return {{
+            async newPage() {{
+              return page;
+            }},
+            async close() {{}},
+          }};
+        }},
+        async close() {{}},
+      }};
+    }},
+  }},
+}};
+""",
+        encoding="utf-8",
+    )
+    input_path = tmp_path / "input.json"
+    output_path = tmp_path / "output.json"
+    output_dir = tmp_path / "videos"
+    input_path.write_text(
+        json.dumps(
+            {
+                "preview_url": "https://preview.example/",
+                "output_dir": str(output_dir),
+                "scenarios": [
+                    {
+                        "name": "App load",
+                        "start_path": "/",
+                        "steps": [{"action": "assert_visible", "selector": "text=QA Demo Ready"}],
+                    }
+                ],
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    env = dict(os.environ)
+    env["QA_DEMO_PLAYWRIGHT_MODULE_DIR"] = str(module_root)
+    result = subprocess.run(
+        ["node", str(SCRIPT_PATH), str(input_path), str(output_path)],
+        env=env,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    assert result.returncode != 0
+    output = json.loads(output_path.read_text(encoding="utf-8"))
+    failure_path = Path(output["failure_evidence"][0]["path"])
+    assert failure_path.suffix == ".txt"
+    assert failure_path.is_file()
+    failure_text = failure_path.read_text(encoding="utf-8")
+    assert "QA Demo Ready was not visible" in output["failure_evidence"][0]["error_message"]
+    assert "pagecrash: browser page crashed" in output["failure_evidence"][0]["error_message"]
+    assert "failure-evidence-error:" in failure_text
+    assert "pagecrash: browser page crashed" in failure_text
+
+
 def test_browser_recorder_routes_public_host_to_recording_host_without_host_header(tmp_path: Path) -> None:
     module_root = tmp_path / "modules"
     playwright_dir = module_root / "playwright"

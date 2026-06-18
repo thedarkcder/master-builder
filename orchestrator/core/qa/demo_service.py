@@ -1354,6 +1354,12 @@ def _content_type_for_recording(path: Path) -> str:
     raise RuntimeError(f"Unsupported QA demo recording file type: {suffix or '<none>'}")
 
 
+def _content_type_for_failure_evidence(path: Path) -> str:
+    if path.suffix.lower() == ".txt":
+        return "text/plain"
+    return _content_type_for_recording(path)
+
+
 def _validate_local_recording_file(path: Path) -> None:
     if not path.exists() or not path.is_file():
         raise RuntimeError(f"QA demo recording file is missing: {path}")
@@ -1371,6 +1377,21 @@ def _validate_local_recording_file(path: Path) -> None:
             raise RuntimeError(f"QA demo recording file is not valid video evidence: {path}")
         return
     raise RuntimeError(f"Unsupported QA demo recording file type: {suffix or '<none>'}")
+
+
+def _validate_local_failure_evidence_file(path: Path) -> None:
+    if path.suffix.lower() != ".txt":
+        _validate_local_recording_file(path)
+        return
+    if not path.exists() or not path.is_file():
+        raise RuntimeError(f"QA demo failure evidence file is missing: {path}")
+    payload = path.read_bytes()
+    if not payload.strip():
+        raise RuntimeError(f"QA demo failure evidence file is empty: {path}")
+    try:
+        payload.decode("utf-8")
+    except UnicodeDecodeError as exc:
+        raise RuntimeError(f"QA demo failure evidence file is not valid UTF-8 text: {path}") from exc
 
 
 def _parse_recorder_output(
@@ -1473,7 +1494,7 @@ def _parse_recorder_failure_evidence(
             raise RuntimeError(
                 f"QA demo recorder returned failure evidence path outside recorder output directory: {source}"
             ) from exc
-        _validate_local_recording_file(source)
+        _validate_local_failure_evidence_file(source)
         content_sha256 = hashlib.sha256(source.read_bytes()).hexdigest()
         evidence.append(
             LocalQaFailureEvidence(
@@ -1481,7 +1502,7 @@ def _parse_recorder_failure_evidence(
                 path=str(source),
                 capture_target=capture_target.capture_target,
                 capture_reference=capture_target.capture_reference,
-                content_type=_content_type_for_recording(source),
+                content_type=_content_type_for_failure_evidence(source),
                 content_sha256=content_sha256,
                 error_message=error_message,
             )

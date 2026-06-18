@@ -209,7 +209,6 @@ for (const scenario of input.scenarios || []) {
       }
     } catch (error) {
       const scenarioName = String(scenario.name || "Demo");
-      const errorMessage = `QA demo browser scenario failed: ${scenarioName}\n${error.message}\nBrowser diagnostics:\n${formatDiagnostics(diagnostics)}`;
       let failurePath = "";
       try {
         if (context && !contextClosed) {
@@ -221,7 +220,19 @@ for (const scenario of input.scenarios || []) {
         await fs.copyFile(videoPath, failurePath);
       } catch (evidenceError) {
         diagnostics.push(`failure-evidence-error: ${evidenceError.message}`);
+        failurePath = path.join(input.output_dir, `${safeSlug(scenarioName)}-failure.txt`);
+        await fs.writeFile(
+          failurePath,
+          [
+            `QA demo browser scenario failed: ${scenarioName}`,
+            error.message,
+            "Browser diagnostics:",
+            formatDiagnostics(diagnostics),
+          ].join("\n"),
+          "utf8",
+        );
       }
+      const errorMessage = `QA demo browser scenario failed: ${scenarioName}\n${error.message}\nBrowser diagnostics:\n${formatDiagnostics(diagnostics)}`;
       if (browser && !browserClosed) {
         await browser.close();
         browserClosed = true;

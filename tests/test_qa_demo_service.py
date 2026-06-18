@@ -44,6 +44,7 @@ from orchestrator.core.qa.demo_service import (
     update_pull_request_with_demo_evidence,
     upload_recording,
     upsert_demo_evidence_section,
+    _parse_recorder_failure_evidence,
 )
 from orchestrator.core.workflow.runner import (
     DemoRequirement,
@@ -83,6 +84,58 @@ def _request() -> WorkflowRequest:
         base_branch="main",
         pr_target_branch="main",
     )
+
+
+def test_parse_recorder_failure_evidence_accepts_text_crash_diagnostics(tmp_path: Path) -> None:
+    output_dir = tmp_path / "videos"
+    output_dir.mkdir()
+    diagnostic_path = output_dir / "app-load-failure.txt"
+    diagnostic_path.write_text(
+        "\n".join(
+            [
+                "QA demo browser scenario failed: App load",
+                "QA Demo Ready was not visible",
+                "Browser diagnostics:",
+                "pagecrash: browser page crashed",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    output_path = tmp_path / "output.json"
+    output_path.write_text(
+        json.dumps(
+            {
+                "failure_evidence": [
+                    {
+                        "name": "App load",
+                        "path": str(diagnostic_path),
+                        "error_message": (
+                            "QA demo browser scenario failed: App load\n"
+                            "QA Demo Ready was not visible\n"
+                            "Browser diagnostics:\n"
+                            "pagecrash: browser page crashed"
+                        ),
+                        "capture_target": "browser",
+                        "capture_reference": "https://preview.example",
+                    }
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    evidence = _parse_recorder_failure_evidence(
+        output_path=output_path,
+        output_dir=output_dir,
+        capture_target=DemoCaptureTarget(
+            capture_target="browser",
+            capture_reference="https://preview.example",
+        ),
+    )
+
+    assert evidence[0].content_type == "text/plain"
+    assert evidence[0].path == str(diagnostic_path.resolve())
+    assert "pagecrash: browser page crashed" in evidence[0].error_message
 
 
 def test_native_launch_context_prefers_recording_urls_without_losing_public_release_identity() -> None:
