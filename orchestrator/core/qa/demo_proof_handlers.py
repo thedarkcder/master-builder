@@ -804,6 +804,21 @@ def _metadata_string(value: object) -> str:
     return str(value or "").strip()
 
 
+def _require_recording_failed_metadata(*, description: dict[str, object], proof_scope_id: str) -> None:
+    metadata = _metadata_by_event(description)
+    failure_metadata = metadata.get("RecordingFailed") or {}
+    missing = [
+        field
+        for field in ("error_message", "failure_evidence_unavailable_reason")
+        if not _metadata_field_is_present(failure_metadata.get(field))
+    ]
+    if missing:
+        raise RuntimeError(
+            f"Demo proof scope {proof_scope_id} requires auditable no-evidence recording failure metadata: "
+            + ", ".join(f"RecordingFailed.{field}" for field in missing)
+        )
+
+
 def _require_from_release_event_matches_requested_release(
     *,
     description: dict[str, object],
@@ -2309,6 +2324,8 @@ class DemoProofWorkflowAdvanceHandler:
         )
         if event == "RecordingCompleted":
             _require_recording_completion_metadata(description=description, proof_scope_id=proof_scope_id)
+        if event == "RecordingFailed":
+            _require_recording_failed_metadata(description=description, proof_scope_id=proof_scope_id)
         if event == "EvidenceUploaded":
             _require_evidence_uploaded_lineage_matches_recording(
                 description=description,

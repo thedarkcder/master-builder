@@ -1661,6 +1661,9 @@ def _qa_demo_proof_event_metadata(*, proof_context, event: str) -> dict[str, obj
             error_message = str(getattr(proof_context, "recording_failure_message", "") or "").strip()
             if error_message:
                 metadata["error_message"] = error_message
+            metadata["failure_evidence_unavailable_reason"] = (
+                "qa_demo_stage_raised_before_failure_evidence_upload"
+            )
         if event in {
             "PreviewCleanupCompleted",
             "FailurePreviewCleanupCompleted",
