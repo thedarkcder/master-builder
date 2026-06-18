@@ -1398,6 +1398,32 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
             else:  # pragma: no cover
                 raise AssertionError("expected demo proof handler to require explicit capture targets")
 
+    def test_demo_proof_handler_rejects_unsupported_required_capture_targets(self) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-a")
+            workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
+            request = _demo_proof_request(tenant=tenant)
+            payload = {
+                **request.payload,
+                "required_capture_targets": ["browser", "tablet"],
+                "required_recording_counts": {"browser": 1, "tablet": 1},
+            }
+
+            try:
+                execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=replace(request, payload=payload),
+                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                )
+            except RuntimeError as exc:
+                assert "required_capture_targets contains unsupported target(s): tablet" in str(exc)
+            else:  # pragma: no cover
+                raise AssertionError("expected demo proof handler to reject unsupported capture targets")
+
+            assert session.execute(select(WorkflowExecution)).scalar_one_or_none() is None
+
     def test_demo_proof_handler_rejects_missing_required_recording_counts(self) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
