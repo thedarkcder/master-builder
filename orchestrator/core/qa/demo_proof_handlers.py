@@ -30,6 +30,7 @@ DEMO_PROOF_HANDLER_KEY = "demo_proof"
 DEMO_PROOF_STEP_PREVIEW_LEASE = "preview_lease"
 _DEMO_PROOF_STATE_DESCRIPTION_KEY = "demo_proof_state"
 _DEMO_PROOF_EVENT_HISTORY_DESCRIPTION_KEY = "demo_proof_events"
+_DEMO_PROOF_EVENT_METADATA_DESCRIPTION_KEY = "demo_proof_event_metadata"
 _RECORDING_WORKFLOW_DESCRIPTION_KEY = "recording_workflows"
 
 
@@ -203,6 +204,19 @@ def _normalized_capture_targets(required_capture_targets: list[object]) -> list[
     return targets or ["browser", "ios", "android"]
 
 
+def _event_metadata(payload: dict[str, object]) -> dict[str, object] | None:
+    raw_metadata = payload.get("event_metadata")
+    if raw_metadata is None:
+        return None
+    if not isinstance(raw_metadata, dict):
+        raise RuntimeError("Demo proof event_metadata must be a JSON object")
+    try:
+        json.dumps(raw_metadata, sort_keys=True)
+    except (TypeError, ValueError) as exc:
+        raise RuntimeError("Demo proof event_metadata must be JSON serializable") from exc
+    return dict(raw_metadata)
+
+
 def _recording_workflow_descriptions(
     *,
     previous_description: dict[str, object],
@@ -251,11 +265,16 @@ def _demo_proof_description(
     request_id: str,
     state: str,
     event: str | None,
+    event_metadata: dict[str, object] | None,
 ) -> dict[str, object]:
     payload = dict(previous_description)
     events = list(payload.get(_DEMO_PROOF_EVENT_HISTORY_DESCRIPTION_KEY) or [])
+    metadata_entries = list(payload.get(_DEMO_PROOF_EVENT_METADATA_DESCRIPTION_KEY) or [])
+    previous_last_event = str(events[-1]) if events else ""
     if event and (not events or str(events[-1]) != event):
         events.append(event)
+    if event and event_metadata and previous_last_event != event:
+        metadata_entries.append({"event": event, "metadata": event_metadata})
     payload.update(
         {
             "proof_scope_id": proof_scope_id,
@@ -271,6 +290,7 @@ def _demo_proof_description(
             "request_id": request_id,
             _DEMO_PROOF_STATE_DESCRIPTION_KEY: state,
             _DEMO_PROOF_EVENT_HISTORY_DESCRIPTION_KEY: events[-100:],
+            _DEMO_PROOF_EVENT_METADATA_DESCRIPTION_KEY: metadata_entries[-100:],
         }
     )
     return payload
@@ -480,6 +500,7 @@ class DemoProofWorkflowAdvanceHandler:
         )
         trigger_event = str(getattr(request.trigger, "event", "") or "").strip()
         state_event = trigger_event or "DemoProofRequested"
+        event_metadata = _event_metadata(request.payload)
         try:
             next_state = transition_demo_proof_state(current_state=current_state, event=state_event)
         except Exception as exc:  # noqa: BLE001
@@ -494,6 +515,7 @@ class DemoProofWorkflowAdvanceHandler:
             request_id=request_id,
             state=next_state,
             event=state_event,
+            event_metadata=event_metadata,
         )
         lifecycle.ensure_execution(
             display_name=f"Demo proof {proof_scope_id}",

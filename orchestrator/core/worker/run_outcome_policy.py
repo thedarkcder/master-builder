@@ -576,6 +576,7 @@ class RunOutcomePolicy:
                     proof_context = _qa_demo_proof_context(
                         prepared=prepared,
                         qa_result=qa_result,
+                        preview_release=preview_release,
                         plan=plan,
                         workflow_result=workflow_result,
                     )
@@ -686,6 +687,7 @@ class RunOutcomePolicy:
         proof_context = _qa_demo_proof_context(
             prepared=prepared,
             qa_result=qa_result,
+            preview_release=preview_release,
             plan=plan,
             workflow_result=workflow_result,
         )
@@ -915,6 +917,7 @@ class RunOutcomePolicy:
             advance_demo_proof_workflow_event,
         )
         for event in events:
+            event_metadata = _qa_demo_proof_event_metadata(proof_context=proof_context, event=event)
             advance_fn(
                 session=self._session,
                 settings=self._settings,
@@ -926,6 +929,7 @@ class RunOutcomePolicy:
                 run_id=proof_context.run_id,
                 pr_url=proof_context.pr_url,
                 required_capture_targets=list(proof_context.required_capture_targets),
+                event_metadata=event_metadata,
             )
 
     def _persist_qa_stage_checkpoint(
@@ -1239,7 +1243,7 @@ def _qa_failure_evidence_diagnostics(result: QaResult) -> str:
     return " | ".join(diagnostics)
 
 
-def _qa_demo_proof_context(*, prepared, qa_result: QaResult, plan, workflow_result):  # noqa: ANN001
+def _qa_demo_proof_context(*, prepared, qa_result: QaResult, preview_release, plan, workflow_result):  # noqa: ANN001
     commit_sha = _qa_demo_proof_commit_sha(qa_result)
     run_id = str(getattr(prepared.run, "run_id", "") or "").strip()
     if not run_id:
@@ -1255,6 +1259,8 @@ def _qa_demo_proof_context(*, prepared, qa_result: QaResult, plan, workflow_resu
         commit_sha=commit_sha,
         proof_scope_id=f"run:{run_id}:{commit_sha}",
         required_capture_targets=tuple(required_capture_targets(plan)),
+        preview_release=preview_release,
+        qa_result=qa_result,
     )
 
 
@@ -1273,6 +1279,8 @@ def _qa_demo_pre_release_proof_context(*, prepared, plan, workflow_result):  # n
         commit_sha="pending-release-commit",
         proof_scope_id=f"run:{run_id}:pending-release-commit",
         required_capture_targets=tuple(required_capture_targets(plan)),
+        preview_release=None,
+        qa_result=None,
     )
 
 
@@ -1294,7 +1302,92 @@ def _qa_demo_release_proof_context(*, prepared, preview_release, plan, workflow_
         commit_sha=commit_sha,
         proof_scope_id=f"run:{run_id}:{commit_sha}",
         required_capture_targets=tuple(required_capture_targets(plan)),
+        preview_release=preview_release,
+        qa_result=None,
     )
+
+
+def _qa_demo_proof_event_metadata(*, proof_context, event: str) -> dict[str, object] | None:  # noqa: ANN001
+    metadata: dict[str, object] = {}
+    preview_release = getattr(proof_context, "preview_release", None)
+    if event in {
+        "ProofLeaseAcquired",
+        "ReleaseRequested",
+        "ReleaseProvisioning",
+        "ReleaseLive",
+        "RouteReady",
+        "ServiceVerificationPassed",
+        "RecordingStarted",
+        "RecordingFailed",
+        "PreviewCleanupRequested",
+        "PreviewCleanupCompleted",
+        "PreviewCleanupFailed",
+        "FailurePreviewCleanupRequested",
+        "FailurePreviewCleanupCompleted",
+        "FailurePreviewCleanupFailed",
+    } and preview_release is not None:
+        metadata.update(
+            {
+                "release_id": str(getattr(preview_release, "release_id", "") or "").strip(),
+                "release_kind": str(getattr(preview_release, "release_kind", "") or "").strip(),
+                "release_status": str(getattr(preview_release, "status", "") or "").strip(),
+                "release_commit_sha": str(getattr(preview_release, "commit_sha", "") or "").strip(),
+            }
+        )
+    qa_result = getattr(proof_context, "qa_result", None)
+    if event in {"RecordingCompleted", "EvidenceUploadStarted", "EvidenceUploaded"} and qa_result is not None:
+        recordings = list(getattr(qa_result, "recordings", ()) or ())
+        metadata.update(
+            {
+                "recording_count": len(recordings),
+                "artifact_urls": [
+                    str(getattr(recording, "artifact_url", "") or "").strip()
+                    for recording in recordings
+                    if str(getattr(recording, "artifact_url", "") or "").strip()
+                ],
+                "capture_targets": [
+                    str(getattr(recording, "capture_target", "") or "").strip()
+                    for recording in recordings
+                    if str(getattr(recording, "capture_target", "") or "").strip()
+                ],
+            }
+        )
+    if event in {
+        "RecordingFailureEvidenceCaptured",
+        "FailureEvidenceUploadStarted",
+        "FailureEvidenceUploaded",
+    } and qa_result is not None:
+        failure_evidence = list(getattr(qa_result, "failure_evidence", ()) or ())
+        metadata.update(
+            {
+                "failure_evidence_count": len(failure_evidence),
+                "artifact_urls": [
+                    str(getattr(item, "artifact_url", "") or "").strip()
+                    for item in failure_evidence
+                    if str(getattr(item, "artifact_url", "") or "").strip()
+                ],
+                "capture_targets": [
+                    str(getattr(item, "capture_target", "") or "").strip()
+                    for item in failure_evidence
+                    if str(getattr(item, "capture_target", "") or "").strip()
+                ],
+            }
+        )
+    if event in {
+        "PREvidenceAttachStarted",
+        "PREvidenceAttached",
+        "PREvidenceAttachFailed",
+        "PRFailureEvidenceAttachStarted",
+        "PRFailureEvidenceAttached",
+        "PRFailureEvidenceAttachFailed",
+    }:
+        metadata["pr_url"] = str(getattr(proof_context, "pr_url", "") or "").strip()
+    compacted: dict[str, object] = {}
+    for key, value in metadata.items():
+        if value == "" or value == [] or value == {}:
+            continue
+        compacted[key] = value
+    return compacted or None
 
 
 def _qa_demo_proof_commit_sha(qa_result: QaResult) -> str:

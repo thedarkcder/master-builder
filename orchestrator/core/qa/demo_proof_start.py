@@ -81,6 +81,14 @@ def _normalize_required_capture_targets(value: object) -> tuple[str, ...]:
     return targets
 
 
+def _normalize_event_metadata(value: object) -> dict[str, object] | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        raise ValueError("Demo proof event_metadata must be a JSON object")
+    return dict(value)
+
+
 def _request_id(*, tenant: Tenant, project: Project, proof_scope_id: str, trigger_event: str) -> str:
     return (
         f"demo-proof:{tenant.tenant_id}:{project.project_id}:{proof_scope_id}:"
@@ -148,10 +156,12 @@ def advance_demo_proof_workflow_event(
     run_id: str | None = None,
     pr_url: str | None = None,
     required_capture_targets: list[object] | None = None,
+    event_metadata: dict[str, object] | None = None,
 ) -> DemoProofWorkflowEventResult:
     normalized_event = str(event or "").strip()
     if not normalized_event:
         raise ValueError("Demo proof event advance requires event")
+    normalized_event_metadata = _normalize_event_metadata(event_metadata)
     result = _advance_demo_proof_workflow(
         session=session,
         settings=settings,
@@ -164,6 +174,7 @@ def advance_demo_proof_workflow_event(
         pr_url=pr_url,
         required_capture_targets=required_capture_targets,
         event=normalized_event,
+        event_metadata=normalized_event_metadata,
     )
     return DemoProofWorkflowEventResult(
         execution_id=result.execution_id,
@@ -187,6 +198,7 @@ def _advance_demo_proof_workflow(
     pr_url: str | None,
     required_capture_targets: list[object] | None,
     event: str | None,
+    event_metadata: dict[str, object] | None = None,
 ) -> DemoProofWorkflowEventResult:
     if tenant is None:
         raise ValueError("Demo proof start requires tenant")
@@ -203,6 +215,7 @@ def _advance_demo_proof_workflow(
     normalized_run_id = str(run_id or "").strip() or None
     normalized_pr_url = _normalize_pr_url(pr_url)
     normalized_request_reason = str(request_reason or "").strip() or "demo_proof_start"
+    normalized_event_metadata = _normalize_event_metadata(event_metadata)
 
     handler_registry = build_workflow_handler_registry(
         advance_handlers={
@@ -219,6 +232,21 @@ def _advance_demo_proof_workflow(
         resolve_advance_handler_fn=handler_registry.resolve_advance_handler,
         workflow_handler_registry=handler_registry,
     )
+    payload: dict[str, object] = {
+        "request_id": _request_id(
+            tenant=tenant,
+            project=project,
+            proof_scope_id=normalized_scope,
+            trigger_event=normalized_request_reason,
+        ),
+        "proof_scope_id": normalized_scope,
+        "commit_sha": normalized_commit_sha,
+        "run_id": normalized_run_id,
+        "pr_url": normalized_pr_url,
+        "required_capture_targets": list(normalized_targets),
+    }
+    if normalized_event_metadata is not None:
+        payload["event_metadata"] = normalized_event_metadata
     runtime.advance(
         request=WorkflowAdvanceRequest(
             workflow_handler_key=DEMO_PROOF_HANDLER_KEY,
@@ -239,19 +267,7 @@ def _advance_demo_proof_workflow(
                     },
                 ),
             ),
-            payload={
-                "request_id": _request_id(
-                    tenant=tenant,
-                    project=project,
-                    proof_scope_id=normalized_scope,
-                    trigger_event=normalized_request_reason,
-                ),
-                "proof_scope_id": normalized_scope,
-                "commit_sha": normalized_commit_sha,
-                "run_id": normalized_run_id,
-                "pr_url": normalized_pr_url,
-                "required_capture_targets": list(normalized_targets),
-            },
+            payload=payload,
             trigger=WorkflowTrigger(event=event),
         )
     )
