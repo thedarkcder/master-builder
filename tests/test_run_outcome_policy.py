@@ -461,6 +461,9 @@ def test_complete_blocks_success_when_qa_demo_preview_cleanup_fails() -> None:
     assert finalizer_calls["workflow_result"].outcome == "blocked"
     assert "QA demo preview cleanup failed" in finalizer_calls["workflow_result"].blocker_message
     assert "provider deletion failed" in finalizer_calls["workflow_result"].blocker_message
+    assert [
+        call.kwargs["event"] for call in deps.execution.advance_demo_proof_workflow_event_fn.call_args_list
+    ][-2:] == ["PreviewCleanupRequested", "PreviewCleanupFailed"]
     final_checkpoint = deps.execution.persist_stage_checkpoint_fn.call_args.kwargs["checkpoint"]
     assert final_checkpoint.stage == "qa"
     assert final_checkpoint.status == "blocked"
