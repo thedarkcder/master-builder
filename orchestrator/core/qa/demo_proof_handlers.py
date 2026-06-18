@@ -80,6 +80,16 @@ _DEMO_PROOF_EVENTS: dict[str, tuple[str, str | None, str]] = {
         DEMO_PROOF_STEP_EVIDENCE_UPLOAD,
         "failure_evidence_upload_requested",
     ),
+    "RecordingFailed": (
+        DEMO_PROOF_STEP_RECORDING,
+        DEMO_PROOF_STEP_PREVIEW_CLEANUP,
+        "recording_failed_cleanup_requested",
+    ),
+    "RecordingFailedPreviewCleanupCompleted": (
+        DEMO_PROOF_STEP_PREVIEW_CLEANUP,
+        None,
+        "demo_proof_blocked_after_recording_failure_cleanup",
+    ),
     "FailureEvidenceUploaded": (
         DEMO_PROOF_STEP_EVIDENCE_UPLOAD,
         DEMO_PROOF_STEP_PR_EVIDENCE_UPDATE,
@@ -128,7 +138,6 @@ _DEMO_PROOF_FAILURE_EVENTS: dict[str, tuple[str, str, str]] = {
         "service_verification_failed",
         "service_verification_failed",
     ),
-    "RecordingFailed": (DEMO_PROOF_STEP_RECORDING, "recording_failed", "recording_failed"),
     "EvidenceUploadFailed": (
         DEMO_PROOF_STEP_EVIDENCE_UPLOAD,
         "evidence_upload_failed",
@@ -143,6 +152,11 @@ _DEMO_PROOF_FAILURE_EVENTS: dict[str, tuple[str, str, str]] = {
         DEMO_PROOF_STEP_PREVIEW_CLEANUP,
         "preview_cleanup_failed",
         "preview_cleanup_failed",
+    ),
+    "RecordingFailedPreviewCleanupFailed": (
+        DEMO_PROOF_STEP_PREVIEW_CLEANUP,
+        "recording_failed_preview_cleanup_failed",
+        "recording_failed_preview_cleanup_failed",
     ),
     "FailureEvidenceUploadFailed": (
         DEMO_PROOF_STEP_EVIDENCE_UPLOAD,
@@ -161,7 +175,12 @@ _DEMO_PROOF_FAILURE_EVENTS: dict[str, tuple[str, str, str]] = {
     ),
 }
 
-_DEMO_PROOF_BLOCKING_COMPLETION_EVENTS = frozenset({"FailurePreviewCleanupCompleted"})
+_DEMO_PROOF_BLOCKING_COMPLETION_EVENTS = frozenset(
+    {
+        "FailurePreviewCleanupCompleted",
+        "RecordingFailedPreviewCleanupCompleted",
+    }
+)
 _PR_EVIDENCE_REQUEST_EVENTS = frozenset({"EvidenceUploaded", "FailureEvidenceUploaded"})
 _SUCCESS_TERMINAL_METADATA_REQUIREMENTS: dict[str, tuple[str, ...]] = {
     "ProofLeaseAcquired": ("release_id", "release_commit_sha", "demo_proof_lease"),
@@ -190,6 +209,23 @@ _FAILURE_TERMINAL_METADATA_REQUIREMENTS: dict[str, tuple[str, ...]] = {
     "FailureEvidenceUploaded": ("artifact_urls", "capture_targets", "failure_evidence"),
     "PRFailureEvidenceAttached": ("pr_url", "pr_body_sha256"),
     "FailurePreviewCleanupCompleted": ("release_id", "cleanup_status", "cleanup_mode", "cleanup_evidence"),
+}
+_RECORDING_FAILED_TERMINAL_METADATA_REQUIREMENTS: dict[str, tuple[str, ...]] = {
+    "ProofLeaseAcquired": ("release_id", "release_commit_sha", "demo_proof_lease"),
+    "ReleaseLive": ("release_id", "release_commit_sha", "demo_proof_lease"),
+    "ServiceVerificationPassed": (
+        "release_id",
+        "release_commit_sha",
+        "required_service_kinds",
+        "service_urls",
+    ),
+    "RecordingFailed": ("error_message",),
+    "RecordingFailedPreviewCleanupCompleted": (
+        "release_id",
+        "cleanup_status",
+        "cleanup_mode",
+        "cleanup_evidence",
+    ),
 }
 _MANAGED_PREVIEW_CLEANUP_RESOURCE_TYPES = frozenset(
     {
@@ -1432,6 +1468,8 @@ def _require_terminal_proof_metadata(
         if event == "PreviewCleanupCompleted"
         else _FAILURE_TERMINAL_METADATA_REQUIREMENTS
         if event == "FailurePreviewCleanupCompleted"
+        else _RECORDING_FAILED_TERMINAL_METADATA_REQUIREMENTS
+        if event == "RecordingFailedPreviewCleanupCompleted"
         else None
     )
     if requirements is None:
@@ -1454,7 +1492,11 @@ def _require_terminal_proof_metadata(
         service_metadata=metadata.get("ServiceVerificationPassed", {}),
         proof_scope_id=proof_scope_id,
     )
-    if event in {"PreviewCleanupCompleted", "FailurePreviewCleanupCompleted"}:
+    if event in {
+        "PreviewCleanupCompleted",
+        "FailurePreviewCleanupCompleted",
+        "RecordingFailedPreviewCleanupCompleted",
+    }:
         cleanup_metadata = metadata.get(event, {})
         _require_cleanup_evidence_metadata(
             value=cleanup_metadata.get("cleanup_evidence"),
@@ -1817,7 +1859,10 @@ class DemoProofWorkflowAdvanceHandler:
                 ),
             )
         elif event in _DEMO_PROOF_BLOCKING_COMPLETION_EVENTS:
-            message = f"Demo proof recorded failure evidence for proof scope {proof_scope_id}."
+            if event == "RecordingFailedPreviewCleanupCompleted":
+                message = f"Demo proof recorded recording failure cleanup for proof scope {proof_scope_id}."
+            else:
+                message = f"Demo proof recorded failure evidence for proof scope {proof_scope_id}."
             mark_workflow_failed(workflow=lifecycle.workflow, message=message)
             session.flush()
         else:

@@ -479,6 +479,7 @@ class RunOutcomePolicy:
                 attempt=attempt,
                 message=message,
             )
+        recording_failure_cleanup_proof_context = None
         try:
             qa_result = execute_qa_demo_stage(
                 session=self._session,
@@ -503,6 +504,7 @@ class RunOutcomePolicy:
                     plan=plan,
                     workflow_result=workflow_result,
                 )
+                proof_context.recording_failure_message = message
                 if not proof_workflow_started:
                     self._start_qa_demo_proof_workflow(
                         proof_context=proof_context,
@@ -521,6 +523,7 @@ class RunOutcomePolicy:
                         "RecordingFailed",
                     ),
                 )
+                recording_failure_cleanup_proof_context = proof_context
             except Exception as proof_exc:  # noqa: BLE001
                 message = (
                     f"{message} QA demo proof recording failure event failed: "
@@ -620,7 +623,7 @@ class RunOutcomePolicy:
                 ],
             )
         if qa_result.outcome != "continue":
-            proof_context = None
+            proof_context = recording_failure_cleanup_proof_context
             proof_terminal_failure_emitted = False
             if qa_result.failure_evidence:
                 try:
@@ -694,9 +697,14 @@ class RunOutcomePolicy:
             if cleanup_error:
                 if proof_context is not None and not proof_terminal_failure_emitted:
                     try:
+                        cleanup_failure_events = (
+                            ("RecordingFailedPreviewCleanupFailed",)
+                            if proof_context is recording_failure_cleanup_proof_context
+                            else ("FailurePreviewCleanupRequested", "FailurePreviewCleanupFailed")
+                        )
                         self._advance_qa_demo_proof_events(
                             proof_context=proof_context,
-                            events=("FailurePreviewCleanupRequested", "FailurePreviewCleanupFailed"),
+                            events=cleanup_failure_events,
                         )
                     except Exception as exc:  # noqa: BLE001
                         cleanup_error = (
@@ -713,9 +721,14 @@ class RunOutcomePolicy:
                 )
             elif proof_context is not None and not proof_terminal_failure_emitted:
                 try:
+                    cleanup_events = (
+                        ("RecordingFailedPreviewCleanupCompleted",)
+                        if proof_context is recording_failure_cleanup_proof_context
+                        else ("FailurePreviewCleanupRequested", "FailurePreviewCleanupCompleted")
+                    )
                     self._advance_qa_demo_proof_events(
                         proof_context=proof_context,
-                        events=("FailurePreviewCleanupRequested", "FailurePreviewCleanupCompleted"),
+                        events=cleanup_events,
                     )
                 except Exception as exc:  # noqa: BLE001
                     message = f"QA demo failure proof cleanup event failed: {type(exc).__name__}: {exc}"
@@ -1406,6 +1419,8 @@ def _qa_demo_proof_event_metadata(*, proof_context, event: str) -> dict[str, obj
         "RecordingStarted",
         "RecordingDeferred",
         "RecordingFailed",
+        "RecordingFailedPreviewCleanupCompleted",
+        "RecordingFailedPreviewCleanupFailed",
         "PreviewCleanupRequested",
         "PreviewCleanupCompleted",
         "PreviewCleanupFailed",
@@ -1438,7 +1453,15 @@ def _qa_demo_proof_event_metadata(*, proof_context, event: str) -> dict[str, obj
                 metadata["recorded_capture_targets"] = recorded_targets
             if remaining_targets:
                 metadata["remaining_capture_targets"] = remaining_targets
-        if event in {"PreviewCleanupCompleted", "FailurePreviewCleanupCompleted"}:
+        if event == "RecordingFailed":
+            error_message = str(getattr(proof_context, "recording_failure_message", "") or "").strip()
+            if error_message:
+                metadata["error_message"] = error_message
+        if event in {
+            "PreviewCleanupCompleted",
+            "FailurePreviewCleanupCompleted",
+            "RecordingFailedPreviewCleanupCompleted",
+        }:
             metadata["cleanup_status"] = "completed"
             metadata["cleanup_mode"] = "destroy_or_ttl"
             cleanup_evidence = _qa_demo_cleanup_evidence_metadata(preview_release=preview_release)

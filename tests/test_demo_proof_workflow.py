@@ -111,13 +111,22 @@ def test_demo_proof_recording_failure_with_evidence_reports_failure_then_blocks(
     assert is_demo_proof_terminal(state)
 
 
-def test_demo_proof_recording_failure_without_evidence_blocks_immediately() -> None:
+def test_demo_proof_recording_failure_without_evidence_waits_for_cleanup_before_blocking() -> None:
     state = transition_demo_proof_state(
         current_state=DEMO_PROOF_STATE_RECORDING,
         event="RecordingFailed",
     )
 
+    assert state != DEMO_PROOF_STATE_BLOCKED
+    assert not is_demo_proof_terminal(state)
+
+    state = transition_demo_proof_state(
+        current_state=state,
+        event="RecordingFailedPreviewCleanupCompleted",
+    )
+
     assert state == DEMO_PROOF_STATE_BLOCKED
+    assert is_demo_proof_terminal(state)
 
 
 def test_demo_proof_recording_deferred_can_resume_on_next_worker() -> None:

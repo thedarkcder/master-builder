@@ -13,6 +13,7 @@ DEMO_PROOF_STATE_RELEASE_LIVE = "release_live"
 DEMO_PROOF_STATE_SERVICES_VERIFYING = "services_verifying"
 DEMO_PROOF_STATE_SERVICES_VERIFIED = "services_verified"
 DEMO_PROOF_STATE_RECORDING = "recording"
+DEMO_PROOF_STATE_RECORDING_FAILED_CLEANUP_SCHEDULED = "recording_failed_cleanup_scheduled"
 DEMO_PROOF_STATE_RECORDING_DEFERRED = "recording_deferred"
 DEMO_PROOF_STATE_EVIDENCE_UPLOADING = "evidence_uploading"
 DEMO_PROOF_STATE_EVIDENCE_UPLOADED = "evidence_uploaded"
@@ -73,6 +74,7 @@ _ALL_DEMO_PROOF_NON_TERMINAL_STATES = frozenset(
         DEMO_PROOF_STATE_SERVICES_VERIFYING,
         DEMO_PROOF_STATE_SERVICES_VERIFIED,
         DEMO_PROOF_STATE_RECORDING,
+        DEMO_PROOF_STATE_RECORDING_FAILED_CLEANUP_SCHEDULED,
         DEMO_PROOF_STATE_RECORDING_DEFERRED,
         DEMO_PROOF_STATE_EVIDENCE_UPLOADING,
         DEMO_PROOF_STATE_EVIDENCE_UPLOADED,
@@ -159,6 +161,14 @@ _DEMO_PROOF_TRANSITIONS: dict[str, _EventTransition] = {
     ),
     "RecordingFailed": _EventTransition(
         frozenset({DEMO_PROOF_STATE_RECORDING}),
+        DEMO_PROOF_STATE_RECORDING_FAILED_CLEANUP_SCHEDULED,
+    ),
+    "RecordingFailedPreviewCleanupCompleted": _EventTransition(
+        frozenset({DEMO_PROOF_STATE_RECORDING_FAILED_CLEANUP_SCHEDULED}),
+        DEMO_PROOF_STATE_BLOCKED,
+    ),
+    "RecordingFailedPreviewCleanupFailed": _EventTransition(
+        frozenset({DEMO_PROOF_STATE_RECORDING_FAILED_CLEANUP_SCHEDULED}),
         DEMO_PROOF_STATE_BLOCKED,
     ),
     "RecordingFailureEvidenceCaptured": _EventTransition(
