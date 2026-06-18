@@ -205,6 +205,33 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
             assert operation.status == "waiting_for_input"
             assert operation.target_ref == "run-1-main-abcdef1"
 
+    def test_start_demo_proof_workflow_rejects_missing_pr_url_before_creating_workflow(self) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-a")
+            project = session.get(Project, "project-a")
+
+            with patch("orchestrator.core.qa.demo_proof_start.build_workflow_runtime") as runtime_mock:
+                try:
+                    start_demo_proof_workflow(
+                        session=session,
+                        settings=SimpleNamespace(),
+                        tenant=tenant,
+                        project=project,
+                        proof_scope_id="run-1-main-abcdef1",
+                        commit_sha="abcdef1",
+                        trigger_event="admin_workflow_start",
+                        run_id="run-1",
+                        pr_url=None,
+                        required_capture_targets=["browser", "ios", "android"],
+                    )
+                except ValueError as exc:
+                    assert "pr_url" in str(exc)
+                else:  # pragma: no cover
+                    raise AssertionError("expected demo proof start to require pr_url")
+
+            runtime_mock.assert_not_called()
+            assert session.execute(select(WorkflowExecution)).scalar_one_or_none() is None
+
     def test_advance_demo_proof_workflow_event_uses_explicit_lifecycle_event(self) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
