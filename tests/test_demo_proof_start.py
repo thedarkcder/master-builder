@@ -286,6 +286,54 @@ def _demo_proof_event_metadata(event: str) -> dict[str, object] | None:
             "checked_artifact_urls": artifact_urls,
             "pr_body_sha256": "f" * 64,
         }
+    if event == "PREvidenceAttachFailed":
+        artifact_urls = [
+            "https://cdn.example/qa-demos/tenant-1/project-1/run-1/browser.webm",
+            "https://cdn.example/qa-demos/tenant-1/project-1/run-1/ios.webm",
+            "https://cdn.example/qa-demos/tenant-1/project-1/run-1/android.webm",
+        ]
+        return {
+            "pr_url": "https://github.com/acme/project-a/pull/8",
+            "artifact_urls": artifact_urls,
+            "artifact_url_check_status": "passed",
+            "checked_artifact_urls": artifact_urls,
+            "error_message": "GitHub rejected demo evidence update",
+        }
+    if event == "PREvidenceAttachFailedPreviewCleanupCompleted":
+        return {
+            "release_id": "release-preview-1",
+            "release_kind": "run_preview",
+            "release_status": "destroyed",
+            "release_commit_sha": "b" * 40,
+            "demo_proof_lease": _demo_proof_lease_metadata(),
+            "cleanup_status": "completed",
+            "cleanup_mode": "destroy_or_ttl",
+            "cleanup_evidence": _cleanup_evidence_metadata(),
+        }
+    if event == "PRFailureEvidenceAttachFailed":
+        artifact_urls = [
+            "https://cdn.example/qa-demos/tenant-1/project-1/run-1/browser-failure.webm",
+            "https://cdn.example/qa-demos/tenant-1/project-1/run-1/ios-failure.webm",
+            "https://cdn.example/qa-demos/tenant-1/project-1/run-1/android-failure.webm",
+        ]
+        return {
+            "pr_url": "https://github.com/acme/project-a/pull/8",
+            "artifact_urls": artifact_urls,
+            "artifact_url_check_status": "passed",
+            "checked_artifact_urls": artifact_urls,
+            "error_message": "GitHub rejected demo failure evidence update",
+        }
+    if event == "PRFailureEvidenceAttachFailedPreviewCleanupCompleted":
+        return {
+            "release_id": "release-preview-1",
+            "release_kind": "run_preview",
+            "release_status": "destroyed",
+            "release_commit_sha": "b" * 40,
+            "demo_proof_lease": _demo_proof_lease_metadata(),
+            "cleanup_status": "completed",
+            "cleanup_mode": "destroy_or_ttl",
+            "cleanup_evidence": _cleanup_evidence_metadata(),
+        }
     return None
 
 
@@ -3624,7 +3672,7 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
             assert release_operation.status == "completed"
             assert cleanup_operation.status == "completed"
 
-    def test_demo_proof_pr_attach_failed_event_fails_waiting_pr_update_operation_and_blocks_workflow(self) -> None:
+    def test_demo_proof_pr_attach_failed_event_requests_cleanup_before_blocking_workflow(self) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
             workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
@@ -3661,17 +3709,33 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 session=session,
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
-                request=replace(request, trigger=WorkflowTrigger(event="PREvidenceAttachFailed")),
+                request=_demo_proof_request_for_event(request, "PREvidenceAttachFailed"),
                 resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
             )
 
-            assert result.reason == "pr_evidence_attach_failed"
-            assert result.failed is True
+            assert result.reason == "pr_evidence_attach_failed_cleanup_requested"
+            assert result.failed is False
+            cleanup_result = execute_workflow_advance(
+                session=session,
+                settings=SimpleNamespace(),
+                workflow_type=workflow_type,
+                request=_demo_proof_request_for_event(request, "PREvidenceAttachFailedPreviewCleanupCompleted"),
+                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+            )
+
+            assert cleanup_result.reason == "demo_proof_blocked_after_pr_evidence_attach_failure_cleanup"
+            assert cleanup_result.failed is True
             workflow = session.execute(select(WorkflowExecution)).scalar_one()
             operation = session.execute(
                 select(WorkflowOperation).where(
                     WorkflowOperation.workflow_id == workflow.workflow_id,
                     WorkflowOperation.operation_type == "pr_evidence_update",
+                )
+            ).scalar_one()
+            cleanup_operation = session.execute(
+                select(WorkflowOperation).where(
+                    WorkflowOperation.workflow_id == workflow.workflow_id,
+                    WorkflowOperation.operation_type == "preview_cleanup",
                 )
             ).scalar_one()
             attempt = session.execute(
@@ -3682,10 +3746,10 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
             description = json.loads(workflow.source_description or "{}")
             assert workflow.status == "failed"
             assert description["demo_proof_state"] == "blocked"
-            assert description["demo_proof_events"][-1] == "PREvidenceAttachFailed"
-            assert operation.status == "failed"
-            assert attempt.status == "failed"
-            assert attempt.error_category == "pr_evidence_attach_failed"
+            assert description["demo_proof_events"][-1] == "PREvidenceAttachFailedPreviewCleanupCompleted"
+            assert operation.status == "completed"
+            assert cleanup_operation.status == "completed"
+            assert attempt.status == "completed"
 
     def test_demo_proof_full_lifecycle_events_complete_operations_in_order(self) -> None:
         with self.session_factory() as session:
@@ -3797,6 +3861,82 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 "pr_evidence_update": "completed",
                 "preview_cleanup": "completed",
             }
+
+    def test_demo_proof_failure_pr_attach_failed_event_requests_cleanup_before_blocking_workflow(self) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-a")
+            workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
+            request = _demo_proof_request(tenant=tenant)
+            execute_workflow_advance(
+                session=session,
+                settings=SimpleNamespace(),
+                workflow_type=workflow_type,
+                request=request,
+                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+            )
+            for event in (
+                "ProofLeaseAcquired",
+                "ReleaseRequested",
+                "ReleaseProvisioning",
+                "ReleaseLive",
+                "RouteReady",
+                "ServiceVerificationPassed",
+                "RecordingStarted",
+                "RecordingFailureEvidenceCaptured",
+                "FailureEvidenceUploadStarted",
+                "FailureEvidenceUploaded",
+                "PRFailureEvidenceAttachStarted",
+            ):
+                execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=_demo_proof_request_for_event(request, event),
+                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                )
+
+            result = execute_workflow_advance(
+                session=session,
+                settings=SimpleNamespace(),
+                workflow_type=workflow_type,
+                request=_demo_proof_request_for_event(request, "PRFailureEvidenceAttachFailed"),
+                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+            )
+
+            assert result.reason == "pr_failure_evidence_attach_failed_cleanup_requested"
+            assert result.failed is False
+            cleanup_result = execute_workflow_advance(
+                session=session,
+                settings=SimpleNamespace(),
+                workflow_type=workflow_type,
+                request=_demo_proof_request_for_event(
+                    request,
+                    "PRFailureEvidenceAttachFailedPreviewCleanupCompleted",
+                ),
+                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+            )
+
+            assert cleanup_result.reason == "demo_proof_blocked_after_pr_failure_evidence_attach_failure_cleanup"
+            assert cleanup_result.failed is True
+            workflow = session.execute(select(WorkflowExecution)).scalar_one()
+            operation = session.execute(
+                select(WorkflowOperation).where(
+                    WorkflowOperation.workflow_id == workflow.workflow_id,
+                    WorkflowOperation.operation_type == "pr_evidence_update",
+                )
+            ).scalar_one()
+            cleanup_operation = session.execute(
+                select(WorkflowOperation).where(
+                    WorkflowOperation.workflow_id == workflow.workflow_id,
+                    WorkflowOperation.operation_type == "preview_cleanup",
+                )
+            ).scalar_one()
+            description = json.loads(workflow.source_description or "{}")
+            assert workflow.status == "failed"
+            assert description["demo_proof_state"] == "blocked"
+            assert description["demo_proof_events"][-1] == "PRFailureEvidenceAttachFailedPreviewCleanupCompleted"
+            assert operation.status == "completed"
+            assert cleanup_operation.status == "completed"
 
     def test_demo_proof_recording_failure_without_evidence_waits_for_cleanup_before_blocking(self) -> None:
         with self.session_factory() as session:
