@@ -11,7 +11,10 @@ from sqlalchemy import select
 from orchestrator.core.qa.demo_proof_handlers import DemoProofWorkflowAdvanceHandler
 from orchestrator.core.qa.demo_proof_start import advance_demo_proof_workflow_event, start_demo_proof_workflow
 from orchestrator.core.workflow.advance import WorkflowAdvanceRequest, WorkflowTrigger, execute_workflow_advance
+from orchestrator.core.workflow.advance import execute_workflow_operation_retry
 from orchestrator.core.workflow.execution_projection import WorkflowExecutionReference, WorkflowSourceReference
+from orchestrator.core.workflow.handler_composition import build_installed_workflow_handler_registry
+from orchestrator.core.workflow.operation_service import fail_workflow_operation
 from orchestrator.core.workflow.type_catalog import get_workflow_type
 from orchestrator.storage.db import create_session_factory
 from orchestrator.storage.models import Project, Tenant, WorkflowExecution, WorkflowOperation, WorkflowOperationAttempt
@@ -544,3 +547,74 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 "pr_evidence_update": "completed",
                 "preview_cleanup": "completed",
             }
+
+    def test_demo_proof_retry_reopens_failed_release_operation_waiting_for_event(self) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-a")
+            workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
+            request = _demo_proof_request(tenant=tenant)
+            execute_workflow_advance(
+                session=session,
+                settings=SimpleNamespace(),
+                workflow_type=workflow_type,
+                request=request,
+                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+            )
+            execute_workflow_advance(
+                session=session,
+                settings=SimpleNamespace(),
+                workflow_type=workflow_type,
+                request=replace(request, trigger=WorkflowTrigger(event="ProofLeaseAcquired")),
+                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+            )
+            workflow = session.execute(select(WorkflowExecution)).scalar_one()
+            release_operation = session.execute(
+                select(WorkflowOperation).where(
+                    WorkflowOperation.workflow_id == workflow.workflow_id,
+                    WorkflowOperation.operation_type == "release",
+                )
+            ).scalar_one()
+            release_attempt = session.execute(
+                select(WorkflowOperationAttempt).where(
+                    WorkflowOperationAttempt.operation_id == release_operation.operation_id,
+                )
+            ).scalar_one()
+            fail_workflow_operation(
+                session,
+                operation=release_operation,
+                attempt=release_attempt,
+                category="release_failed",
+                message="Release provider did not become live.",
+            )
+            workflow.status = "failed"
+            session.commit()
+            registry = build_installed_workflow_handler_registry(
+                integration_router=object(),
+                extract_changed_fields_fn=lambda *_args, **_kwargs: (),
+                extract_status_transition_fn=lambda *_args, **_kwargs: None,
+                build_runtime_for_selector_fn=lambda *_args, **_kwargs: object(),
+                seed_issues_with_runtime_fn=lambda *_args, **_kwargs: object(),
+                post_jira_comment_fn=lambda *_args, **_kwargs: object(),
+                create_jira_comment_fn=lambda *_args, **_kwargs: object(),
+            )
+
+            handle = execute_workflow_operation_retry(
+                session=session,
+                settings=SimpleNamespace(),
+                session_factory=self.session_factory,
+                workflow=workflow,
+                operation=release_operation,
+                resolve_operation_retry_handler_fn=registry.resolve_operation_retry_handler,
+            )
+
+            session.refresh(release_operation)
+            attempts = session.execute(
+                select(WorkflowOperationAttempt)
+                .where(WorkflowOperationAttempt.operation_id == release_operation.operation_id)
+                .order_by(WorkflowOperationAttempt.attempt_number)
+            ).scalars().all()
+            assert handle.operation_type == "release"
+            assert handle.status == "waiting_for_input"
+            assert workflow.status == "waiting_for_input"
+            assert release_operation.status == "waiting_for_input"
+            assert [attempt.status for attempt in attempts] == ["failed", "waiting_for_input"]
