@@ -854,6 +854,24 @@ def _metadata_capture_targets_from_items(value: object) -> set[str]:
     }
 
 
+def _require_no_unplanned_capture_targets(
+    *,
+    required_targets: set[str],
+    event_metadata: dict[str, object],
+    metadata_label: str,
+    evidence_field: str,
+    proof_scope_id: str,
+) -> None:
+    reported_targets = _metadata_string_set(event_metadata.get("capture_targets"))
+    reported_targets.update(_metadata_capture_targets_from_items(event_metadata.get(evidence_field)))
+    unplanned_targets = sorted(reported_targets - required_targets)
+    if unplanned_targets:
+        raise RuntimeError(
+            f"Demo proof scope {proof_scope_id} {metadata_label} contains capture target(s) outside the "
+            "demo plan: " + ", ".join(unplanned_targets)
+        )
+
+
 def _metadata_string(value: object) -> str:
     return str(value or "").strip()
 
@@ -1536,6 +1554,13 @@ def _require_recording_completion_metadata(*, description: dict[str, object], pr
     metadata = _metadata_by_event(description)
     recording_metadata = metadata.get("RecordingCompleted", {})
     required_targets = set(_normalized_capture_targets(list(description.get("required_capture_targets") or [])))
+    _require_no_unplanned_capture_targets(
+        required_targets=required_targets,
+        event_metadata=recording_metadata,
+        metadata_label="recording completion metadata",
+        evidence_field="recordings",
+        proof_scope_id=proof_scope_id,
+    )
     recording_targets = _metadata_string_set(recording_metadata.get("capture_targets"))
     missing_targets = sorted(required_targets - recording_targets)
     if missing_targets:
@@ -1579,6 +1604,13 @@ def _require_evidence_uploaded_metadata(*, description: dict[str, object], proof
     required_targets = set(_normalized_capture_targets(list(description.get("required_capture_targets") or [])))
     recording_metadata = metadata.get("RecordingCompleted", {})
     evidence_metadata = metadata.get("EvidenceUploaded", {})
+    _require_no_unplanned_capture_targets(
+        required_targets=required_targets,
+        event_metadata=evidence_metadata,
+        metadata_label="evidence metadata",
+        evidence_field="recordings",
+        proof_scope_id=proof_scope_id,
+    )
     evidence_targets = _metadata_string_set(evidence_metadata.get("capture_targets"))
     missing_targets = sorted(required_targets - evidence_targets)
     if missing_targets:
@@ -1704,6 +1736,13 @@ def _require_failure_evidence_target_metadata(
     proof_scope_id: str,
 ) -> dict[str, dict[str, str]]:
     required_targets = set(_normalized_capture_targets(list(description.get("required_capture_targets") or [])))
+    _require_no_unplanned_capture_targets(
+        required_targets=required_targets,
+        event_metadata=failure_metadata,
+        metadata_label="failure evidence metadata",
+        evidence_field="failure_evidence",
+        proof_scope_id=proof_scope_id,
+    )
     failure_targets = _metadata_string_set(failure_metadata.get("capture_targets"))
     missing_targets = sorted(required_targets - failure_targets)
     if missing_targets:
@@ -2507,11 +2546,29 @@ class DemoProofWorkflowAdvanceHandler:
         if event == "RecordingFailed":
             _require_recording_failed_metadata(description=description, proof_scope_id=proof_scope_id)
         if event == "EvidenceUploaded":
+            metadata = _metadata_by_event(description)
+            required_targets = set(_normalized_capture_targets(list(description.get("required_capture_targets") or [])))
+            _require_no_unplanned_capture_targets(
+                required_targets=required_targets,
+                event_metadata=metadata.get("EvidenceUploaded", {}),
+                metadata_label="evidence metadata",
+                evidence_field="recordings",
+                proof_scope_id=proof_scope_id,
+            )
             _require_evidence_uploaded_lineage_matches_recording(
                 description=description,
                 proof_scope_id=proof_scope_id,
             )
         if event == "FailureEvidenceUploaded":
+            metadata = _metadata_by_event(description)
+            required_targets = set(_normalized_capture_targets(list(description.get("required_capture_targets") or [])))
+            _require_no_unplanned_capture_targets(
+                required_targets=required_targets,
+                event_metadata=metadata.get("FailureEvidenceUploaded", {}),
+                metadata_label="failure evidence metadata",
+                evidence_field="failure_evidence",
+                proof_scope_id=proof_scope_id,
+            )
             _require_failure_evidence_uploaded_lineage_matches_captured(
                 description=description,
                 proof_scope_id=proof_scope_id,
