@@ -653,6 +653,7 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     run_id="run-1",
                     pr_url="https://github.com/acme/project-a/pull/8",
                     required_capture_targets=["browser", "ios", "android"],
+                    event_metadata=_demo_proof_event_metadata("ProofLeaseAcquired"),
                 )
 
             assert result.status == "waiting_for_input"
@@ -665,12 +666,49 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
             ).scalar_one()
             assert release_operation.status == "waiting_for_input"
 
+    def test_demo_proof_rejects_lease_acquired_without_scoped_lease_metadata(self) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-a")
+            workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
+            request = _demo_proof_request(tenant=tenant)
+            execute_workflow_advance(
+                session=session,
+                settings=SimpleNamespace(),
+                workflow_type=workflow_type,
+                request=request,
+                resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+            )
+
+            try:
+                execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=replace(request, trigger=WorkflowTrigger(event="ProofLeaseAcquired")),
+                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                )
+            except RuntimeError as exc:
+                assert "requires scoped lease metadata before release request" in str(exc)
+                assert "ProofLeaseAcquired.demo_proof_lease.lease_id" in str(exc)
+            else:  # pragma: no cover
+                raise AssertionError("expected lease acquisition to require scoped lease metadata")
+
+            workflow = session.execute(select(WorkflowExecution)).scalar_one()
+            release_operation = session.execute(
+                select(WorkflowOperation).where(
+                    WorkflowOperation.workflow_id == workflow.workflow_id,
+                    WorkflowOperation.operation_type == "release",
+                )
+            ).scalar_one_or_none()
+            if release_operation is not None:
+                assert release_operation.status != "waiting_for_input"
+
     def test_demo_proof_lease_acquired_event_completes_lease_and_waits_for_release_once(self) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
             workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
             request = _demo_proof_request(tenant=tenant)
-            event_request = replace(request, trigger=WorkflowTrigger(event="ProofLeaseAcquired"))
+            event_request = _demo_proof_request_for_event(request, "ProofLeaseAcquired")
             execute_workflow_advance(
                 session=session,
                 settings=SimpleNamespace(),
@@ -2934,6 +2972,7 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
             )
 
             event_metadata = {
+                "ProofLeaseAcquired": _demo_proof_event_metadata("ProofLeaseAcquired"),
                 "ReleaseLive": {
                     "release_id": "release-preview-1",
                     "release_kind": "run_preview",
@@ -3184,7 +3223,7 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 session=session,
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
-                request=replace(request, trigger=WorkflowTrigger(event="ProofLeaseAcquired")),
+                request=_demo_proof_request_for_event(request, "ProofLeaseAcquired"),
                 resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
             )
 
@@ -3222,7 +3261,7 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 session=session,
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
-                request=replace(request, trigger=WorkflowTrigger(event="ProofLeaseAcquired")),
+                request=_demo_proof_request_for_event(request, "ProofLeaseAcquired"),
                 resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
             )
             execute_workflow_advance(
@@ -3454,7 +3493,7 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 session=session,
                 settings=SimpleNamespace(),
                 workflow_type=workflow_type,
-                request=replace(request, trigger=WorkflowTrigger(event="ProofLeaseAcquired")),
+                request=_demo_proof_request_for_event(request, "ProofLeaseAcquired"),
                 resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
             )
             workflow = session.execute(select(WorkflowExecution)).scalar_one()

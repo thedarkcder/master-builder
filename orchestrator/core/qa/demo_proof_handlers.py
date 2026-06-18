@@ -1027,6 +1027,41 @@ def _require_pr_body_sha256_metadata(*, pr_metadata: dict[str, object], pr_event
     )
 
 
+def _require_proof_lease_acquired_metadata(*, description: dict[str, object], proof_scope_id: str) -> None:
+    metadata = _metadata_by_event(description).get("ProofLeaseAcquired", {})
+    release_id = _metadata_string(metadata.get("release_id"))
+    release_commit_sha = _metadata_string(metadata.get("release_commit_sha")).lower()
+    lease_metadata = _demo_proof_lease_metadata(metadata.get("demo_proof_lease"))
+    missing: list[str] = []
+    if not release_id:
+        missing.append("ProofLeaseAcquired.release_id")
+    if not release_commit_sha:
+        missing.append("ProofLeaseAcquired.release_commit_sha")
+    if not lease_metadata:
+        missing.extend(
+            f"ProofLeaseAcquired.demo_proof_lease.{field}"
+            for field in sorted(_DEMO_PROOF_LEASE_REQUIRED_FIELDS)
+        )
+    if missing:
+        raise RuntimeError(
+            f"Demo proof scope {proof_scope_id} requires scoped lease metadata before release request: "
+            + ", ".join(missing)
+        )
+    lease_proof_scope_id = _metadata_string(lease_metadata.get("proof_scope_id"))
+    lease_commit_sha = _metadata_string(lease_metadata.get("commit_sha")).lower()
+    if lease_proof_scope_id != proof_scope_id:
+        raise RuntimeError(
+            f"Demo proof scope {proof_scope_id} acquired lease must reference proof scope {proof_scope_id}: "
+            f"ProofLeaseAcquired.demo_proof_lease.proof_scope_id={lease_proof_scope_id or '<missing>'}"
+        )
+    if lease_commit_sha != release_commit_sha:
+        raise RuntimeError(
+            f"Demo proof scope {proof_scope_id} acquired lease commit must match acquired release commit: "
+            f"ProofLeaseAcquired.release_commit_sha={release_commit_sha or '<missing>'}, "
+            f"ProofLeaseAcquired.demo_proof_lease.commit_sha={lease_commit_sha or '<missing>'}"
+        )
+
+
 def _require_recording_completion_metadata(*, description: dict[str, object], proof_scope_id: str) -> None:
     metadata = _metadata_by_event(description)
     recording_metadata = metadata.get("RecordingCompleted", {})
@@ -1610,6 +1645,8 @@ class DemoProofWorkflowAdvanceHandler:
             raise RuntimeError(f"Unsupported demo proof workflow event: {event}")
         completed_operation_type, next_operation_type, reason = event_spec
         _require_pr_url_for_pr_evidence_event(event=event, pr_url=pr_url, proof_scope_id=proof_scope_id)
+        if event == "ProofLeaseAcquired":
+            _require_proof_lease_acquired_metadata(description=description, proof_scope_id=proof_scope_id)
         if event == "RecordingCompleted":
             _require_recording_completion_metadata(description=description, proof_scope_id=proof_scope_id)
         _require_terminal_proof_metadata(event=event, description=description, proof_scope_id=proof_scope_id)
