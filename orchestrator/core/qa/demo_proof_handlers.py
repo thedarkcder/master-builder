@@ -1104,6 +1104,122 @@ def _require_recording_completion_metadata(*, description: dict[str, object], pr
         )
 
 
+def _require_evidence_uploaded_metadata(*, description: dict[str, object], proof_scope_id: str) -> None:
+    metadata = _metadata_by_event(description)
+    required_targets = set(_normalized_capture_targets(list(description.get("required_capture_targets") or [])))
+    recording_metadata = metadata.get("RecordingCompleted", {})
+    evidence_metadata = metadata.get("EvidenceUploaded", {})
+    evidence_targets = _metadata_string_set(evidence_metadata.get("capture_targets"))
+    missing_targets = sorted(required_targets - evidence_targets)
+    if missing_targets:
+        raise RuntimeError(
+            f"Demo proof scope {proof_scope_id} evidence metadata is missing required capture target(s): "
+            + ", ".join(missing_targets)
+        )
+    artifact_urls = _metadata_string_list(evidence_metadata.get("artifact_urls"))
+    if len(artifact_urls) < len(required_targets):
+        raise RuntimeError(
+            f"Demo proof scope {proof_scope_id} requires at least {len(required_targets)} playable artifact URL(s) "
+            f"for required capture target(s), got {len(artifact_urls)}."
+        )
+    if len(set(artifact_urls)) < len(required_targets):
+        raise RuntimeError(
+            f"Demo proof scope {proof_scope_id} requires at least {len(required_targets)} "
+            "distinct playable artifact URL(s) for required capture target(s)."
+        )
+    artifacts_by_target = _recording_artifacts_by_target(evidence_metadata.get("recordings"))
+    missing_target_artifacts = sorted(target for target in required_targets if target not in artifacts_by_target)
+    if missing_target_artifacts:
+        raise RuntimeError(
+            f"Demo proof scope {proof_scope_id} evidence metadata is missing uploaded artifact metadata "
+            "for required capture target(s): " + ", ".join(missing_target_artifacts)
+        )
+    artifact_urls_by_target = {
+        target: artifacts_by_target[target]["artifact_url"]
+        for target in required_targets
+    }
+    if len(set(artifact_urls_by_target.values())) < len(required_targets):
+        raise RuntimeError(
+            f"Demo proof scope {proof_scope_id} requires distinct playable artifact URL mappings for "
+            "required capture target(s)."
+        )
+    _require_matching_artifact_lineage(
+        source_metadata=recording_metadata,
+        downstream_metadata=evidence_metadata,
+        source_event="RecordingCompleted",
+        downstream_event="EvidenceUploaded",
+        evidence_field="recordings",
+        required_fields=_RECORDING_ARTIFACT_REQUIRED_FIELDS,
+        proof_scope_id=proof_scope_id,
+    )
+    recording_counts_by_target = _recording_artifact_counts_by_target(evidence_metadata.get("recordings"))
+    required_counts = _normalized_required_recording_counts(
+        required_capture_targets=list(required_targets),
+        value=description.get("required_recording_counts"),
+    )
+    missing_count_targets = sorted(
+        (target, required_count, recording_counts_by_target.get(target, 0))
+        for target, required_count in required_counts.items()
+        if recording_counts_by_target.get(target, 0) < required_count
+    )
+    if missing_count_targets:
+        target, required_count, actual_count = missing_count_targets[0]
+        raise RuntimeError(
+            f"Demo proof scope {proof_scope_id} requires {required_count} recording artifact(s) "
+            f"for capture target {target}, got {actual_count}."
+        )
+    release_metadata = metadata.get("ReleaseLive", {})
+    release_commit_sha = _metadata_string(release_metadata.get("release_commit_sha"))
+    if release_commit_sha:
+        mismatched_commit_targets = sorted(
+            target
+            for target in required_targets
+            if artifacts_by_target[target]["release_commit_sha"].lower() != release_commit_sha.lower()
+        )
+        if mismatched_commit_targets:
+            raise RuntimeError(
+                f"Demo proof scope {proof_scope_id} recording metadata release commit does not match "
+                "ReleaseLive.release_commit_sha for capture target(s): "
+                + ", ".join(mismatched_commit_targets)
+            )
+
+
+def _require_evidence_uploaded_lineage_matches_recording(
+    *,
+    description: dict[str, object],
+    proof_scope_id: str,
+) -> None:
+    metadata = _metadata_by_event(description)
+    recording_metadata = metadata.get("RecordingCompleted", {})
+    evidence_metadata = metadata.get("EvidenceUploaded", {})
+    downstream_lineage = _artifact_lineage_by_target(
+        value=evidence_metadata.get("recordings"),
+        required_fields=_RECORDING_ARTIFACT_REQUIRED_FIELDS,
+    )
+    if not downstream_lineage:
+        return
+    source_lineage = _artifact_lineage_by_target(
+        value=recording_metadata.get("recordings"),
+        required_fields=_RECORDING_ARTIFACT_REQUIRED_FIELDS,
+    )
+    if set(source_lineage) != set(downstream_lineage):
+        return
+    if any(len(source_lineage[target]) != len(downstream_lineage[target]) for target in source_lineage):
+        return
+    artifact_urls = _metadata_string_list(evidence_metadata.get("artifact_urls"))
+    if len(artifact_urls) != len(set(artifact_urls)):
+        return
+    _require_matching_artifact_lineage(
+        source_metadata=recording_metadata,
+        downstream_metadata=evidence_metadata,
+        source_event="RecordingCompleted",
+        downstream_event="EvidenceUploaded",
+        evidence_field="recordings",
+        required_fields=_RECORDING_ARTIFACT_REQUIRED_FIELDS,
+        proof_scope_id=proof_scope_id,
+    )
+
+
 def _require_failure_evidence_target_metadata(
     *,
     description: dict[str, object],
@@ -1147,6 +1263,76 @@ def _require_failure_evidence_target_metadata(
             "required capture target(s)."
         )
     return evidence_by_target
+
+
+def _require_failure_evidence_uploaded_metadata(*, description: dict[str, object], proof_scope_id: str) -> None:
+    metadata = _metadata_by_event(description)
+    captured_failure_metadata = metadata.get("RecordingFailureEvidenceCaptured", {})
+    failure_metadata = metadata.get("FailureEvidenceUploaded", {})
+    evidence_by_target = _require_failure_evidence_target_metadata(
+        description=description,
+        failure_metadata=failure_metadata,
+        proof_scope_id=proof_scope_id,
+    )
+    _require_matching_artifact_lineage(
+        source_metadata=captured_failure_metadata,
+        downstream_metadata=failure_metadata,
+        source_event="RecordingFailureEvidenceCaptured",
+        downstream_event="FailureEvidenceUploaded",
+        evidence_field="failure_evidence",
+        required_fields=_FAILURE_EVIDENCE_REQUIRED_FIELDS,
+        proof_scope_id=proof_scope_id,
+    )
+    release_metadata = metadata.get("ReleaseLive", {})
+    release_commit_sha = _metadata_string(release_metadata.get("release_commit_sha"))
+    if release_commit_sha:
+        mismatched_commit_targets = sorted(
+            target
+            for target in evidence_by_target
+            if evidence_by_target[target]["release_commit_sha"].lower() != release_commit_sha.lower()
+        )
+        if mismatched_commit_targets:
+            raise RuntimeError(
+                f"Demo proof scope {proof_scope_id} failure evidence metadata release commit does not match "
+                "ReleaseLive.release_commit_sha for capture target(s): "
+                + ", ".join(mismatched_commit_targets)
+            )
+
+
+def _require_failure_evidence_uploaded_lineage_matches_captured(
+    *,
+    description: dict[str, object],
+    proof_scope_id: str,
+) -> None:
+    metadata = _metadata_by_event(description)
+    captured_failure_metadata = metadata.get("RecordingFailureEvidenceCaptured", {})
+    failure_metadata = metadata.get("FailureEvidenceUploaded", {})
+    downstream_lineage = _artifact_lineage_by_target(
+        value=failure_metadata.get("failure_evidence"),
+        required_fields=_FAILURE_EVIDENCE_REQUIRED_FIELDS,
+    )
+    if not downstream_lineage:
+        return
+    source_lineage = _artifact_lineage_by_target(
+        value=captured_failure_metadata.get("failure_evidence"),
+        required_fields=_FAILURE_EVIDENCE_REQUIRED_FIELDS,
+    )
+    if set(source_lineage) != set(downstream_lineage):
+        return
+    if any(len(source_lineage[target]) != len(downstream_lineage[target]) for target in source_lineage):
+        return
+    artifact_urls = _metadata_string_list(failure_metadata.get("artifact_urls"))
+    if len(artifact_urls) != len(set(artifact_urls)):
+        return
+    _require_matching_artifact_lineage(
+        source_metadata=captured_failure_metadata,
+        downstream_metadata=failure_metadata,
+        source_event="RecordingFailureEvidenceCaptured",
+        downstream_event="FailureEvidenceUploaded",
+        evidence_field="failure_evidence",
+        required_fields=_FAILURE_EVIDENCE_REQUIRED_FIELDS,
+        proof_scope_id=proof_scope_id,
+    )
 
 
 def _require_service_verification_metadata(
@@ -1246,52 +1432,8 @@ def _require_terminal_proof_metadata(
             proof_scope_id=proof_scope_id,
         )
     if event == "PreviewCleanupCompleted":
-        required_targets = set(_normalized_capture_targets(list(description.get("required_capture_targets") or [])))
-        recording_metadata = metadata.get("RecordingCompleted", {})
+        _require_evidence_uploaded_metadata(description=description, proof_scope_id=proof_scope_id)
         evidence_metadata = metadata.get("EvidenceUploaded", {})
-        evidence_targets = _metadata_string_set(evidence_metadata.get("capture_targets"))
-        missing_targets = sorted(required_targets - evidence_targets)
-        if missing_targets:
-            raise RuntimeError(
-                f"Demo proof scope {proof_scope_id} evidence metadata is missing required capture target(s): "
-                + ", ".join(missing_targets)
-            )
-        artifact_urls = _metadata_string_list(evidence_metadata.get("artifact_urls"))
-        if len(artifact_urls) < len(required_targets):
-            raise RuntimeError(
-                f"Demo proof scope {proof_scope_id} requires at least {len(required_targets)} playable artifact URL(s) "
-                f"for required capture target(s), got {len(artifact_urls)}."
-            )
-        if len(set(artifact_urls)) < len(required_targets):
-            raise RuntimeError(
-                f"Demo proof scope {proof_scope_id} requires at least {len(required_targets)} "
-                "distinct playable artifact URL(s) for required capture target(s)."
-            )
-        artifacts_by_target = _recording_artifacts_by_target(evidence_metadata.get("recordings"))
-        missing_target_artifacts = sorted(target for target in required_targets if target not in artifacts_by_target)
-        if missing_target_artifacts:
-            raise RuntimeError(
-                f"Demo proof scope {proof_scope_id} evidence metadata is missing uploaded artifact metadata "
-                "for required capture target(s): " + ", ".join(missing_target_artifacts)
-            )
-        artifact_urls_by_target = {
-            target: artifacts_by_target[target]["artifact_url"]
-            for target in required_targets
-        }
-        if len(set(artifact_urls_by_target.values())) < len(required_targets):
-            raise RuntimeError(
-                f"Demo proof scope {proof_scope_id} requires distinct playable artifact URL mappings for "
-                "required capture target(s)."
-            )
-        _require_matching_artifact_lineage(
-            source_metadata=recording_metadata,
-            downstream_metadata=evidence_metadata,
-            source_event="RecordingCompleted",
-            downstream_event="EvidenceUploaded",
-            evidence_field="recordings",
-            required_fields=_RECORDING_ARTIFACT_REQUIRED_FIELDS,
-            proof_scope_id=proof_scope_id,
-        )
         _require_pr_evidence_matches_uploaded_artifacts(
             uploaded_metadata=evidence_metadata,
             pr_metadata=metadata.get("PREvidenceAttached", {}),
@@ -1315,63 +1457,9 @@ def _require_terminal_proof_metadata(
             pr_event="PREvidenceAttached",
             proof_scope_id=proof_scope_id,
         )
-        recording_counts_by_target = _recording_artifact_counts_by_target(evidence_metadata.get("recordings"))
-        required_counts = _normalized_required_recording_counts(
-            required_capture_targets=list(required_targets),
-            value=description.get("required_recording_counts"),
-        )
-        missing_count_targets = sorted(
-            (target, required_count, recording_counts_by_target.get(target, 0))
-            for target, required_count in required_counts.items()
-            if recording_counts_by_target.get(target, 0) < required_count
-        )
-        if missing_count_targets:
-            target, required_count, actual_count = missing_count_targets[0]
-            raise RuntimeError(
-                f"Demo proof scope {proof_scope_id} requires {required_count} recording artifact(s) "
-                f"for capture target {target}, got {actual_count}."
-            )
-        release_commit_sha = _metadata_string(release_metadata.get("release_commit_sha"))
-        mismatched_commit_targets = sorted(
-            target
-            for target in required_targets
-            if artifacts_by_target[target]["release_commit_sha"].lower() != release_commit_sha.lower()
-        )
-        if mismatched_commit_targets:
-            raise RuntimeError(
-                f"Demo proof scope {proof_scope_id} recording metadata release commit does not match "
-                "ReleaseLive.release_commit_sha for capture target(s): "
-                + ", ".join(mismatched_commit_targets)
-            )
     if event == "FailurePreviewCleanupCompleted":
-        captured_failure_metadata = metadata.get("RecordingFailureEvidenceCaptured", {})
+        _require_failure_evidence_uploaded_metadata(description=description, proof_scope_id=proof_scope_id)
         failure_metadata = metadata.get("FailureEvidenceUploaded", {})
-        evidence_by_target = _require_failure_evidence_target_metadata(
-            description=description,
-            failure_metadata=failure_metadata,
-            proof_scope_id=proof_scope_id,
-        )
-        _require_matching_artifact_lineage(
-            source_metadata=captured_failure_metadata,
-            downstream_metadata=failure_metadata,
-            source_event="RecordingFailureEvidenceCaptured",
-            downstream_event="FailureEvidenceUploaded",
-            evidence_field="failure_evidence",
-            required_fields=_FAILURE_EVIDENCE_REQUIRED_FIELDS,
-            proof_scope_id=proof_scope_id,
-        )
-        release_commit_sha = _metadata_string(release_metadata.get("release_commit_sha"))
-        mismatched_commit_targets = sorted(
-            target
-            for target in evidence_by_target
-            if evidence_by_target[target]["release_commit_sha"].lower() != release_commit_sha.lower()
-        )
-        if mismatched_commit_targets:
-            raise RuntimeError(
-                f"Demo proof scope {proof_scope_id} failure evidence metadata release commit does not match "
-                "ReleaseLive.release_commit_sha for capture target(s): "
-                + ", ".join(mismatched_commit_targets)
-            )
         _require_pr_evidence_matches_uploaded_artifacts(
             uploaded_metadata=failure_metadata,
             pr_metadata=metadata.get("PRFailureEvidenceAttached", {}),
@@ -1649,6 +1737,16 @@ class DemoProofWorkflowAdvanceHandler:
             _require_proof_lease_acquired_metadata(description=description, proof_scope_id=proof_scope_id)
         if event == "RecordingCompleted":
             _require_recording_completion_metadata(description=description, proof_scope_id=proof_scope_id)
+        if event == "EvidenceUploaded":
+            _require_evidence_uploaded_lineage_matches_recording(
+                description=description,
+                proof_scope_id=proof_scope_id,
+            )
+        if event == "FailureEvidenceUploaded":
+            _require_failure_evidence_uploaded_lineage_matches_captured(
+                description=description,
+                proof_scope_id=proof_scope_id,
+            )
         _require_terminal_proof_metadata(event=event, description=description, proof_scope_id=proof_scope_id)
         lifecycle.complete_waiting_operation_attempt(
             operation_type=completed_operation_type,

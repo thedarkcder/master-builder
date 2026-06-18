@@ -2850,6 +2850,21 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                         ],
                     }
                     event_request = replace(event_request, payload=payload)
+                if event == "EvidenceUploaded":
+                    try:
+                        execute_workflow_advance(
+                            session=session,
+                            settings=SimpleNamespace(),
+                            workflow_type=workflow_type,
+                            request=event_request,
+                            resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                        )
+                    except RuntimeError as exc:
+                        assert "EvidenceUploaded.recordings must match RecordingCompleted.recordings" in str(exc)
+                        assert "browser" in str(exc)
+                    else:  # pragma: no cover
+                        raise AssertionError("expected demo proof upload to reject mismatched uploaded recordings")
+                    break
                 execute_workflow_advance(
                     session=session,
                     settings=SimpleNamespace(),
@@ -2857,20 +2872,6 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     request=event_request,
                     resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
                 )
-
-            try:
-                execute_workflow_advance(
-                    session=session,
-                    settings=SimpleNamespace(),
-                    workflow_type=workflow_type,
-                    request=_demo_proof_request_for_event(request, "PreviewCleanupCompleted"),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
-                )
-            except RuntimeError as exc:
-                assert "EvidenceUploaded.recordings must match RecordingCompleted.recordings" in str(exc)
-                assert "browser" in str(exc)
-            else:  # pragma: no cover
-                raise AssertionError("expected demo proof completion to reject mismatched uploaded recordings")
 
     def test_demo_proof_rejects_failure_completion_when_uploaded_failure_evidence_does_not_match_captured_evidence(
         self,
@@ -2933,6 +2934,24 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                         ],
                     }
                     event_request = replace(event_request, payload=payload)
+                if event == "FailureEvidenceUploaded":
+                    try:
+                        execute_workflow_advance(
+                            session=session,
+                            settings=SimpleNamespace(),
+                            workflow_type=workflow_type,
+                            request=event_request,
+                            resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                        )
+                    except RuntimeError as exc:
+                        assert (
+                            "FailureEvidenceUploaded.failure_evidence must match "
+                            "RecordingFailureEvidenceCaptured.failure_evidence"
+                        ) in str(exc)
+                        assert "browser" in str(exc)
+                    else:  # pragma: no cover
+                        raise AssertionError("expected demo proof failure upload to reject mismatched failure evidence")
+                    break
                 execute_workflow_advance(
                     session=session,
                     settings=SimpleNamespace(),
@@ -2940,23 +2959,6 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                     request=event_request,
                     resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
                 )
-
-            try:
-                execute_workflow_advance(
-                    session=session,
-                    settings=SimpleNamespace(),
-                    workflow_type=workflow_type,
-                    request=_demo_proof_request_for_event(request, "FailurePreviewCleanupCompleted"),
-                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
-                )
-            except RuntimeError as exc:
-                assert (
-                    "FailureEvidenceUploaded.failure_evidence must match "
-                    "RecordingFailureEvidenceCaptured.failure_evidence"
-                ) in str(exc)
-                assert "browser" in str(exc)
-            else:  # pragma: no cover
-                raise AssertionError("expected demo proof failure completion to reject mismatched failure evidence")
 
     def test_demo_proof_persists_lifecycle_event_metadata_for_auditable_chain(self) -> None:
         with self.session_factory() as session:
