@@ -438,7 +438,9 @@ def _normalized_capture_targets(required_capture_targets: list[object]) -> list[
             continue
         seen.add(target)
         targets.append(target)
-    return targets or ["browser", "ios", "android"]
+    if not targets:
+        raise RuntimeError("Demo proof required_capture_targets must be provided by PM demo requirements")
+    return targets
 
 
 def _normalized_required_recording_counts(
@@ -1985,7 +1987,7 @@ class DemoProofWorkflowAdvanceHandler:
         pr_url = str(request.payload.get("pr_url") or "").strip() or None
         required_capture_targets = request.payload.get("required_capture_targets")
         if not isinstance(required_capture_targets, list) or not required_capture_targets:
-            required_capture_targets = ["browser", "ios", "android"]
+            raise RuntimeError("Demo proof required_capture_targets must be provided by PM demo requirements")
         required_recording_counts = _normalized_required_recording_counts(
             required_capture_targets=required_capture_targets,
             value=request.payload.get("required_recording_counts"),

@@ -544,6 +544,35 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
             runtime_mock.assert_not_called()
             assert session.execute(select(WorkflowExecution)).scalar_one_or_none() is None
 
+    def test_start_demo_proof_workflow_rejects_missing_required_capture_targets_before_creating_workflow(
+        self,
+    ) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-a")
+            project = session.get(Project, "project-a")
+
+            with patch("orchestrator.core.qa.demo_proof_start.build_workflow_runtime") as runtime_mock:
+                try:
+                    start_demo_proof_workflow(
+                        session=session,
+                        settings=SimpleNamespace(),
+                        tenant=tenant,
+                        project=project,
+                        proof_scope_id="run-1-main-abcdef1",
+                        commit_sha="abcdef1",
+                        trigger_mode="from_run",
+                        trigger_event="admin_workflow_start",
+                        run_id="run-1",
+                        pr_url="https://github.com/acme/project-a/pull/8",
+                    )
+                except ValueError as exc:
+                    assert "required_capture_targets must be provided by PM demo requirements" in str(exc)
+                else:  # pragma: no cover
+                    raise AssertionError("expected demo proof start to require explicit capture targets")
+
+            runtime_mock.assert_not_called()
+            assert session.execute(select(WorkflowExecution)).scalar_one_or_none() is None
+
     def test_start_demo_proof_cleanup_only_starts_cleanup_without_pr_or_preview_lease(self) -> None:
         with self.session_factory() as session:
             tenant = session.get(Tenant, "tenant-a")
@@ -728,6 +757,28 @@ class DemoProofStartTests(SqliteTemplateDbTestCase):
                 assert "required_capture_targets cannot change" in str(exc)
             else:  # pragma: no cover
                 raise AssertionError("expected demo proof to reject required capture target mutation")
+
+    def test_demo_proof_handler_rejects_missing_required_capture_targets(self) -> None:
+        with self.session_factory() as session:
+            tenant = session.get(Tenant, "tenant-a")
+            workflow_type = get_workflow_type(session, workflow_type_key="demo_proof")
+            request = _demo_proof_request(tenant=tenant)
+            payload = dict(request.payload)
+            payload.pop("required_capture_targets")
+            payload.pop("required_recording_counts")
+
+            try:
+                execute_workflow_advance(
+                    session=session,
+                    settings=SimpleNamespace(),
+                    workflow_type=workflow_type,
+                    request=replace(request, payload=payload),
+                    resolve_advance_handler_fn=lambda _handler_key: DemoProofWorkflowAdvanceHandler(),
+                )
+            except RuntimeError as exc:
+                assert "required_capture_targets must be provided by PM demo requirements" in str(exc)
+            else:  # pragma: no cover
+                raise AssertionError("expected demo proof handler to require explicit capture targets")
 
     def test_demo_proof_handler_rejects_required_recording_count_changes_for_existing_scope(self) -> None:
         with self.session_factory() as session:
