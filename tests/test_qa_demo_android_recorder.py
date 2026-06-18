@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import subprocess
+import time
 from pathlib import Path
 
 from scripts.qa_demo_android_recorder import dump_ui_elements
@@ -9,6 +10,7 @@ from scripts.qa_demo_android_recorder import build_debug_apk
 from scripts.qa_demo_android_recorder import discover_android_project_dir
 from scripts.qa_demo_android_recorder import execute_scenario
 from scripts.qa_demo_android_recorder import find_element
+from scripts.qa_demo_android_recorder import ensure_preferred_android_device
 from scripts.qa_demo_android_recorder import launch_app
 from scripts.qa_demo_android_recorder import main
 from scripts.qa_demo_android_recorder import parse_bounds
@@ -67,6 +69,50 @@ def test_preferred_android_avd_uses_configured_avd(monkeypatch) -> None:
     monkeypatch.setenv("QA_DEMO_ANDROID_AVD", "mb_qa_api33")
 
     assert preferred_android_avd("Pixel_10\nmb_qa_api33\n") == "mb_qa_api33"
+
+
+def test_ensure_preferred_android_device_waits_for_boot_without_python_sleep(monkeypatch) -> None:
+    calls: list[list[str]] = []
+
+    class _EmulatorProcess:
+        def __init__(self, args, **_kwargs):  # noqa: ANN001
+            calls.append(list(args))
+
+    def _fake_run(args, **_kwargs):  # noqa: ANN001
+        calls.append(list(args))
+
+        class _Result:
+            stdout = ""
+
+        if args == ["adb", "devices"]:
+            _Result.stdout = (
+                "List of devices attached\n"
+                if calls.count(["adb", "devices"]) == 1
+                else "List of devices attached\nemulator-5554\tdevice\n"
+            )
+        elif args == ["/sdk/emulator", "-list-avds"]:
+            _Result.stdout = "Pixel_API_35\n"
+        elif args[:4] == ["adb", "-s", "emulator-5554", "shell"]:
+            _Result.stdout = ""
+        return _Result()
+
+    monkeypatch.delenv("QA_DEMO_ANDROID_DEVICE_ID", raising=False)
+    monkeypatch.delenv("QA_DEMO_ANDROID_AVD", raising=False)
+    monkeypatch.setattr("scripts.qa_demo_android_recorder.resolve_android_emulator", lambda: "/sdk/emulator")
+    monkeypatch.setattr("scripts.qa_demo_android_recorder.subprocess.Popen", _EmulatorProcess)
+    monkeypatch.setattr("scripts.qa_demo_android_recorder._run", _fake_run)
+    monkeypatch.setattr(
+        time,
+        "sleep",
+        lambda _seconds: (_ for _ in ()).throw(AssertionError("time.sleep must not synchronize emulator boot")),
+    )
+
+    assert ensure_preferred_android_device(timeout_seconds=30) == "emulator-5554"
+    assert ["adb", "wait-for-device"] in calls
+    assert any(
+        call[:4] == ["adb", "-s", "emulator-5554", "shell"] and "sys.boot_completed" in " ".join(call)
+        for call in calls
+    )
 
 
 def test_parse_bounds_returns_tappable_rectangle() -> None:
