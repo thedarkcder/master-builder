@@ -644,6 +644,70 @@ def _require_cleanup_evidence_metadata(*, value: object, event: str, proof_scope
         )
 
 
+def _cleanup_resource_refs(value: object) -> list[dict[str, str]]:
+    if not isinstance(value, list):
+        return []
+    refs: list[dict[str, str]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        resource_type = str(item.get("resource_type") or "").strip()
+        resource_id = str(item.get("resource_id") or "").strip()
+        cleanup_action = str(item.get("cleanup_action") or "").strip()
+        if resource_type and resource_id and cleanup_action:
+            refs.append(
+                {
+                    "resource_type": resource_type,
+                    "resource_id": resource_id,
+                    "cleanup_action": cleanup_action,
+                }
+            )
+    return refs
+
+
+def _require_cleanup_resource_refs(
+    *,
+    value: object,
+    release_id: str,
+    lease_state: str,
+    event: str,
+    proof_scope_id: str,
+) -> None:
+    refs = _cleanup_resource_refs(value)
+    if not refs:
+        raise RuntimeError(
+            f"Demo proof scope {proof_scope_id} requires {event}.cleanup_evidence.resource_refs before "
+            "terminal cleanup completion"
+        )
+    invalid_actions = sorted(
+        {
+            ref["cleanup_action"]
+            for ref in refs
+            if ref["cleanup_action"] != lease_state
+        }
+    )
+    if invalid_actions:
+        raise RuntimeError(
+            f"Demo proof scope {proof_scope_id} cleanup resource refs must use lease_state {lease_state}: "
+            + ", ".join(invalid_actions)
+        )
+    has_release_ref = any(
+        ref["resource_type"] == "release" and ref["resource_id"] == release_id
+        for ref in refs
+    )
+    if not has_release_ref:
+        raise RuntimeError(
+            f"Demo proof scope {proof_scope_id} requires {event}.cleanup_evidence.resource_refs to include "
+            f"release {release_id}"
+        )
+    has_preview_resource_ref = any(ref["resource_type"] != "release" for ref in refs)
+    if not has_preview_resource_ref:
+        raise RuntimeError(
+            f"Demo proof scope {proof_scope_id} requires {event}.cleanup_evidence.resource_refs to identify "
+            "at least one preview resource outside the release record"
+        )
+
+
 def _require_lease_scope_identity(
     *,
     release_metadata: dict[str, object],
@@ -871,6 +935,14 @@ def _require_terminal_proof_metadata(
         _require_lease_scope_identity(
             release_metadata=release_metadata,
             cleanup_metadata=cleanup_metadata,
+            event=event,
+            proof_scope_id=proof_scope_id,
+        )
+        cleanup_evidence = cleanup_metadata.get("cleanup_evidence")
+        _require_cleanup_resource_refs(
+            value=cleanup_evidence.get("resource_refs") if isinstance(cleanup_evidence, dict) else None,
+            release_id=_metadata_string(release_metadata.get("release_id")),
+            lease_state=_metadata_string(cleanup_evidence.get("lease_state")) if isinstance(cleanup_evidence, dict) else "",
             event=event,
             proof_scope_id=proof_scope_id,
         )
