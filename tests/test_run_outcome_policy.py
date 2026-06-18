@@ -192,7 +192,7 @@ def _deps() -> SimpleNamespace:
             advance_demo_proof_workflow_event_fn=MagicMock(
                 return_value=SimpleNamespace(
                     workflow_id="demo_proof:run:run-1:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
-                    status="waiting_for_input",
+                    status="completed",
                 )
             ),
             mark_pull_request_ready_after_demo_proof_fn=MagicMock(),
@@ -487,6 +487,116 @@ def test_complete_runs_qa_demo_stage_before_finalization() -> None:
         reason="qa_demo_complete",
     )
     assert finalizer_calls["workflow_result"].orchestration_stage_trace[-1]["stage"] == "qa"
+
+
+def test_complete_blocks_ready_for_review_until_demo_proof_reports_completed() -> None:
+    session = SimpleNamespace(refresh=lambda _run: None)
+    deps = _deps()
+    prepared = _prepared(_build_snapshot(), effective_policy={"qa_demo_recording_enabled": True})
+    workflow_result = _workflow_result()
+    qa_result = QaResult(
+        summary=["Recorded demos"],
+        scenarios=[],
+        recordings=[
+            _qa_recording(name="Happy path", index=1),
+            _qa_recording(name="Invalid input is rejected", index=2),
+            _qa_recording(name="Repeat action remains safe", index=3),
+        ],
+    )
+    preview_release = SimpleNamespace(
+        release_id="release-preview-1",
+        release_kind="run_preview",
+        status="live",
+        service_urls=[
+            SimpleNamespace(
+                service_kind="website",
+                service_name="web",
+                service_key="web",
+                status="active",
+                url="https://preview.example",
+                internal_url="http://127.0.0.1:8088",
+                host="preview.example",
+            )
+        ],
+        commit_sha="b" * 40,
+        provider_context={
+            "application_uuid": "app-preview-1",
+            "deployment_uuid": "deployment-preview-1",
+        },
+        delivery_metadata={
+            "demo_proof_lease": {
+                "lease_id": "demo-proof-lease:run:run-1:" + "b" * 40 + ":" + "b" * 40,
+                "proof_scope_id": "run:run-1:" + "b" * 40,
+                "commit_sha": "b" * 40,
+                "state": "destroyed",
+                "acquired_at": "2026-06-18T11:00:00+00:00",
+                "expires_at": "2026-06-19T11:00:00+00:00",
+                "destroy_reason": "qa_demo_complete",
+                "destroyed_at": "2026-06-18T12:00:00+00:00",
+            }
+        },
+    )
+    finalizer_calls: dict[str, object] = {}
+
+    def _destroy_preview(**_kwargs):  # noqa: ANN001
+        preview_release.status = "destroyed"
+        return preview_release
+
+    def _advance_demo_proof_event(**kwargs):  # noqa: ANN202
+        event = str(kwargs["event"])
+        return SimpleNamespace(
+            workflow_id="demo_proof:run:run-1:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            status="waiting_for_input" if event == "PreviewCleanupCompleted" else "completed",
+            event=event,
+        )
+
+    class _Finalizer:
+        def __init__(self, **_kwargs):
+            pass
+
+        def finalize(self, **kwargs):
+            finalizer_calls.update(kwargs)
+            return SimpleNamespace(
+                run=prepared.run,
+                workflow_result=kwargs["workflow_result"],
+                persisted_status="blocked",
+                last_error=kwargs["workflow_result"].blocker_message,
+                persisted_plan=prepared.run.plan,
+                event_types=(),
+                tail_steps=(),
+            )
+
+    deps.execution.advance_demo_proof_workflow_event_fn.side_effect = _advance_demo_proof_event
+    with (
+        patch(
+            "orchestrator.core.worker.run_outcome_policy.create_run_preview_deployment",
+            return_value=SimpleNamespace(created=False, reason="existing", release=preview_release),
+        ),
+        patch("orchestrator.core.worker.run_outcome_policy.execute_qa_demo_stage", return_value=qa_result),
+        patch(
+            "orchestrator.core.worker.run_outcome_policy.update_pull_request_with_demo_evidence",
+            return_value="updated-body",
+        ),
+        patch("orchestrator.core.worker.run_outcome_policy.destroy_project_deployment_preview_release", _destroy_preview),
+        patch("orchestrator.core.worker.run_outcome_policy.WorkflowFinalizer", _Finalizer),
+        patch("orchestrator.core.worker.run_outcome_policy.CompletionTailExecutor") as tail_executor_cls,
+    ):
+        tail_executor_cls.return_value.execute.return_value = None
+        RunOutcomePolicy(
+            session=session,
+            settings=SimpleNamespace(project_repo_checkout_base_dir="/tmp/workdirs"),
+            deps=deps,
+            cleanup_run_workspaces_safe_fn=MagicMock(),
+        ).complete(
+            prepared=prepared,
+            workflow_result=workflow_result,
+            execution_context={"execution_branch": "run/MAB-400/run-1"},
+        )
+
+    deps.execution.mark_pull_request_ready_after_demo_proof_fn.assert_not_called()
+    assert finalizer_calls["workflow_result"].outcome == "blocked"
+    assert "PreviewCleanupCompleted" in str(finalizer_calls["workflow_result"].blocker_message)
+    assert "waiting_for_input" in str(finalizer_calls["workflow_result"].blocker_message)
 
 
 def test_complete_uses_destroyed_release_returned_by_cleanup_for_demo_proof_cleanup_evidence() -> None:

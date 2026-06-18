@@ -1004,9 +1004,13 @@ class RunOutcomePolicy:
                 message=cleanup_error,
             )
         try:
-            self._advance_qa_demo_proof_events(
+            cleanup_event_results = self._advance_qa_demo_proof_events(
                 proof_context=proof_context,
                 events=("PreviewCleanupRequested", "PreviewCleanupCompleted"),
+            )
+            _require_demo_proof_completed_event(
+                event_results=cleanup_event_results,
+                event="PreviewCleanupCompleted",
             )
             self._mark_pull_request_ready_after_demo_proof(
                 prepared=prepared,
@@ -1080,29 +1084,33 @@ class RunOutcomePolicy:
             required_recording_counts=dict(proof_context.required_recording_counts),
         )
 
-    def _advance_qa_demo_proof_events(self, *, proof_context, events: tuple[str, ...]) -> None:  # noqa: ANN001
+    def _advance_qa_demo_proof_events(self, *, proof_context, events: tuple[str, ...]) -> tuple[object, ...]:  # noqa: ANN001
         advance_fn = getattr(
             self._deps.execution,
             "advance_demo_proof_workflow_event_fn",
             advance_demo_proof_workflow_event,
         )
+        results: list[object] = []
         for event in events:
             event_metadata = _qa_demo_proof_event_metadata(proof_context=proof_context, event=event)
-            advance_fn(
-                session=self._session,
-                settings=self._settings,
-                tenant=proof_context.tenant,
-                project=proof_context.project,
-                proof_scope_id=proof_context.proof_scope_id,
-                commit_sha=proof_context.commit_sha,
-                trigger_mode=proof_context.trigger_mode,
-                event=event,
-                run_id=proof_context.run_id,
-                pr_url=proof_context.pr_url,
-                required_capture_targets=list(proof_context.required_capture_targets),
-                required_recording_counts=dict(proof_context.required_recording_counts),
-                event_metadata=event_metadata,
+            results.append(
+                advance_fn(
+                    session=self._session,
+                    settings=self._settings,
+                    tenant=proof_context.tenant,
+                    project=proof_context.project,
+                    proof_scope_id=proof_context.proof_scope_id,
+                    commit_sha=proof_context.commit_sha,
+                    trigger_mode=proof_context.trigger_mode,
+                    event=event,
+                    run_id=proof_context.run_id,
+                    pr_url=proof_context.pr_url,
+                    required_capture_targets=list(proof_context.required_capture_targets),
+                    required_recording_counts=dict(proof_context.required_recording_counts),
+                    event_metadata=event_metadata,
+                )
             )
+        return tuple(results)
 
     def _persist_qa_stage_checkpoint(
         self,
@@ -1415,6 +1423,20 @@ def _summarize_qa_result(result: QaResult) -> str:
     if result.summary:
         return "; ".join(result.summary[:2])
     return "QA demo recording completed."
+
+
+def _require_demo_proof_completed_event(*, event_results: tuple[object, ...], event: str) -> None:
+    if not event_results:
+        raise RuntimeError(f"QA demo proof event {event} did not return workflow status")
+    result = event_results[-1]
+    result_event = str(getattr(result, "event", "") or event).strip()
+    status = str(getattr(result, "status", "") or "").strip()
+    if result_event == event and status == "completed":
+        return
+    raise RuntimeError(
+        f"QA demo proof event {event} must complete before PR ready-for-review: "
+        f"event={result_event or '<missing>'} status={status or '<missing>'}"
+    )
 
 
 def _qa_failure_evidence_diagnostics(result: QaResult) -> str:
