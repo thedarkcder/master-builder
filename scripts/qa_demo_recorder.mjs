@@ -99,6 +99,33 @@ function formatDiagnostics(diagnostics) {
   return diagnostics.slice(-20).join("\n");
 }
 
+function safeDiagnosticValue(producer, fallback) {
+  try {
+    return producer();
+  } catch {
+    return fallback;
+  }
+}
+
+function responseDiagnostic(response) {
+  const status = Number(safeDiagnosticValue(() => response.status(), 0));
+  if (status < 400) {
+    return null;
+  }
+  const request = safeDiagnosticValue(() => response.request(), null);
+  const method = request ? safeDiagnosticValue(() => request.method(), "UNKNOWN") : "UNKNOWN";
+  const url = safeDiagnosticValue(() => response.url(), "<unknown-url>");
+  return `http ${status} ${method} ${url}`;
+}
+
+function requestFailureDiagnostic(request) {
+  const method = safeDiagnosticValue(() => request.method(), "UNKNOWN");
+  const url = safeDiagnosticValue(() => request.url(), "<unknown-url>");
+  const failure = safeDiagnosticValue(() => request.failure(), null);
+  const errorText = failure && failure.errorText ? `: ${failure.errorText}` : "";
+  return `requestfailed ${method} ${url}${errorText}`;
+}
+
 function safeSlug(value) {
   return String(value || "demo").replace(/[^a-z0-9]+/gi, "-").toLowerCase();
 }
@@ -131,6 +158,18 @@ for (const scenario of input.scenarios || []) {
       });
       page.on("pageerror", (error) => {
         diagnostics.push(`pageerror: ${error.message}`);
+      });
+      page.on("response", (response) => {
+        const diagnostic = responseDiagnostic(response);
+        if (diagnostic) {
+          diagnostics.push(diagnostic);
+        }
+      });
+      page.on("requestfailed", (request) => {
+        diagnostics.push(requestFailureDiagnostic(request));
+      });
+      page.on("crash", () => {
+        diagnostics.push("pagecrash: browser page crashed");
       });
     }
     const video = page.video();
