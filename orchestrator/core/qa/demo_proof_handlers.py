@@ -163,6 +163,7 @@ _DEMO_PROOF_FAILURE_EVENTS: dict[str, tuple[str, str, str]] = {
 _DEMO_PROOF_BLOCKING_COMPLETION_EVENTS = frozenset({"FailurePreviewCleanupCompleted"})
 _PR_EVIDENCE_REQUEST_EVENTS = frozenset({"EvidenceUploaded", "FailureEvidenceUploaded"})
 _SUCCESS_TERMINAL_METADATA_REQUIREMENTS: dict[str, tuple[str, ...]] = {
+    "ProofLeaseAcquired": ("release_id", "release_commit_sha", "demo_proof_lease"),
     "ReleaseLive": ("release_id", "release_commit_sha", "demo_proof_lease"),
     "ServiceVerificationPassed": (
         "release_id",
@@ -176,6 +177,7 @@ _SUCCESS_TERMINAL_METADATA_REQUIREMENTS: dict[str, tuple[str, ...]] = {
     "PreviewCleanupCompleted": ("release_id", "cleanup_status", "cleanup_mode", "cleanup_evidence"),
 }
 _FAILURE_TERMINAL_METADATA_REQUIREMENTS: dict[str, tuple[str, ...]] = {
+    "ProofLeaseAcquired": ("release_id", "release_commit_sha", "demo_proof_lease"),
     "ReleaseLive": ("release_id", "release_commit_sha", "demo_proof_lease"),
     "ServiceVerificationPassed": (
         "release_id",
@@ -794,11 +796,22 @@ def _require_cleanup_resource_refs(
 
 def _require_lease_scope_identity(
     *,
+    acquired_metadata: dict[str, object],
     release_metadata: dict[str, object],
     cleanup_metadata: dict[str, object],
     event: str,
     proof_scope_id: str,
 ) -> None:
+    acquired_lease = _demo_proof_lease_metadata(acquired_metadata.get("demo_proof_lease"))
+    if not acquired_lease:
+        raise RuntimeError(
+            f"Demo proof scope {proof_scope_id} requires ProofLeaseAcquired.demo_proof_lease metadata before "
+            "terminal completion: "
+            + ", ".join(
+                f"ProofLeaseAcquired.demo_proof_lease.{field}"
+                for field in sorted(_DEMO_PROOF_LEASE_REQUIRED_FIELDS)
+            )
+        )
     release_lease = _demo_proof_lease_metadata(release_metadata.get("demo_proof_lease"))
     if not release_lease:
         raise RuntimeError(
@@ -806,11 +819,24 @@ def _require_lease_scope_identity(
             "completion: "
             + ", ".join(f"ReleaseLive.demo_proof_lease.{field}" for field in sorted(_DEMO_PROOF_LEASE_REQUIRED_FIELDS))
         )
+    release_id = _metadata_string(release_metadata.get("release_id"))
+    acquired_release_id = _metadata_string(acquired_metadata.get("release_id"))
+    if acquired_release_id != release_id:
+        raise RuntimeError(
+            f"Demo proof scope {proof_scope_id} acquired lease must reference ReleaseLive.release_id {release_id}: "
+            f"ProofLeaseAcquired.release_id={acquired_release_id or '<missing>'}"
+        )
     release_proof_scope_id = _metadata_string(release_lease.get("proof_scope_id"))
     if release_proof_scope_id != proof_scope_id:
         raise RuntimeError(
             f"Demo proof scope {proof_scope_id} live release lease must reference proof scope {proof_scope_id}: "
             f"ReleaseLive.demo_proof_lease.proof_scope_id={release_proof_scope_id or '<missing>'}"
+        )
+    acquired_proof_scope_id = _metadata_string(acquired_lease.get("proof_scope_id"))
+    if acquired_proof_scope_id != proof_scope_id:
+        raise RuntimeError(
+            f"Demo proof scope {proof_scope_id} acquired lease must reference proof scope {proof_scope_id}: "
+            f"ProofLeaseAcquired.demo_proof_lease.proof_scope_id={acquired_proof_scope_id or '<missing>'}"
         )
     cleanup_evidence = cleanup_metadata.get("cleanup_evidence")
     cleanup_proof_scope_id = (
@@ -824,6 +850,13 @@ def _require_lease_scope_identity(
             f"{event}.cleanup_evidence.proof_scope_id={cleanup_proof_scope_id or '<missing>'}"
         )
     release_lease_id = _metadata_string(release_lease.get("lease_id"))
+    acquired_lease_id = _metadata_string(acquired_lease.get("lease_id"))
+    if acquired_lease_id != release_lease_id:
+        raise RuntimeError(
+            f"Demo proof scope {proof_scope_id} acquired lease must match ReleaseLive.demo_proof_lease.lease_id "
+            f"{release_lease_id}: ProofLeaseAcquired.demo_proof_lease.lease_id={acquired_lease_id or '<missing>'}, "
+            f"ReleaseLive.demo_proof_lease.lease_id={release_lease_id or '<missing>'}"
+        )
     cleanup_lease_id = (
         _metadata_string(cleanup_evidence.get("lease_id"))
         if isinstance(cleanup_evidence, dict)
@@ -835,16 +868,25 @@ def _require_lease_scope_identity(
             f"{release_lease_id}: {event}.cleanup_evidence.lease_id={cleanup_lease_id or '<missing>'}"
         )
     release_commit_sha = _metadata_string(release_metadata.get("release_commit_sha")).lower()
+    acquired_commit_sha = _metadata_string(acquired_metadata.get("release_commit_sha")).lower()
+    acquired_lease_commit_sha = _metadata_string(acquired_lease.get("commit_sha")).lower()
     lease_commit_sha = _metadata_string(release_lease.get("commit_sha")).lower()
     cleanup_commit_sha = (
         _metadata_string(cleanup_evidence.get("commit_sha")).lower()
         if isinstance(cleanup_evidence, dict)
         else ""
     )
-    if lease_commit_sha != release_commit_sha or cleanup_commit_sha != release_commit_sha:
+    if (
+        acquired_commit_sha != release_commit_sha
+        or acquired_lease_commit_sha != release_commit_sha
+        or lease_commit_sha != release_commit_sha
+        or cleanup_commit_sha != release_commit_sha
+    ):
         raise RuntimeError(
             f"Demo proof scope {proof_scope_id} lease metadata must reference ReleaseLive.release_commit_sha "
             f"{release_commit_sha}: "
+            f"ProofLeaseAcquired.release_commit_sha={acquired_commit_sha or '<missing>'}, "
+            f"ProofLeaseAcquired.demo_proof_lease.commit_sha={acquired_lease_commit_sha or '<missing>'}, "
             f"ReleaseLive.demo_proof_lease.commit_sha={lease_commit_sha or '<missing>'}, "
             f"{event}.cleanup_evidence.commit_sha={cleanup_commit_sha or '<missing>'}"
         )
@@ -1069,6 +1111,7 @@ def _require_terminal_proof_metadata(
             proof_scope_id=proof_scope_id,
         )
         _require_lease_scope_identity(
+            acquired_metadata=metadata.get("ProofLeaseAcquired", {}),
             release_metadata=release_metadata,
             cleanup_metadata=cleanup_metadata,
             event=event,
