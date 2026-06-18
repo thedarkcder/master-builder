@@ -609,6 +609,22 @@ class RunOutcomePolicy:
                     blocker_message=message,
                     summary=[*list(qa_result.summary or []), message],
                 )
+        missing_failure_proof_targets: tuple[str, ...] = ()
+        if qa_result.outcome != "continue" and qa_result.failure_evidence:
+            missing_failure_proof_targets = _missing_qa_demo_failure_proof_targets(plan=plan, qa_result=qa_result)
+            if missing_failure_proof_targets:
+                message = (
+                    "QA demo failure evidence is missing proof for required capture target(s): "
+                    + ", ".join(missing_failure_proof_targets)
+                )
+                qa_result = replace(
+                    qa_result,
+                    blocker_message=(
+                        (qa_result.blocker_message or qa_result.feedback or _summarize_qa_result(qa_result))
+                        + f" {message}"
+                    ),
+                    summary=[*list(qa_result.summary or []), message],
+                )
         self._persist_qa_stage_checkpoint(
             prepared=prepared,
             qa_result=qa_result,
@@ -687,7 +703,7 @@ class RunOutcomePolicy:
             proof_context = recording_failure_cleanup_proof_context
             proof_terminal_failure_emitted = False
             pr_failure_evidence_attach_failed = False
-            if qa_result.failure_evidence:
+            if qa_result.failure_evidence and not missing_failure_proof_targets:
                 try:
                     proof_context = _qa_demo_proof_context(
                         prepared=prepared,
@@ -1475,6 +1491,20 @@ def _qa_failure_evidence_artifact_urls(result: QaResult) -> list[str]:
         for item in list(result.failure_evidence or [])
         if str(getattr(item, "artifact_url", "") or "").strip()
     ]
+
+
+def _missing_qa_demo_failure_proof_targets(*, plan, qa_result: QaResult) -> tuple[str, ...]:  # noqa: ANN001
+    evidence_targets = {
+        str(getattr(item, "capture_target", "") or "").strip()
+        for item in list(qa_result.failure_evidence or [])
+        if str(getattr(item, "capture_target", "") or "").strip()
+    }
+    recording_missing_targets = set(remaining_capture_targets(plan, qa_result.recordings))
+    return tuple(
+        target
+        for target in required_capture_targets(plan)
+        if target in recording_missing_targets and target not in evidence_targets
+    )
 
 
 def _qa_demo_proof_context(*, prepared, qa_result: QaResult, preview_release, plan, workflow_result):  # noqa: ANN001
