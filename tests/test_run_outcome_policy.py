@@ -2444,6 +2444,7 @@ def test_complete_attaches_qa_failure_evidence_to_pr_before_blocking_ready_revie
         release_kind="run_preview",
         status="live",
         service_urls=[],
+        commit_sha="b" * 40,
     )
     finalizer_calls: dict[str, object] = {}
 
@@ -2623,6 +2624,7 @@ def test_complete_blocks_incomplete_qa_failure_evidence_before_pr_update() -> No
         release_id="release-1",
         release_kind="run_preview",
         status="live",
+        commit_sha="b" * 40,
         service_urls=[],
     )
     finalizer_calls: dict[str, object] = {}
@@ -2679,6 +2681,20 @@ def test_complete_blocks_incomplete_qa_failure_evidence_before_pr_update() -> No
     assert "missing proof for required capture target(s): ios" in str(checkpoint.qa_result.blocker_message)
     update_failure_pr_mock.assert_not_called()
     update_pr_mock.assert_not_called()
+    deps.execution.start_demo_proof_workflow_fn.assert_called_once()
+    assert [
+        call.kwargs["event"] for call in deps.execution.advance_demo_proof_workflow_event_fn.call_args_list
+    ] == [
+        "ProofLeaseAcquired",
+        "ReleaseRequested",
+        "ReleaseProvisioning",
+        "ReleaseLive",
+        "RouteReady",
+        "ServiceVerificationPassed",
+        "RecordingStarted",
+        "RecordingFailed",
+        "RecordingFailedPreviewCleanupFailed",
+    ]
     assert finalizer_calls["workflow_result"].outcome == "blocked"
     assert "missing proof for required capture target(s): ios" in str(
         finalizer_calls["workflow_result"].blocker_message

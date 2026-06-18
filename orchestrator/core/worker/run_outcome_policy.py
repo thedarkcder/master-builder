@@ -787,6 +787,55 @@ class RunOutcomePolicy:
                         attempt=attempt,
                         execution_context=execution_context,
                     )
+            elif qa_result.failure_evidence and missing_failure_proof_targets:
+                message = qa_result.blocker_message or qa_result.feedback or _summarize_qa_result(qa_result)
+                try:
+                    proof_context = _qa_demo_release_proof_context(
+                        prepared=prepared,
+                        preview_release=preview_release,
+                        plan=plan,
+                        workflow_result=workflow_result,
+                    )
+                    proof_context.qa_result = qa_result
+                    proof_context.recording_failure_message = message
+                    if not proof_workflow_started:
+                        self._start_qa_demo_proof_workflow(
+                            proof_context=proof_context,
+                            trigger_event="run_failed_with_incomplete_demo_failure_evidence",
+                        )
+                    self._advance_qa_demo_proof_events(
+                        proof_context=proof_context,
+                        events=(
+                            "ProofLeaseAcquired",
+                            "ReleaseRequested",
+                            "ReleaseProvisioning",
+                            "ReleaseLive",
+                            "RouteReady",
+                            "ServiceVerificationPassed",
+                            "RecordingStarted",
+                            "RecordingFailed",
+                        ),
+                    )
+                    recording_failure_cleanup_proof_context = proof_context
+                except Exception as exc:  # noqa: BLE001
+                    proof_event_failure = (
+                        "QA demo proof incomplete failure-evidence event failed: "
+                        f"{type(exc).__name__}: {exc}"
+                    )
+                    qa_result = replace(
+                        qa_result,
+                        blocker_message=(
+                            (qa_result.blocker_message or qa_result.feedback or _summarize_qa_result(qa_result))
+                            + f" {proof_event_failure}"
+                        ),
+                        summary=[*list(qa_result.summary or []), proof_event_failure],
+                    )
+                    self._persist_qa_stage_checkpoint(
+                        prepared=prepared,
+                        qa_result=qa_result,
+                        attempt=attempt,
+                        execution_context=execution_context,
+                    )
             cleanup_release, cleanup_error = self._cleanup_qa_demo_preview_release(
                 prepared=prepared,
                 preview_release=preview_release,
