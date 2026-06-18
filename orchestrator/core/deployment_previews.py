@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
@@ -64,6 +65,7 @@ def create_run_preview_deployment(
     force: bool = False,
     proof_scope_id: str | None = None,
     demo_proof_lease_required: bool = False,
+    demo_proof_lease_acquired_fn: Callable[..., None] | None = None,
 ) -> RunPreviewDeploymentResult:  # noqa: ANN001
     policy = ProjectDeploymentPolicyRead.model_validate(dict(getattr(project, "deployment_config", None) or {}))
     if not policy.enabled:
@@ -99,6 +101,11 @@ def create_run_preview_deployment(
                 current_base_domain=_normalize_optional_string((tenant.deployment_plane_config or {}).get("base_domain")),
             )
             if scoped_release is not None:
+                _signal_demo_proof_lease_acquired(
+                    callback=demo_proof_lease_acquired_fn,
+                    proof_scope_id=normalized_proof_scope_id,
+                    commit_sha=scoped_release.commit_sha,
+                )
                 return RunPreviewDeploymentResult(
                     created=False,
                     reason="existing",
@@ -120,6 +127,11 @@ def create_run_preview_deployment(
                     commit_sha=artifact.commit_sha,
                 )
                 session.flush()
+                _signal_demo_proof_lease_acquired(
+                    callback=demo_proof_lease_acquired_fn,
+                    proof_scope_id=normalized_proof_scope_id,
+                    commit_sha=existing_release.commit_sha,
+                )
             return RunPreviewDeploymentResult(
                 created=False,
                 reason="existing",
@@ -201,6 +213,11 @@ def create_run_preview_deployment(
             "deployment_compose_path": deployment_compose_path,
         }
 
+    _signal_demo_proof_lease_acquired(
+        callback=demo_proof_lease_acquired_fn,
+        proof_scope_id=normalized_proof_scope_id,
+        commit_sha=release_commit_sha,
+    )
     release = create_project_deployment_release(
         session=session,
         tenant_id=tenant.tenant_id,
@@ -219,6 +236,20 @@ def create_run_preview_deployment(
         deployment_config_override=deployment_config_override,
     )
     return RunPreviewDeploymentResult(created=True, reason="created", release=release)
+
+
+def _signal_demo_proof_lease_acquired(
+    *,
+    callback: Callable[..., None] | None,
+    proof_scope_id: str | None,
+    commit_sha: str,
+) -> None:
+    if callback is None or proof_scope_id is None:
+        return
+    callback(
+        proof_scope_id=proof_scope_id,
+        commit_sha=commit_sha,
+    )
 
 
 def _resolve_active_demo_proof_preview_release(

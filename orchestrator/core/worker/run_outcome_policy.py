@@ -206,6 +206,29 @@ class RunOutcomePolicy:
                 )
             try:
                 waiting_preview_release = None
+                qa_demo_proof_started = False
+                qa_demo_proof_start_context = None
+                if demo_recording_required and workflow_result.outcome == "success" and qa_plan is not None:
+                    qa_demo_proof_start_context = _qa_demo_pre_release_proof_context(
+                        prepared=prepared,
+                        plan=qa_plan,
+                        workflow_result=workflow_result,
+                    )
+
+                    def _start_qa_demo_proof_before_release(*, proof_scope_id: str, commit_sha: str) -> None:
+                        nonlocal qa_demo_proof_started, qa_demo_proof_start_context
+                        proof_context_payload = dict(vars(qa_demo_proof_start_context))
+                        proof_context_payload["proof_scope_id"] = proof_scope_id
+                        proof_context_payload["commit_sha"] = commit_sha
+                        qa_demo_proof_start_context = SimpleNamespace(**proof_context_payload)
+                        if qa_demo_proof_started:
+                            return
+                        self._start_qa_demo_proof_workflow(
+                            proof_context=qa_demo_proof_start_context,
+                            trigger_event="run_success_before_preview_release",
+                        )
+                        qa_demo_proof_started = True
+
                 if demo_recording_required and workflow_result.outcome == "success":
                     waiting_preview_release = _qa_demo_waiting_preview_release(
                         session=self._session,
@@ -230,6 +253,11 @@ class RunOutcomePolicy:
                         settings=self._settings,
                         pr_url=workflow_result.pr_url,
                         demo_proof_lease_required=demo_recording_required,
+                        demo_proof_lease_acquired_fn=(
+                            _start_qa_demo_proof_before_release
+                            if demo_recording_required and qa_demo_proof_start_context is not None
+                            else None
+                        ),
                         force=_qa_demo_preview_force_requested(
                             workflow_request=getattr(prepared, "workflow_request", None),
                             demo_recording_required=demo_recording_required,
@@ -277,6 +305,7 @@ class RunOutcomePolicy:
                         workflow_result=workflow_result,
                         preview_release=preview_release,
                         execution_context=execution_context,
+                        proof_workflow_started=qa_demo_proof_started,
                     )
         capability_result = self._handle_capability_requeue(
             prepared=prepared,
@@ -378,6 +407,7 @@ class RunOutcomePolicy:
         workflow_result,
         preview_release,
         execution_context,
+        proof_workflow_started: bool = False,
     ):
         snapshot = ExecutionSnapshot.require(getattr(prepared.run, "plan", None), allow_empty=True)
         plan = workflow_result.plan or snapshot.plan()
@@ -603,7 +633,8 @@ class RunOutcomePolicy:
             workflow_result=workflow_result,
         )
         try:
-            self._start_qa_demo_proof_workflow(proof_context=proof_context)
+            if not proof_workflow_started:
+                self._start_qa_demo_proof_workflow(proof_context=proof_context)
             self._advance_qa_demo_proof_events(
                 proof_context=proof_context,
                 events=_QA_DEMO_SUCCESS_PROOF_EVENTS_BEFORE_PR,
@@ -1129,6 +1160,24 @@ def _qa_demo_proof_context(*, prepared, qa_result: QaResult, plan, workflow_resu
         pr_url=pr_url,
         commit_sha=commit_sha,
         proof_scope_id=f"run:{run_id}:{commit_sha}",
+        required_capture_targets=tuple(required_capture_targets(plan)),
+    )
+
+
+def _qa_demo_pre_release_proof_context(*, prepared, plan, workflow_result):  # noqa: ANN001
+    run_id = str(getattr(prepared.run, "run_id", "") or "").strip()
+    if not run_id:
+        raise RuntimeError("QA demo proof workflow requires run_id")
+    pr_url = str(getattr(workflow_result, "pr_url", "") or getattr(prepared.run, "pr_url", "") or "").strip()
+    if not pr_url:
+        raise RuntimeError("QA demo proof workflow requires PR URL")
+    return SimpleNamespace(
+        tenant=prepared.tenant,
+        project=prepared.project,
+        run_id=run_id,
+        pr_url=pr_url,
+        commit_sha="pending-release-commit",
+        proof_scope_id=f"run:{run_id}:pending-release-commit",
         required_capture_targets=tuple(required_capture_targets(plan)),
     )
 
