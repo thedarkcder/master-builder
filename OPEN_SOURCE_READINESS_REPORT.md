@@ -9,7 +9,7 @@ The maintainer confirmed organizational redistribution/relicensing rights, selec
 SeaweedFS and OpenSSL 3, and requested that the accumulated work be pushed. The
 source branch is `codex/open-source-readiness` in the existing **private**
 [thedarkcder/master-builder](https://github.com/thedarkcder/master-builder)
-repository. This source push does not change visibility, replace old remote history,
+repository; the accumulated work has been pushed there. This source push does not change visibility, replace old remote history,
 publish a release or clear the gates below. Original local private configuration
 and maintainer edits were preserved. No production migration, credential rotation
 or external message was performed.
@@ -45,6 +45,10 @@ or external message was performed.
    Source manifests and collection tools are not clearance. Android SDK, CUDA,
    model files and voice samples require specific rights review. Optional Python
    Torch/setuptools advisories and native Go advisory reachability remain open.
+   GitHub's push response reports **82 dependency alerts on the existing default
+   branch** (14 critical, 38 high, 26 moderate, 4 low). Reconcile those alerts with
+   this candidate's updated locks and experimental dependencies before publication;
+   the server's default-branch count is not a fresh audit of this preparation branch.
    Exclude uncleared capabilities/artifacts from release.
 5. **Final native and core image verification.** The OpenSSL 3 library and actual
    CGo transport built and linked on Linux arm64, and 18 native Go tests passed.
@@ -164,7 +168,7 @@ Counts overlap; do not sum them into a full suite. Hosted CI was not run locally
 | Fresh external setup earlier in this review | Frozen public installs, actual PostgreSQL/API source startup and **six real browser journeys** passed with zero retries. UI production build passed in that fresh snapshot. This evidence preceded the latest storage/native/0137 changes. |
 | Optional audits | Earlier base Python/npm audits had zero findings. Optional voice retains three reports/two packages/two advisory IDs. Non-native Go had module x/crypto findings without reported reachable symbols; native reachability is unverified. |
 | Core and final native container export | **Incomplete** because of local storage/snapshot-lease failures. Source dependency installation/compilation or independent tests do not prove completed final images or startup. No shared Docker resources were pruned. |
-| Secret scanning | Pinned Gitleaks 8.30.1 scanned **1,605 candidate files**, zero findings, exit0. No symlinks, private package paths or files over5MiB found. All local refs/full history/reflogs were also scanned, zero findings; the same gate runs after the release-preparation commit before push. `git fsck --full` passed. |
+| Secret scanning | Pinned Gitleaks 8.30.1 scanned **1,605 candidate files**, zero findings, exit0. No symlinks, private package paths or files over5MiB found. Post-commit all-local-refs/full-history/reflog scan: **1,359 commits / 35.36MB, zero findings, exit0**. `git fsck --full` passed. The initial source push's remote SHA was verified equal to local HEAD and the repository remains private; old remote refs were not replaced. |
 | Unreachable Git objects | 1,120 dangling blobs inspected: 1,118 without findings; two unmapped fixture blobs produced five matches. Whole-AST identity established their exact existing fixture paths; unchanged narrow rules rescanned the raw bytes at those paths with zero findings. No rule was broadened and all private snapshots were deleted. This is not a zero-finding unmapped scan. |
 
 Heuristic scans and static review cannot establish absence of every secret or
