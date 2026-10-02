@@ -40,8 +40,9 @@ Repository lifecycle boundary.
 ## 4. Assumptions
 
 The explicit maintainer request authorizes main promotion and old-branch deletion,
-overriding the default no-merge policy for this task. It does not implicitly publish
-a release or authorize deleting historical release assets. No PR is required for
+overriding the default no-merge policy for this task. The maintainer subsequently
+explicitly authorized removing all 386 inventoried old tags and releases, including
+their four assets. No new release or public visibility is authorized. No PR is required for
 this requested ref operation; the failing full-suite gate remains documented.
 
 ## 5. Contract matrix
@@ -81,9 +82,10 @@ stop at the affected transition; never reset away uncommitted work.
 
 ## 10. Proposed design
 
-Promote only HEAD to main; delete the other 29 inventoried remote heads with exact
-leases. Check out local main and remove obsolete local heads after recovery proof.
-Keep stashes, local tags and the private bundle out of push refspecs.
+Promote only HEAD to main; delete the other 29 inventoried remote heads and 386 old
+tags with exact leases. Delete only inventoried GitHub release IDs after matching
+their tag/asset identity. Check out local main and remove obsolete local heads/tags
+after recovery proof. Keep stashes and the private bundle out of push refspecs.
 
 ## 11. Patterns used
 
@@ -117,7 +119,10 @@ was true and was disabled before promotion to prevent scheduled internal Jira wr
 the inspected recent runs were completed. No repository push hooks were configured.
 Keep CI/security/Dependabot active; new maintenance branches may legitimately appear.
 Other clones need deliberate migration to the rewritten history, not a merge of old
-history. Old tags/releases remain pending the maintainer's separate choice.
+history. Release deletion is explicitly authorized. Sequential API writes are
+scheduled at most once per second within the finite inventory to respect GitHub's
+documented rate limits; this bounded operation scheduling is not readiness polling.
+Do not download or republish uncleared historical release assets.
 
 ## 17. Tests
 
