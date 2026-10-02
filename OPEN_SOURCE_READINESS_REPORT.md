@@ -39,25 +39,26 @@ or external message was performed.
    not establish filesystem, network or resource isolation. Enforce the tenant
    threat model or exclude unsafe capabilities. An agent CLI sandbox option is not
    proof of orchestrator isolation. See [decision gates](docs/open-source-decision-gates.md).
-3. **Full backend verification.** The final bounded full-suite run reached **262
-   passed, 1 failed** before CPython 3.11.7 raised `SystemError: AST constructor
-   recursion depth mismatch` in an architecture test's `ast.parse`. No architecture
-   assertion was reached. Earlier implicit-project and webhook fixture failures
-   have been corrected without restoring production fallbacks. Complete the full
-   suite on a verified toolchain; the remaining suite has not been established as
-   passing. The unchanged failing test passed independently (1/1). This is consistent
-   with the parser race corrected in [Python 3.11.8](https://docs.python.org/release/3.11.8/whatsnew/changelog.html),
-   but that is an inference rather than a proven root cause. SQLite
-   PostgreSQL-listener errors also remain visible in test logs.
+3. **Full backend verification.** [Hosted CI on the reviewed source](https://github.com/thedarkcder/master-builder/actions/runs/37036197180)
+   completed with **3,086 passed, 65 failed, 85 errors, seven skipped and eight
+   subtests passed**. This supersedes the earlier partial local run that stopped
+   at a CPython parser error. Failures include the API architecture allowlist,
+   migration-head assertions, explicit configuration/admission fixtures, and
+   SQLite schema/setup/teardown interactions. These are observed categories, not
+   established independent root causes. Repair and rerun the full suite without
+   restoring removed production fallbacks. UI, repository hygiene and real
+   PostgreSQL isolation jobs passed; the Python distribution step was not reached.
 4. **Artifact redistribution clearance.** Exact final image/browser/CLI/native
    notices, corresponding source and required relinking material remain incomplete.
    Source manifests and collection tools are not clearance. Android SDK, CUDA,
    model files and voice samples require specific rights review. Optional Python
    Torch/setuptools advisories and native Go advisory reachability remain open.
-   GitHub's push response reports **82 dependency alerts on the existing default
-   branch** (14 critical, 38 high, 26 moderate, 4 low). Reconcile those alerts with
-   this candidate's updated locks and experimental dependencies before publication;
-   the server's default-branch count is not a fresh audit of this preparation branch.
+   A fresh [GitHub dependency-alert inventory](https://github.com/thedarkcder/master-builder/security/dependabot)
+   reports **15 open alerts** (seven critical, two high, five medium, one low),
+   down from the earlier 82. Thirteen concern optional native `golang.org/x/crypto`;
+   Torch and setuptools account for the other two. Determine actual native
+   reachability, remediate applicable dependencies and verify final locks/images;
+   an alert count is not proof of exploitability or absence of other vulnerabilities.
    Exclude uncleared capabilities/artifacts from release.
 5. **Final native and core image verification.** The OpenSSL 3 library and actual
    CGo transport built and linked on Linux arm64, and 18 native Go tests passed.
@@ -157,10 +158,9 @@ corresponding-source bundle. No blanket legal clearance is claimed.
 ## Verification evidence
 
 Counts overlap; do not sum them into a full suite. Hosted CI is separate from
-local verification. On the promoted source, hosted repository hygiene, PostgreSQL
-isolation and UI jobs passed; the full Python suite was still running at final
-inspection. The documentation push starts another CI run, so no complete hosted
-CI success is claimed.
+local verification. On reviewed source commit `0d474d11`, hosted repository hygiene,
+PostgreSQL isolation and UI jobs passed; the full Python job failed as recorded
+below. No complete hosted CI success is claimed.
 
 | Check | Result |
 | --- | --- |
@@ -176,11 +176,12 @@ CI success is claimed.
 | Native crypto/startup | **18 native-tagged Go tests passed** offline with bounded memory/CPU, including real independent nonempty signed MLS key packages using production's transient-key contract. Network-disabled EOF startup emits `transport_ready` and exits 0. Final Docker gate/export, amd64/runtime/live audio remain unverified. |
 | UI | **17 unit tests passed**, route type generation/TypeScript and production build **passed**. The final build supplied the documented loopback backend origin and an ephemeral randomly generated AUTH_SECRET without overwriting private configuration. Earlier attempts correctly rejected missing origin/weak local secret. |
 | Python packaging | Fresh wheel/sdist build passed; 844 wheel/1,235 sdist entries and 759 Python sources byte-matched at inspection, migration0137 included, exact GNU license text and `License-Expression: AGPL-3.0-only`; no private env/runtime/node_modules paths. |
-| Full Python suite | **262 passed, 1 failed**, two warnings; CPython AST-parser SystemError stopped the architecture test before its assertion. Exact isolated test then **1 passed**. The rest of the suite is unverified; no PR is being opened over this gate. |
+| Full Python suite | Latest hosted run: **3,086 passed, 65 failed, 85 errors, seven skipped, eight subtests passed**. Earlier partial local run: 262 passed, one CPython parser failure; isolated parser test then passed. The completed hosted result establishes broader unresolved failures. No release or passing full-suite claim. |
 | Global lint/format/quality | Ruff lint **passed**; **1,108 files already formatted**. Compatibility-shim, dead-code and TODO policy checks **passed**. First-party staged whitespace check passed; the full staged check flags original trailing whitespace in three byte-exact upstream license files, deliberately preserved rather than editing their text. **28 YAML / 3 TOML** documents parsed; **7 shell** files passed syntax; root-document local links resolved. |
 | Fresh external setup earlier in this review | Frozen public installs, actual PostgreSQL/API source startup and **six real browser journeys** passed with zero retries. UI production build passed in that fresh snapshot. This evidence preceded the latest storage/native/0137 changes. |
 | Optional audits | Earlier base Python/npm audits had zero findings. Optional voice retains three reports/two packages/two advisory IDs. Non-native Go had module x/crypto findings without reported reachable symbols; native reachability is unverified. |
 | Core and final native container export | **Incomplete** because of local storage/snapshot-lease failures. Source dependency installation/compilation or independent tests do not prove completed final images or startup. No shared Docker resources were pruned. |
+| Post-cleanup hosted secret scan | Targeted rerun of the failed Gitleaks job passed: **1,312 commits / 34.36MB, zero findings**, actual scanner canary passed. The earlier run scanned 2,652 commits before old tag deletion and found five matches. This verifies the subsequently fetched history only; GitHub PR/cache refs and other historical copies remain unresolved. |
 | Consolidation verification | Fresh scanner canaries **3 passed** with the explicitly supplied verified CLI; **1,606 tracked files** scanned with zero findings. Updated-document links, whitespace and first-party license declarations passed. Recovery bundle hash/import/ref and stash coverage passed. |
 | Repository consolidation | Default/main remains private and contains the sanitized source. All **29 old non-main remote heads**, **386 tags from each of the remote and local repositories**, **386 releases** and **four assets** were removed; all **14 old open PRs** closed. Local main tracks origin/main; **34 obsolete local heads** removed, **eight stashes** retained. Verified private bundle covers 463 named refs and all eight stash commits. New security PR #224 is retained. Old main still resolves through GitHub's API, so remote history is not cleared. |
 | Secret scanning | Pinned Gitleaks 8.30.1 scanned **1,605 candidate files**, zero findings, exit0. No symlinks, private package paths or files over5MiB found. Post-commit all-local-refs/full-history/reflog scan: **1,359 commits / 35.36MB, zero findings, exit0**. `git fsck --full` passed. The initial source push's remote SHA was verified equal to local HEAD and the repository remains private; old remote refs were not replaced. |
