@@ -6,11 +6,14 @@ material and locally available Git history. Passing checks are evidence for thei
 stated boundaries, not exhaustive security, confidentiality or legal clearance.
 
 The maintainer confirmed organizational redistribution/relicensing rights, selected
-SeaweedFS and OpenSSL 3, and requested that the accumulated work be pushed. The
-source branch is `codex/open-source-readiness` in the existing **private**
-[thedarkcder/master-builder](https://github.com/thedarkcder/master-builder)
-repository; the accumulated work has been pushed there. This source push does not change visibility, replace old remote history,
-publish a release or clear the gates below. Original local private configuration
+SeaweedFS and OpenSSL 3, and requested that the accumulated work be pushed, promoted
+to main and old branches removed. The existing repository is **private**:
+[thedarkcder/master-builder](https://github.com/thedarkcder/master-builder).
+The reviewed source was first pushed on `codex/open-source-readiness`; the authorized
+consolidation promotes that sanitized history directly to main and removes old
+heads rather than merging unsanitized ancestry back. See the
+[branch review](docs/branch-cleanup-review.md). This does not publish a release or
+clear the gates below. Original local private configuration
 and maintainer edits were preserved. No production migration, credential rotation
 or external message was performed.
 
@@ -19,12 +22,15 @@ or external message was performed.
 1. **Remote history and deployed credentials.** Local sanitation removed identified
    sensitive values, generated private artifacts, private Maven assignments and
    personal commit metadata, preserving 466 refs, eight stashes and 1,655 commits.
-   It does not clean old GitHub branches, PR/cache refs, forks, backups, releases or
-   CI artifacts. Coordinate remote cleanup and determine which credentials were
+   Branch consolidation replaces remote main and removes inventoried old branch
+   heads. It does not clean PR/cache refs, forks, backups, releases or CI artifacts.
+   **386 old remote tags and 386 releases, including four assets,** were inventoried
+   and still require separate cleanup/review. Coordinate that cleanup and determine which credentials were
    deployed; revoke used credentials and rehearse encryption-key rotation and
    re-encryption. Deleting history does not revoke credentials. Rewritten commits
-   invalidate old signatures. Only the reviewed source branch is being pushed;
-   unrelated refs, tags and stashes must not be mirrored.
+   invalidate old signatures. Twenty-one sanitized historical branch tips retain
+   38 distinct commits outside the prepared source; a verified private local recovery
+   bundle preserves those refs. Unrelated refs, tags and stashes must not be mirrored.
 2. **Worker isolation.** Repository tools can invoke subprocesses with ambient
    credentials and host filesystem privileges. Read-only command validation does
    not establish filesystem, network or resource isolation. Enforce the tenant

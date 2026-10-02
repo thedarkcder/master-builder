@@ -157,6 +157,11 @@ The selected source push targets the existing private
 force-pushing or transmitting unrelated refs, tags or stashes. This does not clean
 the old remote history or change repository visibility.
 
+The later explicit maintainer request authorizes promotion to main and removal of
+old branches. The [branch consolidation review](branch-cleanup-review.md) supersedes
+the initial source-push-only boundary: use exact leases, preserve sanitized unique
+work privately, and never merge the unsanitized remote ancestry back.
+
 Real route-smoke verification exposed an owned public-schema defect: tenant Discord
 configuration discarded `command_secret_ref`, preventing the authenticated command
 bridge from being configured. The public API now accepts a managed-secret reference,
