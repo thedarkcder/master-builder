@@ -10,8 +10,8 @@ SeaweedFS and OpenSSL 3, and requested that the accumulated work be pushed, prom
 to main and old branches removed. The existing repository is **private**:
 [thedarkcder/master-builder](https://github.com/thedarkcder/master-builder).
 The reviewed source was first pushed on `codex/open-source-readiness`; the authorized
-consolidation promotes that sanitized history directly to main and removes old
-heads rather than merging unsanitized ancestry back. See the
+consolidation has promoted that sanitized history directly to main and removed all
+29 original non-main heads without reintroducing unsanitized ancestry. See the
 [branch review](docs/branch-cleanup-review.md). This does not publish a release or
 clear the gates below. Original local private configuration
 and maintainer edits were preserved. No production migration, credential rotation
@@ -22,11 +22,14 @@ or external message was performed.
 1. **Remote history and deployed credentials.** Local sanitation removed identified
    sensitive values, generated private artifacts, private Maven assignments and
    personal commit metadata, preserving 466 refs, eight stashes and 1,655 commits.
-   Branch consolidation replaces remote main and removes inventoried old branch
-   heads. It does not clean PR/cache refs, forks, backups, releases or CI artifacts.
-   **386 old remote tags and 386 releases, including four assets,** were inventoried
-   and still require separate cleanup/review. Coordinate that cleanup and determine which credentials were
-   deployed; revoke used credentials and rehearse encryption-key rotation and
+   Branch consolidation replaced remote main and removed all 29 inventoried old
+   non-main heads. The old main commit remains accessible through GitHub's API;
+   223 pull-request refs were advertised at inspection. PR/cache refs, forks,
+   backups and historical CI artifacts still need review/removal.
+   **All 386 old remote tags, 386 releases and four release assets were deleted**
+   under explicit maintainer authorization; release/asset absence was verified.
+   All 386 local tags were removed after private recovery verification. Determine
+   which credentials were deployed; revoke used credentials and rehearse key rotation and
    re-encryption. Deleting history does not revoke credentials. Rewritten commits
    invalidate old signatures. Twenty-one sanitized historical branch tips retain
    38 distinct commits outside the prepared source; a verified private local recovery
@@ -153,7 +156,11 @@ corresponding-source bundle. No blanket legal clearance is claimed.
 
 ## Verification evidence
 
-Counts overlap; do not sum them into a full suite. Hosted CI was not run locally.
+Counts overlap; do not sum them into a full suite. Hosted CI is separate from
+local verification. On the promoted source, hosted repository hygiene, PostgreSQL
+isolation and UI jobs passed; the full Python suite was still running at final
+inspection. The documentation push starts another CI run, so no complete hosted
+CI success is claimed.
 
 | Check | Result |
 | --- | --- |
@@ -174,6 +181,8 @@ Counts overlap; do not sum them into a full suite. Hosted CI was not run locally
 | Fresh external setup earlier in this review | Frozen public installs, actual PostgreSQL/API source startup and **six real browser journeys** passed with zero retries. UI production build passed in that fresh snapshot. This evidence preceded the latest storage/native/0137 changes. |
 | Optional audits | Earlier base Python/npm audits had zero findings. Optional voice retains three reports/two packages/two advisory IDs. Non-native Go had module x/crypto findings without reported reachable symbols; native reachability is unverified. |
 | Core and final native container export | **Incomplete** because of local storage/snapshot-lease failures. Source dependency installation/compilation or independent tests do not prove completed final images or startup. No shared Docker resources were pruned. |
+| Consolidation verification | Fresh scanner canaries **3 passed** with the explicitly supplied verified CLI; **1,606 tracked files** scanned with zero findings. Updated-document links, whitespace and first-party license declarations passed. Recovery bundle hash/import/ref and stash coverage passed. |
+| Repository consolidation | Default/main remains private and contains the sanitized source. All **29 old non-main remote heads**, **386 tags from each of the remote and local repositories**, **386 releases** and **four assets** were removed; all **14 old open PRs** closed. Local main tracks origin/main; **34 obsolete local heads** removed, **eight stashes** retained. Verified private bundle covers 463 named refs and all eight stash commits. New security PR #224 is retained. Old main still resolves through GitHub's API, so remote history is not cleared. |
 | Secret scanning | Pinned Gitleaks 8.30.1 scanned **1,605 candidate files**, zero findings, exit0. No symlinks, private package paths or files over5MiB found. Post-commit all-local-refs/full-history/reflog scan: **1,359 commits / 35.36MB, zero findings, exit0**. `git fsck --full` passed. The initial source push's remote SHA was verified equal to local HEAD and the repository remains private; old remote refs were not replaced. |
 | Unreachable Git objects | 1,120 dangling blobs inspected: 1,118 without findings; two unmapped fixture blobs produced five matches. Whole-AST identity established their exact existing fixture paths; unchanged narrow rules rescanned the raw bytes at those paths with zero findings. No rule was broadened and all private snapshots were deleted. This is not a zero-finding unmapped scan. |
 
@@ -191,7 +200,8 @@ resources were preserved. Resource failures are distinguished from code failures
 - [x] Implement private SeaweedFS storage and OpenSSL 3 native source builds.
 - [x] Verify targeted security/configuration/migration tests and real PostgreSQL isolation.
 - [ ] Resolve worker isolation and complete the full backend release suite.
-- [ ] Clean old remote/fork/cache/backup history and rotate deployed credentials as required.
+- [x] Promote clean main and remove inventoried old branch heads, tags, releases and assets.
+- [ ] Resolve GitHub PR/cache refs, forks, other clones/backups and historical CI artifacts; rotate deployed credentials as required.
 - [ ] Finish exact core/native image builds, supported-platform and real provider/audio checks.
 - [ ] Clear each shipped artifact's rights, notices and corresponding-source/relinking bundle.
 - [ ] Configure private reporting and rehearse production upgrades, restore, retention and ingress.

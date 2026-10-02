@@ -5,7 +5,8 @@ Review date: 2026-10-02. This is repository consolidation, not public-release cl
 ## 0. Reality model
 
 The maintainer requested that the prepared source become main and old branches be
-removed. Thirty remote heads exist. Local history has already been sanitized;
+removed. The initial inventory contained thirty remote heads. Local history was
+already sanitized;
 remote historical commits have different IDs. Source and recovery evidence belong
 to the maintainer, remote refs belong to GitHub, and remote caches are outside Git
 push ownership. State: inventoried → recoverable → main verified → old heads removed
@@ -135,3 +136,38 @@ the previous incomplete full backend suite remains a release gate.
 ## 18. Verdict
 
 ✅ Proceed — design is appropriate and scoped.
+
+## Verified consolidation outcome
+
+The prepared sanitized source is now the default `main` branch. All 29 original
+non-main heads are absent: 22 were removed using exact leases; seven obsolete
+Dependabot heads disappeared after promotion. All 14 previously open old pull
+requests are closed. New Dependabot PR #224 (`dependabot/uv/torch-2.13.0`) was opened
+from clean main during cleanup and is retained as current security maintenance.
+
+Local main is checked out and tracks origin/main. Thirty-four obsolete local heads
+were removed after recovery verification; all eight stashes remain. The private
+mode-0600 complete recovery bundle was imported into a disposable local mirror,
+which verified 463 original named refs and all eight stash commits. Temporary
+recovery refs were removed from the checkout; no bundle or stash was pushed.
+
+The old main commit remains accessible via GitHub's commit API; 223 pull-request
+refs were advertised at inspection. This is affirmative evidence that remote
+sensitive-history cleanup is incomplete, not a claim that every such ref is unsafe.
+GitHub-managed refs/cache, forks, other clones, backups, historical CI artifacts and
+deployed credentials remain outside the completed branch operation. Keep the
+repository private and follow the [history migration guide](open-source-migration.md).
+
+All 386 approved historical releases and their four assets were deleted; release
+listing is empty and each former asset endpoint returns 404. All 386 historical
+remote tags were removed in an atomic push with exact expected-value leases, then
+all 386 local tags were removed after recovery coverage checks. No historical asset
+was downloaded or republished. The repository remains private, with default main
+and the one newly created security branch; no new release was created.
+
+Fresh scanner canary execution passed all three tests with the explicitly supplied,
+checksum-verified Gitleaks 8.30.1 binary. Documentation links and first-party
+AGPL-3.0-only declarations resolve consistently; changed-document whitespace checks
+pass. Hosted main CI passed hygiene, PostgreSQL isolation and UI jobs; its full
+Python suite remained in progress at inspection. Final document pushes start CI
+again, and no complete hosted-suite success is inferred.

@@ -76,14 +76,26 @@ bytes and modes were checked before and after installation. Private generated pa
 static credentials and personal Git metadata were removed. Commit IDs changed;
 invalidated commit/tag signatures must be re-signed if signatures are required.
 
-The private repository-local remote URL was removed. Configure the chosen public
-repository explicitly after reviewing the release candidate. The subsequent
-maintainer-authorized source push targets the existing private repository
-`thedarkcder/master-builder` on a new branch; it does not replace old remote history
-or change repository visibility. No remote force-push,
-GitHub cache/PR-ref cleanup, fork/backup cleanup or deployed credential rotation was
-performed. Keep existing remote copies private until separately reviewed. Coordinate
-fresh clones after any remote rewrite, so old objects cannot be reintroduced.
+The maintainer-authorized consolidation replaces `main` in the existing private
+`thedarkcder/master-builder` repository with the sanitized source, using an exact
+expected-old lease. All 29 inventoried old non-main heads are gone. A new Dependabot
+Torch security update, opened from clean main during cleanup, remains separate.
+All 386 old tags and 386 releases, including four assets, were removed under
+explicit authorization. A verified private recovery bundle preserves sanitized
+historical local work and all eight stashes. See the [consolidation review](branch-cleanup-review.md).
+
+Other clones must migrate deliberately. Prefer a fresh clone after saving any
+uncommitted work privately; do not merge or push old ancestry, tags or stashes into
+the cleaned repository. Recover necessary branch-only changes individually and
+review them for secrets and licensing before applying them to current main.
+
+GitHub still serves the old main commit by its SHA and advertises pull-request refs.
+Deleting branches and releases does not prove those references or cached objects
+are erased. Review affected refs and pursue eligible sensitive-data removal through
+[GitHub's documented cleanup process](https://docs.github.com/en/authentication/keeping-your-account-and-data-secure/removing-sensitive-data-from-a-repository).
+Fork/backup/CI-artifact cleanup and deployed credential rotation remain unresolved.
+Keep the repository and other historical copies private until these publication
+gates are cleared. Repository visibility has not changed.
 
 Active ignored environment/authentication files and worker checkouts remain private
 runtime state. Release from a reviewed commit or inspected distribution, with the
